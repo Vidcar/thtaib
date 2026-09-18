@@ -17,7 +17,7 @@ For a resumed task, also read its task handoff, current branch diff and any newl
 
 Inspect the repository, branch, working tree and dependency manifests before editing. Preserve unrelated changes. Report an unavailable repository or missing tooling; do not claim to have inspected it.
 
-The pack intentionally contains no application scaffold or invented build commands. An `unbound` repository-map entry means the location has not been established. Inspect existing code first. For a new repository, propose a concrete scaffold and package/version choices under the relevant [open question](specs/open-questions.md). Register actual paths and working commands when created. Never create a second backend, client, registry or test stack merely because you did not find the first one.
+Inspect existing code first. The Windows-first scaffold lives under `apps/backend` and `apps/desktop`; working commands are in [commands](specs/commands.md). An `unbound` repository-map entry means that location has not been established. Never create a second backend, client, registry or test stack merely because you did not find the first one.
 
 `unassessed` is not a claim that a feature is missing. `baseline` or `accepted` is not a claim that a feature works.
 

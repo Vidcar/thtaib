@@ -26,7 +26,7 @@ Each boundary has one behavioural owner. A module may contain several internal c
 
 The desktop communicates with the backend. Backend coordination resolves records, definitions and policy, then invokes model management, the harness/workflow integration or worker adapters. Model adapters call existing inference endpoints. Tool adapters call workers or external services. Storage retains records and references; it does not acquire an agent loop.
 
-Framework-specific objects should remain at their integration boundary rather than become the application's universal persisted format. Concrete import paths and dependency checks are bound during repository setup; they are not claimed to exist in this pack. See [contracts](contracts.md) for the proposed authoring convention and [repository map](repository-map.json) for actual-path registration.
+Framework-specific objects should remain at their integration boundary rather than become the application's universal persisted format. Scaffold source and lockfile paths are bound in [the repository map](repository-map.json). Remaining contract, registry and test locations stay unbound until their `required_before` trigger. See [contracts](contracts.md) for the proposed authoring convention.
 
 Do not read this logical map as a proposal for a message broker, microservices, a remote control plane or additional orchestration framework. None is selected by the source.
 

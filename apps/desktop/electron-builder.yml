@@ -1,0 +1,16 @@
+appId: com.vidcar.local-ai-workbench
+productName: Local AI Workbench
+copyright: Copyright © Vidcar
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Local AI Workbench

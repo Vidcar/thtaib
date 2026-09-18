@@ -1,0 +1,37 @@
+{
+  "name": "local-ai-workbench-desktop",
+  "productName": "Local AI Workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local AI Workbench desktop shell",
+  "author": "Vidcar",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=22 <25",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "build": "pnpm run typecheck && vite build",
+    "package": "pnpm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@xyflow/react": "12.11.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.4.3",
+    "electron-builder": "26.15.3",
+    "typescript": "5.9.3",
+    "vite": "8.3.0",
+    "vite-plugin-electron": "1.1.2"
+  }
+}
