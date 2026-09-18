@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-ai-workbench.invalid/runtime-manifest.schema.json",
+  "title": "Local AI Workbench runtime manifest",
+  "description": "Pinned managed llama-server record. PATH fallback is unsupported.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "product",
+    "engine",
+    "component",
+    "platform",
+    "release_tag",
+    "install_dir",
+    "executable",
+    "path_fallback",
+    "status"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "product": { "type": "string", "const": "Local AI Workbench" },
+    "engine": { "type": "string", "const": "llama.cpp" },
+    "component": { "type": "string", "const": "llama-server" },
+    "platform": { "type": "string" },
+    "flavor": { "type": "string" },
+    "release_tag": { "type": "string" },
+    "source_url": { "type": ["string", "null"] },
+    "asset_name": { "type": ["string", "null"] },
+    "sha256": { "type": ["string", "null"] },
+    "install_dir": { "type": "string" },
+    "executable": { "type": "string" },
+    "path_fallback": { "type": "string", "const": "unsupported" },
+    "status": { "type": "string", "enum": ["ready", "failed", "interrupted"] },
+    "error": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

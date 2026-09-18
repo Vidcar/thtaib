@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "kind": "compatibility-record-stub",
+  "product": "Local AI Workbench",
+  "status": "unverified",
+  "note": "Unverified is not incompatible and is not a supported-capability claim. Full MOD-006 / OQ-007 evidence is still open.",
+  "provenance": {
+    "publisher_guidance": [],
+    "tested_adjustments": [],
+    "user_overrides": []
+  },
+  "capabilities": {
+    "status": "unverified"
+  }
+}

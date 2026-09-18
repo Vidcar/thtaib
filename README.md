@@ -6,7 +6,7 @@ This pack turns **Starter Specification revision 0.5, dated 18 September 2026**,
 
 The existing stack is retained. New governance and contract-authoring conventions are labelled as proposals, not attributed to revision 0.5. The [source register](specs/sources/README.md) records provenance and preserves the original document.
 
-The Windows-first scaffold lives under `apps/backend` and `apps/desktop`. **No catalogue feature is marked verified.** Specification integrity is not product acceptance. Terms are in [the glossary](docs/glossary.md).
+The Windows-first scaffold lives under `apps/backend` and `apps/desktop`. The backend hosts the model manager (MOD-001…004). **No catalogue feature is marked verified.** Specification integrity is not product acceptance. Terms are in [the glossary](docs/glossary.md).
 
 ## Put it in your repository
 

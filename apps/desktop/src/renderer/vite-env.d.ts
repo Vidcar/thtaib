@@ -1,10 +1,11 @@
 /// <reference types="vite/client" />
 
-type WorkbenchSurface = "scaffold";
+type WorkbenchSurface = "managed-inference";
 
 interface WorkbenchBridge {
   productName: string;
   surface: WorkbenchSurface;
+  backendUrl: string;
 }
 
 declare global {

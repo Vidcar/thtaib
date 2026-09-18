@@ -9,6 +9,11 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | make it run AI | Out of scope this milestone |
 | host Vite / second server | One FastAPI backend + one Electron desktop |
 | local verification host | Where UAT runs (David-PC) — not a second product mode |
+| make it run a model / wire llama | Managed inference (MOD-001…004) |
+| the model in Chat | Model bundle / running deployment |
+| kill the remote server | Connected endpoint — no destructive lifecycle |
+| compatibility means supported | Unverified ≠ incompatible |
+| PATH llama | Unsupported fallback; managed runtime is the supported path |
 
 ## Product and layout
 
@@ -27,3 +32,15 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **electron-builder (NSIS)** is the Windows packaging owner on the desktop app. A working package script may exist before an installer is required as evidence.
 
 **David-PC** is the local verification host for UAT (`D:\CodeProjects\thtaib`). Cloud or CI checks do not replace that label.
+
+**Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
+
+**Model bundle** is the canonical recorded manifest (quant, shards, companions, HF repo+revision, hashes, paths). It is not “the model in Chat”.
+
+**Running deployment** is a live managed llama-server process or a connected OpenAI-compatible endpoint. A saved profile is not a running deployment.
+
+**Connected endpoint** attaches an existing service with `scope=connected`. The workbench does not start, stop, or kill that external process.
+
+**Unverified ≠ incompatible.** A missing compatibility claim is not a known incompatibility and is not a supported-capability claim.
+
+**PATH llama** is an unsupported fallback. UAT claims use a managed runtime pinned under `runtimes\` with a runtime-manifest.
