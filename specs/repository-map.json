@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "bindings": [
+    {
+      "id": "backend-source",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First backend implementation"
+    },
+    {
+      "id": "desktop-source",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First desktop implementation"
+    },
+    {
+      "id": "shared-python-contracts",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First shared data or API contract"
+    },
+    {
+      "id": "generated-json-schemas",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First generated schema consumer"
+    },
+    {
+      "id": "openapi-export",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First generated HTTP client"
+    },
+    {
+      "id": "generated-desktop-client",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First typed desktop/backend connection"
+    },
+    {
+      "id": "shared-event-contracts",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First streaming/event consumer"
+    },
+    {
+      "id": "contract-generator",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First generated consumer artifact"
+    },
+    {
+      "id": "python-dependency-manifest",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/architecture.md",
+      "required_before": "First supported Python setup"
+    },
+    {
+      "id": "python-lockfile",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/architecture.md",
+      "required_before": "First reproducible Python setup"
+    },
+    {
+      "id": "desktop-dependency-manifest",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First supported desktop setup"
+    },
+    {
+      "id": "desktop-lockfile",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First reproducible desktop setup"
+    },
+    {
+      "id": "runtime-manifest",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/modules/models.md",
+      "required_before": "First managed inference deployment"
+    },
+    {
+      "id": "integration-definitions",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/registry.md",
+      "required_before": "First registered integration"
+    },
+    {
+      "id": "compatibility-records",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/models.md",
+      "required_before": "First supported capability claim"
+    },
+    {
+      "id": "application-migrations",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/modules/state-recovery.md",
+      "required_before": "First durable stored-version change"
+    },
+    {
+      "id": "contract-tests",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/contracts.md",
+      "required_before": "First shared contract implementation"
+    },
+    {
+      "id": "integration-tests",
+      "state": "unbound",
+      "path": null,
+      "kind": "directory",
+      "owner_spec": "specs/verification.md",
+      "required_before": "First live runtime/worker implementation"
+    },
+    {
+      "id": "import-boundary-check",
+      "state": "unbound",
+      "path": null,
+      "kind": "file",
+      "owner_spec": "specs/architecture.md",
+      "required_before": "First concrete inter-module dependencies"
+    }
+  ]
+}

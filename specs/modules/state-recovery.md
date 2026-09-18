@@ -1,0 +1,58 @@
+# State, memory and recovery
+
+[Specification index](../README.md) · [Status and evidence](../catalog.json)
+
+## Ownership, scope and source
+
+Application SQLite records and files store workbench data; the separate LangGraph SQLite checkpointer stores execution state. The application links them. Source: [revision 0.5, pages 4–6](../sources/README.md#application-infrastructure), including [owned records](../sources/README.md#models-and-inference) and [knowledge policy](../sources/README.md#agents-and-workflows).
+
+## Public contracts and collaboration
+
+The application owns run/thread identities, checkpoint namespaces, displayed history, artifact/context references, knowledge versions and snapshot records. LangGraph owns the checkpoint representation/runtime. A snapshot provider captures/restores project files; worker adapters declare environment capabilities and effects. Retrieval is separate from project memory and does not train the model.
+
+Do not infer a distributed transaction between application SQLite, checkpointer SQLite, files and remote services. Their consistency/reconciliation strategy is unresolved and must be decided before recovery or snapshot-aware branching is claimed.
+
+## Lifecycle and failure
+
+Persist enough linkage to explain a run after restart, including selected configuration and recovery outcome. A recoverable checkpoint, a restorable project and a reconnectable environment are separate capabilities. Recovery must reconcile them before resuming effects. A branch creates a linked attempt without overwriting its parent.
+
+## Requirements and acceptance checks
+
+<a id="state-001"></a>
+### STATE-001: Keep application records and execution checkpoints separate
+
+Use separate application/checkpoint databases. Files hold models, projects, versioned knowledge, context captures, snapshots and artifacts. Application run records link profiles, deployments, environments, agent setup, parent/child runs, steps, threads, checkpoints, applied settings, evidence, optional budgets and recovery outcomes.
+
+**Acceptance:** Follow a persisted run to its actual checkpoint and related files after restart. Verify that application records do not require direct mutation of the checkpointer's private tables.
+
+<a id="state-002"></a>
+### STATE-002: Do not confuse history with the working project
+
+The backend owns thread identities, checkpoint namespaces and displayed history. Deep Agents file tools explicitly target project storage; conversation-state files are not a substitute for the working project.
+
+**Acceptance:** Start a fresh conversation and inspect the retained project. Verify that changing displayed history alone neither restores nor deletes project files.
+
+<a id="state-003"></a>
+### STATE-003: Pair branches with consistent project snapshots
+
+Pair checkpoint branching with an application-owned project snapshot captured at a consistent execution boundary. Record included files, exclusions, configuration and memory versions. Restore to a separate workspace, create a linked branch run and compare changes/artifacts/checks without modifying the original attempt.
+
+**Acceptance:** Branch from a captured point, verify restored inputs and memory references, make changes in the branch and demonstrate that the original workspace/attempt is unchanged.
+
+<a id="state-004"></a>
+### STATE-004: Do not promise rollback of external effects
+
+Snapshots do not undo external actions or restore a whole environment unless an adapter explicitly supports it. Preserve unresolved side effects. Reconnect/resume/restart must not silently repeat an operation whose outcome is unknown.
+
+**Acceptance:** Crash between an external effect and its local acknowledgement. Recovery reports the uncertainty or reconciles with authoritative evidence rather than blindly retrying the operation.
+
+<a id="state-005"></a>
+### STATE-005: Version durable knowledge and enforce its write policy
+
+Preserve user, agent and project knowledge scopes, provenance, versions and reversible edits. Resolve concurrent writes and protect instructions from agent-written knowledge. Retention/redaction of context captures is configurable locally.
+
+**Acceptance:** Demonstrate versioned edits/revert, a concurrent update conflict and an attempted protected-instruction overwrite. Verify the configured context-retention/redaction behaviour.
+
+## Unresolved details
+
+Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation, [OQ-005](../open-questions.md#oq-005) for consistent snapshots and restoration, and [OQ-006](../open-questions.md#oq-006) for knowledge storage/concurrency/retention. No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.

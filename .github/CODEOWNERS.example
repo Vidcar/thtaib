@@ -1,0 +1,15 @@
+# EXAMPLE ONLY. This filename does not activate GitHub code ownership.
+# Copy to .github/CODEOWNERS and replace EVERY placeholder with eligible
+# human maintainer handles. Remove the second handle if not applicable.
+# All-path ownership intentionally covers future contracts, tests, manifests,
+# instructions and new modules without relying on a guessed code layout.
+# Two handles on one line mean either may approve; both are not required.
+# Enable required code-owner review in repository settings separately.
+* @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
+
+# Keep enforcement/instructions explicitly owned if narrower rules are added.
+/AGENTS.md @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
+/specs/ @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
+/scripts/check_specs.py @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
+/tests/specs/ @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
+/.github/ @REPLACE_WITH_MAINTAINER @REPLACE_WITH_SECOND_MAINTAINER
