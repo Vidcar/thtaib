@@ -287,33 +287,49 @@
     {
       "id": "MOD-001",
       "document": "specs/modules/models.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/inference/bundles.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_bundles.py"
+      ],
       "evidence": []
     },
     {
       "id": "MOD-002",
       "document": "specs/modules/models.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/inference/inspect.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_bundles.py"
+      ],
       "evidence": []
     },
     {
       "id": "MOD-003",
       "document": "specs/modules/models.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/inference/settings.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_settings.py"
+      ],
       "evidence": []
     },
     {
       "id": "MOD-004",
       "document": "specs/modules/models.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/inference/deployments.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_deployments.py"
+      ],
       "evidence": []
     },
     {

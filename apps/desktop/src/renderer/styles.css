@@ -23,9 +23,9 @@ body {
 }
 
 .shell {
-  max-width: 40rem;
+  max-width: 56rem;
   margin: 0 auto;
-  padding: 4.5rem 1.5rem;
+  padding: 2.5rem 1.5rem 4rem;
 }
 
 .eyebrow {
@@ -37,15 +37,75 @@ body {
 }
 
 h1 {
-  margin: 0 0 1rem;
-  font-size: 2.25rem;
+  margin: 0 0 0.75rem;
+  font-size: 2rem;
   font-weight: 600;
 }
 
+h2,
+h3 {
+  margin: 0 0 0.75rem;
+}
+
 .lede {
-  margin: 0 0 2rem;
+  margin: 0 0 0.75rem;
   line-height: 1.5;
   color: #c5d0de;
+}
+
+.hint {
+  color: #9db0c9;
+  font-size: 0.9rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.25rem 0 1.5rem;
+}
+
+.tab,
+button,
+select,
+input,
+textarea {
+  font: inherit;
+}
+
+.tab,
+button {
+  border: 1px solid #2c3848;
+  background: #1a222d;
+  color: inherit;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+
+.tab.active {
+  border-color: #6ea8ff;
+}
+
+.panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 800px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.card,
+.meta div {
+  padding: 0.85rem 1rem;
+  border: 1px solid #2c3848;
+  background: rgba(17, 21, 28, 0.72);
 }
 
 .meta {
@@ -54,10 +114,8 @@ h1 {
   margin: 0;
 }
 
-.meta div {
-  padding: 0.85rem 1rem;
-  border: 1px solid #2c3848;
-  background: rgba(17, 21, 28, 0.72);
+.meta.compact {
+  margin-bottom: 0.5rem;
 }
 
 dt {
@@ -68,4 +126,83 @@ dt {
 
 dd {
   margin: 0;
+  word-break: break-all;
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #2c3848;
+  background: #0f141b;
+  color: inherit;
+}
+
+textarea {
+  min-height: 4.5rem;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.75rem;
+}
+
+.list li {
+  margin: 0 0 0.75rem;
+}
+
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #9ec2ff;
+  text-align: left;
+}
+
+.json {
+  overflow: auto;
+  max-height: 16rem;
+  font-size: 0.75rem;
+  background: #0b0f14;
+  padding: 0.75rem;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid #2c3848;
+  font-size: 0.75rem;
+}
+
+.scope-connected {
+  border-color: #c9a24a;
+}
+
+.scope-managed {
+  border-color: #6ea8ff;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.status {
+  color: #f0c36d;
+}
+
+code {
+  font-size: 0.85em;
 }

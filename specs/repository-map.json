@@ -99,8 +99,8 @@
     },
     {
       "id": "runtime-manifest",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend/managed/runtime-manifest.schema.json",
       "kind": "file",
       "owner_spec": "specs/modules/models.md",
       "required_before": "First managed inference deployment"
@@ -115,8 +115,8 @@
     },
     {
       "id": "compatibility-records",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend/managed/compatibility",
       "kind": "directory",
       "owner_spec": "specs/modules/models.md",
       "required_before": "First supported capability claim"

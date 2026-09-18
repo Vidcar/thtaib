@@ -73,10 +73,10 @@ Creates `.venv` and installs the locked dependencies from `uv.lock`, including t
 uv run python -m workbench_backend
 ```
 
-Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the scaffold identity. OpenAPI/docs routes are disabled.
+Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the managed-inference identity. Model-manager routes are under `/v1`. OpenAPI/docs routes are disabled.
 
 <a id="backend-test"></a>
-## Test the backend scaffold
+## Test the backend
 
 **Working directory:** `apps/backend`. **Platform:** Windows (supported target); also runs on Linux/macOS. **Prerequisites:** `uv sync`.
 
@@ -84,7 +84,7 @@ Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTT
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Runs the backend unittest module. This is a scaffold check, not catalogue-feature verification.
+Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments. These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
 
 <a id="desktop-install"></a>
 ## Install the desktop

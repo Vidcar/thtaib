@@ -20,7 +20,7 @@ Inspect any existing repository first. The supported scaffold is now:
 - Windows packaging: desktop-owned **electron-builder** (NSIS). The package script is registered; an installer is not required for this milestone.
 - Docker: stub `infra/docker-compose.yml` only; no product services.
 
-Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manifest`, `python-lockfile`, `desktop-dependency-manifest`, `desktop-lockfile`. Working commands are in [commands.md](commands.md). Terms are in [the glossary](../docs/glossary.md).
+Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manifest`, `python-lockfile`, `desktop-dependency-manifest`, `desktop-lockfile`, `runtime-manifest`, `compatibility-records`. Working commands are in [commands.md](commands.md). Terms are in [the glossary](../docs/glossary.md).
 
 **Evidence needed:** a clean setup and minimal backend/desktop build on the claimed platform (David-PC). Do not infer this from the specification checker's Python version.
 
@@ -72,11 +72,15 @@ Choose storage representations, scope precedence, protected instructions, versio
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details
 
+**Status:** partial lifecycle rules are implemented for Issue #3 (failed/interrupted download is not a successful deployment; connected endpoints have no destructive lifecycle; PATH llama-server is unsupported). Full compatibility evidence, capability claims and complete setting-mapping verification remain open.
+
 **Owner:** Model-management boundary. **Blocks:** declaring model capabilities/configurations supported or exposing managed runtime controls as reliable.
 
 Define compatibility-record schemas, evidence provenance, GGUF/companion-file resolution, runtime version identifiers, startup/request setting mapping and unsupported/unknown treatment. Specify cache reuse/interrupted download handling and the lifecycle authority over externally managed endpoints. Determine actual model-adapter parameter support against pinned dependencies.
 
-**Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch exercised through the same recorded path.
+Implemented now, without closing this question: import jobs that fail or are interrupted do not create a complete bundle or a successful deployment; connected attachments report `scope=connected` and reject start/stop/kill; a compatibility-records stub exists and does not claim support.
+
+**Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch exercised through the same recorded path on David-PC.
 
 <a id="oq-008"></a>
 ## OQ-008: Registry schemas, compatibility and extension loading
