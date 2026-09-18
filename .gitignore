@@ -18,10 +18,18 @@ venv/
 .env
 .env.*
 
-# Node / Electron (for later scaffold)
+# Python packaging
+*.egg-info/
+.eggs/
+
+# Node / Electron
 node_modules/
 dist/
+dist-electron/
+release/
 out/
+*.exe
+*.blockmap
 *.log
 
 # Models / local data (never commit)

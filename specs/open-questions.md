@@ -7,11 +7,22 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
 
+**Status:** layout and toolchain pins are recorded for the Windows-first scaffold ([Issue #1](https://github.com/Vidcar/thtaib/issues/1)). Remaining evidence is UAT on David-PC. This does not close [OQ-002](open-questions.md#oq-002).
+
 **Owner:** Backend/desktop maintainers. **Blocks:** first application scaffold or dependency installation represented as the supported setup.
 
-Inspect any existing repository first. Establish actual package/source/test paths, supported Python/Node/package-manager versions, lockfile locations, pinned framework/runtime versions, bootstrap commands and Windows packaging responsibilities. The source selects technologies, not their versions or a directory layout. Bind real paths in [repository-map.json](repository-map.json) and working commands in [commands.md](commands.md).
+Inspect any existing repository first. The supported scaffold is now:
 
-**Evidence needed:** a clean setup and minimal backend/desktop build on the claimed platform. Do not infer this from the specification checker's Python version.
+- Layout: `apps/backend/`, `apps/desktop/`; keep root `specs/`, `scripts/`, `tests/specs/`.
+- Python **3.12.x** via **uv**; `apps/backend/pyproject.toml` and `apps/backend/uv.lock`; import path `workbench_backend` under `apps/backend/src/`.
+- Node **≥22 <25** (develop on 24); **pnpm**; `apps/desktop/package.json` and `apps/desktop/pnpm-lock.yaml`.
+- Desktop stack: Electron + Vite + React + TypeScript + React Flow, pinned in the desktop lockfile.
+- Windows packaging: desktop-owned **electron-builder** (NSIS). The package script is registered; an installer is not required for this milestone.
+- Docker: stub `infra/docker-compose.yml` only; no product services.
+
+Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manifest`, `python-lockfile`, `desktop-dependency-manifest`, `desktop-lockfile`. Working commands are in [commands.md](commands.md). Terms are in [the glossary](../docs/glossary.md).
+
+**Evidence needed:** a clean setup and minimal backend/desktop build on the claimed platform (David-PC). Do not infer this from the specification checker's Python version.
 
 <a id="oq-002"></a>
 ## OQ-002: Desktop/backend trust and communication

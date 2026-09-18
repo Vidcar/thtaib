@@ -55,4 +55,4 @@ The environment manager provisions workers/access, maps project storage and mana
 
 ## Unresolved details
 
-[OQ-002](../open-questions.md#oq-002) blocks privileged API/desktop connectivity until authentication, origin/IPC trust, event reconnection and transport are specified. [OQ-001](../open-questions.md#oq-001) covers packaging, manifests and actual code locations. [OQ-004](../open-questions.md#oq-004) covers state/events and [OQ-010](../open-questions.md#oq-010) covers concrete test commands and environments.
+[OQ-002](../open-questions.md#oq-002) blocks privileged API/desktop connectivity until authentication, origin/IPC trust, event reconnection and transport are specified. [OQ-001](../open-questions.md#oq-001) records the scaffold layout, manifests and packaging owner; a provisional loopback health endpoint does not close that trust question. [OQ-004](../open-questions.md#oq-004) covers state/events and [OQ-010](../open-questions.md#oq-010) covers remaining product test locations.

@@ -3,16 +3,16 @@
   "bindings": [
     {
       "id": "backend-source",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend",
       "kind": "directory",
       "owner_spec": "specs/modules/backend-desktop.md",
       "required_before": "First backend implementation"
     },
     {
       "id": "desktop-source",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/desktop/src",
       "kind": "directory",
       "owner_spec": "specs/modules/backend-desktop.md",
       "required_before": "First desktop implementation"
@@ -67,32 +67,32 @@
     },
     {
       "id": "python-dependency-manifest",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/pyproject.toml",
       "kind": "file",
       "owner_spec": "specs/architecture.md",
       "required_before": "First supported Python setup"
     },
     {
       "id": "python-lockfile",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/uv.lock",
       "kind": "file",
       "owner_spec": "specs/architecture.md",
       "required_before": "First reproducible Python setup"
     },
     {
       "id": "desktop-dependency-manifest",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/desktop/package.json",
       "kind": "file",
       "owner_spec": "specs/modules/backend-desktop.md",
       "required_before": "First supported desktop setup"
     },
     {
       "id": "desktop-lockfile",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/desktop/pnpm-lock.yaml",
       "kind": "file",
       "owner_spec": "specs/modules/backend-desktop.md",
       "required_before": "First reproducible desktop setup"

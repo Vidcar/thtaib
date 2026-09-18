@@ -1,0 +1,23 @@
+[project]
+name = "workbench-backend"
+version = "0.1.0"
+description = "Local AI Workbench backend"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.141.1,<0.142",
+    "httpx>=0.28,<0.29",
+    "uvicorn[standard]>=0.32,<1",
+]
+
+[project.scripts]
+workbench-backend = "workbench_backend.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.fastapi]
+entrypoint = "workbench_backend.app:app"
+
+[tool.uv]
+package = true

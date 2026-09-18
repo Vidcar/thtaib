@@ -6,14 +6,14 @@ This pack turns **Starter Specification revision 0.5, dated 18 September 2026**,
 
 The existing stack is retained. New governance and contract-authoring conventions are labelled as proposals, not attributed to revision 0.5. The [source register](specs/sources/README.md) records provenance and preserves the original document.
 
-**No application repository was inspected. No application behaviour is marked as verified.** This is a specification and governance pack, not an application implementation.
+The Windows-first scaffold lives under `apps/backend` and `apps/desktop`. **No catalogue feature is marked verified.** Specification integrity is not product acceptance. Terms are in [the glossary](docs/glossary.md).
 
 ## Put it in your repository
 
 1. Extract this folder and copy its **contents** to the repository root. In an existing repository, merge conflicting files deliberately; do not overwrite existing agent instructions, workflows or documentation without review. Keep the source archive under `specs/sources/`.
 2. Read [the specification index](specs/README.md), [architecture](specs/architecture.md) and [adoption decision](specs/decisions/ADR-0001-adopt-specification-pack.md). Review the separately identified [contract-authoring proposal](specs/decisions/ADR-0002-contract-authoring.md).
 3. Follow [repository setup](specs/repository-setup.md) to name the human reviewers, activate CODEOWNERS, set repository protections and record approval. One adoption pull request can approve the initial pack; there is no need to approve every file separately.
-4. Give the next implementation agent `AGENTS.md`. Its first job is to inspect the actual repository and bind real paths and commands using [the repository map](specs/repository-map.json), not to assume a scaffold exists.
+4. Give the next implementation agent `AGENTS.md`. Inspect bound paths in [the repository map](specs/repository-map.json) before creating replacements. Leave remaining entries unbound until their `required_before` trigger.
 
 Until the adoption review is recorded, `baseline` specifications preserve the supplied design and `draft` documents are proposals. Producing this pack has not configured any repository permissions or approved changes on your behalf.
 
