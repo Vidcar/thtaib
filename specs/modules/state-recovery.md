@@ -16,6 +16,8 @@ Do not infer a distributed transaction between application SQLite, checkpointer 
 
 Persist enough linkage to explain a run after restart, including selected configuration and recovery outcome. A recoverable checkpoint, a restorable project and a reconnectable environment are separate capabilities. Recovery must reconcile them before resuming effects. A branch creates a linked attempt without overwriting its parent.
 
+Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an application-owned directory snapshot (not a git commit), captured at a quiescent boundary, stored under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`, restored into a new workspace, with secrets/weights/scratch/venv/node_modules/credentials excluded and no full environment restore. Remaining snapshot policy stays [OQ-005](../open-questions.md#oq-005). External-effect rollback stays [STATE-004](#state-004).
+
 ## Requirements and acceptance checks
 
 <a id="state-001"></a>

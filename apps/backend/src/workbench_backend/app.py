@@ -17,6 +17,8 @@ from workbench_backend.agents.routes import router as agent_router
 from workbench_backend.errors import WorkbenchError, workbench_error_handler
 from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
+from workbench_backend.lab.routes import router as lab_router
+from workbench_backend.lab.service import LabService
 
 PRODUCT_NAME = "Local AI Workbench"
 SURFACE = "managed-inference"
@@ -42,8 +44,13 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     )
     application.state.manager = manager_from_env(data_root)
     application.state.harness = HarnessService(lambda: application.state.manager)
+    application.state.lab = LabService(
+        lambda: application.state.manager,
+        lambda: application.state.harness,
+    )
     application.include_router(router)
     application.include_router(agent_router)
+    application.include_router(lab_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 
     @application.get("/health")

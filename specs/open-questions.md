@@ -60,11 +60,22 @@ A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is
 <a id="oq-005"></a>
 ## OQ-005: Consistent project snapshots and restoration
 
-**Owner:** Persistence/environment boundary. **Blocks:** project-restoring branches or repeatable Lab starting states.
+**Status:** partially constrained by [Issue #15](https://github.com/Vidcar/thtaib/issues/15) for Lab reuse. The question stays open.
+
+**Owner:** Persistence/environment boundary. **Blocks:** remaining snapshot policy beyond the locked defaults — retention, concurrent-writer details beyond “fail if live tools are writing”, environment-snapshot adapters, and any mechanism other than the application-owned directory snapshot.
+
+Issue #15 locked these defaults for LAB-001…004 and STATE-003. They are recorded in [Lab integration](modules/lab-evaluation.md#locked-milestone-defaults-issue-15-partial-oq-005) and [state and recovery](modules/state-recovery.md). Do not invent a different snapshot mechanism:
+
+- Application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary (fail if live tools are still writing).
+- Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Not git-commit-as-snapshot.
+- Restore into a new workspace directory; linked branch run; never overwrite the parent.
+- Include allowlisted project files, task, profile/deployment ids, dependency versions, memory/skill version refs, tool fixtures and acceptance checks.
+- Exclude secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
+- No full environment restore this milestone; record exclusions.
 
 Choose the snapshot mechanism, quiescent/consistent capture boundary, concurrent writer policy, included/excluded files, metadata and memory/configuration linkage, workspace isolation, retention and restoration validation. Define the boundary between project files and an environment snapshot. Do not assume checkpoints or Git commits capture untracked files, dependencies, services or remote effects.
 
-**Evidence needed:** capture during a controlled execution boundary, restore into a separate workspace, verify included inputs, expose exclusions and show the parent remains unchanged.
+**Evidence needed:** capture during a controlled execution boundary, restore into a separate workspace, verify included inputs, expose exclusions and show the parent remains unchanged. UAT of the locked defaults remains local-machine-required on David-PC.
 
 <a id="oq-006"></a>
 ## OQ-006: Memory, skills, retrieval and sensitive context

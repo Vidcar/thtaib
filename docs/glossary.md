@@ -36,6 +36,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | Chat agent / Builder agent graph | embedded harness + MOD-005 (not Chat or Builder) |
 | complete real agent work | harness + MOD-005 against managed inference |
 | second agent loop | Deep Agents owns the loop; application owns config/lifecycle |
+| Lab agent | Lab reuse against shared harness |
+| git snapshot | application directory snapshot |
+| identical rerun | restore inputs + record deviations |
+| full eval UX | OQ-014 later |
 
 ## Product and layout
 
@@ -59,7 +63,13 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **UAT workroot** is a throwaway directory under `.scratch/uat/…`. Agents and UAT must not create `uat-workroot*` at the repository root.
 
-**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state). Durable product and managed-inference state is never the repository root and never `.scratch/`.
+**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces). Durable product, managed-inference and Lab case/snapshot state is never the repository root and never `.scratch/`.
+
+**Lab reuse** is capture → restore → rerun against the shared Deep Agents harness. It is not a Lab agent and not a second evaluation loop.
+
+**Application directory snapshot** is the Issue #15 snapshot: an application-owned copy of allowlisted project files at a quiescent boundary, stored under `cases\` and `snapshots\`. It is not a git commit.
+
+**Recorded-tool** is fixture replay labelled as not proof of a current live integration. **Live-tool** invokes the enabled tools.
 
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
 

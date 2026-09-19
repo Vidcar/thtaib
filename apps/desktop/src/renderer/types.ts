@@ -1,12 +1,15 @@
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "models" | "deployments" | "agent-run";
+export type WorkbenchTab = "models" | "deployments" | "agent-run" | "lab";
 
 export interface PathsInfo {
   root: string;
   models: string;
   runtimes: string;
   state: string;
+  cases: string;
+  snapshots: string;
+  workspaces: string;
   windows_layout: string;
 }
 
@@ -87,6 +90,72 @@ export interface RuntimeManifest {
   path_fallback: "unsupported";
   status: "ready" | "failed" | "interrupted";
   error: string | null;
+}
+
+export type LabToolMode = "live-tool" | "recorded-tool";
+
+export interface LabWorkspace {
+  id: string;
+  display_name: string;
+  path: string;
+  origin: "created" | "restored";
+  parent_workspace_id: string | null;
+  snapshot_id: string | null;
+  case_id: string | null;
+}
+
+export interface LabCase {
+  id: string;
+  snapshot_id: string;
+  source_run_id: string | null;
+  source_workspace_id: string;
+  task: string;
+  deployment_id: string | null;
+  profile_id: string | null;
+  exclusions: Array<{ path: string; reason: string }>;
+  environment_restore: "not_this_milestone";
+  environment_exclusions: string[];
+  dependency_versions: Record<string, string>;
+  tool_fixtures: Array<Record<string, unknown>>;
+  snapshot_path: string;
+}
+
+export interface LabRestore {
+  workspace: LabWorkspace;
+  case_id: string;
+  parent_workspace_id: string;
+  parent_unchanged: boolean;
+  branch: { kind: string; parent_workspace_id: string; child_workspace_id: string };
+  deviations: string[];
+}
+
+export interface LabResult {
+  id: string;
+  case_id: string;
+  workspace_id: string;
+  agent_run_id: string;
+  tool_mode: LabToolMode;
+  tool_mode_label: string;
+  recorded_is_not_live_proof: boolean;
+  evaluation_kind: "task_evaluation";
+  harness: "deepagents";
+  second_agent_loop: false;
+  applied_config: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  judgement: Record<string, unknown>;
+  deviations: string[];
+  parent_workspace_unchanged: boolean;
+}
+
+export interface EngineMeasurement {
+  id: string;
+  kind: "engine_measurement";
+  engine: "llama-bench";
+  available: boolean;
+  success: boolean;
+  reason: string | null;
+  scores: Record<string, string> | null;
+  note: string;
 }
 
 export interface AgentRun {

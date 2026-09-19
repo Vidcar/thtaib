@@ -73,6 +73,17 @@ class ModelRequestCapture(BaseModel):
     http_payload: dict[str, Any] | None = None
 
 
+class ToolMode(str, Enum):
+    live_tool = "live-tool"
+    recorded_tool = "recorded-tool"
+
+
+def label_for_tool_mode(mode: ToolMode) -> str:
+    if mode is ToolMode.recorded_tool:
+        return "recorded-tool — not proof of a current live integration"
+    return "live-tool"
+
+
 class AgentStartRequest(BaseModel):
     deployment_id: str
     task: str
@@ -80,6 +91,10 @@ class AgentStartRequest(BaseModel):
     system_prompt: str | None = None
     criteria: TaskCriteria | None = None
     budgets: AgentBudgets | None = None
+    workspace_id: str | None = None
+    parent_run_id: str | None = None
+    tool_mode: ToolMode = ToolMode.live_tool
+    recorded_fixtures: list[dict[str, Any]] | None = None
 
 
 class AgentRun(BaseModel):
@@ -102,6 +117,12 @@ class AgentRun(BaseModel):
     created_at: str
     updated_at: str
     finished_at: str | None = None
+    workspace_id: str | None = None
+    parent_run_id: str | None = None
+    tool_mode: ToolMode = ToolMode.live_tool
+    tool_mode_label: str = "live-tool"
+    recorded_is_not_live_proof: bool = False
+    recorded_fixtures: list[dict[str, Any]] = Field(default_factory=list)
     harness: Literal["deepagents"] = "deepagents"
     outer_graph: Literal["deepagents-compiled-state-graph"] = "deepagents-compiled-state-graph"
     knowledge: Literal["none"] = "none"

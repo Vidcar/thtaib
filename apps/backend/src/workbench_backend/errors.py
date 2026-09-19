@@ -22,6 +22,10 @@ class HarnessError(WorkbenchError):
     """Embedded Deep Agents harness domain error."""
 
 
+class LabError(WorkbenchError):
+    """Lab case/snapshot/evaluation domain error. Not a second agent loop."""
+
+
 def workbench_error_handler(_request: Request, exc: WorkbenchError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,

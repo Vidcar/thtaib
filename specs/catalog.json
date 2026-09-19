@@ -507,9 +507,14 @@
     {
       "id": "STATE-003",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/lab/snapshot.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {
@@ -611,33 +616,53 @@
     {
       "id": "LAB-001",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/lab/engine.py",
+        "apps/backend/src/workbench_backend/lab/service.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {
       "id": "LAB-002",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/lab/snapshot.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {
       "id": "LAB-003",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/agents/tools.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {
       "id": "LAB-004",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/lab/schemas.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {
