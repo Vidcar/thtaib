@@ -30,6 +30,10 @@ class HarnessError(WorkbenchError):
     """Embedded Deep Agents harness domain error."""
 
 
+class ReplayError(HarnessError):
+    """Recorded-tool fixture mismatch, exhaustion, or unsupported replay."""
+
+
 class LabError(WorkbenchError):
     """Lab case/snapshot/evaluation domain error. Not a second agent loop."""
 

@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+from workbench_backend.agents.replay import FixtureBank
 from workbench_backend.agents.schemas import (
     AgentEvent,
     AgentRun,
@@ -43,7 +44,7 @@ from workbench_backend.agents.tools import (
     resolve_presented_tools,
     tools_for_names,
 )
-from workbench_backend.errors import HarnessError
+from workbench_backend.errors import HarnessError, ReplayError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
@@ -292,20 +293,25 @@ class HarnessService:
         agent = None
         try:
             model = self._model_factory(run, http_sink)
-            fixtures = run.recorded_fixtures if run.tool_mode is ToolMode.recorded_tool else None
+            fixture_bank = (
+                FixtureBank(run.recorded_fixtures)
+                if run.tool_mode is ToolMode.recorded_tool
+                else None
+            )
             agent_kwargs: dict[str, Any] = {}
             backend = _project_backend(run)
             if backend is not None:
                 agent_kwargs["backend"] = backend
             agent = create_deep_agent(
                 model=model,
-                tools=tools_for_names(run.presented_tools, recorded_fixtures=fixtures),
+                tools=tools_for_names(run.presented_tools, fixture_bank=fixture_bank),
                 system_prompt=run.system_prompt,
                 middleware=[
                     WorkbenchHarnessMiddleware(
                         run,
                         http_sink,
                         settings_provider=self._capture_settings,
+                        fixture_bank=fixture_bank,
                     )
                 ],
                 name="workbench-embedded-harness",
@@ -326,6 +332,23 @@ class HarnessService:
             run.completion = build_completion(run)
             self._link_run(run, agent)
             self._finish(run, AgentRunStatus.completed, "completed")
+        except ReplayError as exc:
+            if agent is not None:
+                self._link_run(run, agent)
+            else:
+                self._collect_related_files(run)
+            if cancel.is_set():
+                self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                return
+            run.error = str(exc)
+            run.events.append(
+                AgentEvent(
+                    at=utc_now(),
+                    kind="recorded_replay_failed",
+                    detail={"code": exc.code, "error": exc.message, **exc.details},
+                )
+            )
+            self._finish(run, AgentRunStatus.failed, "failed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
             if agent is not None:
                 self._link_run(run, agent)
@@ -534,8 +557,16 @@ def _resolved_project_path(project_path: str | None) -> str | None:
 
 
 def _project_backend(run: AgentRun) -> FilesystemBackend | None:
-    """Bind Deep Agents file tools to project storage (STATE-002)."""
+    """Bind live filesystem tools to project storage (STATE-002).
 
+    Recorded-tool mode never attaches ``FilesystemBackend``. Replay is fixture
+    driven (LAB-003 / Issue #67). Deep Agents may still use its default
+    in-memory ``StateBackend`` for internal offload; that is not project disk
+    and recorded tool calls are intercepted before the live handler.
+    """
+
+    if run.tool_mode is ToolMode.recorded_tool:
+        return None
     if not run.project_path:
         return None
     return FilesystemBackend(root_dir=run.project_path, virtual_mode=True)

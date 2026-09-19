@@ -6,10 +6,16 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage
+from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
-from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
+from workbench_backend.agents.replay import (
+    RECONSTRUCTION_NOTE,
+    FixtureBank,
+    apply_recorded_reconstruction,
+)
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
@@ -28,11 +34,14 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         run: AgentRun,
         http_sink: list[dict[str, Any]] | None = None,
         settings_provider: Callable[[], ContextCaptureSettings] | None = None,
+        *,
+        fixture_bank: FixtureBank | None = None,
     ) -> None:
         super().__init__()
         self.run = run
         self.http_sink = http_sink if http_sink is not None else []
         self._settings_provider = settings_provider
+        self.fixture_bank = fixture_bank
 
     def wrap_model_call(
         self,
@@ -55,6 +64,63 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         response = await handler(filtered)
         self._capture(filtered, _payload_after(self.http_sink, before))
         return response
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Any],
+    ) -> ToolMessage | Any:
+        if self.fixture_bank is None:
+            return handler(request)
+        return self._replay_tool_call(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Any],
+    ) -> ToolMessage | Any:
+        if self.fixture_bank is None:
+            return await handler(request)
+        return self._replay_tool_call(request)
+
+    def _replay_tool_call(self, request: ToolCallRequest) -> ToolMessage:
+        """Replay from fixtures. Never invoke the live tool handler."""
+
+        call = request.tool_call
+        if isinstance(call, dict):
+            name = str(call.get("name") or "")
+            raw_args = call.get("args")
+            call_id = call.get("id")
+        else:
+            name = str(getattr(call, "name", "") or "")
+            raw_args = getattr(call, "args", {})
+            call_id = getattr(call, "id", None)
+        args = raw_args if isinstance(raw_args, dict) else {}
+        result = self.fixture_bank.take(name, args) if self.fixture_bank is not None else ""
+        reconstructions = apply_recorded_reconstruction(name, args, self.run.project_path)
+        now = utc_now()
+        for item in reconstructions:
+            self.run.events.append(
+                AgentEvent(
+                    at=now,
+                    kind="recorded_reconstruction",
+                    detail=item,
+                )
+            )
+        if reconstructions:
+            self.run.events.append(
+                AgentEvent(
+                    at=now,
+                    kind="recorded_reconstruction_note",
+                    detail={"note": RECONSTRUCTION_NOTE},
+                )
+            )
+        return ToolMessage(
+            content=result,
+            name=name,
+            tool_call_id=str(call_id) if call_id is not None else "",
+            status="success",
+        )
 
     def _presented(self, tools: list[Any] | None) -> list[Any]:
         allowed = set(self.run.presented_tools)

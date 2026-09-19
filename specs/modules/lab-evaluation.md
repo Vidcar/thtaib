@@ -56,6 +56,18 @@ These defaults are authorised by [Issue #65](https://github.com/Vidcar/thtaib/is
 - **Legacy / missing:** a run without a readable starting snapshot yields an explicit unavailable/degraded outcome (`starting_snapshot_unavailable`). Current files are not claimed as the original inputs.
 - **Parent isolation:** later parent edits do not alter the saved starting snapshot. Restore/rerun still writes a new workspace and does not overwrite the parent.
 
+<a id="locked-milestone-defaults-issue-67-recorded-tool-replay"></a>
+## Locked milestone defaults (Issue #67; recorded-tool replay)
+
+These defaults are authorised by [Issue #67](https://github.com/Vidcar/thtaib/issues/67) (tracking [#58](https://github.com/Vidcar/thtaib/issues/58) finding 5). They refine [LAB-003](#lab-003) recorded-tool honesty. They do **not** close [OQ-005](../open-questions.md#oq-005) and they are not Model Lab.
+
+- **Modes stay labelled:** recorded-tool versus live-tool. A recorded result is not proof of a current live integration.
+- **No live filesystem backend in recorded mode:** recorded-tool does not attach Deep Agents `FilesystemBackend`. Claimed tools (visibility and filesystem) are replayed from fixtures, or the run fails as unsupported/mismatched replay. Mixed live+recorded per tool is not this slice.
+- **Invocation identity:** a fixture matches the first unused capture whose tool **name** and **canonical arguments** are equal. Canonical arguments are JSON-stable (sorted keys; `None` omitted; path-like values compared after POSIX normalisation that strips a leading `/`). Capture order is consumption order among matches. Two calls to the same tool with different arguments cannot consume each other's fixtures.
+- **Mismatch / missing / exhausted:** structured replay failure (`recorded_fixture_missing`, `recorded_fixture_exhausted`, `recorded_fixture_arg_mismatch`). The harness run is `failed` and Lab records an explicit deviation. This is not live-equivalent success.
+- **Reconstruction:** matched `write_file` / `edit_file` fixtures may apply recorded bytes only under the replay workspace (`project_path` / restored case workspace). Never the parent workspace. This is fixture application, not a live tool invocation, and is labelled as such.
+- **Live-tool:** unchanged. Live mode still uses `FilesystemBackend` bound to project storage and remains labelled `live-tool`.
+
 ## Requirements and acceptance checks
 
 <a id="lab-001"></a>

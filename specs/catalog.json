@@ -805,11 +805,15 @@
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/export_privacy.py",
-        "apps/backend/src/workbench_backend/agents/tools.py"
+        "apps/backend/src/workbench_backend/agents/tools.py",
+        "apps/backend/src/workbench_backend/agents/replay.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/middleware.py"
       ],
       "tests": [
         "apps/backend/tests/test_lab.py",
-        "apps/backend/tests/test_privacy_diagnostics.py"
+        "apps/backend/tests/test_privacy_diagnostics.py",
+        "apps/backend/tests/test_recorded_tools.py"
       ],
       "evidence": []
     },

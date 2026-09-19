@@ -154,7 +154,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Application directory snapshot** is the Issue #15 snapshot: an application-owned copy of allowlisted project files at a quiescent boundary, stored under `cases\` and `snapshots\`. It is not a git commit.
 
-**Recorded-tool** is fixture replay labelled as not proof of a current live integration. **Live-tool** invokes the enabled tools.
+**Recorded-tool** is fixture replay matched by tool name and canonical arguments, labelled as not proof of a current live integration. It does not attach a live filesystem backend. Fixture-driven write/edit reconstruction stays in the replay workspace. **Live-tool** invokes the enabled tools.
 
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
 
