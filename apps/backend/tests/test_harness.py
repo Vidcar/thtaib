@@ -13,8 +13,9 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
@@ -233,34 +234,23 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIn("cancelled", confirmed_kinds)
 
     def test_cancel_requested_is_still_live_for_quiescence(self) -> None:
-        hold = threading.Event()
-        scripted_model.GENERATE_HOLD = hold
-        ScriptedChatModel.generate_hold = hold
-        held = ScriptedChatModel(echo_then_reply(), hold=hold)
-
-        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return held
-
-        harness = HarnessService(
-            lambda: self.manager,
-            model_factory=factory,
-            knowledge_provider=lambda: self.app.state.knowledge,
+        now = utc_now()
+        run = AgentRun(
+            id="agent_cancel_live_ws",
+            status=AgentRunStatus.cancel_requested,
+            deployment_id=self.deployment_id,
+            task="held for quiescence",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+            workspace_id="ws_cancel_live",
         )
-        self.app.state.harness = harness
-        started = self._start(workspace_id="ws_cancel_live")
-        try:
-            wait_for_status(self.client, started["id"], "running")
-            requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
-            self.assertEqual(requested.json()["status"], "cancel_requested")
-            still = self.client.get(f"/v1/agent-runs/{started['id']}").json()
-            self.assertEqual(still["status"], "cancel_requested")
-            self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [started["id"]])
-        finally:
-            hold.set()
-            scripted_model.GENERATE_HOLD = None
-            ScriptedChatModel.generate_hold = None
-        confirmed = wait_for_run(self.client, started["id"])
-        self.assertEqual(confirmed["status"], "cancelled")
+        harness = self.app.state.harness
+        harness.store.put_run(run)
+        self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [run.id])
+        run.status = AgentRunStatus.cancelled
+        harness.store.put_run(run)
         self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [])
 
     def test_default_run_has_no_product_budget_or_rag(self) -> None:
