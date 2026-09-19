@@ -21,6 +21,7 @@ from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeRefs
 from workbench_backend.knowledge.service import KnowledgeService
+from workbench_backend.lab.export_privacy import build_case_export
 from workbench_backend.lab.engine import measure_engine
 from workbench_backend.lab.schemas import (
     AppliedConfig,
@@ -236,20 +237,7 @@ class LabService:
     def export_case(self, case_id: str) -> CaseExport:
         case = self.get_case(case_id)
         snapshot = self.get_snapshot(case.snapshot_id)
-        blob = case.model_dump_json() + snapshot.model_dump_json()
-        tree = Path(snapshot.tree_path)
-        if tree.is_dir():
-            for file_path in tree.rglob("*"):
-                if file_path.is_file():
-                    blob += file_path.read_text(encoding="utf-8", errors="ignore")
-        secret_hits = ("SECRET_VALUE", "API_KEY=", "BEGIN PRIVATE KEY")
-        clean = not any(token in blob for token in secret_hits)
-        for item in snapshot.exclusions:
-            if item.reason in {"secrets", "env_credentials", "weights"}:
-                exported = (tree / item.path) if tree.is_dir() else None
-                if exported is not None and exported.exists():
-                    clean = False
-        return CaseExport(case=case, snapshot=snapshot, secret_scan_clean=clean)
+        return build_case_export(case, snapshot)
 
     def restore(self, case_id: str) -> RestoreResult:
         case = self.get_case(case_id)

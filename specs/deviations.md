@@ -26,3 +26,26 @@ Resolution evidence and date:
 ```
 
 Temporary approval does not mark the requirement verified. Keep its status `partial` until full compliance is evidenced or the requirement is formally changed. Do not silently extend an expired deviation, remove its test, or rewrite the specification to match it. Record closure with its evidence and retain the entry for history.
+
+<a id="dev-001"></a>
+## DEV-001: Diagnostic captures and case export bypassed Knowledge capture policy
+
+**Affected requirement IDs:** AGT-002, STATE-005, LAB-003; related OQ-006.
+
+**Observed behaviour and inspected revision:** At [`55e6c50a7c419d28ee6915d6cf98f83c53a595d1`](https://github.com/Vidcar/thtaib/tree/55e6c50a7c419d28ee6915d6cf98f83c53a595d1) (filing-time main `ea683db`), `KnowledgeService.capture()` applied retention/redaction/discard, but harness middleware appended raw messages/HTTP payloads to `run.model_requests` and `put_run()` persisted them. `LabService.export_case()` returned the unchanged case with a `secret_scan_clean` flag based on three literal strings and did not sanitize or refuse a dirty payload. Recorded in [Issue #58](https://github.com/Vidcar/thtaib/issues/58) finding 6 / [Issue #64](https://github.com/Vidcar/thtaib/issues/64).
+
+**Intended behaviour:** [STATE-005](modules/state-recovery.md#state-005) configurable capture policy; [AGT-002](modules/agents-workflows.md#agt-002) redaction/gaps; [LAB-003](modules/lab-evaluation.md#lab-003) exclude or redact secrets before case export.
+
+**Risk:** Persisted diagnostics and shareable exports could retain detectable credentials.
+
+**Owner:** Knowledge / Lab / harness persist boundary.
+
+**Disposition:** fix (Issue #64). Not an approved temporary deviation.
+
+**Scope and compensating controls:** Synthetic credentials only in tests. Detector remains pattern-based and incomplete.
+
+**Review or expiry trigger:** Merge of the Issue #64 fix.
+
+**Reproduction and tracking reference:** [Issue #64](https://github.com/Vidcar/thtaib/issues/64).
+
+**Resolution evidence and date:** Fixed in the Issue #64 change: diagnostic copies use the Knowledge capture policy before persist; export sanitizes or blocks. Executable regression: `apps/backend/tests/test_privacy_diagnostics.py`. Not catalogue `verified`.

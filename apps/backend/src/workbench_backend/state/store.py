@@ -9,6 +9,10 @@ from pathlib import Path
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.knowledge.diagnostics import (
+    apply_run_diagnostic_policy,
+    capture_settings_for_paths,
+)
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
 from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
 
@@ -130,6 +134,7 @@ class ApplicationStore:
         return {str(row["name"]) for row in rows}
 
     def put_run(self, run: AgentRun) -> AgentRun:
+        run = apply_run_diagnostic_policy(run, capture_settings_for_paths(self.paths))
         payload = run.model_dump_json()
         with self._lock:
             self._conn.execute(
@@ -180,7 +185,10 @@ class ApplicationStore:
         run.thread_id = linkage.thread_id or run.thread_id
         run.checkpoint_ids = list(linkage.checkpoint_ids)
         run.related_files = list(linkage.related_files)
-        return run
+        sanitized = apply_run_diagnostic_policy(run, capture_settings_for_paths(self.paths))
+        if sanitized.model_requests != run.model_requests:
+            return self.put_run(sanitized)
+        return sanitized
 
     def list_runs(self) -> list[AgentRun]:
         with self._lock:

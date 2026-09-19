@@ -58,6 +58,8 @@ Keep recorded-tool tests separate from live-tool tests. Exclude secrets from reu
 
 **Acceptance:** Run both modes, inspect their labels and fixtures, and verify a secret-bearing value is excluded or safely redacted before case export.
 
+Shareable export ([Issue #64](https://github.com/Vidcar/thtaib/issues/64)) uses the same Knowledge capture detector as context captures. Detectable unsafe content in task text, tool fixtures, or an ordinarily named included file is sanitized in the returned payload or the export is **blocked**. Filename exclusions are not sufficient. `secret_scan_clean` must not be true beside unchanged unsafe output. The detector is incomplete; a clean scan is not proof that no secret is present. Stored local cases/snapshots are not rewritten by export.
+
 <a id="lab-004"></a>
 ### LAB-004: Preserve interpretable evidence
 

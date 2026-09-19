@@ -448,11 +448,13 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/agents/middleware.py",
-        "apps/backend/src/workbench_backend/agents/effective_setup.py"
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
+        "apps/backend/src/workbench_backend/knowledge/diagnostics.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
-        "apps/backend/tests/test_effective_setup.py"
+        "apps/backend/tests/test_effective_setup.py",
+        "apps/backend/tests/test_privacy_diagnostics.py"
       ],
       "evidence": []
     },
@@ -644,11 +646,14 @@
       "code": [
         "apps/backend/src/workbench_backend/knowledge/service.py",
         "apps/backend/src/workbench_backend/knowledge/store.py",
-        "apps/backend/src/workbench_backend/agents/effective_setup.py"
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
+        "apps/backend/src/workbench_backend/knowledge/diagnostics.py",
+        "apps/backend/src/workbench_backend/knowledge/redaction.py"
       ],
       "tests": [
         "apps/backend/tests/test_knowledge.py",
-        "apps/backend/tests/test_effective_setup.py"
+        "apps/backend/tests/test_effective_setup.py",
+        "apps/backend/tests/test_privacy_diagnostics.py"
       ],
       "evidence": []
     },
@@ -795,10 +800,12 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/lab/export_privacy.py",
         "apps/backend/src/workbench_backend/agents/tools.py"
       ],
       "tests": [
-        "apps/backend/tests/test_lab.py"
+        "apps/backend/tests/test_lab.py",
+        "apps/backend/tests/test_privacy_diagnostics.py"
       ],
       "evidence": []
     },

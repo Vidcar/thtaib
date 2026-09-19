@@ -12,6 +12,8 @@ from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.knowledge.diagnostics import apply_capture_policy
+from workbench_backend.knowledge.schemas import ContextCaptureSettings
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -21,10 +23,16 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     on the run is never rewritten here.
     """
 
-    def __init__(self, run: AgentRun, http_sink: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        run: AgentRun,
+        http_sink: list[dict[str, Any]] | None = None,
+        settings_provider: Callable[[], ContextCaptureSettings] | None = None,
+    ) -> None:
         super().__init__()
         self.run = run
         self.http_sink = http_sink if http_sink is not None else []
+        self._settings_provider = settings_provider
 
     def wrap_model_call(
         self,
@@ -70,7 +78,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         applied = dict(setup.bags.per_request.applied) if setup is not None else {}
         generation = dict(applied)
         generation.update(request.model_settings or {})
-        self.run.model_requests.append(
+        settings = (
+            self._settings_provider()
+            if self._settings_provider is not None
+            else ContextCaptureSettings()
+        )
+        captured = apply_capture_policy(
             ModelRequestCapture(
                 at=utc_now(),
                 instructions=_system_text(request),
@@ -94,8 +107,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     if setup is not None
                     else []
                 ),
-            )
+            ),
+            settings,
         )
+        self.run.model_requests.append(captured)
         self.run.updated_at = utc_now()
 
 
