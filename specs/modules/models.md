@@ -16,6 +16,20 @@ The manager supplies a deployment endpoint and resolved settings to the LangChai
 
 Cover download, import/reuse, compatibility assessment, load, health reporting, switching and unload. A connected endpoint and a managed process have different ownership; the source does not define the full external-service control policy. Resolve that policy before implementing destructive external lifecycle actions. Interrupted downloads, failed startup, settings mismatches and unavailable endpoints need explicit outcomes, not a successful deployment record.
 
+<a id="locked-milestone-defaults-issue-21-partial-oq-007"></a>
+## Locked milestone defaults (Issue #21; partial OQ-007)
+
+These defaults are authorised by [Issue #21](https://github.com/Vidcar/thtaib/issues/21). They do not close [OQ-007](../open-questions.md#oq-007) or [OQ-013](../open-questions.md#oq-013). They do not add a second inference engine.
+
+- **Pin revision:** llama.cpp **b11045**.
+- **Windows NVIDIA assets:** `llama-b11045-bin-win-cuda-13.4-x64.zip` and `cudart-llama-bin-win-cuda-13.4-x64.zip` extracted into managed `runtimes\`. This is the supported GPU path. Prefer the CUDA flavor when NVIDIA is present.
+- **NVIDIA absent:** clear error. Do not install CPU-only as a silent GPU path. PATH llama-server remains unsupported.
+- **Default GPU profile:** `ctx_size` ≥ 65536 (65536 for 3090/24GB), `n_gpu_layers: -1`, `flash_attn` as a valued enum (`on` / `off` / `auto`). Desktop Start managed binds this profile; it must not send empty `startup: {}` as the product default.
+- **Valued startup enums:** `flash_attn` serializes as `--flash-attn on|off|auto` only. Never emit a bare `--flash-attn`. Other current STARTUP_KEYS stay flags (`mlock`, `no_mmap`) or valued scalars.
+- **Local pin:** `local_executable` copies the full runtime directory (executable plus CUDA DLLs), not the exe alone.
+- **Pin while running:** reject, or stop managed servers first. A half-finished pin is not success.
+- **Non-Windows CUDA** is not a day-one supported path.
+
 ## Requirements and acceptance checks
 
 <a id="mod-001"></a>
@@ -62,4 +76,4 @@ Compatibility profiles are versioned and include requirements, supported capabil
 
 ## Unresolved details
 
-[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers compatibility evidence, startup/request settings and external lifecycle control. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager without claiming `verified` or closing OQ-007.
+[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers compatibility evidence, startup/request settings and external lifecycle control. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager and Issue #21 lands the Windows CUDA pin and default GPU profile without claiming `verified` or closing OQ-007.

@@ -137,9 +137,13 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertEqual(stopped.json()["code"], "connected_no_lifecycle")
 
     def test_runtime_pin_local_writes_manifest(self) -> None:
-        fixture = self.root / "fake-server"
+        runtime_dir = self.root / "fake-runtime"
+        runtime_dir.mkdir()
+        fixture = runtime_dir / "fake-server"
         fixture.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         fixture.chmod(0o755)
+        sibling = runtime_dir / "cudart64_134.dll"
+        sibling.write_bytes(b"fake-cudart")
         manifest = self.client.post(
             "/v1/runtime/pin",
             json=PinRuntimeRequest(local_executable=str(fixture)).model_dump(),
@@ -147,6 +151,7 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "ready")
         self.assertEqual(manifest["path_fallback"], "unsupported")
         self.assertTrue(Path(manifest["executable"]).is_file())
+        self.assertTrue((Path(manifest["install_dir"]) / "cudart64_134.dll").is_file())
         self.assertTrue((self.paths.runtimes / "runtime-manifest.json").is_file())
 
 

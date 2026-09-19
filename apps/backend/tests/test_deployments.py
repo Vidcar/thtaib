@@ -26,11 +26,18 @@ from test_app import FakeHF
 
 
 class FakeWindowsInstaller(RuntimeInstaller):
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
     def download(self, url: str, dest: Path) -> None:
+        self.urls.append(url)
         dest.parent.mkdir(parents=True, exist_ok=True)
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zipped:
-            zipped.writestr("llama-server.exe", b"not-a-real-binary")
+            if "cudart" in dest.name:
+                zipped.writestr("cudart64_134.dll", b"fake-cudart")
+            else:
+                zipped.writestr("llama-server.exe", b"not-a-real-binary")
         dest.write_bytes(buffer.getvalue())
 
 
@@ -62,7 +69,9 @@ class DeploymentTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _fake_server_script(self) -> str:
-        script = self.root / "fake-llama-server"
+        runtime_dir = self.root / "fake-runtime"
+        runtime_dir.mkdir(exist_ok=True)
+        script = runtime_dir / "fake-llama-server"
         module = Path(__file__).with_name("fake_llama_server.py")
         script.write_text(
             "#!{}\nimport runpy\nrunpy.run_path({!r}, run_name='__main__')\n".format(
@@ -72,6 +81,7 @@ class DeploymentTests(unittest.TestCase):
             encoding="utf-8",
         )
         script.chmod(0o755)
+        (runtime_dir / "cudart64_134.dll").write_bytes(b"fake-cudart")
         return str(script)
 
     def test_managed_start_health_stop(self) -> None:
@@ -119,13 +129,25 @@ class DeploymentTests(unittest.TestCase):
             self.manager.get_deployment(deployment.id)
 
     def test_windows_pin_writes_manifest_and_rejects_unpinned_start(self) -> None:
-        other = ModelManager(WorkbenchPaths(self.root / "other"), installer=FakeWindowsInstaller())
+        installer = FakeWindowsInstaller()
+        other = ModelManager(
+            WorkbenchPaths(self.root / "other"),
+            installer=installer,
+            nvidia_present=lambda: True,
+        )
         manifest = other.pin_runtime()
         self.assertEqual(manifest.status, "ready")
         self.assertEqual(manifest.platform, "win-x64")
+        self.assertEqual(manifest.flavor, "cuda-13.4")
         self.assertEqual(manifest.release_tag, "b11045")
+        self.assertEqual(manifest.asset_name, "llama-b11045-bin-win-cuda-13.4-x64.zip")
+        self.assertEqual(manifest.companion_asset_name, "cudart-llama-bin-win-cuda-13.4-x64.zip")
         self.assertEqual(manifest.path_fallback, "unsupported")
         self.assertTrue(Path(manifest.executable).name.endswith("llama-server.exe"))
+        self.assertTrue((Path(manifest.install_dir) / "cudart64_134.dll").is_file())
+        self.assertEqual(len(installer.urls), 2)
+        self.assertTrue(any("cuda-13.4" in url and "cudart" not in url for url in installer.urls))
+        self.assertTrue(any("cudart-llama-bin-win-cuda-13.4" in url for url in installer.urls))
         empty = ModelManager(WorkbenchPaths(self.root / "empty"))
         job = empty.import_local(LocalImportRequest(source_path=str(self.gguf)))
         with self.assertRaises(ManagerError) as caught:
@@ -135,7 +157,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "runtime_unpinned")
 
     def test_interrupted_runtime_pin_is_not_ready(self) -> None:
-        manager = ModelManager(WorkbenchPaths(self.root / "failpin"), installer=FailingInstaller())
+        manager = ModelManager(
+            WorkbenchPaths(self.root / "failpin"),
+            installer=FailingInstaller(),
+            nvidia_present=lambda: True,
+        )
         manifest = manager.pin_runtime()
         self.assertEqual(manifest.status, "interrupted")
         self.assertNotEqual(manifest.status, "ready")

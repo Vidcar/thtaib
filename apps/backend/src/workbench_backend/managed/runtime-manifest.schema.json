@@ -31,7 +31,9 @@
     "executable": { "type": "string" },
     "path_fallback": { "type": "string", "const": "unsupported" },
     "status": { "type": "string", "enum": ["ready", "failed", "interrupted"] },
-    "error": { "type": ["string", "null"] }
+    "error": { "type": ["string", "null"] },
+    "companion_asset_name": { "type": ["string", "null"] },
+    "companion_sha256": { "type": ["string", "null"] }
   },
   "additionalProperties": false
 }

@@ -20,7 +20,9 @@ export function ModelsPanel() {
   const [localPath, setLocalPath] = useState("");
   const [repoId, setRepoId] = useState("");
   const [revision, setRevision] = useState("");
-  const [startupRaw, setStartupRaw] = useState('{"ctx_size": 4096}');
+  const [startupRaw, setStartupRaw] = useState(
+    '{"ctx_size": 65536, "n_gpu_layers": -1, "flash_attn": "on"}',
+  );
   const [requestRaw, setRequestRaw] = useState('{"temperature": 0.7}');
   const [agentRaw, setAgentRaw] = useState('{"tools_enabled": false}');
   const [preview, setPreview] = useState<SettingsBags | null>(null);

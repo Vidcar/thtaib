@@ -86,11 +86,13 @@ export interface Deployment {
 
 export interface RuntimeManifest {
   platform: string;
+  flavor?: string;
   release_tag: string;
   executable: string;
   path_fallback: "unsupported";
   status: "ready" | "failed" | "interrupted";
   error: string | null;
+  companion_asset_name?: string | null;
 }
 
 export type LabToolMode = "live-tool" | "recorded-tool";
