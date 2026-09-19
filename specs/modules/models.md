@@ -74,6 +74,18 @@ Compatibility profiles are versioned and include requirements, supported capabil
 
 **Acceptance:** Inspect a compatibility record with all three provenance categories and an unfamiliar model. Show the distinction between unverified support and a known incompatibility.
 
+<a id="locked-milestone-defaults-issue-31-partial-oq-007"></a>
+## Locked milestone defaults (Issue #31; partial OQ-007)
+
+These defaults are authorised by [Issue #31](https://github.com/Vidcar/thtaib/issues/31). They satisfy the [MOD-006](#mod-006) provenance-separation and unverified≠incompatible checks. They do **not** close [OQ-007](../open-questions.md#oq-007): full compatibility evidence, capability claims and complete setting-mapping verification stay open. They are not a catalogue `verified` claim.
+
+- **Records:** versioned `compatibility-record` documents under the bound `compatibility-records` directory. Each record carries requirements, supported capabilities/controls, recommendations, sources and validation evidence.
+- **Provenance categories:** `publisher_guidance`, `tested_adjustments` and `user_overrides` are separate inspectable lists. An item cannot sit in the wrong list. User overrides written at runtime are stored under LocalAppData `state\compatibility\` and merged only into `user_overrides`.
+- **Support status:** `unverified` | `known_incompatible` | `tested`. `tested` is a record status, not catalogue `verified`.
+- **Unverified ≠ incompatible:** an unfamiliar model without a matching record is assessed `unverified`, `usable=true`, `incompatible=false`, `excluded=false`. Unverified is never treated as known incompatible and is not a reason to refuse managed-deployment create.
+- **Surfaces:** `GET /v1/compatibility/records`, `POST /v1/compatibility/assess`, `GET /v1/bundles/{id}/compatibility`. No Builder canvas.
+- **Not claimed:** David-PC capability UAT, complete setting-mapping verification, or that a `tested` fixture is a supported-capability product claim.
+
 ## Unresolved details
 
-[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers compatibility evidence, startup/request settings and external lifecycle control. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager and Issue #21 lands the Windows CUDA pin and default GPU profile without claiming `verified` or closing OQ-007.
+[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers remaining compatibility evidence, startup/request settings and external lifecycle control. Issue #31 lands provenance-capable records and the unverified≠incompatible distinction without closing that question. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager and Issue #21 lands the Windows CUDA pin and default GPU profile without claiming `verified` or closing OQ-007.

@@ -57,6 +57,9 @@ class SnapshotManifest(BaseModel):
     exclusions: list[SnapshotExclusion] = Field(default_factory=list)
     environment_restore: Literal["not_this_milestone"] = "not_this_milestone"
     environment_exclusions: list[str] = Field(default_factory=list)
+    external_effect_rollback: Literal["not_supported"] = "not_supported"
+    rollback_promise: Literal["none"] = "none"
+    unresolved_side_effects: list[str] = Field(default_factory=list)
     allowlist: list[str] | None = None
     tree_path: str
 
@@ -97,6 +100,9 @@ class LabCase(BaseModel):
     exclusions: list[SnapshotExclusion] = Field(default_factory=list)
     environment_restore: Literal["not_this_milestone"] = "not_this_milestone"
     environment_exclusions: list[str] = Field(default_factory=list)
+    external_effect_rollback: Literal["not_supported"] = "not_supported"
+    rollback_promise: Literal["none"] = "none"
+    unresolved_side_effects: list[str] = Field(default_factory=list)
     created_at: str
     snapshot_path: str
     knowledge: KnowledgeBinding = "none"
@@ -110,6 +116,9 @@ class RestoreResult(BaseModel):
     branch: dict[str, str]
     deviations: list[str] = Field(default_factory=list)
     snapshot_id: str
+    external_effects_rolled_back: Literal[False] = False
+    rollback_promise: Literal["none"] = "none"
+    unresolved_side_effects: list[str] = Field(default_factory=list)
 
 
 class RerunRequest(BaseModel):

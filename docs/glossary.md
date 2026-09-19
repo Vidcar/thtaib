@@ -59,6 +59,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | mutate LangGraph tables | App links checkpoint ids only — never mutate checkpointer private tables |
 | clear chat deletes project | STATE-002 — history ≠ project |
 | close OQ-004 | Partial OQ-004 defaults only |
+| unverified means incompatible | Unverified ≠ incompatible |
+| silently retry unknown tool | Unknown-effect safety (STATE-004) |
+| snapshot undoes the email | No external-effect rollback promise |
 
 ## Product and layout
 
@@ -114,11 +117,15 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **STATE-002 — history ≠ project** means editing or clearing Chat history alone neither restores nor deletes project files. Filesystem tools write project storage only.
 
-**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Identities, event reconciliation, exactly-once and external-effect remainder stay [OQ-004](../specs/open-questions.md#oq-004).
+**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Issue #31 locked unknown-effect safety ([STATE-004](../specs/modules/state-recovery.md#state-004)). Identities, event-order/reconnection and exactly-once stay [OQ-004](../specs/open-questions.md#oq-004).
 
 **Debug-quality Chat (Issue #22)** is the Chat tab that calls the embedded harness. Agent-run is not that surface. Do not call it finished Chat polish.
 
 **Partial OQ-007 landed on #21; remainder open** means Windows CUDA 13.4 pin, default GPU profile and valued `flash_attn` mapping landed with [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24). Full compatibility evidence, capability claims and complete setting-mapping verification stay [OQ-007](../specs/open-questions.md#oq-007).
+
+**Partial OQ-007 provenance records on #31** means versioned compatibility records keep publisher guidance, tested adjustments and user overrides separate. `tested` is a record status, not catalogue `verified`. Unverified ≠ incompatible.
+
+**Unknown-effect safety (STATE-004)** means reconnect/resume/restart reports uncertainty or reconciles with evidence. It does not silently replay an unknown external operation and does not promise external-effect rollback.
 
 **MOD-005 adapter** is the narrow LangChain ChatOpenAI client aimed at a model-manager deployment OpenAI-compatible endpoint. The adapter starts no inference process.
 

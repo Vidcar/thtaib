@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "compatibility-record",
+  "id": "compat_known_incompatible",
+  "record_version": 1,
+  "product": "Local AI Workbench",
+  "support_status": "known_incompatible",
+  "subject": {
+    "kind": "model_family",
+    "selector": "known-incompatible-fixture",
+    "display_name": "Known-incompatible fixture family"
+  },
+  "requirements": [
+    "Recorded as known incompatible for this managed llama.cpp pin"
+  ],
+  "supported_capabilities": [],
+  "supported_controls": [],
+  "recommendations": [
+    "Do not treat unverified models as this status"
+  ],
+  "sources": [
+    "pack fixture: known incompatibility example"
+  ],
+  "validation_evidence": [
+    "Pack fixture only. Distinguishes known incompatible from unverified. Not catalogue verified."
+  ],
+  "provenance": {
+    "publisher_guidance": [
+      {
+        "id": "pub_incompat",
+        "category": "publisher_guidance",
+        "claim": "Publisher documents this family as unsupported on the pinned engine flavour",
+        "source": "fixture-publisher-card",
+        "evidence_ref": null,
+        "note": "Publisher guidance for a known incompatibility."
+      }
+    ],
+    "tested_adjustments": [],
+    "user_overrides": []
+  },
+  "excluded": false,
+  "incompatible": true,
+  "catalogue_claim": "not_verified",
+  "note": "Known incompatible is not unverified. Inspectable; not a silent exclusion of unfamiliar models."
+}

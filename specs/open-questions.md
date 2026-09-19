@@ -6,7 +6,7 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 
 Later-decision product topics are recorded here so they stay visible: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016) — v1 chrome is locked in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the implementation remainder stays open. Recording a topic is not a selection, a silent default, or an ADR. Real choices use [the decision template](templates/decision.md) and maintainer approval.
 
-Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); identities, event reconciliation, exactly-once and external-effect remainder stay open. [OQ-016](#oq-016) v1 chrome **landed as a partial** on [Issue #29](https://github.com/Vidcar/thtaib/issues/29) / [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the unfinished Builder surface stays open and is not a shipped claim. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); [MOD-006](modules/models.md#mod-006) provenance-capable records **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); full evidence and capability claims stay open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); identities, event-order/reconnection and exactly-once stay open. [OQ-016](#oq-016) v1 chrome **landed as a partial** on [Issue #29](https://github.com/Vidcar/thtaib/issues/29) / [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the unfinished Builder surface stays open and is not a shipped claim. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
@@ -51,9 +51,9 @@ This is the isolation question. Tool/worker sandbox isolation — what a disposa
 <a id="oq-004"></a>
 ## OQ-004: Run state, events, continuation and uncertain effects
 
-**Status:** partially constrained by [Issue #27](https://github.com/Vidcar/thtaib/issues/27) for the dual application/checkpointer SQLite pair and app-owned run→checkpoint-id→file linkage. The question stays open.
+**Status:** partially constrained by [Issue #27](https://github.com/Vidcar/thtaib/issues/27) for the dual application/checkpointer SQLite pair and app-owned run→checkpoint-id→file linkage, and by [Issue #31](https://github.com/Vidcar/thtaib/issues/31) for [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety. The question stays open.
 
-**Owner:** Backend, agent/workflow and persistence boundaries jointly; backend maintains the shared contract. **Blocks:** remaining durable-run claims — identities beyond the locked linkage, event ordering/reconnection, state transitions, exactly-once, or external-effect acknowledgement.
+**Owner:** Backend, agent/workflow and persistence boundaries jointly; backend maintains the shared contract. **Blocks:** remaining durable-run claims — identities beyond the locked linkage, event ordering/reconnection, state transitions, or exactly-once.
 
 Issue #27 locked these defaults for [STATE-001](modules/state-recovery.md#state-001) and [STATE-002](modules/state-recovery.md#state-002). They are recorded in [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-27-partial-oq-004). Do not invent a second persistence owner or mutate checkpointer private tables:
 
@@ -63,7 +63,13 @@ Issue #27 locked these defaults for [STATE-001](modules/state-recovery.md#state-
 - JSON run/chat linkage under `state\` migrates to the application DB; after cutover there is no dual-write SoR.
 - Chat history is not the working project; filesystem tools write project storage only.
 
-The remainder stays open. Define identities beyond that linkage, parent/child semantics, thread/checkpoint namespaces for continuation, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Define acknowledgement/reconciliation for external effects and when retry, reconnect, resume, restart or human intervention is safe. Do not claim an exactly-once transaction across databases, files and services.
+Issue #31 additionally locked these [STATE-004](modules/state-recovery.md#state-004) defaults, recorded in [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-31-state-004):
+
+- Application-owned external-effect ledger in `application.sqlite` (`dispatched` / `acknowledged` / `unknown` / `reconciled` / `failed`).
+- Reconnect/resume/restart after a missing acknowledgement reports uncertainty and does not silently repeat the operation.
+- Snapshots do not roll back external effects (`rollback_promise=none`). Unresolved side effects are preserved.
+
+The remainder stays open. Define identities beyond that linkage, parent/child semantics, thread/checkpoint namespaces for continuation, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Exactly-once across databases, files and services is still not claimed. Worker-adapter interrupt/cancel truth remains [ENV-003](modules/environments-tools.md#env-003).
 
 A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Builder v1 chrome locks Run/Stop, canvas highlight and a run inspector in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); run-state semantics stay this question. Those chrome locks do not reopen this run-state contract.
 
@@ -112,7 +118,7 @@ The remainder stays open. Choose retrieval/indexing integration separately from 
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details
 
-**Status:** partial lifecycle and Windows CUDA defaults are implemented for [Issue #3](https://github.com/Vidcar/thtaib/issues/3) and [Issue #21](https://github.com/Vidcar/thtaib/issues/21). The CUDA pin and `flash_attn` mapping have landed. Full compatibility evidence, capability claims and complete setting-mapping verification remain open.
+**Status:** partial lifecycle and Windows CUDA defaults are implemented for [Issue #3](https://github.com/Vidcar/thtaib/issues/3) and [Issue #21](https://github.com/Vidcar/thtaib/issues/21). Provenance-capable compatibility records and the unverified≠incompatible distinction landed as a further partial on [Issue #31](https://github.com/Vidcar/thtaib/issues/31). Full compatibility evidence, capability claims and complete setting-mapping verification remain open. This does not close the question.
 
 **Owner:** Model-management boundary. **Blocks:** declaring model capabilities/configurations supported or exposing managed runtime controls as reliable.
 
@@ -122,6 +128,7 @@ Implemented now, without closing this question:
 
 - Issue #3: import jobs that fail or are interrupted do not create a complete bundle or a successful deployment; connected attachments report `scope=connected` and reject start/stop/kill; a compatibility-records stub exists and does not claim support; PATH llama-server is unsupported.
 - Issue #21: managed Windows NVIDIA hosts pin llama.cpp **b11045** CUDA 13.4 (`llama-b11045-bin-win-cuda-13.4-x64.zip` + `cudart-llama-bin-win-cuda-13.4-x64.zip`); NVIDIA absence is a clear error (no silent GPU claim); default GPU profile is `ctx_size` 65536, `n_gpu_layers` -1, valued `flash_attn`; `flash_attn` serializes as `--flash-attn on|off|auto` only; `local_executable` pins the full runtime directory; pin-while-running is reject or stop-first. Locked defaults are in [models](modules/models.md#locked-milestone-defaults-issue-21-partial-oq-007).
+- Issue #31: versioned compatibility records carry requirements, supported capabilities/controls, recommendations, sources and validation evidence; publisher guidance, tested adjustments and user overrides stay separate; unverified ≠ known incompatible ≠ tested; unfamiliar models are not excluded for being unverified. Locked defaults are in [models](modules/models.md#locked-milestone-defaults-issue-31-partial-oq-007). This is not catalogue `verified`.
 
 Multi-model routing and hybrid local GGUF / remote OpenAI-compatible deployments are [OQ-013](#oq-013). The model manager remains the owner; do not add a second inference engine.
 

@@ -62,7 +62,7 @@ Preserve user, agent and project knowledge scopes, provenance, versions and reve
 <a id="locked-milestone-defaults-issue-27-partial-oq-004"></a>
 ## Locked milestone defaults (Issue #27; partial OQ-004)
 
-These defaults are authorised by [Issue #27](https://github.com/Vidcar/thtaib/issues/27). They satisfy [STATE-001](#state-001) dual-database separation and keep [STATE-002](#state-002) history ≠ project. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event reconciliation, exactly-once and external-effect remainder stay open.
+These defaults are authorised by [Issue #27](https://github.com/Vidcar/thtaib/issues/27). They satisfy [STATE-001](#state-001) dual-database separation and keep [STATE-002](#state-002) history ≠ project. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event reconciliation and exactly-once stay open. External-effect acknowledgement is the Issue #31 partial below.
 
 - **App DB:** `%LOCALAPPDATA%\LocalAIWorkbench\application.sqlite` (or the same filename under the portable product root). Application system of record for runs, chat linkage, profile/deployment refs, checkpoint id links and file/artifact refs.
 - **Checkpointer DB:** separate `%LOCALAPPDATA%\LocalAIWorkbench\checkpoints.sqlite` (LangGraph SQLite checkpointer). Application code links by checkpoint id only and never mutates checkpointer private tables.
@@ -70,7 +70,18 @@ These defaults are authorised by [Issue #27](https://github.com/Vidcar/thtaib/is
 - **Migration:** JSON run/chat linkage under `state\` migrates into the application DB. After cutover the application DB is the only system of record for that linkage (no dual-write).
 - **STATE-002:** Chat history is not the working project. Filesystem tools write only to project storage. Editing or clearing displayed history alone neither restores nor deletes project files.
 - **Surfaces:** backend persistence plus the existing Chat / Issue #22 history and project-path controls. No Builder canvas ([OQ-016](../open-questions.md#oq-016)).
-- **Not claimed:** exactly-once across databases, files and services; event-order/reconnect contracts; external-effect acknowledgement.
+- **Not claimed:** exactly-once across databases, files and services; event-order/reconnect contracts. External-effect acknowledgement for [STATE-004](#state-004) lands with Issue #31 as a partial; see the locked defaults below.
+
+<a id="locked-milestone-defaults-issue-31-state-004"></a>
+## Locked milestone defaults (Issue #31; STATE-004 / partial OQ-004)
+
+These defaults are authorised by [Issue #31](https://github.com/Vidcar/thtaib/issues/31). They satisfy [STATE-004](#state-004) unknown-effect safety on the application ledger. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection contracts and exactly-once across databases, files and services stay open. They are not a catalogue `verified` claim.
+
+- **Ledger:** application-owned `external_effects` rows in `application.sqlite`. Outcomes: `dispatched`, `acknowledged`, `unknown`, `reconciled`, `failed`.
+- **Crash/reconnect:** if acknowledgement is missing, recover/reconnect/resume/restart reports `unknown` and **does not** repeat the operation. `replayed` is always false. Authoritative evidence may `reconcile` without replay.
+- **Snapshots:** do not undo external actions. `external_effect_rollback` is `not_supported`. `rollback_promise` is `none`. Unresolved side-effect ids are preserved on capture/restore. No whole-environment restore unless an adapter later declares it; the application ledger does not.
+- **Surfaces:** `POST /v1/effects`, acknowledge / recover / reconcile, and a rollback path that returns 409. Lab snapshot/restore carry the honesty fields. No Builder canvas.
+- **Not claimed:** exactly-once, a real worker-adapter interrupt (see [ENV-003](environments-tools.md#env-003)), or that reconnect event ordering is finished.
 
 <a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
 ## Locked milestone defaults (Issue #17; partial OQ-006)
@@ -89,4 +100,4 @@ These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-Issue #27 locked the dual-DB and app-linkage defaults above; resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. External-effect rollback stays [STATE-004](#state-004). No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.
+Issue #27 locked the dual-DB and app-linkage defaults above. Issue #31 locked the [STATE-004](#state-004) unknown-effect ledger (no silent replay; no external-effect rollback promise). Resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities, event ordering/reconnection and exactly-once. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. No exactly-once guarantee or migration library is selected by revision 0.5.

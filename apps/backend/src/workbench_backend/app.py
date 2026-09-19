@@ -17,12 +17,16 @@ from workbench_backend.agents.routes import router as agent_router
 from workbench_backend.chat.routes import router as chat_router
 from workbench_backend.chat.service import ChatService
 from workbench_backend.errors import WorkbenchError, workbench_error_handler
+from workbench_backend.inference.compatibility import CompatibilityService
+from workbench_backend.inference.compatibility_routes import router as compatibility_router
 from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
 from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
+from workbench_backend.state.effect_routes import router as effect_router
+from workbench_backend.state.effects import EffectService
 from workbench_backend.state.migrate import open_application_store
 
 PRODUCT_NAME = "Local AI Workbench"
@@ -49,6 +53,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     )
     application.state.manager = manager_from_env(data_root)
     application.state.app_store = open_application_store(application.state.manager.paths)
+    application.state.compatibility = CompatibilityService(application.state.manager.paths)
+    application.state.effects = EffectService(application.state.app_store)
     application.state.knowledge = KnowledgeService(application.state.manager.paths)
     application.state.harness = HarnessService(
         lambda: application.state.manager,
@@ -59,6 +65,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.manager,
         lambda: application.state.harness,
         knowledge_provider=lambda: application.state.knowledge,
+        effects_provider=lambda: application.state.effects,
     )
     application.state.chat = ChatService(
         lambda: application.state.manager,
@@ -67,6 +74,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         app_store=application.state.app_store,
     )
     application.include_router(router)
+    application.include_router(compatibility_router)
+    application.include_router(effect_router)
     application.include_router(agent_router)
     application.include_router(lab_router)
     application.include_router(knowledge_router)

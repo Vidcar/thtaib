@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local-ai-workbench.invalid/compatibility-record.schema.json",
+  "title": "Local AI Workbench compatibility record",
+  "description": "Versioned MOD-006 compatibility record. Unverified is not incompatible. Not a catalogue verified claim.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "id",
+    "record_version",
+    "support_status",
+    "subject",
+    "requirements",
+    "supported_capabilities",
+    "supported_controls",
+    "recommendations",
+    "sources",
+    "validation_evidence",
+    "provenance",
+    "catalogue_claim"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "compatibility-record" },
+    "id": { "type": "string" },
+    "record_version": { "type": "integer", "minimum": 1 },
+    "product": { "type": "string", "const": "Local AI Workbench" },
+    "support_status": {
+      "type": "string",
+      "enum": ["unverified", "known_incompatible", "tested"]
+    },
+    "subject": {
+      "type": "object",
+      "required": ["kind", "selector"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["unfamiliar", "model_family", "bundle"]
+        },
+        "selector": { "type": "string" },
+        "display_name": { "type": ["string", "null"] }
+      }
+    },
+    "requirements": { "type": "array", "items": { "type": "string" } },
+    "supported_capabilities": { "type": "array", "items": { "type": "string" } },
+    "supported_controls": { "type": "array", "items": { "type": "string" } },
+    "recommendations": { "type": "array", "items": { "type": "string" } },
+    "sources": { "type": "array", "items": { "type": "string" } },
+    "validation_evidence": { "type": "array", "items": { "type": "string" } },
+    "provenance": {
+      "type": "object",
+      "required": ["publisher_guidance", "tested_adjustments", "user_overrides"],
+      "additionalProperties": false,
+      "properties": {
+        "publisher_guidance": { "type": "array" },
+        "tested_adjustments": { "type": "array" },
+        "user_overrides": { "type": "array" }
+      }
+    },
+    "excluded": { "type": "boolean" },
+    "incompatible": { "type": "boolean" },
+    "catalogue_claim": { "type": "string", "const": "not_verified" },
+    "note": { "type": "string" }
+  },
+  "additionalProperties": false
+}
