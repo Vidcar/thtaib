@@ -42,7 +42,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | CDF fork | out of scope |
 | TooGraph as pixel target / fork | OQ-016 — TooGraph inspiration only (ADR-0003); original layout |
 | invent Builder chrome | OQ-016 v1 chrome locked (ADR-0003); implementation remainder |
-| custom desktop auth header | `X-Workbench-Local-Token` (ADR-0002 / Issue #40 default) |
+| custom desktop auth header | `X-Workbench-Local-Token` (ADR-0002 / Issues #40 and #41) |
 | cancel means requested | `cancel_requested` is still live; `cancelled` is confirmed stop |
 | Builder shipped | unfinished Builder surface (OQ-016 remainder) |
 | canvas config edge | node badge/popover for config (WF-001 unchanged) |
@@ -61,6 +61,11 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | mutate LangGraph tables | App links checkpoint ids only — never mutate checkpointer private tables |
 | clear chat deletes project | STATE-002 — history ≠ project |
 | close OQ-004 | Partial OQ-004 defaults only |
+| CORS is login | CORS is not authorisation |
+| secret in the repo | LocalAppData `state\desktop_backend_shared_secret` |
+| remote backend v1 | unsupported (partial OQ-002) |
+| renderer holds the token | Electron main injects `X-Workbench-Local-Token` |
+| close OQ-002 | Partial OQ-002 defaults only |
 | unverified means incompatible | Unverified ≠ incompatible |
 | silently retry unknown tool | Unknown-effect safety (STATE-004) |
 | snapshot undoes the email | No external-effect rollback promise |
@@ -79,7 +84,15 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Repository-map binding** is a real path recorded in `specs/repository-map.json`. Unbound entries stay `null` until their `required_before` trigger.
 
-**Provisional localhost HTTP** is loopback smoke for the FastAPI process. It does not close [OQ-002](../specs/open-questions.md#oq-002) and is not a trust model.
+**Provisional localhost HTTP** is the v1 loopback bind (`127.0.0.1` only). [Issue #40](https://github.com/Vidcar/thtaib/issues/40) adds shared-secret header checks; that does not close [OQ-002](../specs/open-questions.md#oq-002) and is not a remote-backend claim.
+
+**`X-Workbench-Local-Token`** is the locked desktop↔backend local-trust header. ADR-0002 / Issue #41 owns the generated envelope. Issue #40 implements Electron main injection and the LocalAppData secret. The renderer must not hold or send the secret.
+
+**LocalAppData `state\desktop_backend_shared_secret`** is the shared-secret file under `%LOCALAPPDATA%\LocalAIWorkbench\state\` (or the portable `state\` sibling). It is created on first use if missing. Never commit it.
+
+**Partial OQ-002 defaults only** means Issue #40 locked same-machine shared-secret + loopback bind. Event reconnection and remote backend stay [OQ-002](../specs/open-questions.md#oq-002).
+
+**CORS is not authorisation.** Allowed origins do not grant privileged `/v1` access. Missing token → 401; wrong token → 403.
 
 **Docker Compose stub** is `infra/docker-compose.yml` with no product services. Compose is reserved for later container services.
 
@@ -182,8 +195,6 @@ These names are locked vocabulary, not selections. The questions stay in [open q
 **Voice/multimodal optional (OQ-009)** stays experimental. It is not a core prerequisite.
 
 **Builder canvas and chrome UX (OQ-016)** is partially decided for **v1 chrome** in [ADR-0003](../specs/decisions/ADR-0003-builder-v1-chrome.md): TooGraph-inspired cues with an original layout; grid, zoom, minimap, multi-select; icon rail and searchable node library; expanded nodes with an inline prompt editor; Run/Stop, canvas highlight and a run inspector; colour+label workflow edges with config via node badge/popover (not a canvas config edge); inherit workflow profile/deployment with explicit per-node override only. The remainder is the unfinished Builder surface — not a shipped claim. [OQ-004](../specs/open-questions.md#oq-004) and [OQ-011](../specs/open-questions.md#oq-011) stay open. [WF-001](../specs/modules/agents-workflows.md#wf-001) and [ARCH-003](../specs/architecture.md#arch-003) behaviour are unchanged. TooGraph is inspiration only — not a pixel target and not a fork.
-
-**`X-Workbench-Local-Token`** is the locked desktop↔backend local-trust header name. Issue #40 implements Electron injection and the LocalAppData secret; ADR-0002 only defines the shared type/envelope.
 
 **`cancel_requested` / `cancelled`** are shared run-lifecycle names. `cancel_requested` is still live (not quiescent). `cancelled` is confirmed stop. Issue #42 owns harness honesty; ADR-0002 only defines the shared names.
 

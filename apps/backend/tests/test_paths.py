@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from workbench_backend.paths import PRODUCT_DATA_DIR, WorkbenchPaths, resolve_data_root
+from workbench_backend.paths import PRODUCT_DATA_DIR, SHARED_SECRET_FILENAME, WorkbenchPaths, resolve_data_root
 
 
 class PathResolutionTests(unittest.TestCase):
@@ -49,6 +49,8 @@ class PathResolutionTests(unittest.TestCase):
         self.assertIn("knowledge", public["windows_layout"])
         self.assertIn("application.sqlite", public["windows_layout"])
         self.assertIn("checkpoints.sqlite", public["windows_layout"])
+        self.assertEqual(paths.desktop_backend_shared_secret, paths.state / SHARED_SECRET_FILENAME)
+        self.assertNotIn("shared_secret", public)
 
 
 if __name__ == "__main__":

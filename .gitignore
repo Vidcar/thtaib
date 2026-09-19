@@ -37,6 +37,7 @@ out/
 *.bin
 models/
 data/
+desktop_backend_shared_secret
 
 # Local scratch (UAT / temp) — never commit
 .scratch/

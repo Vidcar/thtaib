@@ -19,7 +19,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite
+from tests.support import close_workbench_sqlite, workbench_client
 
 FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
 
@@ -86,7 +86,7 @@ class ChatHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "chat-fixture"},
@@ -286,7 +286,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
             model_factory=factory,
             app_store=self.app.state.app_store,
         )
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "fs-fixture"},

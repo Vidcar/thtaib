@@ -1,7 +1,14 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, session } from "electron";
+
+import {
+  WORKBENCH_BACKEND_ORIGIN,
+  WORKBENCH_LOCAL_TOKEN_HEADER,
+  ensureSharedSecret,
+  resolveProductDataRoot,
+} from "./localTrust";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,7 +51,23 @@ function createWindow(): void {
   void window.loadFile(path.join(currentDir, "../dist/index.html"));
 }
 
+function installLocalTrustHeader(): void {
+  const token = ensureSharedSecret(resolveProductDataRoot());
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: [`${WORKBENCH_BACKEND_ORIGIN}/*`] },
+    (details, callback) => {
+      callback({
+        requestHeaders: {
+          ...details.requestHeaders,
+          [WORKBENCH_LOCAL_TOKEN_HEADER]: token,
+        },
+      });
+    },
+  );
+}
+
 app.whenReady().then(() => {
+  installLocalTrustHeader();
   createWindow();
 
   app.on("activate", () => {

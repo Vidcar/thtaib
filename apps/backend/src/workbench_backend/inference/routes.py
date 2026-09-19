@@ -1,4 +1,4 @@
-"""HTTP routes for the model manager. Loopback smoke only; OQ-002 stays open."""
+"""HTTP routes for the model manager. Privileged /v1; Issue #40 partial OQ-002."""
 
 from __future__ import annotations
 

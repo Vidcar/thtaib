@@ -666,10 +666,12 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/app.py",
+        "apps/backend/src/workbench_backend/local_trust.py",
         "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
         "apps/backend/tests/test_app.py",
+        "apps/backend/tests/test_local_trust.py",
         "apps/backend/tests/test_harness.py"
       ],
       "evidence": []
@@ -680,7 +682,9 @@
       "implementation_status": "partial",
       "code": [
         "apps/desktop/src/renderer/App.tsx",
-        "apps/desktop/src/renderer/api.ts"
+        "apps/desktop/src/renderer/api.ts",
+        "apps/desktop/src/main/main.ts",
+        "apps/desktop/src/main/localTrust.ts"
       ],
       "tests": [],
       "evidence": []
@@ -688,9 +692,16 @@
     {
       "id": "API-003",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/local_trust.py",
+        "apps/backend/src/workbench_backend/contracts/auth.py",
+        "apps/backend/src/workbench_backend/app.py",
+        "apps/backend/src/workbench_backend/__main__.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_local_trust.py"
+      ],
       "evidence": []
     },
     {

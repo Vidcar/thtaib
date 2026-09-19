@@ -25,7 +25,7 @@ from workbench_backend.inference.schemas import LocalImportRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests.support import close_workbench_sqlite, write_tiny_gguf
+from tests.support import close_workbench_sqlite, workbench_client, write_tiny_gguf
 
 
 class ProvenanceSeparationTests(unittest.TestCase):
@@ -69,7 +69,7 @@ class CompatibilityApiTests(unittest.TestCase):
         self.app = create_app(data_root=self.root)
         self.app.state.manager = self.manager
         self.app.state.compatibility = CompatibilityService(self.paths)
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
 
     def tearDown(self) -> None:
         close_workbench_sqlite(self.app, getattr(self, "client", None))

@@ -14,7 +14,7 @@ from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import close_workbench_sqlite, write_tiny_gguf
+from support import close_workbench_sqlite, workbench_client, write_tiny_gguf
 
 
 class FakeHF:
@@ -55,12 +55,15 @@ class HealthEndpointTests(unittest.TestCase):
     def test_openapi_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = create_app(data_root=Path(tmp))
-            client = TestClient(app)
+            anonymous = TestClient(app)
+            authorized = workbench_client(app)
             try:
-                self.assertEqual(client.get("/openapi.json").status_code, 404)
-                self.assertEqual(client.get("/docs").status_code, 404)
+                self.assertEqual(anonymous.get("/openapi.json").status_code, 401)
+                self.assertEqual(anonymous.get("/docs").status_code, 401)
+                self.assertEqual(authorized.get("/openapi.json").status_code, 404)
+                self.assertEqual(authorized.get("/docs").status_code, 404)
             finally:
-                close_workbench_sqlite(app, client)
+                close_workbench_sqlite(app, anonymous, authorized)
 
 
 class ModelManagerApiTests(unittest.TestCase):
@@ -75,7 +78,7 @@ class ModelManagerApiTests(unittest.TestCase):
         )
         self.app = create_app(data_root=self.root)
         self.app.state.manager = self.manager
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
 
     def tearDown(self) -> None:
         close_workbench_sqlite(self.app, getattr(self, "client", None))

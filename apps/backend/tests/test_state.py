@@ -26,7 +26,7 @@ from workbench_backend.state.checkpointer import open_sqlite_checkpointer
 from workbench_backend.state.store import json_chat_root
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite
+from tests.support import close_workbench_sqlite, workbench_client
 
 LANGGRAPH_PRIVATE_TABLES = {"checkpoints", "writes"}
 
@@ -178,7 +178,7 @@ class RunLinkageRestartTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "state-fixture"},
@@ -220,7 +220,7 @@ class RunLinkageRestartTests(unittest.TestCase):
 
         restarted = create_app(data_root=self.root)
         self.restarted = restarted
-        client = TestClient(restarted)
+        client = workbench_client(restarted)
         restored = client.get(f"/v1/agent-runs/{run_id}")
         self.assertEqual(restored.status_code, 200, restored.text)
         payload = restored.json()

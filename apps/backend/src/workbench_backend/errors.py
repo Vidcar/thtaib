@@ -50,6 +50,10 @@ class DefinitionCompileError(WorkbenchError):
     """WF-001 definition compiler error. Not a Builder or workflow-runtime claim."""
 
 
+class LocalTrustError(WorkbenchError):
+    """Missing or invalid desktop↔backend shared-secret token."""
+
+
 def workbench_error_handler(_request: Request, exc: WorkbenchError) -> JSONResponse:
     content: dict[str, object] = {"error": exc.message, "code": exc.code}
     content.update(exc.details)

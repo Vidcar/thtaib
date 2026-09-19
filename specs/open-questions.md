@@ -6,12 +6,12 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 
 Later-decision product topics are recorded here so they stay visible: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016) — v1 chrome is locked in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the implementation remainder stays open. Recording a topic is not a selection, a silent default, or an ADR. Real choices use [the decision template](templates/decision.md) and maintainer approval.
 
-Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); [MOD-006](modules/models.md#mod-006) provenance-capable records **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); full evidence and capability claims stay open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); identities, event-order/reconnection and exactly-once stay open. [OQ-016](#oq-016) v1 chrome **landed as a partial** on [Issue #29](https://github.com/Vidcar/thtaib/issues/29) / [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the unfinished Builder surface stays open and is not a shipped claim. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish. [OQ-010](#oq-010) registered backend/desktop CI jobs on [Issue #32](https://github.com/Vidcar/thtaib/issues/32); [Issue #36](https://github.com/Vidcar/thtaib/issues/36) locks those jobs as **advisory CI only** — required branch-protection checks are deferred indefinitely until Pro or public, with **no open ask for David**. Remaining product gates stay open.
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); [MOD-006](modules/models.md#mod-006) provenance-capable records **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); full evidence and capability claims stay open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety **landed as a further partial** on [Issue #31](https://github.com/Vidcar/thtaib/issues/31); identities, event-order/reconnection and exactly-once stay open. [OQ-002](#oq-002) same-machine shared-secret + loopback bind **landed as a partial** on [Issue #40](https://github.com/Vidcar/thtaib/issues/40); event reconnection and remote backend stay open. [OQ-016](#oq-016) v1 chrome **landed as a partial** on [Issue #29](https://github.com/Vidcar/thtaib/issues/29) / [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the unfinished Builder surface stays open and is not a shipped claim. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish. [OQ-010](#oq-010) registered backend/desktop CI jobs on [Issue #32](https://github.com/Vidcar/thtaib/issues/32); [Issue #36](https://github.com/Vidcar/thtaib/issues/36) locks those jobs as **advisory CI only** — required branch-protection checks are deferred indefinitely until Pro or public, with **no open ask for David**. Remaining product gates stay open.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
 
-**Status:** layout and toolchain pins are recorded for the Windows-first scaffold ([Issue #1](https://github.com/Vidcar/thtaib/issues/1)). Remaining evidence is UAT on David-PC. This does not close [OQ-002](open-questions.md#oq-002).
+**Status:** layout and toolchain pins are recorded for the Windows-first scaffold ([Issue #1](https://github.com/Vidcar/thtaib/issues/1)). Remaining evidence is UAT on David-PC. This does not close the [OQ-002](open-questions.md#oq-002) remainder (event reconnection / remote backend).
 
 **Owner:** Backend/desktop maintainers. **Blocks:** first application scaffold or dependency installation represented as the supported setup.
 
@@ -32,11 +32,20 @@ Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manife
 <a id="oq-002"></a>
 ## OQ-002: Desktop/backend trust and communication
 
-**Owner:** Backend/desktop boundary. **Blocks:** connecting a privileged API or desktop to real tools, files or credentials.
+**Status:** partially constrained by [Issue #40](https://github.com/Vidcar/thtaib/issues/40) for same-machine shared-secret authentication and loopback bind. The question stays open.
 
-Choose local transport/IPC, API authentication and origin checks, Electron trust boundaries, secret handling, event streaming/reconnection and endpoint exposure. Define whether remote backend access is supported; remote workers do not automatically imply an internet-exposed backend. The source names FastAPI and Electron but does not select these controls.
+**Owner:** Backend/desktop boundary. **Blocks:** remaining trust claims — event streaming/reconnection, remaining origin/IPC details, or treating a remote backend as supported.
 
-**Evidence needed:** contract fixtures plus denied unauthorised requests, reconnect behaviour and a real desktop/backend interaction. An API bound locally must not be assumed secure solely because it is local.
+Issue #40 locked these defaults. They are recorded in [backend and desktop](modules/backend-desktop.md#locked-milestone-defaults-issue-40-partial-oq-002). Do not invent a remote-backend or renderer-held secret:
+
+- Secret file: `%LOCALAPPDATA%\LocalAIWorkbench\state\desktop_backend_shared_secret` (or the portable `state\` sibling). Never in the repository.
+- Header: `X-Workbench-Local-Token` imported from the Issue #41 / ADR-0002 envelope. Electron **main** injects; the renderer does not hold the secret.
+- Bind: `127.0.0.1` only (v1). Remote backend is unsupported.
+- Unauthenticated / wrong-token clients receive 401/403 on privileged `/v1` routes, including Chat, Lab and project-file operations. `GET /health` remains a public smoke identity. CORS is not authorisation.
+
+The remainder stays open. Choose event streaming/reconnection, remaining origin/IPC checks, and whether remote backend access is ever supported; remote workers do not automatically imply an internet-exposed backend. The source names FastAPI and Electron but does not select those remaining controls.
+
+**Evidence needed:** denied unauthorised requests (executable unit checks exist for the locked defaults), reconnect behaviour, and a real Electron main ↔ backend pairing on David-PC. An API bound locally must not be assumed secure solely because it is local. Unit checks are not that UAT evidence.
 
 <a id="oq-003"></a>
 ## OQ-003: Worker protocol, isolation and access policy
