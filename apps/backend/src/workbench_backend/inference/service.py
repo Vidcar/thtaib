@@ -158,7 +158,10 @@ class ModelManager:
                     status_code=409,
                 )
             for deployment in running:
+                pid = deployment.pid
                 self.deployments.stop(deployment.id)
+                if pid is not None:
+                    self.deployments.processes.wait_until_gone(pid)
         return self.runtime.pin(request)
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:

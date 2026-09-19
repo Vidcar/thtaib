@@ -7,7 +7,9 @@ GPU path.
 
 from __future__ import annotations
 
+import errno
 import shutil
+import time
 import zipfile
 from pathlib import Path
 from typing import Literal
@@ -270,8 +272,32 @@ def _copy_runtime_directory(source_dir: Path, dest_dir: Path) -> None:
     if source == dest:
         return
     if dest.exists():
-        shutil.rmtree(dest)
+        _rmtree_when_unlocked(dest)
     shutil.copytree(source, dest)
+
+
+def _rmtree_when_unlocked(path: Path, *, attempts: int = 25, delay: float = 0.1) -> None:
+    """Retry directory removal while a just-stopped process still holds it."""
+
+    last: OSError | None = None
+    for _ in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            last = exc
+            if not _is_locked_oserror(exc):
+                raise
+            time.sleep(delay)
+    if last is not None:
+        raise last
+
+
+def _is_locked_oserror(exc: OSError) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {5, 32}:
+        return True
+    return exc.errno in {errno.EACCES, errno.EPERM, errno.EBUSY, errno.ENOTEMPTY}
 
 
 def _extract_zip(archive: Path, dest: Path) -> None:

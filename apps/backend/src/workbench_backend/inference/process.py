@@ -57,6 +57,12 @@ class ProcessSupervisor:
         return int(process.pid)
 
     def stop(self, pid: int, *, timeout: float = 5.0) -> None:
+        """Terminate the managed process tree and wait until it is gone.
+
+        Callers that replace ``runtimes/local-pin`` (``stop_first`` pin) must
+        not copy until this returns. On Windows a still-living child or an
+        open cwd/exe handle makes ``shutil.rmtree`` fail with WinError 32.
+        """
         child = self._children.pop(pid, None)
         if child is not None and child.poll() is None:
             child.terminate()
@@ -64,22 +70,62 @@ class ProcessSupervisor:
                 child.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 child.kill()
-                child.wait(timeout=timeout)
-            return
-        if not self.is_running(pid):
-            return
-        process = psutil.Process(pid)
-        process.terminate()
-        try:
-            process.wait(timeout=timeout)
-        except psutil.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=timeout)
+                try:
+                    child.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    pass
+        self._stop_process_tree(pid, timeout=timeout)
+        self.wait_until_gone(pid, timeout=timeout)
+
+    def wait_until_gone(self, pid: int, *, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self.is_running(pid):
+                return
+            time.sleep(0.05)
+        if self.is_running(pid):
+            self._stop_process_tree(pid, timeout=timeout, force=True)
+        while time.monotonic() < deadline + timeout:
+            if not self.is_running(pid):
+                return
+            time.sleep(0.05)
 
     def is_running(self, pid: int | None) -> bool:
         if pid is None:
             return False
-        return psutil.pid_exists(pid) and psutil.Process(pid).is_running()
+        try:
+            return psutil.pid_exists(pid) and psutil.Process(pid).is_running()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+
+    def _stop_process_tree(self, pid: int, *, timeout: float, force: bool = False) -> None:
+        try:
+            process = psutil.Process(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+        descendants: list[psutil.Process] = []
+        try:
+            descendants = process.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            descendants = []
+        targets = [*descendants, process]
+        for item in targets:
+            try:
+                if force:
+                    item.kill()
+                else:
+                    item.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        _gone, alive = psutil.wait_procs(targets, timeout=timeout)
+        if not alive:
+            return
+        for item in alive:
+            try:
+                item.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        psutil.wait_procs(alive, timeout=timeout)
 
     def resource_usage(self, pid: int | None) -> ResourceUsage:
         if not self.is_running(pid):
