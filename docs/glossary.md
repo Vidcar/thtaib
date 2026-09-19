@@ -64,6 +64,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | unverified means incompatible | Unverified ≠ incompatible |
 | silently retry unknown tool | Unknown-effect safety (STATE-004) |
 | snapshot undoes the email | No external-effect rollback promise |
+| put it on the board | Set Project Status **and** attach a Milestone |
+| milestone with a deadline | Delivery Milestone (no due date) |
+| sprint / velocity | Out of scope (not how Issues are tracked) |
+| cryptic Milestone title | Plain-English delivery name |
 
 ## Product and layout
 
@@ -146,6 +150,16 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Reuse managed Model bundle (reference/link; no scratch copy)** means capability UAT points at the registered bundle or its local path. Do not copy the GGUF into `.scratch/uat/` or any other workroot.
 
 **Never commit GGUF/mmproj/weights.** Existing ignore patterns stay. For vision-related capability UAT, include the official mmproj companion from the same Hugging Face repository in the same Model bundle.
+
+## Issue tracking
+
+**Project Status** is the GitHub Project field for **agent pipeline state only**: Backlog, Ready, In progress, Review, UAT, Done. Keep it accurate when the Issue moves. It is not a delivery label and not a second board.
+
+**Milestone** is which plain-English **delivery** the Issue belongs to — what David is getting. Optional short description; **no due date**. It is not a second Status board, not a sprint, and not a velocity target. One Milestone per delivery; close it when that delivery’s Issues are done. Do not keep a forever-open “everything” Milestone. Title it so David can scan the delivery (for example “End-to-end gaps — Slice 1: desktop trust, contracts, cancel honesty”), not a cryptic code. Put a technical hint in the Issue title if needed.
+
+**Tracking Issue** is an epic/checklist. It stays open until the whole proof is done. Focused Issues link to it **and** share its Milestone.
+
+“Put it on the board” means set Project Status **and** attach a Milestone. Spec does both when opening a Ready Issue. Builder, Reviewer, UAT and Release do not invent parallel boards. Informal “out of scope this milestone” in product copy is not a GitHub Milestone and is not a deadline.
 
 ## Later-decision phrases (still open)
 
