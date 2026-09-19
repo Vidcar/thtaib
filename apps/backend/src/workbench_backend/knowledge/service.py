@@ -98,8 +98,7 @@ class KnowledgeService:
 
     def list_versions(self, entry_id: str) -> list[KnowledgeVersion]:
         self.get_entry(entry_id)
-        versions = self.store.list_versions(entry_id)
-        return sorted(versions, key=lambda item: item.created_at)
+        return self._order_versions(self.store.list_versions(entry_id))
 
     def get_version(self, version_id: str) -> KnowledgeVersion:
         version = self.store.get_version(version_id)
@@ -149,20 +148,24 @@ class KnowledgeService:
         stored, redacted, fields = apply_redaction(request.content, settings.redaction_mode)
         now = datetime.now(timezone.utc).replace(microsecond=0)
         expires_at = None
+        expired = False
         if settings.retention_seconds is not None:
             expires_at = now + timedelta(seconds=settings.retention_seconds)
-        discarded = settings.redaction_mode == "discard"
+            expired = expires_at <= now
+        discarded = settings.redaction_mode == "discard" or expired
+        stored_content = None if discarded else stored
         record = ContextCapture(
             id=new_id("kcap"),
             created_at=now.isoformat(),
             expires_at=expires_at.isoformat() if expires_at else None,
             retention_seconds=settings.retention_seconds,
             redaction_mode=settings.redaction_mode,
-            content=None if discarded else stored,
-            retained=not discarded,
-            redacted=redacted,
-            discarded=discarded,
-            redacted_fields=fields,
+            content=stored_content,
+            retained=stored_content is not None,
+            redacted=False if discarded else redacted,
+            discarded=settings.redaction_mode == "discard",
+            expired=expired,
+            redacted_fields=[] if discarded else fields,
             run_id=request.run_id,
             source=request.source,
         )
@@ -304,10 +307,28 @@ class KnowledgeService:
             version_created_at=version.created_at,
         )
 
+    def _order_versions(self, versions: list[KnowledgeVersion]) -> list[KnowledgeVersion]:
+        children: dict[str | None, list[KnowledgeVersion]] = {}
+        for version in versions:
+            children.setdefault(version.previous_version_id, []).append(version)
+        ordered: list[KnowledgeVersion] = []
+        pending = list(children.get(None, []))
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop(0)
+            if current.id in seen:
+                continue
+            seen.add(current.id)
+            ordered.append(current)
+            pending.extend(children.get(current.id, []))
+        leftovers = [item for item in versions if item.id not in seen]
+        leftovers.sort(key=lambda item: (item.created_at, item.id))
+        return ordered + leftovers
+
     def _expire_captures(self) -> None:
         now = datetime.now(timezone.utc)
         for capture in self.store.list_captures():
-            if capture.expires_at is None:
+            if capture.expired or capture.expires_at is None:
                 continue
             expires = datetime.fromisoformat(capture.expires_at)
             if expires.tzinfo is None:
