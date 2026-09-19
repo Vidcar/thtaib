@@ -261,6 +261,16 @@ export interface ChatMessage {
   run_id: string | null;
 }
 
+export interface ChatDeployHealth {
+  deployment_id: string;
+  deployment_status: string;
+  healthy: boolean | null;
+  code: "deploy_unhealthy" | "deploy_unreachable" | null;
+  message: string | null;
+  detail: string | null;
+  note: string;
+}
+
 export interface ChatContinuity {
   conversation_id: string;
   thread_id: string;
@@ -293,6 +303,7 @@ export interface ChatConversation {
   current_run: AgentRun | null;
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;
+  deploy_health?: ChatDeployHealth | null;
   created_at: string;
   updated_at: string;
 }

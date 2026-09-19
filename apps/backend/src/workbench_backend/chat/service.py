@@ -7,6 +7,7 @@ from pathlib import Path
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest
+from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
     ChatContinuity,
     ChatConversation,
@@ -331,6 +332,7 @@ class ChatService:
                 if self._maybe_append_assistant(conversation, current) and persist:
                     self.store.put(conversation)
         thread_id = conversation.thread_id or ""
+        deployment = self.manager.get_deployment(conversation.deployment_id)
         return ChatConversationView(
             **conversation.model_dump(),
             current_run=current,
@@ -341,6 +343,7 @@ class ChatService:
                 run_ids=list(conversation.run_ids),
                 current_run_id=conversation.current_run_id,
             ),
+            deploy_health=report_chat_deploy_health(deployment, current),
         )
 
     def _maybe_append_assistant(self, conversation: ChatConversation, run: AgentRun) -> bool:

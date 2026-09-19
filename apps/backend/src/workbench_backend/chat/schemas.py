@@ -44,6 +44,23 @@ class ChatTranscriptReplaceRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
 
 
+class ChatDeployHealth(BaseModel):
+    """Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces."""
+
+    deployment_id: str
+    deployment_status: str
+    healthy: bool | None = None
+    code: Literal["deploy_unhealthy", "deploy_unreachable"] | None = None
+    message: str | None = None
+    detail: str | None = None
+    note: str = (
+        "Live Chat completion requires a healthy managed/connected llama.cpp. "
+        "Harness model_requests and thread reuse prove continuity only — not "
+        "live assistant completion. David-PC UAT must check deploy health "
+        "before treating a reply as live proof."
+    )
+
+
 class ChatContinuity(BaseModel):
     """Documented conversation ↔ thread ↔ run linkage (Issue #56)."""
 
@@ -92,6 +109,7 @@ class ChatConversationView(ChatConversation):
     current_run: AgentRun | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     continuity: ChatContinuity | None = None
+    deploy_health: ChatDeployHealth | None = None
     note: str = (
         "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
         "iteration. Follow-ups resume conversation.thread_id. Transcript is "
