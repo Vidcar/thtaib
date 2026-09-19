@@ -64,3 +64,5 @@ Expose answers, failures, resource use, artifacts and checks rather than scores 
 ## Unresolved details
 
 [OQ-005](../open-questions.md#oq-005) covers restorable starting states; [OQ-010](../open-questions.md#oq-010) covers remaining product gates beyond the registered backend/desktop commands. Optional beta grading support is tracked separately under [OQ-009](../open-questions.md#oq-009). [OQ-012](../open-questions.md#oq-012) covers run observability outside Lab. [OQ-014](../open-questions.md#oq-014) covers evaluation UX beyond Inspect. Debug-quality Chat lands with Issue #22; Builder is not shipped. Lab sharing with those surfaces stays intended, not a finished-product claim.
+
+**Product feature split:** [Model Lab](../../docs/glossary.md#model-lab) (hardware-local trait/capability tests) and [Task cases and replay](../../docs/glossary.md#task-cases-and-replay) are separate delivery features. This module may describe both. [LAB-001](#lab-001) is the engine-versus-task separation; it is not permission to merge those features. See the [delivery feature map](../../docs/delivery-feature-map.md).
