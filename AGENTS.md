@@ -23,6 +23,8 @@ Inspect existing code first. The Windows-first scaffold lives under `apps/backen
 
 Throwaway UAT and temp files belong only under `.scratch/` at the repository root (the entire tree is gitignored). Use `.scratch/uat/` for UAT workroots and `.scratch/logs/` for capture files. Do not create `uat-workroot*` or other UAT droppings at the repository root. Durable product and managed-inference data stays under `%LOCALAPPDATA%\LocalAIWorkbench\`, never in `.scratch/`.
 
+Capability UAT (replies, tool calling, MTP/vision-related checks) uses the **preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS)**: `unsloth/Qwen3.8-27B-GGUF` file `Qwen3.8-27B-UD-IQ4_XS.gguf` (~14.3 GB). Download it once, revision-pinned via `huggingface_hub`, under `%LOCALAPPDATA%\LocalAIWorkbench\models\`, and register it as a Model bundle (MOD-001). Reuse that bundle by reference or local path; do not copy weights into `.scratch/uat/` or the repository. For vision-related capability UAT, include the official mmproj companion from the same repository in the same bundle. Tiny models are for fast smoke and process tests only — not for reply or tool acceptance. Never commit GGUF, mmproj, or other weights. Locked names are in [the glossary](docs/glossary.md).
+
 ## Before implementing
 
 State the task outcome, relevant requirement IDs, files/boundaries affected, acceptance checks and unresolved dependencies. For a substantial or interrupted task use the [task template](specs/templates/task.md); small fixes may use the pull-request description instead.
