@@ -168,6 +168,13 @@ class ProcessSupervisor:
     def classify(self, identity: ProcessIdentity) -> IdentityVerdict:
         return classify_identity(identity, inspector=self.inspector)
 
+    def launched_still_running(self, pid: int) -> bool:
+        """True only for a child this supervisor launched that has not exited."""
+        child = self._children.get(int(pid))
+        if child is None:
+            return False
+        return child.poll() is None
+
     def owns_listen(self, identity: ProcessIdentity, port: int) -> bool | None:
         if self.classify(identity) != "match":
             return False
@@ -339,6 +346,9 @@ def wait_for_owned_health(
 
     Returns ``(verdict, report, owns_listen)``. ``owns_listen`` is ``None``
     when sockets cannot be inspected or no port was supplied.
+
+    A healthy endpoint with ``owns_listen is None`` is not ownership. Keep
+    waiting until listen is proven, denied, the process exits, or timeout.
     """
     report = probe.health(endpoint)
     owns: bool | None = None
@@ -346,16 +356,21 @@ def wait_for_owned_health(
         verdict = supervisor.classify(identity)
         if verdict != "match":
             return verdict, report, False
+        if not supervisor.launched_still_running(identity.pid):
+            return "gone", report, False
         if port is not None:
             owns = supervisor.owns_listen(identity, port)
         if report.healthy:
+            if owns is True:
+                return "match", report, True
             if owns is False:
                 return "match", report, False
-            return "match", report, owns
         time.sleep(delay)
         report = probe.health(endpoint)
     verdict = supervisor.classify(identity)
-    if verdict == "match" and port is not None:
+    if verdict != "match" or not supervisor.launched_still_running(identity.pid):
+        return "gone" if verdict == "match" else verdict, report, False
+    if port is not None:
         owns = supervisor.owns_listen(identity, port)
     return verdict, report, owns
 

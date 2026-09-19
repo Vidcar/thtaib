@@ -248,7 +248,7 @@ class DeploymentService:
                 identity,
                 port=port,
             )
-            if verdict != "match":
+            if verdict != "match" or not self.processes.launched_still_running(identity.pid):
                 return self._fail_unowned(
                     recorded,
                     error=(

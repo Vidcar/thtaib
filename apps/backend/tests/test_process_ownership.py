@@ -24,6 +24,7 @@ from workbench_backend.inference.process import (
     PROCESS_IDENTITY_UNPROVEN,
     ProcessInspector,
     ProcessSupervisor,
+    wait_for_owned_health,
 )
 from workbench_backend.inference.runtime import RuntimeService
 from workbench_backend.inference.schemas import (
@@ -57,6 +58,16 @@ class ScriptedInspector(ProcessInspector):
 
     def listen_ports(self, pid: int) -> list[int] | None:
         return self.ports.get(int(pid))
+
+
+class _ExitedChild:
+    """Stand-in Popen that has already exited. Never a live host process."""
+
+    def poll(self) -> int:
+        return 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
 
 
 class HealthyProbe:
@@ -344,6 +355,27 @@ class ProcessIdentityFixtureTests(unittest.TestCase):
         self.assertIsNone(reconciled[0].process_identity)
         self.assertEqual(reconciled[0].status, DeploymentStatus.stopped)
         self.assertIn("cleared without termination", reconciled[0].error or "")
+
+    def test_healthy_unknown_listen_is_not_immediate_ownership(self) -> None:
+        inspector = ScriptedInspector()
+        identity = ProcessIdentity(pid=42424247, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424247] = identity
+        inspector.ports[42424247] = None
+        supervisor = ProcessSupervisor(inspector=inspector)
+        supervisor._children[42424247] = _ExitedChild()
+        verdict, report, owns = wait_for_owned_health(
+            HealthyProbe(),
+            "http://127.0.0.1:9/v1",
+            supervisor,
+            identity,
+            port=9,
+            attempts=5,
+            delay=0.0,
+        )
+        self.assertNotEqual(verdict, "match")
+        self.assertTrue(report.healthy)
+        self.assertIs(owns, False)
+        self.assertEqual(self.terminations, [])
 
     def test_supervisor_stop_mismatch_does_not_touch_psutil_tree(self) -> None:
         inspector = ScriptedInspector()
