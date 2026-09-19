@@ -17,6 +17,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | kill the remote server | Connected endpoint — no destructive lifecycle |
 | compatibility means supported | Unverified ≠ incompatible |
 | PATH llama | Unsupported fallback; managed runtime is the supported path |
+| use 0.5B for agent UAT | Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS) |
+| copy GGUF into workroot | Reuse managed Model bundle (reference/link; no scratch copy) |
+| check in weights | Never commit GGUF/mmproj/weights |
 | add RAG | OQ-006 unresolved (surface vs shared) |
 | MCP is the bus | open — default tool bus vs optional (OQ-009 / OQ-003) |
 | Approvals = LangGraph interrupt | OQ-011 — durable product Approvals inbox ≠ framework interrupt |
@@ -64,6 +67,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Unverified ≠ incompatible.** A missing compatibility claim is not a known incompatibility and is not a supported-capability claim.
 
 **PATH llama** is an unsupported fallback. UAT claims use a managed runtime pinned under `runtimes\` with a runtime-manifest.
+
+**Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS)** is Hugging Face repo `unsloth/Qwen3.8-27B-GGUF`, file `Qwen3.8-27B-UD-IQ4_XS.gguf` (~14.3 GB). Download it once with `huggingface_hub`, revision-pinned, under `%LOCALAPPDATA%\LocalAIWorkbench\models\`, and register it as a Model bundle ([MOD-001](../specs/modules/models.md#mod-001)). Tiny ~0.5B models are for fast smoke and process tests only — not for reply, tool-calling, or other capability acceptance. This is the preferred capability UAT model, not the only model forever, and it is not required for every fast smoke.
+
+**Reuse managed Model bundle (reference/link; no scratch copy)** means capability UAT points at the registered bundle or its local path. Do not copy the GGUF into `.scratch/uat/` or any other workroot.
+
+**Never commit GGUF/mmproj/weights.** Existing ignore patterns stay. For vision-related capability UAT, include the official mmproj companion from the same Hugging Face repository in the same Model bundle.
 
 ## Later-decision phrases (still open)
 
