@@ -1,44 +1,75 @@
-# Local AI Workbench — architecture specification pack
+# Local AI Workbench
 
-Start here as a maintainer. Coding agents start at [AGENTS.md](AGENTS.md).
+Local AI Workbench is a Windows-first, local-first workbench for running models and agent work on your machine. One FastAPI backend coordinates the product; one Electron desktop presents it. llama.cpp owns supported inference. Deep Agents, LangGraph and LangChain stay behind application boundaries — the workbench owns configuration, lifecycle, visibility and connecting contracts, not a second implementation of those loops.
 
-This pack turns **Starter Specification revision 0.5, dated 18 September 2026**, into repository specifications and a maintenance process. It covers framework ownership, integration boundaries, contracts, execution policy, persistence and verification. It does not redesign the product or prescribe its visual design.
+## Coding agents
 
-The existing stack is retained. New governance and contract-authoring conventions are labelled as proposals, not attributed to revision 0.5. The [source register](specs/sources/README.md) records provenance and preserves the original document.
+Coding agents start at [AGENTS.md](AGENTS.md).
 
-The Windows-first scaffold lives under `apps/backend` and `apps/desktop`. The backend hosts the model manager (MOD-001…004), an embedded Deep Agents harness (AGT-001, MOD-005), Lab reuse (LAB-001…004, STATE-003) and durable knowledge versioning (STATE-005). **No catalogue feature is marked verified.** Specification integrity is not product acceptance. Terms are in [the glossary](docs/glossary.md).
+## Requirements
 
-## Put it in your repository
+- Python 3.12.x and [uv](https://docs.astral.sh/uv/) (uv can install 3.12)
+- Node.js ≥22 and <25 (develop on 24) and pnpm 10+
+- Windows is the supported target; Linux/macOS are used for smoke
 
-1. Extract this folder and copy its **contents** to the repository root. In an existing repository, merge conflicting files deliberately; do not overwrite existing agent instructions, workflows or documentation without review. Keep the source archive under `specs/sources/`.
-2. Read [the specification index](specs/README.md), [architecture](specs/architecture.md) and [adoption decision](specs/decisions/ADR-0001-adopt-specification-pack.md). Review the separately identified [contract-authoring proposal](specs/decisions/ADR-0002-contract-authoring.md).
-3. Follow [repository setup](specs/repository-setup.md) to name the human reviewers, activate CODEOWNERS, set repository protections and record approval. One adoption pull request can approve the initial pack; there is no need to approve every file separately.
-4. Give the next implementation agent `AGENTS.md`. Inspect bound paths in [the repository map](specs/repository-map.json) before creating replacements. Leave remaining entries unbound until their `required_before` trigger.
+## Install and run
 
-Until the adoption review is recorded, `baseline` specifications preserve the supplied design and `draft` documents are proposals. Producing this pack has not configured any repository permissions or approved changes on your behalf.
+Use only the commands recorded in [commands](specs/commands.md). Application commands name their working directory.
 
-## Check the pack locally
+### Backend
 
-From the repository root, with Python 3.11 or newer:
+**Working directory:** `apps/backend`. **Platform:** Windows (supported target); also runs on Linux/macOS for smoke. **Prerequisites:** [uv](https://docs.astral.sh/uv/) and Python 3.12.x (uv can install 3.12).
 
 ```text
-python scripts/check_specs.py
-python -m unittest discover -s tests/specs -p "test_*.py"
+uv sync
 ```
 
-On Windows, `py -3` can replace `python` when that is how your Python installation is exposed. These commands need no third-party Python packages. Their canonical reference is [commands](specs/commands.md).
+```text
+uv run python -m workbench_backend
+```
 
-The supplied workflow runs those checks on Windows and Linux. A passing check establishes **specification integrity**, not working inference, secure isolation, correct agent behaviour or a protected GitHub repository.
+### Desktop
 
-## Main entry points
+**Working directory:** `apps/desktop`. **Platform:** Windows (supported target); also runs on Linux/macOS for install/type-check/build. **Prerequisites:** Node.js ≥22 and <25 (develop on 24) and pnpm 10+.
+
+```text
+pnpm install
+```
+
+```text
+pnpm run dev
+```
+
+Type-check and build from the same directory after `pnpm install`:
+
+```text
+pnpm run typecheck
+```
+
+```text
+pnpm run build
+```
+
+`pnpm run dev` needs a machine that can open an Electron window (David-PC for UAT). See [commands](specs/commands.md) for what each command does.
+
+## Durable data
+
+Durable product and managed-inference data stays under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway UAT and temp files belong only under `.scratch/` at the repository root (the entire tree is gitignored).
+
+## What exists and what does not
+
+Present today: the model manager, the embedded Deep Agents harness, Lab capture/restore/rerun, and durable knowledge versioning. The desktop exposes Models and Deployments controls. Optional Agent-run, Lab and Knowledge debug panels are fine; they are not Chat or Builder. Chat and Builder are not shipped.
+
+## Specification pack
+
+The [specification index](specs/README.md) is the behavioural home. To check pack integrity, use [commands](specs/commands.md#spec-integrity). [Repository setup](specs/repository-setup.md) covers adoption and protections.
+
+## Entry points
 
 | Need | Open |
 | --- | --- |
-| Agent working rules and reading order | [AGENTS.md](AGENTS.md) |
-| Current architecture and focused module specifications | [Specification index](specs/README.md) |
-| How to change specifications without silent drift | [Governance](specs/governance.md) |
-| Decisions that remain genuinely unresolved | [Open questions](specs/open-questions.md) |
-| Implementation claims and supporting evidence | [Catalogue](specs/catalog.json) and [verification guide](specs/verification.md) |
-| Safe adoption into a new or existing repository | [Repository setup](specs/repository-setup.md) |
-
-Do not maintain a second editable Word specification or an agent-specific copy of the rules. Link back to these files. Use Git history for previous versions and decision records for rationale.
+| Agent working rules | [AGENTS.md](AGENTS.md) |
+| Specification index | [specs/README.md](specs/README.md) |
+| Commands | [specs/commands.md](specs/commands.md) |
+| Glossary | [docs/glossary.md](docs/glossary.md) |
+| Open questions | [specs/open-questions.md](specs/open-questions.md) |
