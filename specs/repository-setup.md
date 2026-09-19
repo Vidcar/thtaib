@@ -18,12 +18,18 @@ CODEOWNERS must be on the pull request's base branch for normal review routing. 
 
 ## 3. Run checks, then protect the target branch
 
-Run the two working commands in [commands](commands.md). Let the [workflow](../.github/workflows/specs.yml) run in GitHub, then select its exact observed status names as required checks. Its job names are:
+Run the working commands in [commands](commands.md). Let the workflows run in GitHub, then select the exact observed status names as required checks. Current job names are:
 
 ```text
 spec-integrity (ubuntu-latest)
 spec-integrity (windows-latest)
+backend-unittest (ubuntu-latest)
+backend-unittest (windows-latest)
+desktop-typecheck-build (ubuntu-latest)
+desktop-typecheck-build (windows-latest)
 ```
+
+The first pair is the [specification-integrity workflow](../.github/workflows/specs.yml). The backend and desktop names come from [backend.yml](../.github/workflows/backend.yml) and [desktop.yml](../.github/workflows/desktop.yml). Do not add invented contract-generation, import-boundary or integration required checks. Selecting names as branch-protection required checks is a maintainer action; listing them here does not claim those settings are already enabled.
 
 Protect the actual default/release branch, whether named `main` or otherwise. Require pull requests, at least one eligible human approval, required code-owner review, current required status checks, resolution of blocking discussions, and dismissal of stale approvals after new reviewable changes. Disable routine force-push/deletion and avoid agent/admin bypass privileges. Where available, restrict the expected source of required status checks.
 

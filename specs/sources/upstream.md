@@ -63,9 +63,12 @@ Official references consulted on 18 September 2026:
 - [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 - [GitHub protected branches and required reviews/checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 
-The supplied workflow pins actions to these verified upstream release commits:
+The supplied workflows pin actions to these verified upstream release commits:
 
 - [actions/checkout v7.0.1](https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1).
 - [actions/setup-python v7.0.0](https://github.com/actions/setup-python/commit/5fda3b95a4ea91299a34e894583c3862153e4b97).
+- [actions/setup-node v7.0.0](https://github.com/actions/setup-node/commit/820762786026740c76f36085b0efc47a31fe5020).
+- [astral-sh/setup-uv v10.0.1](https://github.com/astral-sh/setup-uv/commit/20cfd1bf945f4377ade1205e4dbc17946fc9a30d).
+- [pnpm/action-setup v4.3.0](https://github.com/pnpm/action-setup/commit/b906affcce14559ad1aafd4ab0e942779e9f58b1).
 
-These pins concern governance CI only. They do not pin application dependencies or imply the workflow has run in the user's repository. Review updates to the actions and runner compatibility like other dependency changes. The actual action references in the workflow are the executable source of truth.
+These pins concern CI runners only. They do not pin application dependencies or imply every workflow has run in the user's repository. Review updates to the actions and runner compatibility like other dependency changes. The actual action references in the workflows are the executable source of truth.

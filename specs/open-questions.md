@@ -163,13 +163,13 @@ Voice and multimodal product surfaces stay optional and experimental ([ARCH-007]
 <a id="oq-010"></a>
 ## OQ-010: Product verification commands and test environments
 
-**Status:** specification-integrity commands and some product commands are registered in [commands](commands.md). Backend unittest and desktop type-check/build exist as local entry points. They are not catalogue `verified` evidence and are not additional required GitHub status names until a workflow is added. This does not close the question.
+**Status:** **partial.** Specification-integrity commands remain registered. Backend unittest and desktop type-check/build are registered local commands and GitHub Actions jobs; exact status-check names are in [commands CI scope](commands.md#ci-scope). Those jobs are executable product-command gates, not catalogue `verified` evidence and not build-stage acceptance. This does not close the question.
 
 **Owner:** Boundary implementer; architecture maintainers approve stage evidence. **Blocks:** declaring the relevant implementation or build stage verified.
 
 Remaining choices: contract-generation freshness, import-boundary checks, shared contract tests, integration-test locations, live-tool versus recorded fixtures as product gates, platform/environment manifests, and David-PC UAT environments. Define repeatable starting inputs and evidence retention without storing secrets or model weights in this pack. Do not invent those missing gates as silent defaults.
 
-**Evidence needed:** registered commands executed against actual code, negative/failure cases, and traceable results at a concrete revision. A green specification-integrity workflow is not stage acceptance.
+**Evidence needed:** registered commands executed against actual code, negative/failure cases, and traceable results at a concrete revision. A green specification-integrity workflow is not stage acceptance. A green backend-unittest or desktop-typecheck-build job is not stage acceptance either.
 
 <a id="oq-011"></a>
 ## OQ-011: Durable product Approvals inbox

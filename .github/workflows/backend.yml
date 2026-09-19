@@ -1,0 +1,41 @@
+# Product-command gate for the registered backend unittest.
+# Not a contract-generation, import-boundary, or integration gate.
+# A green run is not catalogue verified evidence and not stage acceptance.
+name: Backend unittest
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-unittest:
+    name: backend-unittest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: apps/backend
+    steps:
+      - name: Check out the reviewed tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv and Python 3.12
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          working-directory: apps/backend
+      - name: Install the backend
+        run: uv sync --frozen
+      - name: Test the backend
+        run: uv run python -m unittest discover -s tests -p "test_*.py"

@@ -58,7 +58,7 @@ Introduce each gate with its first affected implementation, not after the projec
 | Snapshots/branching | Consistent capture, isolated restore and parent-preservation checks |
 | Live Lab cases | Restored starting inputs and recorded-tool versus live-tool distinction |
 
-The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification.
+The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest and desktop type-check/build now have registered CI jobs ([commands CI scope](commands.md#ci-scope)); that does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
 
 ## Build-stage acceptance from revision 0.5
 
