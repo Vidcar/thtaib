@@ -20,7 +20,7 @@ Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an applicatio
 
 Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
 
-Issue #27 locks the STATE-001 dual SQLite pair and app-owned run→checkpoint-id→file linkage. Remaining identities, event reconciliation, exactly-once and external-effect questions stay [OQ-004](../open-questions.md#oq-004). Deep Agents file tools that target project storage for Chat land with [STATE-002](#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Enabled catalogue includes visibility tools (`echo`, `time_now`) and filesystem tools (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). Chat transcripts live in `application.sqlite` and are not the working project.
+Issue #27 locks the STATE-001 dual SQLite pair and app-owned run→checkpoint-id→file linkage. Remaining identities, event reconciliation, exactly-once and external-effect questions stay [OQ-004](../open-questions.md#oq-004). Deep Agents file tools that target project storage for Chat land with [STATE-002](#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Enabled catalogue includes visibility tools (`echo`, `time_now`) and filesystem tools (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). Chat transcripts live in `application.sqlite` and are not the working project. [Issue #56](https://github.com/Vidcar/thtaib/issues/56) adds the Chat conversation→`thread_id`→run link so follow-ups resume the same checkpointer thread; displayed history remains not that thread.
 
 ## Requirements and acceptance checks
 
@@ -95,6 +95,16 @@ These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/is
 - **Unknown effects stay unknown.** Recover/reconnect/resume/restart of an effect linked to a `cancel_requested` (or otherwise live) run reports `unknown`, sets `replayed` false, and does not repeat the operation. The cancel request is not acknowledgement.
 - **No rollback promise.** Snapshots still do not undo external actions. `rollback_promise` remains `none`.
 - **Not claimed:** exactly-once, event-order/reconnection contracts, or worker-adapter interrupt truth.
+
+<a id="locked-milestone-defaults-issue-56-chat-continuity"></a>
+## Locked milestone defaults (Issue #56; Chat thread linkage / partial OQ-004)
+
+These defaults are authorised by [Issue #56](https://github.com/Vidcar/thtaib/issues/56). They extend [STATE-001](#state-001) app-owned linkage and keep [STATE-002](#state-002) history ≠ project. They do **not** close [OQ-004](../open-questions.md#oq-004). They are not a catalogue `verified` claim.
+
+- **Chat linkage:** application records store `conversation.id`, `conversation.thread_id`, and `run_ids`. Each Chat run records the same `thread_id` and its checkpoint ids. After restart, reopen the conversation and start again on that thread.
+- **History ≠ thread:** replacing or clearing the displayed transcript does not mutate `checkpoints.sqlite` private tables, does not fork/reset the conversation thread, and neither restores nor deletes project files.
+- **Fresh conversation:** a new conversation id and `thread_id`. The selected project directory and the application-owned knowledge store are not wiped.
+- **Not claimed:** exactly-once, event-order/reconnection, loading knowledge/profile content into the request, or worker-adapter interrupt.
 
 <a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
 ## Locked milestone defaults (Issue #17; partial OQ-006)

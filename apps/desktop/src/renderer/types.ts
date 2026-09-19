@@ -218,12 +218,25 @@ export interface ChatMessage {
   run_id: string | null;
 }
 
+export interface ChatContinuity {
+  conversation_id: string;
+  thread_id: string;
+  run_ids: string[];
+  current_run_id: string | null;
+  transcript_is_harness_context: false;
+  history_edit_effect: "display_only";
+  model_switch_effect: "same_thread_new_run";
+  fresh_conversation_effect: "new_thread_retain_project_and_knowledge";
+  note: string;
+}
+
 export interface ChatConversation {
   id: string;
   deployment_id: string;
   profile_id: string | null;
   project_path: string;
   workspace_id: string | null;
+  thread_id: string | null;
   transcript: ChatMessage[];
   current_run_id: string | null;
   run_ids: string[];
@@ -233,6 +246,7 @@ export interface ChatConversation {
   source_surface: "chat";
   current_run: AgentRun | null;
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
+  continuity?: ChatContinuity | null;
   created_at: string;
   updated_at: string;
 }

@@ -181,10 +181,12 @@ class HarnessService:
             memory_version_refs=refs.memory_version_refs,
             skill_version_refs=refs.skill_version_refs,
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
-            thread_id=None,
+            thread_id=request.thread_id or None,
             related_files=_initial_related_files(project_path),
         )
-        run.thread_id = run.id
+        # Agent-run / Lab own one thread per run. Chat follow-ups pass the
+        # conversation thread so LangGraph resumes the same checkpointer state.
+        run.thread_id = request.thread_id or run.id
         cancel = threading.Event()
         with self._lock:
             self._runs[run.id] = run

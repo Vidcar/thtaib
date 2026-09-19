@@ -402,11 +402,13 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/desktop/src/renderer/ChatPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
-        "apps/backend/tests/test_chat.py"
+        "apps/backend/tests/test_chat.py",
+        "apps/backend/tests/test_chat_continuity.py"
       ],
       "evidence": []
     },
@@ -462,11 +464,13 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/knowledge/service.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
-        "apps/backend/tests/test_knowledge.py"
+        "apps/backend/tests/test_knowledge.py",
+        "apps/backend/tests/test_chat_continuity.py"
       ],
       "evidence": []
     },
@@ -557,11 +561,13 @@
         "apps/backend/src/workbench_backend/state/checkpointer.py",
         "apps/backend/src/workbench_backend/state/migrate.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/store.py"
       ],
       "tests": [
         "apps/backend/tests/test_state.py",
-        "apps/backend/tests/test_paths.py"
+        "apps/backend/tests/test_paths.py",
+        "apps/backend/tests/test_chat_continuity.py"
       ],
       "evidence": []
     },
@@ -571,12 +577,14 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/store.py",
         "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",
-        "apps/backend/tests/test_state.py"
+        "apps/backend/tests/test_state.py",
+        "apps/backend/tests/test_chat_continuity.py"
       ],
       "evidence": []
     },
