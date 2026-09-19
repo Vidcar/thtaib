@@ -11,6 +11,8 @@ export interface PathsInfo {
   snapshots: string;
   workspaces: string;
   knowledge: string;
+  application_db: string;
+  checkpoints_db: string;
   windows_layout: string;
 }
 
@@ -199,6 +201,9 @@ export interface AgentRun {
   project_path?: string | null;
   profile_id?: string | null;
   source_surface?: "agent-run" | "chat" | "lab";
+  thread_id?: string | null;
+  checkpoint_ids?: string[];
+  related_files?: Array<{ path: string; kind: "project_root" | "written_file" | "artifact" }>;
 }
 
 export interface ChatMessage {

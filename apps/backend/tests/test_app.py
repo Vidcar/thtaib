@@ -80,7 +80,12 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertEqual(body["cases"], str(self.paths.cases))
         self.assertEqual(body["snapshots"], str(self.paths.snapshots))
         self.assertEqual(body["knowledge"], str(self.paths.knowledge))
+        self.assertEqual(body["application_db"], str(self.paths.application_db))
+        self.assertEqual(body["checkpoints_db"], str(self.paths.checkpoints_db))
+        self.assertNotEqual(body["application_db"], body["checkpoints_db"])
         self.assertIn("LocalAIWorkbench", body["windows_layout"])
+        self.assertIn("application.sqlite", body["windows_layout"])
+        self.assertIn("checkpoints.sqlite", body["windows_layout"])
 
     def test_local_import_and_inspect_via_api(self) -> None:
         job = self.client.post(

@@ -21,6 +21,8 @@ from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.lab.service import LabService
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.migrate import open_application_store
+from workbench_backend.state.store import ApplicationStore
 
 CHAT_SYSTEM_PROMPT = (
     "You are the Local AI Workbench Chat surface. Complete the user's task "
@@ -36,10 +38,12 @@ class ChatService:
         manager_provider: Callable[[], ModelManager],
         harness_provider: Callable[[], HarnessService],
         lab_provider: Callable[[], LabService],
+        app_store: ApplicationStore | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._harness_provider = harness_provider
         self._lab_provider = lab_provider
+        self._app_store = app_store
 
     @property
     def manager(self) -> ModelManager:
@@ -58,8 +62,14 @@ class ChatService:
         return self.manager.paths.ensure()
 
     @property
+    def app_store(self) -> ApplicationStore:
+        if self._app_store is None:
+            self._app_store = open_application_store(self.paths)
+        return self._app_store
+
+    @property
     def store(self) -> ChatStore:
-        return ChatStore(self.paths)
+        return ChatStore(self.app_store)
 
     def create(self, request: ChatConversationCreateRequest) -> ChatConversationView:
         workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
@@ -205,10 +215,14 @@ class ChatService:
         current: AgentRun | None = None
         events: list[dict[str, object]] = []
         if conversation.current_run_id:
-            current = self.harness.get_run(conversation.current_run_id)
-            events = [event.model_dump(mode="json") for event in current.events]
-            if self._maybe_append_assistant(conversation, current) and persist:
-                self.store.put(conversation)
+            try:
+                current = self.harness.get_run(conversation.current_run_id)
+            except HarnessError:
+                current = None
+            if current is not None:
+                events = [event.model_dump(mode="json") for event in current.events]
+                if self._maybe_append_assistant(conversation, current) and persist:
+                    self.store.put(conversation)
         return ChatConversationView(
             **conversation.model_dump(),
             current_run=current,

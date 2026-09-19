@@ -83,6 +83,7 @@ class ChatHarnessTests(unittest.TestCase):
             lambda: self.manager,
             model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
         )
         self.client = TestClient(self.app)
         self.deployment_id = self.client.post(
@@ -159,10 +160,13 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertTrue(written.is_file())
         self.assertEqual(written.read_text(encoding="utf-8"), "chat-file-edit")
         self.assertEqual((self.project / "keep.md").read_text(encoding="utf-8"), "retain-me")
-        chat_dir = WorkbenchPaths(self.root).state / "chat"
-        self.assertTrue(chat_dir.is_dir())
-        self.assertFalse((chat_dir / "edited.md").exists())
-        self.assertFalse(any(path.name == "edited.md" for path in chat_dir.rglob("*")))
+        paths = WorkbenchPaths(self.root)
+        edited_hits = [path for path in self.root.rglob("edited.md") if path.is_file()]
+        self.assertEqual(edited_hits, [written])
+        self.assertTrue(paths.application_db.is_file())
+        self.assertTrue(paths.checkpoints_db.is_file())
+        self.assertNotEqual(paths.application_db, paths.checkpoints_db)
+        self.assertFalse((paths.state / "chat" / "edited.md").exists())
 
     def test_transcript_is_not_the_working_project(self) -> None:
         conversation = self._create()
@@ -195,6 +199,15 @@ class ChatHarnessTests(unittest.TestCase):
         fresh = self._create()
         self.assertNotEqual(fresh["id"], conversation["id"])
         self.assertEqual(fresh["transcript"], [])
+        self.assertEqual((self.project / "keep.md").read_text(encoding="utf-8"), "retain-me")
+        self.assertEqual((self.project / "edited.md").read_text(encoding="utf-8"), "chat-file-edit")
+
+        cleared = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/transcript",
+            json={"messages": []},
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(cleared.json()["transcript"], [])
         self.assertEqual((self.project / "keep.md").read_text(encoding="utf-8"), "retain-me")
         self.assertEqual((self.project / "edited.md").read_text(encoding="utf-8"), "chat-file-edit")
 
@@ -241,6 +254,7 @@ class ChatHarnessTests(unittest.TestCase):
             lambda: self.manager,
             model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
         )
         conversation = self._create()
         started = self._start(conversation["id"])
@@ -265,7 +279,11 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return self.scripted
 
-        self.app.state.harness = HarnessService(lambda: self.manager, model_factory=factory)
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            app_store=self.app.state.app_store,
+        )
         self.client = TestClient(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",

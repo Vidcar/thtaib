@@ -27,6 +27,12 @@ from workbench_backend.agents.schemas import (
     ToolMode,
     label_for_tool_mode,
 )
+from workbench_backend.state.checkpointer import (
+    checkpoint_ids_from_graph,
+    open_sqlite_checkpointer,
+)
+from workbench_backend.state.schemas import RelatedFile
+from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
     enabled_catalogue,
     resolve_presented_tools,
@@ -49,7 +55,7 @@ ModelFactory = Callable[[AgentRun, list[dict[str, Any]]], BaseChatModel]
 
 
 class HarnessService:
-    """In-memory runs for one complete task. Durable recovery is OQ-004."""
+    """Harness runs persist in application.sqlite. Recovery remainder is OQ-004."""
 
     def __init__(
         self,
@@ -57,28 +63,44 @@ class HarnessService:
         *,
         model_factory: ModelFactory | None = None,
         knowledge_provider: Callable[[], KnowledgeService] | None = None,
+        app_store: ApplicationStore | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._model_factory = model_factory or self._deployment_model
         self._knowledge_provider = knowledge_provider
+        self._app_store = app_store
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+
+    @property
+    def store(self) -> ApplicationStore:
+        if self._app_store is None:
+            self._app_store = ApplicationStore(self.manager.paths)
+        return self._app_store
 
     @property
     def manager(self) -> ModelManager:
         return self._manager_provider()
 
     def list_runs(self) -> list[AgentRun]:
+        stored = {item.id: item for item in self.store.list_runs()}
         with self._lock:
-            return [run.model_copy(deep=True) for run in self._runs.values()]
+            for run in self._runs.values():
+                stored[run.id] = run.model_copy(deep=True)
+        return list(stored.values())
 
     def get_run(self, run_id: str) -> AgentRun:
         with self._lock:
             run = self._runs.get(run_id)
-            if run is None:
-                raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
-            return run.model_copy(deep=True)
+            if run is not None:
+                return run.model_copy(deep=True)
+        stored = self.store.get_run(run_id)
+        if stored is None:
+            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+        with self._lock:
+            self._runs.setdefault(run_id, stored)
+        return stored.model_copy(deep=True)
 
     def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
         """Runs still writing or executing against a workspace (quiescent check)."""
@@ -149,11 +171,15 @@ class HarnessService:
             memory_version_refs=refs.memory_version_refs,
             skill_version_refs=refs.skill_version_refs,
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
+            thread_id=None,
+            related_files=_initial_related_files(project_path),
         )
+        run.thread_id = run.id
         cancel = threading.Event()
         with self._lock:
             self._runs[run.id] = run
             self._cancels[run.id] = cancel
+        self._persist(run)
         thread = threading.Thread(target=self._execute, args=(run.id,), daemon=True)
         thread.start()
         return run.model_copy(deep=True)
@@ -173,6 +199,7 @@ class HarnessService:
                 run.events.append(
                     AgentEvent(at=run.updated_at, kind="cancelled", detail={"requested": True})
                 )
+                self._persist(run)
             return run.model_copy(deep=True)
 
     def _execute(self, run_id: str) -> None:
@@ -185,6 +212,7 @@ class HarnessService:
             run.updated_at = utc_now()
             run.events.append(AgentEvent(at=run.updated_at, kind="started", detail={}))
         http_sink: list[dict[str, Any]] = []
+        agent = None
         try:
             model = self._model_factory(run, http_sink)
             fixtures = run.recorded_fixtures if run.tool_mode is ToolMode.recorded_tool else None
@@ -198,21 +226,28 @@ class HarnessService:
                 system_prompt=run.system_prompt,
                 middleware=[WorkbenchHarnessMiddleware(run, http_sink)],
                 name="workbench-embedded-harness",
+                checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
                 **agent_kwargs,
             )
             config = _invoke_config(run)
             for chunk in agent.stream(
                 {"messages": [{"role": "user", "content": run.task}]},
-                config=config or None,
+                config=config,
                 stream_mode="updates",
             ):
                 if cancel.is_set():
+                    self._link_run(run, agent)
                     self._finish(run, AgentRunStatus.cancelled, "cancelled")
                     return
                 self._ingest_stream(run, chunk)
             run.completion = build_completion(run)
+            self._link_run(run, agent)
             self._finish(run, AgentRunStatus.completed, "completed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
+            if agent is not None:
+                self._link_run(run, agent)
+            else:
+                self._collect_related_files(run)
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -225,6 +260,7 @@ class HarnessService:
                 run.stop_reason = "cancelled"
                 run.finished_at = run.finished_at or utc_now()
                 run.updated_at = run.finished_at
+                self._persist(run)
                 return
             run.status = status
             run.stop_reason = stop_reason
@@ -237,6 +273,7 @@ class HarnessService:
                     detail={"stop_reason": stop_reason, "error": run.error},
                 )
             )
+            self._persist(run)
 
     def _ingest_stream(self, run: AgentRun, chunk: Any) -> None:
         if not isinstance(chunk, dict):
@@ -309,6 +346,28 @@ class HarnessService:
             knowledge_version_refs=request.knowledge_version_refs,
         )
 
+    def _link_run(self, run: AgentRun, agent: object) -> None:
+        """Record checkpoint ids and related files in application records only."""
+
+        run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
+        self._collect_related_files(run)
+
+    def _collect_related_files(self, run: AgentRun) -> None:
+        files = list(_initial_related_files(run.project_path))
+        files.extend(_files_from_tool_invocations(run))
+        seen: set[tuple[str, str]] = set()
+        unique: list[RelatedFile] = []
+        for item in files:
+            key = (item.path, item.kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        run.related_files = unique
+
+    def _persist(self, run: AgentRun) -> None:
+        self.store.put_run(run.model_copy(deep=True))
+
 
 def _resolved_project_path(project_path: str | None) -> str | None:
     if not project_path:
@@ -332,8 +391,33 @@ def _project_backend(run: AgentRun) -> FilesystemBackend | None:
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:
-    """Framework config only when the user selected a product budget."""
+    """Thread id is required so LangGraph can write checkpoints.sqlite."""
 
-    if run.budgets is None or run.budgets.max_steps is None:
-        return {}
-    return {"recursion_limit": run.budgets.max_steps}
+    config: dict[str, Any] = {"configurable": {"thread_id": run.thread_id or run.id}}
+    if run.budgets is not None and run.budgets.max_steps is not None:
+        config["recursion_limit"] = run.budgets.max_steps
+    return config
+
+
+def _initial_related_files(project_path: str | None) -> list[RelatedFile]:
+    if not project_path:
+        return []
+    return [RelatedFile(path=project_path, kind="project_root")]
+
+
+def _files_from_tool_invocations(run: AgentRun) -> list[RelatedFile]:
+    if not run.project_path:
+        return []
+    root = Path(run.project_path)
+    files: list[RelatedFile] = []
+    for invocation in run.tool_invocations:
+        name = invocation.get("name")
+        if name not in {"write_file", "edit_file"}:
+            continue
+        args = invocation.get("args") if isinstance(invocation.get("args"), dict) else {}
+        relative = args.get("file_path") or args.get("path")
+        if not isinstance(relative, str) or not relative.strip():
+            continue
+        resolved = (root / relative.lstrip("/")).resolve()
+        files.append(RelatedFile(path=str(resolved), kind="written_file"))
+    return files

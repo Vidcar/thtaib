@@ -531,9 +531,14 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/paths.py",
-        "apps/backend/src/workbench_backend/inference/store.py"
+        "apps/backend/src/workbench_backend/state/store.py",
+        "apps/backend/src/workbench_backend/state/checkpointer.py",
+        "apps/backend/src/workbench_backend/state/migrate.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/store.py"
       ],
       "tests": [
+        "apps/backend/tests/test_state.py",
         "apps/backend/tests/test_paths.py"
       ],
       "evidence": []
@@ -548,7 +553,8 @@
         "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
-        "apps/backend/tests/test_chat.py"
+        "apps/backend/tests/test_chat.py",
+        "apps/backend/tests/test_state.py"
       ],
       "evidence": []
     },

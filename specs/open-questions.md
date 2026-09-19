@@ -6,7 +6,7 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 
 Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
 
-Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); identities, event reconciliation, exactly-once and external-effect remainder stay open. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
@@ -51,13 +51,23 @@ This is the isolation question. Tool/worker sandbox isolation — what a disposa
 <a id="oq-004"></a>
 ## OQ-004: Run state, events, continuation and uncertain effects
 
-**Owner:** Backend, agent/workflow and persistence boundaries jointly; backend maintains the shared contract. **Blocks:** durable runs, recovery, long-running continuation or cross-process cancellation claims.
+**Status:** partially constrained by [Issue #27](https://github.com/Vidcar/thtaib/issues/27) for the dual application/checkpointer SQLite pair and app-owned run→checkpoint-id→file linkage. The question stays open.
 
-Define identities, parent/child linkage, thread/checkpoint namespaces, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Define acknowledgement/reconciliation for external effects and when retry, reconnect, resume, restart or human intervention is safe. Do not claim an exactly-once transaction across databases, files and services.
+**Owner:** Backend, agent/workflow and persistence boundaries jointly; backend maintains the shared contract. **Blocks:** remaining durable-run claims — identities beyond the locked linkage, event ordering/reconnection, state transitions, exactly-once, or external-effect acknowledgement.
+
+Issue #27 locked these defaults for [STATE-001](modules/state-recovery.md#state-001) and [STATE-002](modules/state-recovery.md#state-002). They are recorded in [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-27-partial-oq-004). Do not invent a second persistence owner or mutate checkpointer private tables:
+
+- Separate `%LOCALAPPDATA%\LocalAIWorkbench\application.sqlite` and `checkpoints.sqlite`.
+- Application records are the system of record for runs, chat linkage, profile/deployment refs, checkpoint id links and file/artifact refs.
+- LangGraph owns checkpoint bytes. The application stores checkpoint ids only.
+- JSON run/chat linkage under `state\` migrates to the application DB; after cutover there is no dual-write SoR.
+- Chat history is not the working project; filesystem tools write project storage only.
+
+The remainder stays open. Define identities beyond that linkage, parent/child semantics, thread/checkpoint namespaces for continuation, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Define acknowledgement/reconciliation for external effects and when retry, reconnect, resume, restart or human intervention is safe. Do not claim an exactly-once transaction across databases, files and services.
 
 A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Builder canvas run affordances (Run/stop; active step on the canvas versus a run inspector) are [OQ-016](#oq-016). Those questions do not reopen this run-state contract.
 
-**Evidence needed:** cancellation and crash tests before/after an external effect and checkpoint boundary, plus continuation beyond a measured upstream limit without duplicates.
+**Evidence needed:** cancellation and crash tests before/after an external effect and checkpoint boundary, plus continuation beyond a measured upstream limit without duplicates. Executable unit checks for the dual-DB + linkage defaults are not that remainder evidence. UAT of the locked defaults remains local-machine-required on David-PC.
 
 <a id="oq-005"></a>
 ## OQ-005: Consistent project snapshots and restoration

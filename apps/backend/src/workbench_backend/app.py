@@ -23,6 +23,7 @@ from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
+from workbench_backend.state.migrate import open_application_store
 
 PRODUCT_NAME = "Local AI Workbench"
 SURFACE = "managed-inference"
@@ -47,10 +48,12 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.state.manager = manager_from_env(data_root)
+    application.state.app_store = open_application_store(application.state.manager.paths)
     application.state.knowledge = KnowledgeService(application.state.manager.paths)
     application.state.harness = HarnessService(
         lambda: application.state.manager,
         knowledge_provider=lambda: application.state.knowledge,
+        app_store=application.state.app_store,
     )
     application.state.lab = LabService(
         lambda: application.state.manager,
@@ -61,6 +64,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.manager,
         lambda: application.state.harness,
         lambda: application.state.lab,
+        app_store=application.state.app_store,
     )
     application.include_router(router)
     application.include_router(agent_router)

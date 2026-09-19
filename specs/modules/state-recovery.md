@@ -20,7 +20,7 @@ Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an applicatio
 
 Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
 
-Application records on main are JSON files under `%LOCALAPPDATA%\LocalAIWorkbench\state\` and sibling product directories. The dual application/checkpoint SQLite pair is not implemented; that remains [STATE-001](#state-001) and [OQ-004](../open-questions.md#oq-004), not an approved waiver. Deep Agents file tools that target project storage for Chat land with [STATE-002](#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Enabled catalogue includes visibility tools (`echo`, `time_now`) and filesystem tools (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). Transcripts stay under `state\chat\` and are not the working project.
+Issue #27 locks the STATE-001 dual SQLite pair and app-owned run→checkpoint-id→file linkage. Remaining identities, event reconciliation, exactly-once and external-effect questions stay [OQ-004](../open-questions.md#oq-004). Deep Agents file tools that target project storage for Chat land with [STATE-002](#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Enabled catalogue includes visibility tools (`echo`, `time_now`) and filesystem tools (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). Chat transcripts live in `application.sqlite` and are not the working project.
 
 ## Requirements and acceptance checks
 
@@ -59,6 +59,19 @@ Preserve user, agent and project knowledge scopes, provenance, versions and reve
 
 **Acceptance:** Demonstrate versioned edits/revert, a concurrent update conflict and an attempted protected-instruction overwrite. Verify the configured context-retention/redaction behaviour.
 
+<a id="locked-milestone-defaults-issue-27-partial-oq-004"></a>
+## Locked milestone defaults (Issue #27; partial OQ-004)
+
+These defaults are authorised by [Issue #27](https://github.com/Vidcar/thtaib/issues/27). They satisfy [STATE-001](#state-001) dual-database separation and keep [STATE-002](#state-002) history ≠ project. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event reconciliation, exactly-once and external-effect remainder stay open.
+
+- **App DB:** `%LOCALAPPDATA%\LocalAIWorkbench\application.sqlite` (or the same filename under the portable product root). Application system of record for runs, chat linkage, profile/deployment refs, checkpoint id links and file/artifact refs.
+- **Checkpointer DB:** separate `%LOCALAPPDATA%\LocalAIWorkbench\checkpoints.sqlite` (LangGraph SQLite checkpointer). Application code links by checkpoint id only and never mutates checkpointer private tables.
+- **Linkage:** app records link `run → checkpoint id(s) → files`. After restart, follow a persisted run to its checkpoint ids and related files via those application records.
+- **Migration:** JSON run/chat linkage under `state\` migrates into the application DB. After cutover the application DB is the only system of record for that linkage (no dual-write).
+- **STATE-002:** Chat history is not the working project. Filesystem tools write only to project storage. Editing or clearing displayed history alone neither restores nor deletes project files.
+- **Surfaces:** backend persistence plus the existing Chat / Issue #22 history and project-path controls. No Builder canvas ([OQ-016](../open-questions.md#oq-016)).
+- **Not claimed:** exactly-once across databases, files and services; event-order/reconnect contracts; external-effect acknowledgement.
+
 <a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
 ## Locked milestone defaults (Issue #17; partial OQ-006)
 
@@ -76,4 +89,4 @@ These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation and [OQ-005](../open-questions.md#oq-005) for remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. External-effect rollback stays [STATE-004](#state-004). No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.
+Issue #27 locked the dual-DB and app-linkage defaults above; resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. External-effect rollback stays [STATE-004](#state-004). No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.
