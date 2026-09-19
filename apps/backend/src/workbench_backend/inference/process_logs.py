@@ -51,7 +51,7 @@ def prune_logs_dir(logs_dir: Path, *, max_bytes: int = PROCESS_LOGS_DIR_MAX_BYTE
     total = sum(item.stat().st_size for item in members if item.is_file())
     if total <= max_bytes:
         return
-    members.sort(key=lambda item: item.stat().st_mtime)
+    members.sort(key=lambda item: (item.stat().st_mtime, item.name))
     for item in members:
         if total <= max_bytes:
             return

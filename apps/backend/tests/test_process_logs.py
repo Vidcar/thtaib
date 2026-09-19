@@ -62,6 +62,9 @@ class ProcessLogHelperTests(unittest.TestCase):
             second = logs / "llama-server-new.log"
             first.write_bytes(b"a" * 20)
             second.write_bytes(b"b" * 20)
+            older = 1_700_000_000
+            os.utime(first, (older, older))
+            os.utime(second, (older + 60, older + 60))
             prune_logs_dir(logs, max_bytes=25)
             self.assertFalse(first.exists())
             self.assertTrue(second.exists())
