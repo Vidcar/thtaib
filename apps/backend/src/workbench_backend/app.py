@@ -12,8 +12,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from workbench_backend import __version__
-from workbench_backend.errors import ManagerError
-from workbench_backend.inference.routes import manager_error_handler, router
+from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.routes import router as agent_router
+from workbench_backend.errors import WorkbenchError, workbench_error_handler
+from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
 
 PRODUCT_NAME = "Local AI Workbench"
@@ -39,8 +41,10 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.state.manager = manager_from_env(data_root)
+    application.state.harness = HarnessService(lambda: application.state.manager)
     application.include_router(router)
-    application.add_exception_handler(ManagerError, manager_error_handler)
+    application.include_router(agent_router)
+    application.add_exception_handler(WorkbenchError, workbench_error_handler)
 
     @application.get("/health")
     def health() -> dict[str, str]:
