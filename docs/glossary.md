@@ -9,6 +9,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | make it run AI | Out of scope this milestone |
 | host Vite / second server | One FastAPI backend + one Electron desktop |
 | local verification host | Where UAT runs (David-PC) — not a second product mode |
+| scratch / temp at repo root | Scratch workspace (`.scratch/`, gitignored) |
+| uat-workroot at repo root | UAT workroot under `.scratch/uat/` |
+| product data at repo root | Product data under `%LOCALAPPDATA%\LocalAIWorkbench\` |
 | make it run a model / wire llama | Managed inference (MOD-001…004) |
 | the model in Chat | Model bundle / running deployment |
 | kill the remote server | Connected endpoint — no destructive lifecycle |
@@ -43,6 +46,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **electron-builder (NSIS)** is the Windows packaging owner on the desktop app. A working package script may exist before an installer is required as evidence.
 
 **David-PC** is the local verification host for UAT (`D:\CodeProjects\thtaib`). Cloud or CI checks do not replace that label.
+
+**Scratch workspace** is `.scratch/` at the repository root. The entire tree is gitignored. Conventional subdirectories are `.scratch/uat/` (UAT workroots) and `.scratch/logs/` (capture files). An optional local-only `.scratch/README.txt` is fine; do not require committing anything under `.scratch/`.
+
+**UAT workroot** is a throwaway directory under `.scratch/uat/…`. Agents and UAT must not create `uat-workroot*` at the repository root.
+
+**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state). Durable product and managed-inference state is never the repository root and never `.scratch/`.
 
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
 
