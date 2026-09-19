@@ -107,8 +107,10 @@ class LabApiTests(unittest.TestCase):
         body = self.client.get("/v1/paths").json()
         self.assertEqual(body["cases"], str(self.paths.cases))
         self.assertEqual(body["snapshots"], str(self.paths.snapshots))
+        self.assertEqual(body["knowledge"], str(self.paths.knowledge))
         self.assertIn("cases", body["windows_layout"])
         self.assertIn("snapshots", body["windows_layout"])
+        self.assertIn("knowledge", body["windows_layout"])
 
     def test_engine_measurement_unavailable_does_not_invent_scores(self) -> None:
         response = self.client.post("/v1/lab/engine-measurements", json={})

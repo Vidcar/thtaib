@@ -12,11 +12,9 @@ from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
 
-CAPTURE_GAPS = [
-    "no durable memory configured (AGT-004)",
-    "no retrieval / RAG (OQ-006 unresolved)",
-    "no skill versions bound for this milestone",
-]
+RAG_GAP = "no retrieval / RAG (OQ-006 unresolved)"
+MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
+SKILL_GAP = "no skill versions bound for this run"
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -60,7 +58,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _capture(self, request: ModelRequest) -> None:
         http_payload = self.http_sink[-1] if self.http_sink else None
-        gaps = list(CAPTURE_GAPS)
+        gaps = [RAG_GAP]
+        if not self.run.memory_version_refs:
+            gaps.append(MEMORY_GAP)
+        if not self.run.skill_version_refs:
+            gaps.append(SKILL_GAP)
         if http_payload is None:
             gaps.append("http payload not yet observed at wrap_model_call time")
         self.run.model_requests.append(
@@ -75,6 +77,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     if name in self.run.presented_tools
                 ],
                 generation_settings=dict(request.model_settings or {}),
+                memory_versions=list(self.run.memory_version_refs),
+                skill_versions=list(self.run.skill_version_refs),
                 capture_gaps=gaps,
                 http_payload=http_payload,
             )

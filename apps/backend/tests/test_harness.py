@@ -54,7 +54,11 @@ class HarnessApiTests(unittest.TestCase):
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return self.scripted
 
-        self.app.state.harness = HarnessService(lambda: self.manager, model_factory=factory)
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
         self.client = TestClient(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
@@ -148,7 +152,11 @@ class HarnessApiTests(unittest.TestCase):
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return slow
 
-        self.app.state.harness = HarnessService(lambda: self.manager, model_factory=factory)
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
         started = self._start()
         cancelled = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
         self.assertEqual(cancelled.status_code, 200)
@@ -163,6 +171,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(body["knowledge"], "none")
         self.assertFalse(any(self.root.rglob("rag-index*")))
         self.assertFalse(any(self.root.rglob("knowledge-store*")))
+        self.assertTrue((self.root / "knowledge").is_dir())
         capture = body["model_requests"][0]
         self.assertEqual(capture["retrieved_material"], [])
 

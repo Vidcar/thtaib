@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from workbench_backend.agents.schemas import AgentBudgets, TaskCriteria, ToolMode
+from workbench_backend.knowledge.schemas import KnowledgeBinding
 
 
 class WorkspaceFileMap(BaseModel):
@@ -69,6 +70,10 @@ class CaptureRequest(BaseModel):
     presented_tools: list[str] | None = None
     criteria: TaskCriteria | None = None
     allowlist: list[str] | None = None
+    memory_version_refs: list[str] | None = None
+    skill_version_refs: list[str] | None = None
+    protected_instruction_version_refs: list[str] | None = None
+    knowledge_version_refs: list[str] | None = None
 
 
 class LabCase(BaseModel):
@@ -88,12 +93,13 @@ class LabCase(BaseModel):
     dependency_versions: dict[str, str] = Field(default_factory=dict)
     memory_version_refs: list[str] = Field(default_factory=list)
     skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
     exclusions: list[SnapshotExclusion] = Field(default_factory=list)
     environment_restore: Literal["not_this_milestone"] = "not_this_milestone"
     environment_exclusions: list[str] = Field(default_factory=list)
     created_at: str
     snapshot_path: str
-    knowledge: Literal["none"] = "none"
+    knowledge: KnowledgeBinding = "none"
 
 
 class RestoreResult(BaseModel):
@@ -122,6 +128,10 @@ class AppliedConfig(BaseModel):
     criteria: TaskCriteria = Field(default_factory=TaskCriteria)
     dependency_versions: dict[str, str] = Field(default_factory=dict)
     workspace_id: str
+    memory_version_refs: list[str] = Field(default_factory=list)
+    skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    knowledge: KnowledgeBinding = "none"
     harness: Literal["deepagents"] = "deepagents"
     adapter: Literal["mod-005"] = "mod-005"
     evaluation_kind: Literal["task_evaluation"] = "task_evaluation"

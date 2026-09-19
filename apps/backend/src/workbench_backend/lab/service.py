@@ -19,6 +19,8 @@ from workbench_backend.agents.schemas import (
 from workbench_backend.errors import LabError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
+from workbench_backend.knowledge.schemas import KnowledgeRefs
+from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.engine import measure_engine
 from workbench_backend.lab.schemas import (
     AppliedConfig,
@@ -53,9 +55,11 @@ class LabService:
         self,
         manager_provider: Callable[[], ModelManager],
         harness_provider: Callable[[], HarnessService],
+        knowledge_provider: Callable[[], KnowledgeService] | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._harness_provider = harness_provider
+        self._knowledge_provider = knowledge_provider
 
     @property
     def manager(self) -> ModelManager:
@@ -72,6 +76,12 @@ class LabService:
     @property
     def store(self) -> LabStore:
         return LabStore(self.paths)
+
+    @property
+    def knowledge(self) -> KnowledgeService:
+        if self._knowledge_provider is not None:
+            return self._knowledge_provider()
+        return KnowledgeService(self.paths)
 
     def create_workspace(self, request: WorkspaceCreateRequest) -> LabWorkspace:
         now = utc_now()
@@ -168,6 +178,7 @@ class LabService:
 
         fixtures = fixtures_from_run(run) if run else []
         criteria = request.criteria or (run.criteria if run else TaskCriteria())
+        refs = self._resolve_knowledge_refs(request, run)
         case = LabCase(
             id=new_id("case"),
             snapshot_id=snapshot_id,
@@ -183,12 +194,14 @@ class LabService:
             tool_fixtures=fixtures,
             acceptance_checks=criteria,
             dependency_versions=dependency_versions(),
-            memory_version_refs=[],
-            skill_version_refs=[],
+            memory_version_refs=refs.memory_version_refs,
+            skill_version_refs=refs.skill_version_refs,
+            protected_instruction_version_refs=refs.protected_instruction_version_refs,
             exclusions=exclusions,
             environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
             created_at=utc_now(),
             snapshot_path=str(self.paths.snapshots / snapshot_id),
+            knowledge=refs.binding(),
         )
         return self.store.put_case(case)
 
@@ -299,6 +312,9 @@ class LabService:
                 parent_run_id=case.source_run_id,
                 tool_mode=request.tool_mode,
                 recorded_fixtures=case.tool_fixtures if request.tool_mode is ToolMode.recorded_tool else None,
+                memory_version_refs=case.memory_version_refs,
+                skill_version_refs=case.skill_version_refs,
+                protected_instruction_version_refs=case.protected_instruction_version_refs,
             )
         )
         parent_after = project_fingerprints(Path(parent.path))
@@ -335,6 +351,10 @@ class LabService:
                 criteria=criteria,
                 dependency_versions=case.dependency_versions,
                 workspace_id=workspace.id,
+                memory_version_refs=case.memory_version_refs,
+                skill_version_refs=case.skill_version_refs,
+                protected_instruction_version_refs=case.protected_instruction_version_refs,
+                knowledge=case.knowledge,
             ),
             evidence=_evidence_from_run(started),
             judgement=started.completion.judgement.model_dump() if started.completion else {},
@@ -382,6 +402,26 @@ class LabService:
         path = self.paths.snapshots / manifest.id / "manifest.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+
+    def _resolve_knowledge_refs(self, request: CaptureRequest, run: AgentRun | None) -> KnowledgeRefs:
+        memory = request.memory_version_refs
+        skills = request.skill_version_refs
+        protected = request.protected_instruction_version_refs
+        generic = request.knowledge_version_refs
+        if memory is None and run is not None:
+            memory = run.memory_version_refs
+        if skills is None and run is not None:
+            skills = run.skill_version_refs
+        if protected is None and run is not None:
+            protected = run.protected_instruction_version_refs
+        if not (memory or skills or protected or generic):
+            return KnowledgeRefs()
+        return self.knowledge.resolve_refs(
+            memory_version_refs=memory,
+            skill_version_refs=skills,
+            protected_instruction_version_refs=protected,
+            knowledge_version_refs=generic,
+        )
 
 
 def fixtures_from_run(run: AgentRun | None) -> list[dict[str, Any]]:

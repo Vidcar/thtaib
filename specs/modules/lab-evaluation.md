@@ -23,7 +23,7 @@ These defaults are authorised by [Issue #15](https://github.com/Vidcar/thtaib/is
 
 - **Snapshot:** application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary. Capture fails if live tools or harness runs are still writing. Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Git commits are not snapshots.
 - **Restore / branch:** restore into a new workspace directory and a linked branch run. Never overwrite the parent workspace or the original attempt.
-- **Include:** allowlisted project files, task, profile and deployment ids, dependency versions, memory/skill version refs, tool fixtures and acceptance checks.
+- **Include:** allowlisted project files, task, profile and deployment ids, dependency versions, memory/skill/protected-instruction version refs from the [STATE-005 store](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006), tool fixtures and acceptance checks. Knowledge version ids use the same reference pattern as profile and deployment ids. This does not select RAG.
 - **Exclude:** secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
 - **Environment:** no full environment restore this milestone; record exclusions.
 - **Engine:** llama-bench via the managed runtime when present; otherwise report unavailable. Do not invent scores.

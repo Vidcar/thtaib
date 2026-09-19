@@ -80,13 +80,22 @@ Choose the snapshot mechanism, quiescent/consistent capture boundary, concurrent
 <a id="oq-006"></a>
 ## OQ-006: Memory, skills, retrieval and sensitive context
 
-**Owner:** Persistence/agent boundary. **Blocks:** automatic durable knowledge updates or retention of real sensitive context.
+**Status:** partially constrained by [Issue #17](https://github.com/Vidcar/thtaib/issues/17) for the STATE-005 store. The question stays open.
 
-Choose storage representations, scope precedence, protected instructions, versioning/provenance, concurrent-write handling, review/revert, retention/redaction and deletion. Define retrieval/indexing integration separately from durable memory; the source has not selected a retrieval database. Clarify how restored runs use memory versions and what capture gaps are reported.
+**Owner:** Persistence/agent boundary. **Blocks:** automatic durable knowledge updates without an explicit scope policy, a retrieval/RAG product, or a decision that knowledge is shared across Chat, Lab and Builder versus surface-local.
 
-Whether retrieval/RAG and durable knowledge are shared across Chat, Lab and Builder or remain surface-local is unresolved. [AGT-004](modules/agents-workflows.md#agt-004) already separates active context from durable knowledge; it does not select a retrieval product, a shared index, or per-surface stores. Do not add RAG as a silent default or a second knowledge owner.
+Issue #17 locked the application-owned store defaults recorded in [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006). Those defaults do **not** select RAG, a shared index, or cross-surface sharing:
 
-**Evidence needed:** fresh-context reuse, conflicting writes, denied protected writes, memory revert and a redacted/retained context capture with declared limitations.
+- Store under `%LOCALAPPDATA%\LocalAIWorkbench\knowledge\` (not checkpointer tables, not git).
+- Versioned records with user/agent/project scopes, memory/skill/protected_instruction kinds, provenance and append-only history.
+- Optimistic concurrency via expected `base_version`; mismatch is an explicit conflict.
+- Protected instructions reject agent-origin writes; automatic agent writes need an explicit scope policy.
+- Context-capture retention duration and redaction mode are local config; default is retain with secrets redacted.
+- Backend API and an optional thin debug panel. Knowledge version ids are referenceable from Lab cases and harness setup.
+
+The remainder stays open. Choose retrieval/indexing integration separately from durable memory; the source has not selected a retrieval database. Clarify whether retrieval/RAG and durable knowledge are shared across Chat, Lab and Builder or remain surface-local, and what capture gaps a restored run must report beyond version refs. [AGT-004](modules/agents-workflows.md#agt-004) already separates active context from durable knowledge; it does not select a retrieval product, a shared index, or per-surface stores. Do not add RAG as a silent default or a second knowledge owner.
+
+**Evidence needed:** fresh-context reuse across surfaces if sharing is selected, a retrieval path that is not a second knowledge owner, and a redacted/retained context capture with declared limitations on a real David-PC workload. Executable unit checks for the locked store defaults are not that RAG/sharing evidence.
 
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details

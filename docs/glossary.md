@@ -20,7 +20,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | use 0.5B for agent UAT | Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS) |
 | copy GGUF into workroot | Reuse managed Model bundle (reference/link; no scratch copy) |
 | check in weights | Never commit GGUF/mmproj/weights |
+| add memory / RAG | Durable knowledge versioning (STATE-005) |
 | add RAG | OQ-006 unresolved (surface vs shared) |
+| agent memory DB | Application-owned knowledge store under LocalAppData |
+| last write wins | Optimistic concurrency / explicit conflict |
+| close OQ-006 | Partial OQ-006 defaults only (store; not RAG / cross-surface sharing) |
+| Chat memory UI | Out of scope |
 | MCP is the bus | open — default tool bus vs optional (OQ-009 / OQ-003) |
 | Approvals = LangGraph interrupt | OQ-011 — durable product Approvals inbox ≠ framework interrupt |
 | LangSmith for observability | OQ-012 — run observability outside Lab (local; LangSmith not home) |
@@ -40,6 +45,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | git snapshot | application directory snapshot |
 | identical rerun | restore inputs + record deviations |
 | full eval UX | OQ-014 later |
+| Durable knowledge (STATE-005) | Versioned scoped entries with provenance under LocalAppData knowledge |
+| Protected instruction | Kind that rejects agent-origin overwrites |
+| Knowledge conflict | Explicit failure when `base_version` does not match |
 
 ## Product and layout
 
@@ -63,7 +71,19 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **UAT workroot** is a throwaway directory under `.scratch/uat/…`. Agents and UAT must not create `uat-workroot*` at the repository root.
 
-**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces). Durable product, managed-inference and Lab case/snapshot state is never the repository root and never `.scratch/`.
+**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces, knowledge). Durable product, managed-inference, Lab case/snapshot and durable-knowledge state is never the repository root and never `.scratch/`.
+
+**Durable knowledge versioning (STATE-005)** is the application-owned, versioned store of user / agent / project memories, skills and protected instructions under `%LOCALAPPDATA%\LocalAIWorkbench\knowledge\`. It is not a RAG product, not a checkpointer table, and not git.
+
+**Application-owned knowledge store under LocalAppData** is that `knowledge\` directory. Do not call it an agent memory DB.
+
+**Optimistic concurrency / explicit conflict** means a write must name the expected `base_version`. A mismatch is a knowledge conflict, not last-write-wins.
+
+**Protected instruction** is the knowledge kind that rejects agent-origin overwrites. A human or API-maintainer path may edit it with provenance.
+
+**Knowledge conflict** is the explicit failure when `base_version` does not match the current version.
+
+**Partial OQ-006 defaults only (store; not RAG / cross-surface sharing)** means Issue #17 locked the STATE-005 store. Retrieval/RAG and whether knowledge is shared across Chat, Lab and Builder stay open.
 
 **Lab reuse** is capture → restore → rerun against the shared Deep Agents harness. It is not a Lab agent and not a second evaluation loop.
 
@@ -97,7 +117,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 These names are locked vocabulary, not selections. The questions stay in [open questions](../specs/open-questions.md).
 
-**OQ-006 unresolved (surface vs shared)** is whether retrieval/RAG and durable knowledge are shared across Chat, Lab and Builder or remain surface-local. It is not permission to “add RAG”.
+**OQ-006 unresolved (surface vs shared)** is whether retrieval/RAG and durable knowledge are shared across Chat, Lab and Builder or remain surface-local. It is not permission to “add RAG”. The STATE-005 store defaults do not close this question.
 
 **Default tool bus vs optional (OQ-009 / OQ-003)** is whether MCP is the default tool bus or an optional integration. MCP is not isolation; sandbox isolation stays [OQ-003](../specs/open-questions.md#oq-003).
 

@@ -18,6 +18,8 @@ Persist enough linkage to explain a run after restart, including selected config
 
 Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an application-owned directory snapshot (not a git commit), captured at a quiescent boundary, stored under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`, restored into a new workspace, with secrets/weights/scratch/venv/node_modules/credentials excluded and no full environment restore. Remaining snapshot policy stays [OQ-005](../open-questions.md#oq-005). External-effect rollback stays [STATE-004](#state-004).
 
+Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
+
 ## Requirements and acceptance checks
 
 <a id="state-001"></a>
@@ -55,6 +57,21 @@ Preserve user, agent and project knowledge scopes, provenance, versions and reve
 
 **Acceptance:** Demonstrate versioned edits/revert, a concurrent update conflict and an attempted protected-instruction overwrite. Verify the configured context-retention/redaction behaviour.
 
+<a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
+## Locked milestone defaults (Issue #17; partial OQ-006)
+
+These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/issues/17). They satisfy [STATE-005](#state-005) and support [AGT-004](agents-workflows.md#agt-004) durable-knowledge rules. They do **not** close [OQ-006](../open-questions.md#oq-006): retrieval/RAG and cross-surface sharing stay open.
+
+- **Store:** `%LOCALAPPDATA%\LocalAIWorkbench\knowledge\`. Application-owned files. Not checkpointer tables, not git, not `.scratch/`.
+- **Representation:** versioned records — scope ∈ {user, agent, project}, kind ∈ {memory, skill, protected_instruction}, content, provenance, version id, parent/previous version, timestamps.
+- **History:** append-only versions. Revert creates a new version that restores prior content; history is retained.
+- **Concurrency:** optimistic. Writes require expected `base_version`. A mismatch is an explicit conflict (`knowledge_conflict`); no silent last-write-wins.
+- **Protected instructions:** agent-origin writes are rejected. A human or API-maintainer path may edit with provenance.
+- **Automatic agent writes:** only when an explicit scope policy allows them. Every write carries provenance (actor, and run id if any).
+- **Context captures:** local config for retention duration and redaction mode. Default: retain with secrets redacted (`redact_secrets`). Configurable to retain plaintext or discard.
+- **Surfaces:** backend API (`/v1/knowledge/`) and an optional thin debug panel. No Chat or Builder UI.
+- **Lab/harness:** knowledge version ids are referenceable from cases and harness setup, using the same pattern as profile and deployment refs.
+
 ## Unresolved details
 
-Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation, [OQ-005](../open-questions.md#oq-005) for consistent snapshots and restoration, and [OQ-006](../open-questions.md#oq-006) for knowledge storage/concurrency/retention. No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.
+Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation and [OQ-005](../open-questions.md#oq-005) for remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.

@@ -35,10 +35,13 @@ class PathResolutionTests(unittest.TestCase):
         public = paths.as_public_dict()
         self.assertEqual(paths.cases, paths.root / "cases")
         self.assertEqual(paths.snapshots, paths.root / "snapshots")
+        self.assertEqual(paths.knowledge, paths.root / "knowledge")
         self.assertEqual(public["cases"], str(paths.cases))
         self.assertEqual(public["snapshots"], str(paths.snapshots))
+        self.assertEqual(public["knowledge"], str(paths.knowledge))
         self.assertIn("cases", public["windows_layout"])
         self.assertIn("snapshots", public["windows_layout"])
+        self.assertIn("knowledge", public["windows_layout"])
 
 
 if __name__ == "__main__":

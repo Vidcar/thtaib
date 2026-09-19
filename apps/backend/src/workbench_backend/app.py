@@ -17,6 +17,8 @@ from workbench_backend.agents.routes import router as agent_router
 from workbench_backend.errors import WorkbenchError, workbench_error_handler
 from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
+from workbench_backend.knowledge.routes import router as knowledge_router
+from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
 
@@ -43,14 +45,20 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.state.manager = manager_from_env(data_root)
-    application.state.harness = HarnessService(lambda: application.state.manager)
+    application.state.knowledge = KnowledgeService(application.state.manager.paths)
+    application.state.harness = HarnessService(
+        lambda: application.state.manager,
+        knowledge_provider=lambda: application.state.knowledge,
+    )
     application.state.lab = LabService(
         lambda: application.state.manager,
         lambda: application.state.harness,
+        knowledge_provider=lambda: application.state.knowledge,
     )
     application.include_router(router)
     application.include_router(agent_router)
     application.include_router(lab_router)
+    application.include_router(knowledge_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 
     @application.get("/health")
