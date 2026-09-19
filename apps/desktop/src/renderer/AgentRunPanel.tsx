@@ -25,18 +25,21 @@ export function AgentRunPanel() {
     });
   }, []);
 
+  const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
+
   useEffect(() => {
-    if (!run || !isAgentRunLive(run.status)) {
+    if (!liveRunId) {
       return;
     }
-    const timer = window.setInterval(() => {
-      void api
-        .agentRun(run.id)
-        .then(setRun)
-        .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [run]);
+    const controller = new AbortController();
+    void api.subscribeAgentRun(liveRunId, controller.signal, setRun).catch((error: unknown) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : String(error));
+    });
+    return () => controller.abort();
+  }, [liveRunId]);
 
   return (
     <section className="panel">
@@ -86,7 +89,7 @@ export function AgentRunPanel() {
           </button>
           <button
             type="button"
-            disabled={!run}
+            disabled={!run || !isAgentRunLive(run.status)}
             onClick={() => {
               if (!run) {
                 return;

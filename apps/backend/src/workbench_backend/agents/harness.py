@@ -7,6 +7,7 @@ returned by create_deep_agent — not a second Builder workflow editor.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -92,7 +93,8 @@ class HarnessService:
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._updates = threading.Condition(self._lock)
 
     @property
     def store(self) -> ApplicationStore:
@@ -241,7 +243,7 @@ class HarnessService:
         with self._lock:
             self._runs[run.id] = run
             self._cancels[run.id] = cancel
-        self._persist(run)
+            self._persist_and_notify(run)
         thread = threading.Thread(target=self._execute, args=(run.id,), daemon=True)
         with self._lock:
             self._threads[run.id] = thread
@@ -281,7 +283,7 @@ class HarnessService:
                         detail={"requested": True, "confirmed": False},
                     )
                 )
-                self._persist(run)
+                self._persist_and_notify(run)
             return run.model_copy(deep=True)
 
     def _execute(self, run_id: str) -> None:
@@ -297,7 +299,7 @@ class HarnessService:
                 run.status = AgentRunStatus.running
                 run.updated_at = utc_now()
                 run.events.append(AgentEvent(at=run.updated_at, kind="started", detail={}))
-                self._persist(run)
+                self._persist_and_notify(run)
         if already_terminal:
             return
         if requested_before_start:
@@ -381,7 +383,7 @@ class HarnessService:
                     run.stop_reason = "cancelled"
                     run.finished_at = run.finished_at or utc_now()
                     run.updated_at = run.finished_at
-                    self._persist(run)
+                    self._persist_and_notify(run)
                 return
             run.status = status
             run.stop_reason = stop_reason
@@ -402,20 +404,26 @@ class HarnessService:
                     detail=event_detail,
                 )
             )
-            self._persist(run)
+            self._persist_and_notify(run)
 
     def _ingest_stream(self, run: AgentRun, chunk: Any) -> None:
         if not isinstance(chunk, dict):
             return
+        changed = False
         for node, update in chunk.items():
             messages = update.get("messages") if isinstance(update, dict) else None
             if not messages:
                 continue
             for message in messages:
-                self._ingest_message(run, message, str(node))
+                if self._ingest_message(run, message, str(node)):
+                    changed = True
+        if changed:
+            with self._lock:
+                self._persist_and_notify(run)
 
-    def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str) -> None:
+    def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str) -> bool:
         now = utc_now()
+        emitted = False
         if isinstance(message, AIMessage) and message.tool_calls:
             for call in message.tool_calls:
                 name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
@@ -424,7 +432,9 @@ class HarnessService:
                 invocation = {"name": name, "args": args, "id": call_id, "node": node}
                 run.tool_invocations.append(invocation)
                 run.events.append(AgentEvent(at=now, kind="tool_call", detail=invocation))
-            return
+                emitted = True
+            run.updated_at = now
+            return emitted
         if isinstance(message, ToolMessage):
             run.events.append(
                 AgentEvent(
@@ -438,7 +448,8 @@ class HarnessService:
                     },
                 )
             )
-            return
+            run.updated_at = now
+            return True
         if isinstance(message, AIMessage) and message.content:
             run.events.append(
                 AgentEvent(
@@ -447,7 +458,9 @@ class HarnessService:
                     detail={"content": message.content, "node": node},
                 )
             )
+            emitted = True
         run.updated_at = now
+        return emitted
 
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
         deployment = self.manager.get_deployment(run.deployment_id)
@@ -510,10 +523,47 @@ class HarnessService:
             unique.append(item)
         run.related_files = unique
 
+    def wait_after(
+        self,
+        run_id: str,
+        after_seq: int,
+        *,
+        timeout: float,
+    ) -> tuple[AgentRun, list[AgentEvent]]:
+        """Block until events after ``after_seq`` exist or the run is terminal.
+
+        ``after_seq`` is the count of events already sent (same as last SSE id).
+        """
+
+        deadline = time.monotonic() + timeout
+        with self._updates:
+            while True:
+                run = self._require_run(run_id)
+                extra = list(run.events[after_seq:])
+                if extra or not is_run_lifecycle_live(run.status):
+                    return self._expose_run(run), extra
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return self._expose_run(run), []
+                self._updates.wait(timeout=remaining)
+
+    def _require_run(self, run_id: str) -> AgentRun:
+        run = self._runs.get(run_id)
+        if run is not None:
+            return run
+        stored = self.store.get_run(run_id)
+        if stored is None:
+            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+        return self._runs.setdefault(run_id, stored)
+
     def _persist(self, run: AgentRun) -> None:
         sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
         run.model_requests = sanitized.model_requests
         self.store.put_run(run.model_copy(deep=True))
+
+    def _persist_and_notify(self, run: AgentRun) -> None:
+        self._persist(run)
+        self._updates.notify_all()
 
     def _capture_settings(self) -> ContextCaptureSettings:
         if self._knowledge_provider is not None:

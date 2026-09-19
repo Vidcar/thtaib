@@ -10,9 +10,9 @@ Design choices not yet made. Recording a question is not permission to choose si
 <a id="oq-002"></a>
 ## OQ-002: Desktop/backend trust and communication
 
-**Status:** partially decided (same-machine shared secret and loopback bind, Issue #40). **Owner:** backend/desktop boundary. **Blocks:** any event streaming or reconnection claim; treating a remote backend as supported.
+**Status:** partially decided (same-machine shared secret and loopback bind, Issue #40; SSE for same-machine run/chat events, [changelog](decisions/changelog.md)). **Owner:** backend/desktop boundary. **Blocks:** treating a remote backend as supported.
 
-Open: the event transport (SSE or WebSocket) and reconnection contract that replaces polling ([DEV-005](deviations.md#dev-005)); remaining origin/IPC checks; whether remote backend access is ever supported. An API bound locally must not be assumed secure solely because it is local. **Evidence needed:** reconnect behaviour under a dropped client and a real Electron ↔ backend pairing on David-PC.
+Decided for this machine: one `GET /v1/events` SSE stream (`run_id` or `conversation_id`), same `X-Workbench-Local-Token` header, FastAPI `EventSourceResponse`, reconnect `snapshot` then only `run_event`s newer than that snapshot ([API-006](modules/backend-desktop.md#api-006)). WebSockets are not the transport. Open: remaining origin/IPC checks; whether remote backend access is ever supported. An API bound locally must not be assumed secure solely because it is local. **Evidence needed:** reconnect behaviour under a dropped Electron client and a real Electron ↔ backend pairing on David-PC.
 
 <a id="oq-003"></a>
 ## OQ-003: Worker protocol, isolation and access policy
@@ -26,7 +26,7 @@ Open: the approval flow for host-shell commands (what is auto-allowed, what inte
 
 **Status:** partially decided (two databases and linkage #27; effects ledger #31; cancel honesty #42; Chat thread reuse #56). **Owner:** backend, agent and persistence boundaries jointly. **Blocks:** durable-run claims beyond the recorded linkage.
 
-Open: identity formats and parent/child semantics beyond conversation → thread → run; event ordering and reconnection; remaining state transitions and stop reasons; whether the same thread can resume after a model or adapter change; exactly-once across databases, files and services. **Evidence needed:** cancel and crash tests around an external effect and a checkpoint boundary; continuation beyond a measured framework limit without duplicates.
+Open: identity formats and parent/child semantics beyond conversation → thread → run; remaining state transitions and stop reasons; whether the same thread can resume after a model or adapter change; exactly-once across databases, files and services. For this stream, event order is the append order of application `AgentEvent` rows; `run_event` seq is that 1-based index. After a reconnect `snapshot`, only later seq values stream ([API-006](modules/backend-desktop.md#api-006)). That is not an exactly-once claim across a backend restart. **Evidence needed:** cancel and crash tests around an external effect and a checkpoint boundary; continuation beyond a measured framework limit without duplicates.
 
 <a id="oq-005"></a>
 ## OQ-005: Consistent project snapshots and restoration

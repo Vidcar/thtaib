@@ -2,12 +2,20 @@ import type {
   SchemaLocalSessionTrustContract,
   SchemaRunLifecycleContract,
   SchemaRunLifecycleStatus,
+  SchemaRunStreamContract,
+  SchemaRunStreamEnvelope,
+  SchemaRunStreamEventType,
+  SchemaSharedAgentEvent,
 } from "../generated/shared-contracts/openapi";
 
 /** Generated shared-contract consumer aliases. Do not hand-edit generated sources. */
 export type LocalSessionTrustContract = SchemaLocalSessionTrustContract;
 export type RunLifecycleContract = SchemaRunLifecycleContract;
 export type RunLifecycleStatus = SchemaRunLifecycleStatus;
+export type RunStreamContract = SchemaRunStreamContract;
+export type RunStreamEnvelope = SchemaRunStreamEnvelope;
+export type RunStreamEventType = SchemaRunStreamEventType;
+export type SharedAgentEvent = SchemaSharedAgentEvent;
 
 export function isRunLifecycleLive(status: RunLifecycleStatus): boolean {
   switch (status) {

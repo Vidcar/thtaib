@@ -38,18 +38,21 @@ export function LabPanel() {
     });
   }, []);
 
+  const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
+
   useEffect(() => {
-    if (!run || !isAgentRunLive(run.status)) {
+    if (!liveRunId) {
       return;
     }
-    const timer = window.setInterval(() => {
-      void api
-        .agentRun(run.id)
-        .then(setRun)
-        .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [run]);
+    const controller = new AbortController();
+    void api.subscribeAgentRun(liveRunId, controller.signal, setRun).catch((error: unknown) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : String(error));
+    });
+    return () => controller.abort();
+  }, [liveRunId]);
 
   useEffect(() => {
     if (!result) {
@@ -64,7 +67,7 @@ export function LabPanel() {
         .labResult(result.id)
         .then(setResult)
         .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
-    }, 750);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [result]);
 

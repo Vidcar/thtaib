@@ -47,6 +47,16 @@ Never let an upstream example silently replace application ownership, permission
 - <https://inspect.aisi.org.uk/scorers.html>
 - <https://modelcontextprotocol.io/extensions/apps/overview>
 
+<a id="fastapi-sse"></a>
+## FastAPI Server-Sent Events
+
+Consulted 2026-09-19 for the pinned FastAPI 0.141 line (SSE added in 0.135.0):
+
+- [Server-Sent Events (SSE)](https://fastapi.tiangolo.com/tutorial/server-sent-events/) — `EventSourceResponse`, `ServerSentEvent`, `Last-Event-ID`, automatic keep-alive comments.
+- [SSE reference](https://fastapi.tiangolo.com/reference/sse/).
+
+LangGraph `stream_mode="updates"` (pinned `langgraph>=1.0,<2`) remains the harness ingest path ([streaming](https://docs.langchain.com/oss/python/langgraph/streaming)); the application maps those updates to `AgentEvent` and SSE publishes the application events.
+
 <a id="contract-generation"></a>
 ## Additional contract-generation references
 

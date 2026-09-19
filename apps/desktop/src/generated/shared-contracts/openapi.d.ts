@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shared-contracts/run-stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run/chat SSE envelope contract */
+        get: operations["run_stream_contract_v1_shared_contracts_run_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shared-contracts/run-stream-envelope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run/chat SSE JSON data envelope */
+        get: operations["run_stream_envelope_contract_v1_shared_contracts_run_stream_envelope_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shared-contracts/session-trust": {
         parameters: {
             query?: never;
@@ -135,6 +169,102 @@ export interface components {
          * @enum {string}
          */
         RunLifecycleStatus: "queued" | "running" | "cancel_requested" | "cancelled" | "completed" | "failed";
+        /**
+         * RunStreamContract
+         * @description Documented stream route, headers and event names for generated consumers.
+         */
+        RunStreamContract: {
+            /**
+             * Auth Header
+             * @default X-Workbench-Local-Token
+             * @constant
+             */
+            auth_header: "X-Workbench-Local-Token";
+            /**
+             * Disconnect Does Not End Run
+             * @default true
+             * @constant
+             */
+            disconnect_does_not_end_run: true;
+            /** Event Names */
+            event_names?: components["schemas"]["RunStreamEventType"][];
+            /**
+             * Last Event Id Header
+             * @default Last-Event-ID
+             * @constant
+             */
+            last_event_id_header: "Last-Event-ID";
+            /**
+             * Media Type
+             * @default text/event-stream
+             * @constant
+             */
+            media_type: "text/event-stream";
+            /**
+             * Method
+             * @default GET
+             * @constant
+             */
+            method: "GET";
+            /**
+             * Path
+             * @default /v1/events
+             * @constant
+             */
+            path: "/v1/events";
+            /** Query One Of */
+            query_one_of?: ("run_id" | "conversation_id")[];
+            /**
+             * Transport
+             * @default sse
+             * @constant
+             */
+            transport: "sse";
+        };
+        /**
+         * RunStreamEnvelope
+         * @description JSON `data` for each SSE message on GET /v1/events.
+         */
+        RunStreamEnvelope: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            event?: components["schemas"]["SharedAgentEvent"] | null;
+            /** Run Id */
+            run_id?: string | null;
+            /**
+             * Seq
+             * @description 1-based AgentEvent index on the run. Set on run_event; used as SSE id.
+             */
+            seq?: number | null;
+            /**
+             * Snapshot
+             * @description GET-equivalent agent-run or chat-conversation record.
+             */
+            snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            status?: components["schemas"]["RunLifecycleStatus"] | null;
+            type: components["schemas"]["RunStreamEventType"];
+        };
+        /**
+         * RunStreamEventType
+         * @enum {string}
+         */
+        RunStreamEventType: "snapshot" | "run_event" | "stream_end";
+        /**
+         * SharedAgentEvent
+         * @description One application harness event. Not a raw LangGraph stream chunk.
+         */
+        SharedAgentEvent: {
+            /** At */
+            at: string;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -145,6 +275,10 @@ export interface components {
 export type SchemaLocalSessionTrustContract = components['schemas']['LocalSessionTrustContract'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
 export type SchemaRunLifecycleStatus = components['schemas']['RunLifecycleStatus'];
+export type SchemaRunStreamContract = components['schemas']['RunStreamContract'];
+export type SchemaRunStreamEnvelope = components['schemas']['RunStreamEnvelope'];
+export type SchemaRunStreamEventType = components['schemas']['RunStreamEventType'];
+export type SchemaSharedAgentEvent = components['schemas']['SharedAgentEvent'];
 export type $defs = Record<string, never>;
 export interface operations {
     run_lifecycle_contract_v1_shared_contracts_run_lifecycle_get: {
@@ -163,6 +297,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunLifecycleContract"];
+                };
+            };
+        };
+    };
+    run_stream_contract_v1_shared_contracts_run_stream_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStreamContract"];
+                };
+            };
+        };
+    };
+    run_stream_envelope_contract_v1_shared_contracts_run_stream_envelope_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStreamEnvelope"];
                 };
             };
         };

@@ -59,9 +59,9 @@
     },
     {
       "id": "shared-event-contracts",
-      "state": "unbound",
-      "path": null,
-      "kind": "directory",
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend/contracts/events.py",
+      "kind": "file",
       "owner_spec": "specs/modules/backend-desktop.md",
       "required_before": "First streaming/event consumer"
     },

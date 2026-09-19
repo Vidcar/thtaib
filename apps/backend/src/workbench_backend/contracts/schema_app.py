@@ -16,6 +16,7 @@ from workbench_backend.contracts.auth import (
     WORKBENCH_LOCAL_TOKEN_HEADER,
     LocalSessionTrustContract,
 )
+from workbench_backend.contracts.events import RunStreamContract, RunStreamEnvelope
 from workbench_backend.contracts.lifecycle import RunLifecycleContract
 
 SHARED_CONTRACT_OPENAPI_TITLE = f"{PRODUCT_NAME} shared contracts"
@@ -60,5 +61,23 @@ def create_shared_contract_app() -> FastAPI:
     )
     def run_lifecycle_contract() -> RunLifecycleContract:
         return RunLifecycleContract()
+
+    @application.get(
+        "/v1/shared-contracts/run-stream",
+        response_model=RunStreamContract,
+        tags=["shared-contracts"],
+        summary="Run/chat SSE envelope contract",
+    )
+    def run_stream_contract() -> RunStreamContract:
+        return RunStreamContract()
+
+    @application.get(
+        "/v1/shared-contracts/run-stream-envelope",
+        response_model=RunStreamEnvelope,
+        tags=["shared-contracts"],
+        summary="Run/chat SSE JSON data envelope",
+    )
+    def run_stream_envelope_contract() -> RunStreamEnvelope:
+        return RunStreamEnvelope(type="stream_end")
 
     return application
