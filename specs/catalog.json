@@ -282,10 +282,12 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
+        "apps/backend/src/workbench_backend/inference/compatibility.py",
         "apps/backend/src/workbench_backend/managed/compatibility/unverified.stub.json"
       ],
       "tests": [
-        "apps/backend/tests/test_settings.py"
+        "apps/backend/tests/test_settings.py",
+        "apps/backend/tests/test_compatibility.py"
       ],
       "evidence": []
     },
@@ -382,9 +384,15 @@
       "document": "specs/modules/models.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/managed/compatibility/unverified.stub.json"
+        "apps/backend/src/workbench_backend/inference/compatibility.py",
+        "apps/backend/src/workbench_backend/inference/compatibility_routes.py",
+        "apps/backend/src/workbench_backend/managed/compatibility/unverified.stub.json",
+        "apps/backend/src/workbench_backend/managed/compatibility/three-provenance.example.json",
+        "apps/backend/src/workbench_backend/managed/compatibility/known-incompatible.example.json"
       ],
-      "tests": [],
+      "tests": [
+        "apps/backend/tests/test_compatibility.py"
+      ],
       "evidence": []
     },
     {
@@ -582,9 +590,17 @@
     {
       "id": "STATE-004",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/state/effects.py",
+        "apps/backend/src/workbench_backend/state/effect_routes.py",
+        "apps/backend/src/workbench_backend/state/store.py",
+        "apps/backend/src/workbench_backend/lab/schemas.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_effects.py",
+        "apps/backend/tests/test_lab.py"
+      ],
       "evidence": []
     },
     {

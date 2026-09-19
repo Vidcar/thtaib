@@ -1,15 +1,28 @@
 {
   "schema_version": 1,
-  "kind": "compatibility-record-stub",
+  "kind": "compatibility-record",
+  "id": "compat_unverified_unfamiliar",
+  "record_version": 1,
   "product": "Local AI Workbench",
-  "status": "unverified",
-  "note": "Unverified is not incompatible and is not a supported-capability claim. Full MOD-006 / OQ-007 evidence is still open.",
+  "support_status": "unverified",
+  "subject": {
+    "kind": "unfamiliar",
+    "selector": "unfamiliar-unverified",
+    "display_name": "Unfamiliar unverified model"
+  },
+  "requirements": [],
+  "supported_capabilities": [],
+  "supported_controls": [],
+  "recommendations": [],
+  "sources": [],
+  "validation_evidence": [],
   "provenance": {
     "publisher_guidance": [],
     "tested_adjustments": [],
     "user_overrides": []
   },
-  "capabilities": {
-    "status": "unverified"
-  }
+  "excluded": false,
+  "incompatible": false,
+  "catalogue_claim": "not_verified",
+  "note": "Unverified is not incompatible and is not a supported-capability claim. Full MOD-006 / OQ-007 evidence remains open."
 }

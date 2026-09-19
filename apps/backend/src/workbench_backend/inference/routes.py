@@ -63,6 +63,12 @@ def inspect_bundle(request: Request, bundle_id: str) -> object:
     return get_manager(request).inspect_bundle(bundle_id)
 
 
+@router.get("/bundles/{bundle_id}/compatibility")
+def bundle_compatibility(request: Request, bundle_id: str) -> object:
+    bundle = get_manager(request).get_bundle(bundle_id)
+    return request.app.state.compatibility.assess_bundle(bundle)
+
+
 @router.get("/profiles")
 def list_profiles(request: Request) -> object:
     return get_manager(request).list_profiles()

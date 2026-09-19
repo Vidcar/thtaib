@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "kind": "compatibility-record",
+  "id": "compat_three_provenance",
+  "record_version": 1,
+  "product": "Local AI Workbench",
+  "support_status": "tested",
+  "subject": {
+    "kind": "model_family",
+    "selector": "qwen3.8-fixture",
+    "display_name": "Three-provenance fixture family"
+  },
+  "requirements": [
+    "Managed llama.cpp runtime (PATH llama unsupported)",
+    "GGUF primary weights recorded as a Model bundle"
+  ],
+  "supported_capabilities": [],
+  "supported_controls": ["ctx_size", "n_gpu_layers", "flash_attn"],
+  "recommendations": [
+    "Keep publisher guidance, tested adjustments and user overrides inspectable and separate"
+  ],
+  "sources": [
+    "publisher: fixture publisher card",
+    "tested: pack fixture, not David-PC UAT",
+    "user: example override stored in the user_overrides category"
+  ],
+  "validation_evidence": [
+    "Pack fixture only. Not catalogue verified. Not a capability UAT claim."
+  ],
+  "provenance": {
+    "publisher_guidance": [
+      {
+        "id": "pub_ctx",
+        "category": "publisher_guidance",
+        "claim": "Publisher card suggests ctx_size 8192 for this family",
+        "source": "fixture-publisher-card",
+        "evidence_ref": null,
+        "note": "Publisher guidance only. Not a tested or user-override claim."
+      }
+    ],
+    "tested_adjustments": [
+      {
+        "id": "test_ctx",
+        "category": "tested_adjustments",
+        "claim": "Fixture test used ctx_size 4096 with n_gpu_layers -1",
+        "source": "pack-fixture",
+        "evidence_ref": "validation_evidence[0]",
+        "note": "Tested adjustment. Not publisher guidance and not a user override."
+      }
+    ],
+    "user_overrides": [
+      {
+        "id": "user_temp",
+        "category": "user_overrides",
+        "claim": "User prefers temperature 0.2 for this fixture family",
+        "source": "user",
+        "evidence_ref": null,
+        "note": "User override. Not publisher guidance and not a tested adjustment."
+      }
+    ]
+  },
+  "excluded": false,
+  "incompatible": false,
+  "catalogue_claim": "not_verified",
+  "note": "All three provenance categories are present and kept separate. tested is not catalogue verified."
+}

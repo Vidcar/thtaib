@@ -42,6 +42,10 @@ class ChatError(WorkbenchError):
     """Chat surface error. Chat is not a second agent loop."""
 
 
+class StateError(WorkbenchError):
+    """Application-owned recovery/effect error. Not an exactly-once claim."""
+
+
 def workbench_error_handler(_request: Request, exc: WorkbenchError) -> JSONResponse:
     content: dict[str, object] = {"error": exc.message, "code": exc.code}
     content.update(exc.details)

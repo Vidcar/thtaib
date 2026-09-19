@@ -197,9 +197,13 @@ class LabApiTests(unittest.TestCase):
         self.assertTrue(case["dependency_versions"])
         self.assertEqual(case["memory_version_refs"], [])
         self.assertEqual(case["environment_restore"], "not_this_milestone")
+        self.assertEqual(case["rollback_promise"], "none")
+        self.assertEqual(case["external_effect_rollback"], "not_supported")
         snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
         self.assertEqual(snapshot["mechanism"], "application_directory_snapshot")
         self.assertTrue(snapshot["not_git_commit"])
+        self.assertEqual(snapshot["rollback_promise"], "none")
+        self.assertEqual(snapshot["external_effect_rollback"], "not_supported")
         self.assertTrue((self.paths.snapshots / case["snapshot_id"] / "tree" / "notes.md").is_file())
 
         changed = self.client.put(
@@ -214,6 +218,8 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(restored.status_code, 200, restored.text)
         restore = restored.json()
         self.assertTrue(restore["parent_unchanged"])
+        self.assertFalse(restore["external_effects_rolled_back"])
+        self.assertEqual(restore["rollback_promise"], "none")
         self.assertEqual(restore["branch"]["kind"], "linked_branch")
         self.assertNotEqual(restore["workspace"]["id"], workspace["id"])
         self.assertEqual(restore["workspace"]["origin"], "restored")

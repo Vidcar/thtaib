@@ -14,7 +14,7 @@ They do **not** prove architectural semantics, actual test execution, security i
 
 After the repository was inspected (Windows-first scaffold, managed inference, embedded harness, Lab reuse, durable knowledge), use `planned` for absent work or `partial` for incomplete or insufficiently evidenced work. Leave `unassessed` only where no inspection has been performed. Use `verified` only for the current scope with actual implementation/test paths and passing evidence. Unit-test pointers alone are not `verified`. Preserve a retired requirement's ID/heading and explain its replacement rather than delete or reuse it.
 
-Issue #23 recorded that inspection. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with Issue #22; it is not finished polish. CUDA 13.4 / default GPU profile / valued `flash_attn` mapping landed as a partial [OQ-007](open-questions.md#oq-007) on Issue #21; the remainder stays open.
+Issue #23 recorded that inspection. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with Issue #22; it is not finished polish. CUDA 13.4 / default GPU profile / valued `flash_attn` mapping landed as a partial [OQ-007](open-questions.md#oq-007) on Issue #21; Issue #31 adds provenance-capable [MOD-006](modules/models.md#mod-006) records; the remainder stays open. [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety landed as a partial on Issue #31; it is not catalogue `verified`.
 
 A code/test pointer is a repository-relative **file** path, not a guessed symbol name or future directory. Put exact test names/selectors and commands in the evidence record. Actual commands belong in [commands](commands.md), and logical-to-physical bindings belong in [the repository map](repository-map.json).
 

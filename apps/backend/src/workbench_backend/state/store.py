@@ -10,7 +10,7 @@ from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
-from workbench_backend.state.schemas import RelatedFile, RunLinkage
+from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
 
 SCHEMA_VERSION = "1"
 
@@ -63,6 +63,16 @@ CREATE TABLE IF NOT EXISTS migration_log (
     destination TEXT NOT NULL,
     status TEXT NOT NULL,
     at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_effects (
+    id TEXT PRIMARY KEY,
+    run_id TEXT,
+    payload TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    unresolved INTEGER NOT NULL,
+    dispatched_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -260,6 +270,65 @@ class ApplicationStore:
                 """,
                 (run_id, checkpoint_id, thread_id, now),
             )
+
+    def put_effect(self, effect: ExternalEffect) -> ExternalEffect:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO external_effects(
+                    id, run_id, payload, outcome, unresolved, dispatched_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    run_id=excluded.run_id,
+                    payload=excluded.payload,
+                    outcome=excluded.outcome,
+                    unresolved=excluded.unresolved,
+                    dispatched_at=excluded.dispatched_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    effect.id,
+                    effect.run_id,
+                    effect.model_dump_json(),
+                    effect.outcome.value,
+                    1 if effect.unresolved else 0,
+                    effect.dispatched_at,
+                    utc_now(),
+                ),
+            )
+            self._conn.commit()
+        return effect
+
+    def get_effect(self, effect_id: str) -> ExternalEffect | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM external_effects WHERE id = ?",
+                (effect_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ExternalEffect.model_validate_json(row["payload"])
+
+    def list_effects(
+        self,
+        *,
+        run_id: str | None = None,
+        unresolved_only: bool = False,
+    ) -> list[ExternalEffect]:
+        sql = "SELECT payload FROM external_effects"
+        params: list[object] = []
+        clauses: list[str] = []
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        if unresolved_only:
+            clauses.append("unresolved = 1")
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY dispatched_at"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [ExternalEffect.model_validate_json(row["payload"]) for row in rows]
 
     def _replace_files_locked(self, run_id: str, files: list[RelatedFile]) -> None:
         self._conn.execute("DELETE FROM run_files WHERE run_id = ?", (run_id,))

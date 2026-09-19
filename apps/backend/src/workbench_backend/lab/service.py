@@ -46,6 +46,7 @@ from workbench_backend.lab.snapshot import (
 )
 from workbench_backend.lab.store import LabStore
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.effects import EffectService
 
 DEPENDENCY_PACKAGES = ("deepagents", "langchain", "langgraph", "langchain-openai")
 
@@ -56,10 +57,12 @@ class LabService:
         manager_provider: Callable[[], ModelManager],
         harness_provider: Callable[[], HarnessService],
         knowledge_provider: Callable[[], KnowledgeService] | None = None,
+        effects_provider: Callable[[], EffectService] | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._harness_provider = harness_provider
         self._knowledge_provider = knowledge_provider
+        self._effects_provider = effects_provider
 
     @property
     def manager(self) -> ModelManager:
@@ -82,6 +85,12 @@ class LabService:
         if self._knowledge_provider is not None:
             return self._knowledge_provider()
         return KnowledgeService(self.paths)
+
+    @property
+    def effects(self) -> EffectService:
+        if self._effects_provider is not None:
+            return self._effects_provider()
+        return EffectService(self.harness.store)
 
     def create_workspace(self, request: WorkspaceCreateRequest) -> LabWorkspace:
         now = utc_now()
@@ -158,6 +167,7 @@ class LabService:
             tree_path,
             allowlist=request.allowlist or workspace.allowlist,
         )
+        unresolved = self.effects.unresolved_ids_for_run(run.id if run else None)
         manifest = SnapshotManifest(
             id=snapshot_id,
             workspace_id=workspace.id,
@@ -165,6 +175,7 @@ class LabService:
             included_files=included,
             exclusions=exclusions,
             environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
+            unresolved_side_effects=unresolved,
             allowlist=request.allowlist or workspace.allowlist,
             tree_path=str(tree_path),
         )
@@ -199,6 +210,7 @@ class LabService:
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
             exclusions=exclusions,
             environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
+            unresolved_side_effects=unresolved,
             created_at=utc_now(),
             snapshot_path=str(self.paths.snapshots / snapshot_id),
             knowledge=refs.binding(),
@@ -263,7 +275,12 @@ class LabService:
             "Restored into a new workspace directory; the parent was not overwritten.",
             "Full environment restore is not this milestone; exclusions are recorded.",
             "Restored inputs do not guarantee an identical model output.",
+            "Snapshot restore does not roll back external effects or restore a whole environment.",
         ]
+        if snapshot.unresolved_side_effects:
+            deviations.append(
+                "Unresolved side effects were preserved; they were not replayed or rolled back."
+            )
         if not parent_unchanged:
             deviations.append("Parent workspace fingerprints changed during restore.")
         return RestoreResult(
@@ -279,6 +296,7 @@ class LabService:
             },
             deviations=deviations,
             snapshot_id=snapshot.id,
+            unresolved_side_effects=list(snapshot.unresolved_side_effects),
         )
 
     def rerun(self, case_id: str, request: RerunRequest) -> LabResult:
