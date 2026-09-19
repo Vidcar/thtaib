@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
 from workbench_backend.knowledge.schemas import KnowledgeBinding
 from workbench_backend.state.schemas import RelatedFile
@@ -68,9 +69,13 @@ class ModelRequestCapture(BaseModel):
     generation_settings: dict[str, Any] = Field(default_factory=dict)
     memory_versions: list[str] = Field(default_factory=list)
     skill_versions: list[str] = Field(default_factory=list)
+    loaded_knowledge: list[LoadedKnowledgeFact] = Field(default_factory=list)
     retrieved_material: list[str] = Field(default_factory=list)
     capture_gaps: list[str] = Field(default_factory=list)
     http_payload: dict[str, Any] | None = None
+    selected_profile_id: str | None = None
+    applied_per_request: dict[str, Any] = Field(default_factory=dict)
+    startup_mismatches: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ToolMode(str, Enum):
@@ -146,3 +151,4 @@ class AgentRun(BaseModel):
     thread_id: str | None = None
     checkpoint_ids: list[str] = Field(default_factory=list)
     related_files: list[RelatedFile] = Field(default_factory=list)
+    effective_setup: EffectiveSetup | None = None

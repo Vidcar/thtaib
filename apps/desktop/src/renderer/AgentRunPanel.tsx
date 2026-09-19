@@ -125,6 +125,8 @@ export function AgentRunPanel() {
           <p>enabled tools: {run.enabled_tools.join(", ")}</p>
           <p>presented tools: {run.presented_tools.join(", ")}</p>
           {run.error ? <p className="status">{run.error}</p> : null}
+          <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
+          <pre className="json">{JSON.stringify(run.effective_setup ?? null, null, 2)}</pre>
           <h3>Captured model request</h3>
           <pre className="json">{JSON.stringify(run.model_requests, null, 2)}</pre>
           <h3>Evidence (not judgement)</h3>

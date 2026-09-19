@@ -21,6 +21,10 @@ class ChatConversationCreateRequest(BaseModel):
     project_path: str | None = None
     workspace_id: str | None = None
     profile_id: str | None = None
+    memory_version_refs: list[str] = Field(default_factory=list)
+    skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    knowledge_version_refs: list[str] = Field(default_factory=list)
 
 
 class ChatStartRequest(BaseModel):
@@ -30,6 +34,10 @@ class ChatStartRequest(BaseModel):
     project_path: str | None = None
     workspace_id: str | None = None
     presented_tools: list[str] | None = None
+    memory_version_refs: list[str] | None = None
+    skill_version_refs: list[str] | None = None
+    protected_instruction_version_refs: list[str] | None = None
+    knowledge_version_refs: list[str] | None = None
 
 
 class ChatTranscriptReplaceRequest(BaseModel):
@@ -73,6 +81,9 @@ class ChatConversation(BaseModel):
     harness: Literal["deepagents"] = "deepagents"
     second_agent_loop: Literal[False] = False
     source_surface: Literal["chat"] = "chat"
+    memory_version_refs: list[str] = Field(default_factory=list)
+    skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

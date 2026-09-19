@@ -16,6 +16,7 @@ from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
+from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import (
@@ -46,7 +47,7 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.schemas import KnowledgeRefs
+from workbench_backend.knowledge.schemas import KnowledgeRefs, KnowledgeVersion
 from workbench_backend.knowledge.service import KnowledgeService
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -151,8 +152,16 @@ class HarnessService:
                 status_code=400,
             )
         refs = self._resolve_knowledge_refs(request)
-        if request.profile_id:
-            self.manager.get_profile(request.profile_id)
+        versions = self._load_knowledge_versions(refs)
+        profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
+        setup = resolve_effective_setup(
+            deployment=deployment,
+            profile=profile,
+            knowledge_refs=refs,
+            knowledge_versions=versions,
+            surface_system_prompt=request.system_prompt,
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+        )
         project_path = _resolved_project_path(request.project_path)
         now = utc_now()
         run = AgentRun(
@@ -163,7 +172,7 @@ class HarnessService:
             enabled_tools=enabled_catalogue(),
             presented_tools=presented,
             denied_tools=[],
-            system_prompt=request.system_prompt or DEFAULT_SYSTEM_PROMPT,
+            system_prompt=setup.system_prompt,
             criteria=request.criteria or TaskCriteria(),
             budgets=request.budgets,
             created_at=now,
@@ -183,6 +192,7 @@ class HarnessService:
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
             thread_id=request.thread_id or None,
             related_files=_initial_related_files(project_path),
+            effective_setup=setup,
         )
         # Agent-run / Lab own one thread per run. Chat follow-ups pass the
         # conversation thread so LangGraph resumes the same checkpointer state.
@@ -365,7 +375,12 @@ class HarnessService:
 
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
         deployment = self.manager.get_deployment(run.deployment_id)
-        return chat_model_for_deployment(deployment, capture_sink=http_sink)
+        per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+        return chat_model_for_deployment(
+            deployment,
+            per_request=per_request,
+            capture_sink=http_sink,
+        )
 
     def _resolve_knowledge_refs(self, request: AgentStartRequest) -> KnowledgeRefs:
         requested = (
@@ -388,6 +403,17 @@ class HarnessService:
             protected_instruction_version_refs=request.protected_instruction_version_refs,
             knowledge_version_refs=request.knowledge_version_refs,
         )
+
+    def _load_knowledge_versions(self, refs: KnowledgeRefs) -> list[KnowledgeVersion]:
+        if not refs.all_ids():
+            return []
+        if self._knowledge_provider is None:
+            raise HarnessError(
+                "Knowledge version refs require the application-owned knowledge store.",
+                code="knowledge_store_missing",
+                status_code=409,
+            )
+        return [self._knowledge_provider().get_version(version_id) for version_id in refs.all_ids()]
 
     def _link_run(self, run: AgentRun, agent: object) -> None:
         """Record checkpoint ids and related files in application records only."""

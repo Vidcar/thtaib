@@ -169,6 +169,11 @@ export interface EngineMeasurement {
   note: string;
 }
 
+export type KnowledgeScope = "user" | "agent" | "project";
+export type KnowledgeKind = "memory" | "skill" | "protected_instruction";
+export type KnowledgeActor = "human" | "api_maintainer" | "agent";
+export type RedactionMode = "retain" | "redact_secrets" | "discard";
+
 export type AgentRunStatus = RunLifecycleStatus;
 export const isAgentRunLive = isRunLifecycleLive;
 
@@ -187,7 +192,40 @@ export interface AgentRun {
     available_tools: string[];
     capture_gaps: string[];
     http_payload: Record<string, unknown> | null;
+    generation_settings?: Record<string, unknown>;
+    memory_versions?: string[];
+    skill_versions?: string[];
+    loaded_knowledge?: Array<{
+      version_id: string;
+      kind: KnowledgeKind;
+      content_digest: string;
+      content_available: boolean;
+    }>;
+    selected_profile_id?: string | null;
+    applied_per_request?: Record<string, unknown>;
+    startup_mismatches?: Array<{ key: string; selected: unknown; loaded: unknown }>;
   }>;
+  effective_setup?: {
+    selected_profile_id: string | null;
+    selected_deployment_id: string;
+    selected_memory_version_ids: string[];
+    selected_skill_version_ids: string[];
+    selected_protected_instruction_version_ids: string[];
+    loaded_deployment_id: string;
+    loaded_startup: Record<string, unknown>;
+    loaded_knowledge: Array<{
+      version_id: string;
+      kind: KnowledgeKind;
+      content_digest: string;
+      content_available: boolean;
+    }>;
+    bags: SettingsBags;
+    startup_mismatches: Array<{ key: string; selected: unknown; loaded: unknown }>;
+    unsupported: Record<string, string[]>;
+    system_prompt: string;
+    gaps: string[];
+    knowledge_binding: "none" | "application_owned";
+  } | null;
   completion: {
     evidence: {
       executable_checks: Array<{ name: string; passed: boolean; detail: string | null }>;
@@ -244,17 +282,15 @@ export interface ChatConversation {
   harness: "deepagents";
   second_agent_loop: false;
   source_surface: "chat";
+  memory_version_refs?: string[];
+  skill_version_refs?: string[];
+  protected_instruction_version_refs?: string[];
   current_run: AgentRun | null;
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;
   created_at: string;
   updated_at: string;
 }
-
-export type KnowledgeScope = "user" | "agent" | "project";
-export type KnowledgeKind = "memory" | "skill" | "protected_instruction";
-export type KnowledgeActor = "human" | "api_maintainer" | "agent";
-export type RedactionMode = "retain" | "redact_secrets" | "discard";
 
 export interface KnowledgeProvenance {
   actor: KnowledgeActor;

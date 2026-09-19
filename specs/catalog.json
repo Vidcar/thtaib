@@ -268,10 +268,14 @@
       "document": "specs/architecture.md",
       "implementation_status": "partial",
       "code": [
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/inference/service.py"
       ],
       "tests": [
+        "apps/backend/tests/test_effective_setup.py",
         "apps/backend/tests/test_lab.py"
       ],
       "evidence": []
@@ -344,11 +348,13 @@
       "document": "specs/modules/models.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/inference/settings.py"
+        "apps/backend/src/workbench_backend/inference/settings.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py"
       ],
       "tests": [
         "apps/backend/tests/test_settings.py",
-        "apps/backend/tests/test_runtime.py"
+        "apps/backend/tests/test_runtime.py",
+        "apps/backend/tests/test_effective_setup.py"
       ],
       "evidence": []
     },
@@ -372,10 +378,12 @@
       "document": "specs/modules/models.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/inference/adapter.py"
+        "apps/backend/src/workbench_backend/inference/adapter.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py"
       ],
       "tests": [
-        "apps/backend/tests/test_adapter.py"
+        "apps/backend/tests/test_adapter.py",
+        "apps/backend/tests/test_effective_setup.py"
       ],
       "evidence": []
     },
@@ -437,10 +445,12 @@
       "document": "specs/modules/agents-workflows.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/agents/middleware.py"
+        "apps/backend/src/workbench_backend/agents/middleware.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py"
       ],
       "tests": [
-        "apps/backend/tests/test_harness.py"
+        "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_effective_setup.py"
       ],
       "evidence": []
     },
@@ -466,13 +476,15 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/knowledge/service.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_knowledge.py",
-        "apps/backend/tests/test_chat_continuity.py"
+        "apps/backend/tests/test_chat_continuity.py",
+        "apps/backend/tests/test_effective_setup.py"
       ],
       "evidence": []
     },
@@ -629,10 +641,12 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/knowledge/service.py",
-        "apps/backend/src/workbench_backend/knowledge/store.py"
+        "apps/backend/src/workbench_backend/knowledge/store.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py"
       ],
       "tests": [
-        "apps/backend/tests/test_knowledge.py"
+        "apps/backend/tests/test_knowledge.py",
+        "apps/backend/tests/test_effective_setup.py"
       ],
       "evidence": []
     },

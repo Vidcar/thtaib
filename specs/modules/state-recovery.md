@@ -104,7 +104,7 @@ These defaults are authorised by [Issue #56](https://github.com/Vidcar/thtaib/is
 - **Chat linkage:** application records store `conversation.id`, `conversation.thread_id`, and `run_ids`. Each Chat run records the same `thread_id` and its checkpoint ids. After restart, reopen the conversation and start again on that thread.
 - **History ≠ thread:** replacing or clearing the displayed transcript does not mutate `checkpoints.sqlite` private tables, does not fork/reset the conversation thread, and neither restores nor deletes project files.
 - **Fresh conversation:** a new conversation id and `thread_id`. The selected project directory and the application-owned knowledge store are not wiped.
-- **Not claimed:** exactly-once, event-order/reconnection, loading knowledge/profile content into the request, or worker-adapter interrupt.
+- **Not claimed:** exactly-once, event-order/reconnection, or worker-adapter interrupt. Loading selected knowledge/profile content into the request is [Issue #57](https://github.com/Vidcar/thtaib/issues/57).
 
 <a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
 ## Locked milestone defaults (Issue #17; partial OQ-006)
@@ -137,4 +137,4 @@ These defaults are authorised by [Issue #52](https://github.com/Vidcar/thtaib/is
 - **Fresh** creates a new conversation and a new execution thread. Selected project files and permitted durable knowledge are retained. Previous active context is not inherited ([AGT-004](agents-workflows.md#agt-004)).
 - **STATE-002:** editing or clearing displayed history alone neither restores nor deletes project files. A display-only history edit does not silently become the next model request. Making edited history into execution context is an explicit new attempt; the branch / checkpoint mechanism stays [OQ-004](../open-questions.md#oq-004) / [STATE-003](#state-003).
 - **Surfaces:** Chat. Agent-run is not Chat. No Builder canvas. No Model Lab and no Task-case replay in this mapping.
-- **Not claimed:** identity formats; event-order / reconnection; exactly-once; current Chat implementing this mapping; effective setup ([Issue #53](https://github.com/Vidcar/thtaib/issues/53)).
+- **Not claimed:** identity formats; event-order / reconnection; exactly-once; Chat polish. Effective setup apply-for-real is [Issue #57](https://github.com/Vidcar/thtaib/issues/57).

@@ -118,6 +118,10 @@ export const api = {
     profile_id?: string;
     project_path?: string;
     workspace_id?: string;
+    memory_version_refs?: string[];
+    skill_version_refs?: string[];
+    protected_instruction_version_refs?: string[];
+    knowledge_version_refs?: string[];
   }) =>
     request<ChatConversation>("/v1/chat/conversations", {
       method: "POST",
@@ -134,6 +138,10 @@ export const api = {
       profile_id?: string;
       project_path?: string;
       workspace_id?: string;
+      memory_version_refs?: string[];
+      skill_version_refs?: string[];
+      protected_instruction_version_refs?: string[];
+      knowledge_version_refs?: string[];
     },
   ) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/start`, {

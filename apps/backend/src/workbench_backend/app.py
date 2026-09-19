@@ -102,6 +102,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.harness,
         lambda: application.state.lab,
         app_store=application.state.app_store,
+        knowledge_provider=lambda: application.state.knowledge,
     )
     application.include_router(router)
     application.include_router(compatibility_router)

@@ -63,14 +63,17 @@ class RecordingTransport(httpx.BaseTransport):
 def chat_model_for_deployment(
     deployment: Deployment,
     *,
+    per_request: SettingsBag | None = None,
     capture_sink: list[dict[str, Any]] | None = None,
     timeout: float = DEFAULT_ADAPTER_TIMEOUT,
     http_client: httpx.Client | None = None,
 ) -> ChatOpenAI:
     """Return a LangChain chat model aimed only at ``deployment.endpoint``.
 
-    Raises if the deployment has no endpoint. Never starts a managed
-    llama-server or any other inference process.
+    ``per_request`` is the resolved applied bag for this call (selected
+    profile when one was resolved). The deployment bag is used only when
+    no resolved bag is supplied. Raises if the deployment has no endpoint.
+    Never starts a managed llama-server or any other inference process.
     """
 
     endpoint = (deployment.endpoint or "").rstrip("/")
@@ -82,7 +85,7 @@ def chat_model_for_deployment(
             status_code=409,
         )
 
-    per_request = deployment.settings.per_request
+    per_request = per_request if per_request is not None else deployment.settings.per_request
     kwargs = _direct_kwargs(per_request)
     extra_body = _extra_body(per_request)
     model_name = str(deployment.applied_startup.get("alias") or "local")
