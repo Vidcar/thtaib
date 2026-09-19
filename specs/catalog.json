@@ -59,6 +59,14 @@
       "approval_reference": null
     },
     {
+      "path": "specs/decisions/ADR-0003-builder-v1-chrome.md",
+      "kind": "decision",
+      "basis": "pack-proposal",
+      "owner": "Architecture maintainers",
+      "status": "draft",
+      "approval_reference": null
+    },
+    {
       "path": "specs/decisions/README.md",
       "kind": "guide",
       "basis": "pack-proposal",

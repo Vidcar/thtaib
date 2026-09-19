@@ -4,9 +4,9 @@ These are deliberately unresolved. They are not permission for an agent to choos
 
 All entries are initially **open**. Owners below are responsibility roles, not assertions that particular accounts have been assigned. Resolve an entry by retaining its ID, recording the approved ADR/specification change and linking the evidence; do not delete its history.
 
-Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
+Later-decision product topics are recorded here so they stay visible: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016) — v1 chrome is locked in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the implementation remainder stays open. Recording a topic is not a selection, a silent default, or an ADR. Real choices use [the decision template](templates/decision.md) and maintainer approval.
 
-Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); identities, event reconciliation, exactly-once and external-effect remainder stay open. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. [OQ-004](#oq-004) dual application/checkpointer SQLite + app linkage **landed as a partial** on [Issue #27](https://github.com/Vidcar/thtaib/issues/27); identities, event reconciliation, exactly-once and external-effect remainder stay open. [OQ-016](#oq-016) v1 chrome **landed as a partial** on [Issue #29](https://github.com/Vidcar/thtaib/issues/29) / [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the unfinished Builder surface stays open and is not a shipped claim. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
@@ -65,7 +65,7 @@ Issue #27 locked these defaults for [STATE-001](modules/state-recovery.md#state-
 
 The remainder stays open. Define identities beyond that linkage, parent/child semantics, thread/checkpoint namespaces for continuation, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Define acknowledgement/reconciliation for external effects and when retry, reconnect, resume, restart or human intervention is safe. Do not claim an exactly-once transaction across databases, files and services.
 
-A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Builder canvas run affordances (Run/stop; active step on the canvas versus a run inspector) are [OQ-016](#oq-016). Those questions do not reopen this run-state contract.
+A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Builder v1 chrome locks Run/Stop, canvas highlight and a run inspector in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); run-state semantics stay this question. Those chrome locks do not reopen this run-state contract.
 
 **Evidence needed:** cancellation and crash tests before/after an external effect and checkpoint boundary, plus continuation beyond a measured upstream limit without duplicates. Executable unit checks for the dual-DB + linkage defaults are not that remainder evidence. UAT of the locked defaults remains local-machine-required on David-PC.
 
@@ -169,7 +169,7 @@ Remaining choices: contract-generation freshness, import-boundary checks, shared
 
 **Owner:** Backend/desktop and agent/workflow boundaries jointly; backend maintains the shared contract. **Blocks:** presenting a durable product Approvals inbox, or treating a framework interrupt as that inbox.
 
-Human-in-the-loop approvals that survive reconnect, restart and a closed editor remain unresolved as a product surface. LangGraph interrupts and Deep Agents intervention hooks are framework mechanisms; they are not the Approvals inbox. [OQ-004](#oq-004) covers run-state, interrupt mapping and when human intervention is safe; it does not select inbox persistence, notification, or desktop presentation. [REG-004](modules/registry.md#reg-004) still requires one run hierarchy and that approvals cannot be bypassed; it does not design the inbox. Builder canvas chrome is [OQ-016](#oq-016); it is not this inbox.
+Human-in-the-loop approvals that survive reconnect, restart and a closed editor remain unresolved as a product surface. LangGraph interrupts and Deep Agents intervention hooks are framework mechanisms; they are not the Approvals inbox. [OQ-004](#oq-004) covers run-state, interrupt mapping and when human intervention is safe; it does not select inbox persistence, notification, or desktop presentation. [REG-004](modules/registry.md#reg-004) still requires one run hierarchy and that approvals cannot be bypassed; it does not design the inbox. Builder v1 chrome in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md) / [OQ-016](#oq-016) is not this inbox.
 
 **Evidence needed:** an approval that remains visible and actionable after client disconnect and backend restart, distinguished from a transient framework interrupt, with denied bypass through agent, workflow and panel paths.
 
@@ -212,22 +212,22 @@ Import and export of workflow definitions — including LangGraph JSON and any l
 <a id="oq-016"></a>
 ## OQ-016: Builder canvas and chrome UX
 
+**Status:** v1 chrome is **partially decided** in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md). The question stays open for the unfinished Builder surface. This is not a Builder-shipped claim.
+
 **Owner:** Desktop and agents/workflows boundaries jointly. **Blocks:** shipping Builder as a finished product surface.
 
-Builder look-and-feel and canvas chrome remain unresolved. Recording this question is not a selection, a silent default, or an ADR. Do not invent chrome so implementation can proceed as if finished, and do not treat a missing mockup as a reason to leave the question unrecorded.
+[ADR-0003](decisions/ADR-0003-builder-v1-chrome.md) locks these **v1 chrome** choices. They are presentation only. Do not invent a different default look, and do not treat the ADR as an implemented canvas.
 
-The following are unknowns. None is selected:
+1. TooGraph-inspired cues, **original** layout (inspiration only — not a fork/pixel clone).
+2. Grid, zoom, minimap, multi-select.
+3. Icon rail + searchable node library.
+4. Expanded nodes with inline prompt editor.
+5. Run/Stop + canvas highlight + run inspector. Run-state semantics stay [OQ-004](#oq-004). A durable Approvals inbox stays [OQ-011](#oq-011).
+6. Colour+label **workflow** edges; config via node badge/popover **not** a canvas config edge. [WF-001](modules/agents-workflows.md#wf-001) behaviour is unchanged: configuration links must not become executable workflow steps.
+7. Inherit workflow profile/deployment; explicit per-node override only. [ARCH-003](architecture.md#arch-003) behaviour is unchanged: do not hide a per-node profile or silently default every slider on every node.
 
-1. Canvas chrome — grid, zoom, minimap, selection and multi-select.
-2. Left icon rail information architecture and node-library search.
-3. Node anatomy — title, ports, compact versus expanded presentation, and where prompt and model live.
-4. Edge presentation — colour or label by kind. This is presentation only; it is not a second type system.
-5. Run affordances — Run and stop controls, and whether an active step is shown on the canvas, in a run inspector, or both. Run-state semantics stay [OQ-004](#oq-004). A durable Approvals inbox stays [OQ-011](#oq-011).
-6. Visual distinction between configuration links and workflow links. [WF-001](modules/agents-workflows.md#wf-001) already locks the behaviour: configuration links must not become executable workflow steps. How that distinction looks on the canvas is unresolved.
-7. Profile and deployment binding versus per-node overrides. [ARCH-003](architecture.md#arch-003) already prefers shared profiles across Models, Lab, Chat and Builder. Do not silently default every slider on every node, and do not invent a hidden per-node profile.
+The remainder is an implementation Issue / unfinished surface: the React Flow Builder canvas, node library, run-inspector wiring, and product UAT. [API-002](modules/backend-desktop.md#api-002) still requires that the visual graph is not executable authority. The locked stack is not reopened.
 
-TooGraph-ish cues — an icon rail, a searchable node library, compact nodes, coloured or labelled edges, a minimap — are **inspiration only**. TooGraph is not a pixel target and not a fork. Do not copy CDF/TooGraph, and do not treat a visual mock as a working integration.
+TooGraph-ish cues remain **inspiration only**. TooGraph is not a pixel target and not a fork. Do not copy CDF/TooGraph, and do not treat a visual mock as a working integration.
 
-React Flow remains the definition editor; the visual graph is not executable authority ([API-002](modules/backend-desktop.md#api-002)). The locked stack is not reopened.
-
-**Evidence needed:** a maintainer-approved chrome decision, recorded as an ADR and matching specification, before Builder is presented as a finished product surface. A TooGraph screenshot, mockup resemblance, or unpublished preference is not that evidence.
+**Evidence needed:** a later implementation Issue with matching specification, tests and evidence before Builder is presented as a finished product surface. [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md) records chrome only. A TooGraph screenshot, mockup resemblance, or unpublished preference is not implementation evidence.
