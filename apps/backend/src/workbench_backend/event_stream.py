@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from fastapi.sse import ServerSentEvent
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentEvent, AgentRunStatus
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, AgentRunStatus
 from workbench_backend.chat.service import ChatService
 from workbench_backend.contracts.events import (
     RunStreamEnvelope,
@@ -24,6 +24,18 @@ from workbench_backend.errors import WorkbenchError
 WAIT_TIMEOUT_SECONDS = 15.0
 
 
+def resume_after_snapshot(event_count: int) -> int:
+    """Return the ``wait_after`` cursor after a full snapshot was sent.
+
+    ``event_count`` is ``len(snapshot.events)``. Those rows are already in the
+    snapshot, so ``Last-Event-ID`` must not rewind the cursor. A stale id from
+    a previous run on the same conversation can exceed this run's length; still
+    resume at the snapshot, not that id.
+    """
+
+    return event_count
+
+
 def iter_workbench_events(
     *,
     harness: HarnessService,
@@ -32,18 +44,25 @@ def iter_workbench_events(
     conversation_id: str | None,
     last_event_id: int | None,
 ) -> Iterable[ServerSentEvent]:
+    """Yield snapshot, then only rows newer than that snapshot.
+
+    ``last_event_id`` is the ``Last-Event-ID`` header. It is accepted so a
+    reconnecting client can send it; resume is ``len(snapshot.events)``, not a
+    rewind to that id.
+    """
+
     if (run_id is None) == (conversation_id is None):
         raise WorkbenchError(
             "Provide exactly one of run_id or conversation_id.",
             code="event_target_required",
             status_code=400,
         )
+    _ = last_event_id
     if conversation_id is not None:
         yield from _iter_conversation(
             harness=harness,
             chat=chat,
             conversation_id=conversation_id,
-            last_event_id=last_event_id,
         )
         return
     assert run_id is not None
@@ -51,7 +70,6 @@ def iter_workbench_events(
         harness=harness,
         run_id=run_id,
         conversation_id=None,
-        last_event_id=last_event_id,
     )
 
 
@@ -60,7 +78,6 @@ def _iter_conversation(
     harness: HarnessService,
     chat: ChatService,
     conversation_id: str,
-    last_event_id: int | None,
 ) -> Iterable[ServerSentEvent]:
     view = chat.get(conversation_id)
     current = view.current_run
@@ -84,7 +101,6 @@ def _iter_conversation(
         chat=chat,
         run_id=current.id,
         conversation_id=conversation_id,
-        last_event_id=last_event_id,
         initial=current,
     )
 
@@ -94,7 +110,6 @@ def _iter_run(
     harness: HarnessService,
     run_id: str,
     conversation_id: str | None,
-    last_event_id: int | None,
 ) -> Iterable[ServerSentEvent]:
     run = harness.get_run(run_id)
     yield _sse(
@@ -111,7 +126,6 @@ def _iter_run(
         chat=None,
         run_id=run.id,
         conversation_id=conversation_id,
-        last_event_id=last_event_id,
         initial=run,
     )
 
@@ -122,11 +136,10 @@ def _follow_run(
     chat: ChatService | None,
     run_id: str,
     conversation_id: str | None,
-    last_event_id: int | None,
     initial: AgentRun,
 ) -> Iterable[ServerSentEvent]:
-    after = last_event_id if last_event_id is not None else len(initial.events)
-    if last_event_id is None and not is_run_lifecycle_live(initial.status):
+    after = resume_after_snapshot(len(initial.events))
+    if not is_run_lifecycle_live(initial.status):
         yield _sse(
             event="stream_end",
             envelope=_end_envelope(

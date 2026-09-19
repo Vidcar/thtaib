@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -17,6 +18,7 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
+from workbench_backend.event_stream import resume_after_snapshot
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
@@ -98,6 +100,96 @@ def read_stream_until_end(
             if time.time() > deadline:
                 raise TimeoutError(f"SSE timed out; so far={collected!r}")
     return collected
+
+
+def read_stream_until_idle(
+    client: TestClient,
+    *,
+    params: dict[str, str],
+    headers: dict[str, str] | None = None,
+    timeout: float = 8.0,
+) -> list[dict[str, Any]]:
+    """Collect through the first snapshot and the next idle signal.
+
+    Idle means ``stream_end`` or a keep-alive comment. Used for a live run
+    that must not be waited to completion.
+    """
+
+    deadline = time.time() + timeout
+    collected: list[dict[str, Any]] = []
+    saw_snapshot = False
+    with client.stream("GET", "/v1/events", params=params, headers=headers) as response:
+        if response.status_code != 200:
+            body = response.read().decode("utf-8", errors="replace")
+            raise AssertionError(f"stream HTTP {response.status_code}: {body}")
+        buffer = ""
+        for chunk in response.iter_text():
+            buffer += chunk
+            events = parse_sse_events(buffer)
+            if events and events[-1].get("event") is None and events[-1].get("data") is None and not events[-1].get("comment"):
+                events = events[:-1]
+            collected = events
+            if any(item.get("event") == "snapshot" for item in collected):
+                saw_snapshot = True
+            idle = any(item.get("event") == "stream_end" for item in collected) or any(
+                item.get("comment") == "keepalive" for item in collected
+            )
+            if saw_snapshot and idle:
+                return collected
+            if time.time() > deadline:
+                raise TimeoutError(f"SSE idle timed out; so far={collected!r}")
+    return collected
+
+
+def record_events(record: dict[str, Any] | None) -> list[Any]:
+    if record is None:
+        return []
+    current_run = record.get("current_run")
+    if isinstance(current_run, dict) and current_run.get("events") is not None:
+        return list(current_run["events"])
+    return list(record.get("events") or [])
+
+
+def apply_snapshot_replace_then_append(
+    current: dict[str, Any] | None,
+    envelope: dict[str, Any] | None,
+    event_name: str | None,
+) -> dict[str, Any] | None:
+    """Desktop merge without a seq guard: snapshot replaces, run_event appends.
+
+    This is the client path that grew 5 → 9 when the server replayed snapshot
+    rows after Last-Event-ID. The contract test uses it so a server regression
+    cannot hide behind a client skip.
+    """
+
+    if envelope is None:
+        return current
+    etype = envelope.get("type") or event_name
+    if etype == "snapshot":
+        snapshot = envelope.get("snapshot")
+        return snapshot if isinstance(snapshot, dict) else current
+    if etype != "run_event" or envelope.get("event") is None or current is None:
+        return current
+    event = envelope["event"]
+    merged = dict(current)
+    merged["events"] = [*list(current.get("events") or []), event]
+    if envelope.get("status") is not None and "status" in current:
+        merged["status"] = envelope["status"]
+    run = current.get("current_run")
+    if isinstance(run, dict):
+        next_run = dict(run)
+        next_run["events"] = [*list(run.get("events") or []), event]
+        if envelope.get("status") is not None:
+            next_run["status"] = envelope["status"]
+        merged["current_run"] = next_run
+    return merged
+
+
+class ResumeAfterSnapshotTests(unittest.TestCase):
+    def test_cursor_is_snapshot_length_not_last_event_id(self) -> None:
+        self.assertEqual(resume_after_snapshot(5), 5)
+        self.assertEqual(resume_after_snapshot(1), 1)
+        self.assertEqual(resume_after_snapshot(0), 0)
 
 
 class EventStreamTests(unittest.TestCase):
@@ -202,9 +294,116 @@ class EventStreamTests(unittest.TestCase):
             headers={"Last-Event-ID": str(skip_id)},
         )
         self.assertEqual(replay[0]["event"], "snapshot")
+        snapshot_count = len(replay[0]["data"]["snapshot"]["events"])
         replayed_ids = [item["id"] for item in replay if item["event"] == "run_event"]
         self.assertNotIn(skip_id, replayed_ids)
+        for item in replay:
+            if item.get("event") == "run_event":
+                self.assertGreater(item["data"]["seq"], snapshot_count, item)
         self.assertEqual(replay[-1]["event"], "stream_end")
+
+    def test_snapshot_plus_resume_does_not_duplicate_events(self) -> None:
+        """Reconnect with Last-Event-ID must not append snapshot rows again.
+
+        Applies the desktop replace-then-append merge after every frame so a
+        wire-id-only check cannot stay green while Chat / Agent-run grow.
+        """
+
+        started = self._start()
+        first = read_stream_until_end(self.client, params={"run_id": started["id"]})
+        self.assertEqual(first[0]["event"], "snapshot")
+        persisted = self.client.get(f"/v1/agent-runs/{started['id']}").json()
+        persisted_events = persisted["events"]
+        self.assertGreaterEqual(len(persisted_events), 2, persisted_events)
+
+        replay = read_stream_until_end(
+            self.client,
+            params={"run_id": started["id"]},
+            headers={"Last-Event-ID": "1"},
+        )
+        self.assertEqual(replay[0]["event"], "snapshot")
+        snapshot = replay[0]["data"]["snapshot"]
+        snapshot_events = snapshot["events"]
+        self.assertEqual(len(snapshot_events), len(persisted_events), snapshot_events)
+
+        merged: dict[str, Any] | None = None
+        for item in replay:
+            merged = apply_snapshot_replace_then_append(merged, item.get("data"), item.get("event"))
+            seen = record_events(merged)
+            self.assertLessEqual(
+                len(seen),
+                len(persisted_events),
+                f"snapshot-plus-resume duplicated events after {item.get('event')} "
+                f"id={item.get('id')}: {len(seen)} > {len(persisted_events)}",
+            )
+            if item.get("event") == "run_event":
+                seq = item["data"]["seq"] if item.get("data") else None
+                self.assertIsNotNone(seq)
+                self.assertGreater(
+                    seq,
+                    len(snapshot_events),
+                    f"replayed snapshot row seq={seq} after a {len(snapshot_events)}-event snapshot",
+                )
+
+        self.assertEqual(record_events(merged), persisted_events)
+
+    def test_live_snapshot_plus_resume_does_not_duplicate_events(self) -> None:
+        """While the run is still live there is no terminal snapshot to heal a dup.
+
+        Cancel while generate is held adds a second live row so Last-Event-ID: 1
+        is behind the snapshot (the 5 → 9 shape). A later real row is allowed
+        only when its seq is greater than the snapshot count.
+        """
+
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        started = self._start()
+        wait_for_generate_hold()
+        cancelled = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        persisted = self.client.get(f"/v1/agent-runs/{started['id']}").json()
+        persisted_events = persisted["events"]
+        self.assertGreaterEqual(len(persisted_events), 2, persisted)
+        self.assertTrue(is_run_lifecycle_live(persisted["status"]), persisted["status"])
+
+        with patch("workbench_backend.event_stream.WAIT_TIMEOUT_SECONDS", 0.2):
+            replay = read_stream_until_idle(
+                self.client,
+                params={"run_id": started["id"]},
+                headers={"Last-Event-ID": "1"},
+                timeout=5.0,
+            )
+        self.assertEqual(replay[0]["event"], "snapshot")
+        snapshot_events = replay[0]["data"]["snapshot"]["events"]
+        self.assertGreaterEqual(len(snapshot_events), 2, snapshot_events)
+
+        merged: dict[str, Any] | None = None
+        newer = 0
+        for item in replay:
+            merged = apply_snapshot_replace_then_append(merged, item.get("data"), item.get("event"))
+            seen = record_events(merged)
+            if item.get("event") == "run_event":
+                seq = item["data"]["seq"] if item.get("data") else None
+                self.assertIsNotNone(seq)
+                self.assertGreater(
+                    seq,
+                    len(snapshot_events),
+                    f"live reconnect replayed snapshot row seq={seq} after a "
+                    f"{len(snapshot_events)}-event snapshot",
+                )
+                newer += 1
+            self.assertEqual(
+                len(seen),
+                len(snapshot_events) + newer,
+                f"live reconnect duplicated events after {item.get('event')} "
+                f"id={item.get('id')}: {len(seen)} != {len(snapshot_events) + newer}",
+            )
+
+        latest = self.client.get(f"/v1/agent-runs/{started['id']}").json()["events"]
+        self.assertEqual(record_events(merged), latest[: len(record_events(merged))])
+        hold.set()
 
     def test_subscriber_wait_does_not_cancel_run(self) -> None:
         """A waiting consumer is not a run end. TestClient buffers SSE until the

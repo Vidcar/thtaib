@@ -10,7 +10,7 @@ Authority: technical owner decision from the assigned streaming outcome (coordin
 
 - One privileged `GET /v1/events` stream (exactly one of `run_id` or `conversation_id`). Transport is FastAPI `EventSourceResponse` (`text/event-stream`), not WebSockets and not a second broker.
 - Auth is `X-Workbench-Local-Token`. Event names: `snapshot` (GET-equivalent run or conversation record), `run_event` (one application `AgentEvent`; SSE `id` is the 1-based append index), `stream_end` (terminal, then the response closes). FastAPI keep-alive comments cover idle live streams.
-- `Last-Event-ID` resumes after that `run_event` seq; the server still sends a `snapshot` first so a reconnect reads persisted/in-memory state. Closing the client does not cancel the run.
+- `Last-Event-ID` is the last received `run_event` seq from a prior connection. The server still sends a full `snapshot` first so a reconnect reads persisted/in-memory state, then only `run_event`s with seq greater than that snapshot's event count. The header must not replay rows already inside the snapshot (a replace-then-append client would duplicate them). The desktop appends a `run_event` only when `seq` is greater than the current list length. Closing the client does not cancel the run.
 - The harness continues to use LangGraph `stream_mode="updates"` and map chunks to `AgentEvent`; SSE does not re-expose raw graph chunks.
 - Desktop Chat, Agent-run and Lab run views subscribe while the run is live. Lab result rows that are not run events may poll every 5 s. Agent-run Cancel is enabled only while live.
 

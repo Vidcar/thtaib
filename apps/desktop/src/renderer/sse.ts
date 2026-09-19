@@ -46,6 +46,16 @@ function applyStreamEvent<T>(current: T | null, envelope: RunStreamEnvelope): T 
   }
 }
 
+function recordedEventCount(record: {
+  events?: SharedAgentEvent[];
+  current_run?: { events: SharedAgentEvent[] } | null;
+}): number {
+  if (record.current_run != null) {
+    return record.current_run.events.length;
+  }
+  return record.events?.length ?? 0;
+}
+
 function mergeRunEvent<T>(current: T, envelope: RunStreamEnvelope): T {
   const event = envelope.event;
   if (event == null) {
@@ -56,6 +66,11 @@ function mergeRunEvent<T>(current: T, envelope: RunStreamEnvelope): T {
     current_run?: AgentRun | null;
     status?: AgentRunStatus;
   };
+  const seq = envelope.seq;
+  const known = recordedEventCount(record);
+  if (seq == null || seq <= known) {
+    return current;
+  }
   const events = [...(record.events ?? []), event];
   if (record.current_run) {
     const runEvents = [...record.current_run.events, event];
