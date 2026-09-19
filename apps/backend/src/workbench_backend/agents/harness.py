@@ -34,6 +34,8 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
+from workbench_backend.knowledge.schemas import KnowledgeRefs
+from workbench_backend.knowledge.service import KnowledgeService
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the Local AI Workbench embedded harness. Use enabled tools when "
@@ -52,9 +54,11 @@ class HarnessService:
         manager_provider: Callable[[], ModelManager],
         *,
         model_factory: ModelFactory | None = None,
+        knowledge_provider: Callable[[], KnowledgeService] | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._model_factory = model_factory or self._deployment_model
+        self._knowledge_provider = knowledge_provider
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -112,6 +116,7 @@ class HarnessService:
                 code="recorded_fixtures_required",
                 status_code=400,
             )
+        refs = self._resolve_knowledge_refs(request)
         now = utc_now()
         run = AgentRun(
             id=new_id("agent"),
@@ -132,6 +137,10 @@ class HarnessService:
             tool_mode_label=label_for_tool_mode(request.tool_mode),
             recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
             recorded_fixtures=list(request.recorded_fixtures or []),
+            knowledge=refs.binding(),
+            memory_version_refs=refs.memory_version_refs,
+            skill_version_refs=refs.skill_version_refs,
+            protected_instruction_version_refs=refs.protected_instruction_version_refs,
         )
         cancel = threading.Event()
         with self._lock:
@@ -264,6 +273,28 @@ class HarnessService:
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
         deployment = self.manager.get_deployment(run.deployment_id)
         return chat_model_for_deployment(deployment, capture_sink=http_sink)
+
+    def _resolve_knowledge_refs(self, request: AgentStartRequest) -> KnowledgeRefs:
+        requested = (
+            request.memory_version_refs
+            or request.skill_version_refs
+            or request.protected_instruction_version_refs
+            or request.knowledge_version_refs
+        )
+        if not requested:
+            return KnowledgeRefs()
+        if self._knowledge_provider is None:
+            raise HarnessError(
+                "Knowledge version refs require the application-owned knowledge store.",
+                code="knowledge_store_missing",
+                status_code=409,
+            )
+        return self._knowledge_provider().resolve_refs(
+            memory_version_refs=request.memory_version_refs,
+            skill_version_refs=request.skill_version_refs,
+            protected_instruction_version_refs=request.protected_instruction_version_refs,
+            knowledge_version_refs=request.knowledge_version_refs,
+        )
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

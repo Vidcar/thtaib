@@ -1,6 +1,6 @@
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "models" | "deployments" | "agent-run" | "lab";
+export type WorkbenchTab = "models" | "deployments" | "agent-run" | "lab" | "knowledge";
 
 export interface PathsInfo {
   root: string;
@@ -10,6 +10,7 @@ export interface PathsInfo {
   cases: string;
   snapshots: string;
   workspaces: string;
+  knowledge: string;
   windows_layout: string;
 }
 
@@ -118,6 +119,10 @@ export interface LabCase {
   dependency_versions: Record<string, string>;
   tool_fixtures: Array<Record<string, unknown>>;
   snapshot_path: string;
+  memory_version_refs: string[];
+  skill_version_refs: string[];
+  protected_instruction_version_refs: string[];
+  knowledge: "none" | "application_owned";
 }
 
 export interface LabRestore {
@@ -184,8 +189,70 @@ export interface AgentRun {
   stop_reason: string | null;
   error: string | null;
   budgets: { max_steps: number | null; max_tool_calls: number | null } | null;
-  knowledge: "none";
+  knowledge: "none" | "application_owned";
+  memory_version_refs: string[];
+  skill_version_refs: string[];
+  protected_instruction_version_refs: string[];
   harness: "deepagents";
+}
+
+export type KnowledgeScope = "user" | "agent" | "project";
+export type KnowledgeKind = "memory" | "skill" | "protected_instruction";
+export type KnowledgeActor = "human" | "api_maintainer" | "agent";
+export type RedactionMode = "retain" | "redact_secrets" | "discard";
+
+export interface KnowledgeProvenance {
+  actor: KnowledgeActor;
+  run_id: string | null;
+  note: string | null;
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  scope: KnowledgeScope;
+  scope_id: string | null;
+  kind: KnowledgeKind;
+  display_name: string | null;
+  current_version_id: string;
+  content: string;
+  provenance: KnowledgeProvenance;
+  previous_version_id: string | null;
+  reverted_from_version_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeVersion {
+  id: string;
+  entry_id: string;
+  content: string;
+  previous_version_id: string | null;
+  reverted_from_version_id: string | null;
+  created_at: string;
+  provenance: KnowledgeProvenance;
+}
+
+export interface KnowledgeConfig {
+  context_captures: {
+    retention_seconds: number | null;
+    redaction_mode: RedactionMode;
+  };
+  scope_policies: Record<KnowledgeScope, { automatic_agent_writes: boolean }>;
+  not_rag: true;
+  note: string;
+}
+
+export interface ContextCapture {
+  id: string;
+  created_at: string;
+  expires_at: string | null;
+  redaction_mode: RedactionMode;
+  content: string | null;
+  retained: boolean;
+  redacted: boolean;
+  discarded: boolean;
+  expired: boolean;
+  redacted_fields: string[];
 }
 
 export interface InspectReport {

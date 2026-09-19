@@ -1,5 +1,6 @@
 import type {
   AgentRun,
+  ContextCapture,
   Deployment,
   EngineMeasurement,
   ImportJob,
@@ -7,10 +8,17 @@ import type {
   LabCase,
   LabRestore,
   LabResult,
+  KnowledgeActor,
+  KnowledgeConfig,
+  KnowledgeEntry,
+  KnowledgeKind,
+  KnowledgeScope,
+  KnowledgeVersion,
   LabToolMode,
   LabWorkspace,
   ModelBundle,
   PathsInfo,
+  RedactionMode,
   RunProfile,
   RuntimeManifest,
   SettingsBags,
@@ -120,5 +128,43 @@ export const api = {
     request<EngineMeasurement>("/v1/lab/engine-measurements", {
       method: "POST",
       body: JSON.stringify({ deployment_id }),
+    }),
+  knowledgeConfig: () => request<KnowledgeConfig>("/v1/knowledge/config"),
+  updateKnowledgeConfig: (payload: {
+    context_captures?: { retention_seconds?: number | null; redaction_mode?: RedactionMode };
+    scope_policies?: Partial<Record<KnowledgeScope, { automatic_agent_writes: boolean }>>;
+  }) =>
+    request<KnowledgeConfig>("/v1/knowledge/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  knowledgeEntries: () => request<KnowledgeEntry[]>("/v1/knowledge/entries"),
+  createKnowledgeEntry: (payload: {
+    scope: KnowledgeScope;
+    kind: KnowledgeKind;
+    content: string;
+    scope_id?: string;
+    display_name?: string;
+    provenance: { actor: KnowledgeActor; run_id?: string; note?: string };
+  }) =>
+    request<KnowledgeEntry>("/v1/knowledge/entries", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  editKnowledgeEntry: (id: string, content: string, base_version: string, actor: KnowledgeActor) =>
+    request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/edit`, {
+      method: "POST",
+      body: JSON.stringify({ content, base_version, provenance: { actor } }),
+    }),
+  revertKnowledgeEntry: (id: string, target_version_id: string, base_version: string, actor: KnowledgeActor) =>
+    request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/revert`, {
+      method: "POST",
+      body: JSON.stringify({ target_version_id, base_version, provenance: { actor } }),
+    }),
+  knowledgeVersions: (id: string) => request<KnowledgeVersion[]>(`/v1/knowledge/entries/${id}/versions`),
+  createContextCapture: (content: string) =>
+    request<ContextCapture>("/v1/knowledge/captures", {
+      method: "POST",
+      body: JSON.stringify({ content, source: "debug-panel" }),
     }),
 };

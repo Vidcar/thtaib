@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from workbench_backend.knowledge.schemas import KnowledgeBinding
+
 
 class AgentRunStatus(str, Enum):
     queued = "queued"
@@ -95,6 +97,10 @@ class AgentStartRequest(BaseModel):
     parent_run_id: str | None = None
     tool_mode: ToolMode = ToolMode.live_tool
     recorded_fixtures: list[dict[str, Any]] | None = None
+    memory_version_refs: list[str] = Field(default_factory=list)
+    skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    knowledge_version_refs: list[str] = Field(default_factory=list)
 
 
 class AgentRun(BaseModel):
@@ -125,4 +131,7 @@ class AgentRun(BaseModel):
     recorded_fixtures: list[dict[str, Any]] = Field(default_factory=list)
     harness: Literal["deepagents"] = "deepagents"
     outer_graph: Literal["deepagents-compiled-state-graph"] = "deepagents-compiled-state-graph"
-    knowledge: Literal["none"] = "none"
+    knowledge: KnowledgeBinding = "none"
+    memory_version_refs: list[str] = Field(default_factory=list)
+    skill_version_refs: list[str] = Field(default_factory=list)
+    protected_instruction_version_refs: list[str] = Field(default_factory=list)
