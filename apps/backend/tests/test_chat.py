@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests.scripted_model import ScriptedChatModel
+from tests.scripted_model import ScriptedChatModel, set_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
 
 FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
@@ -47,6 +48,24 @@ def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 
             return body
         time.sleep(0.05)
     raise TimeoutError(f"chat {conversation_id} did not finish: {body}")
+
+
+def wait_for_status(
+    client: TestClient,
+    run_id: str,
+    status: str,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = client.get(f"/v1/agent-runs/{run_id}")
+        body = response.json()
+        if body.get("status") == status:
+            return body
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
 
 
 def write_then_reply(path: str = "/edited.md", content: str = "chat-file-edit") -> list[AIMessage]:
@@ -268,6 +287,59 @@ class ChatHarnessTests(unittest.TestCase):
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "cancelled")
         self.assertEqual(body["current_run"]["id"], started["current_run"]["id"])
+
+    def test_start_rejected_while_cancel_requested(self) -> None:
+        hold = threading.Event()
+        previous = self.app.state.harness
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        self.addCleanup(previous.close)
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return ScriptedChatModel(write_then_reply(), hold=hold)
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        conversation = self._create()
+        started = self._start(conversation["id"])
+        first_run_id = started["current_run"]["id"]
+        self.assertEqual(started["current_run_id"], first_run_id)
+        try:
+            wait_for_status(self.client, first_run_id, "running")
+            cancelled = self.client.post(f"/v1/chat/conversations/{conversation['id']}/cancel")
+            self.assertEqual(cancelled.status_code, 200, cancelled.text)
+            self.assertEqual(cancelled.json()["current_run"]["status"], "cancel_requested")
+            self.assertEqual(cancelled.json()["current_run_id"], first_run_id)
+            overlap = self.client.post(
+                f"/v1/chat/conversations/{conversation['id']}/start",
+                json={"task": "Second turn while cancelling."},
+            )
+            self.assertEqual(overlap.status_code, 409, overlap.text)
+            self.assertEqual(overlap.json()["code"], "chat_turn_active")
+            observed = self.client.get(f"/v1/chat/conversations/{conversation['id']}")
+            self.assertEqual(observed.status_code, 200, observed.text)
+            self.assertEqual(observed.json()["current_run_id"], first_run_id)
+            self.assertEqual(observed.json()["current_run"]["id"], first_run_id)
+            self.assertEqual(observed.json()["current_run"]["status"], "cancel_requested")
+            listed = self.client.get("/v1/agent-runs").json()
+            self.assertEqual([item["id"] for item in listed], [first_run_id])
+        finally:
+            hold.set()
+        body = wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(body["current_run"]["status"], "cancelled")
+        self.assertEqual(body["current_run"]["id"], first_run_id)
+        self.assertEqual(body["current_run_id"], first_run_id)
+        follow = self._start(conversation["id"], task="Follow-up after confirmed cancel.")
+        self.assertNotEqual(follow["current_run"]["id"], first_run_id)
+        self.assertEqual(follow["current_run_id"], follow["current_run"]["id"])
+        listed_after = self.client.get("/v1/agent-runs").json()
+        ids = [item["id"] for item in listed_after]
+        self.assertEqual(set(ids), {first_run_id, follow["current_run"]["id"]})
 
 
 class HarnessProjectFilesystemTests(unittest.TestCase):

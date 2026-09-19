@@ -451,9 +451,11 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/schemas.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/contracts/lifecycle.py"
       ],
       "tests": [
+        "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_harness.py"
       ],
       "evidence": []
@@ -725,10 +727,12 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/lab/routes.py",
         "apps/backend/src/workbench_backend/knowledge/routes.py"
       ],
       "tests": [
+        "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_lab.py",
         "apps/backend/tests/test_knowledge.py"
