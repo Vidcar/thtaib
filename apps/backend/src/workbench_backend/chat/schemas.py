@@ -6,7 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
+
+# Re-export so Chat routes can accept the same HITL payload as agent-runs.
+ChatInterruptDecisionRequest = InterruptDecisionRequest
 
 
 class ChatMessage(BaseModel):
@@ -111,10 +114,13 @@ class ChatConversationView(ChatConversation):
     continuity: ChatContinuity | None = None
     deploy_health: ChatDeployHealth | None = None
     filesystem_tools_available: bool = False
+    shell_tools_available: bool = False
     enabled_tools: list[str] = Field(default_factory=list)
     note: str = (
         "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
         "iteration. Follow-ups resume conversation.thread_id. Transcript is "
         "displayed history, not the working project and not harness context. "
-        "A project folder is optional; filesystem tools are unavailable without one."
+        "A project folder is optional; filesystem and host-shell tools are "
+        "unavailable without one. Host-shell execute pauses on Deep Agents "
+        "interrupt_on; this is not a durable Approvals inbox (OQ-011)."
     )

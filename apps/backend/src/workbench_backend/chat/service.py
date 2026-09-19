@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun, AgentStartRequest
+from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
@@ -33,14 +33,17 @@ from workbench_backend.state.store import ApplicationStore
 CHAT_SYSTEM_PROMPT = (
     "You are the Local AI Workbench Chat surface. Complete the user's task "
     "using the embedded Deep Agents harness. Filesystem tools target the bound "
-    "project workspace, not conversation history. Do not invent durable "
-    "knowledge or retrieval."
+    "project workspace, not conversation history. The host shell execute tool "
+    "runs on this machine in the project working directory with no isolation; "
+    "dangerous commands pause for approval. Do not invent durable knowledge "
+    "or retrieval."
 )
 CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT = (
     "You are the Local AI Workbench Chat surface. Complete the user's task "
     "using the embedded Deep Agents harness. This conversation has no project "
-    "folder. Filesystem tools are unavailable. Use visibility tools only. "
-    "Do not invent a project directory or durable knowledge."
+    "folder. Filesystem and host-shell tools are unavailable. Use visibility "
+    "tools only. Do not invent a project directory, a home-directory cwd, or "
+    "durable knowledge."
 )
 
 
@@ -224,6 +227,22 @@ class ChatService:
         conversation.updated_at = utc_now()
         return self._view(self.store.put(conversation), persist=True)
 
+    def resume_interrupt(
+        self,
+        conversation_id: str,
+        request: InterruptDecisionRequest,
+    ) -> ChatConversationView:
+        conversation = self._require(conversation_id)
+        if not conversation.current_run_id:
+            raise ChatError(
+                "No active Chat run for a host-shell interrupt decision.",
+                code="chat_run_missing",
+                status_code=409,
+            )
+        self.harness.resume_interrupt(conversation.current_run_id, request)
+        conversation.updated_at = utc_now()
+        return self._view(self.store.put(conversation), persist=True)
+
     def replace_transcript(
         self,
         conversation_id: str,
@@ -352,6 +371,7 @@ class ChatService:
             ),
             deploy_health=report_chat_deploy_health(deployment, current),
             filesystem_tools_available=bool(conversation.project_path),
+            shell_tools_available=bool(conversation.project_path),
             enabled_tools=enabled_for_project(bool(conversation.project_path)),
         )
 

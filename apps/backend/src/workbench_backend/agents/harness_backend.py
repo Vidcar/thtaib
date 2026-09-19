@@ -1,7 +1,9 @@
-"""Deep Agents filesystem backend for one harness run (STATE-002).
+"""Deep Agents filesystem / host-shell backend for one harness run (STATE-002).
 
 Live runs attach ``CompositeBackend`` so framework internals stay out of the
-user's project. Recorded-tool mode attaches nothing (LAB-003 / Issue #67).
+user's project. A bound project uses ``LocalShellBackend`` as the default
+(Windows host shell with approvals). Recorded-tool mode attaches nothing
+(LAB-003 / Issue #67).
 """
 
 from __future__ import annotations
@@ -9,7 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
 from deepagents.backends.protocol import BackendProtocol
 
 from workbench_backend.agents.schemas import AgentRun, ToolMode
@@ -66,7 +68,14 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
     }
     default: BackendProtocol
     if run.project_path:
-        default = FilesystemBackend(root_dir=run.project_path, virtual_mode=True)
+        # Host shell cwd is the user-chosen project. inherit_env so PATH and
+        # the Windows host environment are the real machine, not an empty env.
+        # virtual_mode does not restrict execute() (LocalShellBackend docs).
+        default = LocalShellBackend(
+            root_dir=run.project_path,
+            virtual_mode=True,
+            inherit_env=True,
+        )
     else:
         default = StateBackend()
     return CompositeBackend(default=default, routes=routes, artifacts_root="/")

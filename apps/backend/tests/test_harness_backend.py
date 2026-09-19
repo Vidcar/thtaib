@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
 
 from workbench_backend.agents.harness_backend import (
     RESERVED_FRAMEWORK_PREFIXES,
@@ -67,7 +67,9 @@ class HarnessBackendHelperTests(unittest.TestCase):
             backend = build_run_backend(_run(project_path=str(project), thread_id="thread_iso"), paths)
             self.assertIsInstance(backend, CompositeBackend)
             assert isinstance(backend, CompositeBackend)
+            self.assertIsInstance(backend.default, LocalShellBackend)
             self.assertIsInstance(backend.default, FilesystemBackend)
+            self.assertIn("PATH", getattr(backend.default, "_env", {}))
             self.assertEqual(backend.artifacts_root, "/")
             write = backend.write("/hello.txt", "in-project")
             self.assertFalse(write.error, write.error)

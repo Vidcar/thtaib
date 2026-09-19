@@ -265,12 +265,21 @@
     {
       "id": "ARCH-005",
       "document": "specs/architecture.md",
-      "status": "planned",
+      "status": "built",
       "verifiable_by": [
         "uat"
       ],
-      "code": [],
-      "tests": [],
+      "code": [
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/desktop/src/renderer/InterruptApproval.tsx",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx"
+      ],
+      "tests": [
+        "apps/backend/tests/test_host_shell.py"
+      ],
       "evidence": []
     },
     {
@@ -475,6 +484,7 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
         "apps/backend/src/workbench_backend/agents/tools.py",
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
@@ -486,6 +496,7 @@
       "tests": [
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_harness_backend.py",
+        "apps/backend/tests/test_host_shell.py",
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_continuity.py",
         "apps/backend/tests/test_chat_deploy_health.py",
@@ -623,11 +634,13 @@
       ],
       "code": [
         "apps/backend/src/workbench_backend/agents/tools.py",
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/middleware.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_host_shell.py",
         "apps/backend/tests/test_chat.py"
       ],
       "evidence": []
@@ -657,22 +670,35 @@
       ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
         "apps/backend/src/workbench_backend/agents/tools.py"
       ],
       "tests": [
-        "apps/backend/tests/test_chat.py"
+        "apps/backend/tests/test_chat.py",
+        "apps/backend/tests/test_host_shell.py",
+        "apps/backend/tests/test_harness_backend.py"
       ],
       "evidence": []
     },
     {
       "id": "ENV-002",
       "document": "specs/modules/environments-tools.md",
-      "status": "planned",
+      "status": "built",
       "verifiable_by": [
         "uat"
       ],
-      "code": [],
-      "tests": [],
+      "code": [
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/desktop/src/renderer/InterruptApproval.tsx",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx"
+      ],
+      "tests": [
+        "apps/backend/tests/test_host_shell.py"
+      ],
       "evidence": []
     },
     {
@@ -1006,6 +1032,7 @@
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
         "apps/backend/src/workbench_backend/event_stream.py",
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
@@ -1015,12 +1042,14 @@
         "apps/backend/src/workbench_backend/knowledge/routes.py",
         "apps/desktop/src/renderer/ChatPanel.tsx",
         "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/desktop/src/renderer/InterruptApproval.tsx",
         "apps/desktop/src/renderer/LabPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_deploy_health.py",
         "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_host_shell.py",
         "apps/backend/tests/test_event_stream.py",
         "apps/backend/tests/test_lab.py",
         "apps/backend/tests/test_knowledge.py"

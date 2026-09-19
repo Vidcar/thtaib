@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentStartRequest
+from workbench_backend.agents.schemas import AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_catalogue
 from workbench_backend.chat.service import ChatService
 from workbench_backend.errors import WorkbenchError
@@ -69,6 +69,15 @@ def get_agent_run(request: Request, run_id: str) -> object:
 @router.post("/agent-runs/{run_id}/cancel")
 def cancel_agent_run(request: Request, run_id: str) -> object:
     return get_harness(request).cancel(run_id)
+
+
+@router.post("/agent-runs/{run_id}/interrupt-decision")
+def decide_agent_run_interrupt(
+    request: Request,
+    run_id: str,
+    body: InterruptDecisionRequest,
+) -> object:
+    return get_harness(request).resume_interrupt(run_id, body)
 
 
 @router.get("/events", response_class=EventSourceResponse)
