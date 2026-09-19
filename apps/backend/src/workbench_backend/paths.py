@@ -2,9 +2,9 @@
 
 On Windows the layout is ``%LOCALAPPDATA%\\LocalAIWorkbench\\`` with
 ``models\\``, ``runtimes\\``, ``state\\``, ``cases\\``, ``snapshots\\``,
-``workspaces\\`` and ``knowledge\\``. Other platforms use the same directory
-names under a portable data root so tests and smoke can run without claiming
-a second product mode.
+``workspaces\\``, ``knowledge\\``, plus ``application.sqlite`` and
+``checkpoints.sqlite``. Other platforms use the same names under a portable
+data root so tests and smoke can run without claiming a second product mode.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from pathlib import Path
 
 PRODUCT_DATA_DIR = "LocalAIWorkbench"
 DATA_ROOT_ENV = "WORKBENCH_DATA_ROOT"
+APPLICATION_DB_NAME = "application.sqlite"
+CHECKPOINTS_DB_NAME = "checkpoints.sqlite"
 
 
 def resolve_data_root(
@@ -52,6 +54,8 @@ class WorkbenchPaths:
         self.snapshots = self.root / "snapshots"
         self.workspaces = self.root / "workspaces"
         self.knowledge = self.root / "knowledge"
+        self.application_db = self.root / APPLICATION_DB_NAME
+        self.checkpoints_db = self.root / CHECKPOINTS_DB_NAME
 
     def ensure(self) -> "WorkbenchPaths":
         for path in (
@@ -77,7 +81,9 @@ class WorkbenchPaths:
             "snapshots": str(self.snapshots),
             "workspaces": str(self.workspaces),
             "knowledge": str(self.knowledge),
+            "application_db": str(self.application_db),
+            "checkpoints_db": str(self.checkpoints_db),
             "windows_layout": (
-                r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state,cases,snapshots,workspaces,knowledge}"
+                r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state,cases,snapshots,workspaces,knowledge,application.sqlite,checkpoints.sqlite}"
             ),
         }

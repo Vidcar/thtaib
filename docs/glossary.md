@@ -52,6 +52,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | Durable knowledge (STATE-005) | Versioned scoped entries with provenance under LocalAppData knowledge |
 | Protected instruction | Kind that rejects agent-origin overwrites |
 | Knowledge conflict | Explicit failure when `base_version` does not match |
+| one sqlite for everything | Separate application.sqlite and checkpoints.sqlite |
+| mutate LangGraph tables | App links checkpoint ids only — never mutate checkpointer private tables |
+| clear chat deletes project | STATE-002 — history ≠ project |
+| close OQ-004 | Partial OQ-004 defaults only |
 
 ## Product and layout
 
@@ -75,7 +79,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **UAT workroot** is a throwaway directory under `.scratch/uat/…`. Agents and UAT must not create `uat-workroot*` at the repository root.
 
-**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces, knowledge). Chat transcripts live under `state\chat\` and are not the working project. Durable product, managed-inference, Lab case/snapshot and durable-knowledge state is never the repository root and never `.scratch/`.
+**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces, knowledge, `application.sqlite`, `checkpoints.sqlite`). Chat transcripts live in `application.sqlite` and are not the working project. Durable product, managed-inference, Lab case/snapshot and durable-knowledge state is never the repository root and never `.scratch/`.
 
 **Durable knowledge versioning (STATE-005)** is the application-owned, versioned store of user / agent / project memories, skills and protected instructions under `%LOCALAPPDATA%\LocalAIWorkbench\knowledge\`. It is not a RAG product, not a checkpointer table, and not git.
 
@@ -99,7 +103,15 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. Debug-quality Chat calls this harness directly. It is not a second application-written agent loop and not Builder. A thin desktop Agent-run debug panel may still call that API.
 
-**Debug-quality Chat** is the Chat tab that binds a deployment/profile and project workspace path, starts/cancels one harness task, and streams harness events. Transcript / conversation history is displayed history under `state\chat\`, not the working project (STATE-002). Deep Agents filesystem tools target project storage. This is not Chat polish and not Builder.
+**Debug-quality Chat** is the Chat tab that binds a deployment/profile and project workspace path, starts/cancels one harness task, and streams harness events. Transcript / conversation history is displayed history in `application.sqlite`, not the working project (STATE-002). Deep Agents filesystem tools target project storage. This is not Chat polish and not Builder.
+
+**Separate application.sqlite and checkpoints.sqlite** is the Issue #27 pair under the product root. `application.sqlite` is the workbench system of record for runs, chat linkage, profile/deployment refs, checkpoint id links and file refs. `checkpoints.sqlite` is the LangGraph checkpointer file.
+
+**App links checkpoint ids only — never mutate checkpointer private tables** means application code records checkpoint identities and related files in `application.sqlite`. It does not UPDATE/INSERT/DELETE LangGraph checkpointer tables.
+
+**STATE-002 — history ≠ project** means editing or clearing Chat history alone neither restores nor deletes project files. Filesystem tools write project storage only.
+
+**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Identities, event reconciliation, exactly-once and external-effect remainder stay [OQ-004](../specs/open-questions.md#oq-004).
 
 **Debug-quality Chat (Issue #22)** is the Chat tab that calls the embedded harness. Agent-run is not that surface. Do not call it finished Chat polish.
 

@@ -110,6 +110,18 @@ export function AgentRunPanel() {
             <span className="badge">{run.status}</span>
           </h3>
           <p>harness: {run.harness} · stop: {run.stop_reason ?? "n/a"} · budgets: {run.budgets ? "set" : "unset"}</p>
+          <h3>Run linkage (application records)</h3>
+          <pre className="json">
+            {JSON.stringify(
+              {
+                thread_id: run.thread_id ?? null,
+                checkpoint_ids: run.checkpoint_ids ?? [],
+                related_files: run.related_files ?? [],
+              },
+              null,
+              2,
+            )}
+          </pre>
           <p>enabled tools: {run.enabled_tools.join(", ")}</p>
           <p>presented tools: {run.presented_tools.join(", ")}</p>
           {run.error ? <p className="status">{run.error}</p> : null}

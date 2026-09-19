@@ -36,12 +36,19 @@ class PathResolutionTests(unittest.TestCase):
         self.assertEqual(paths.cases, paths.root / "cases")
         self.assertEqual(paths.snapshots, paths.root / "snapshots")
         self.assertEqual(paths.knowledge, paths.root / "knowledge")
+        self.assertEqual(paths.application_db, paths.root / "application.sqlite")
+        self.assertEqual(paths.checkpoints_db, paths.root / "checkpoints.sqlite")
+        self.assertNotEqual(paths.application_db, paths.checkpoints_db)
         self.assertEqual(public["cases"], str(paths.cases))
         self.assertEqual(public["snapshots"], str(paths.snapshots))
         self.assertEqual(public["knowledge"], str(paths.knowledge))
+        self.assertEqual(public["application_db"], str(paths.application_db))
+        self.assertEqual(public["checkpoints_db"], str(paths.checkpoints_db))
         self.assertIn("cases", public["windows_layout"])
         self.assertIn("snapshots", public["windows_layout"])
         self.assertIn("knowledge", public["windows_layout"])
+        self.assertIn("application.sqlite", public["windows_layout"])
+        self.assertIn("checkpoints.sqlite", public["windows_layout"])
 
 
 if __name__ == "__main__":

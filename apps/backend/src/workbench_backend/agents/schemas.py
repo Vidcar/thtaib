@@ -1,4 +1,4 @@
-"""Harness run records. Enough events for one complete run; not OQ-004 recovery."""
+"""Harness run records. Application DB is the run SoR (STATE-001)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from workbench_backend.knowledge.schemas import KnowledgeBinding
+from workbench_backend.state.schemas import RelatedFile
 
 
 class AgentRunStatus(str, Enum):
@@ -144,3 +145,6 @@ class AgentRun(BaseModel):
     memory_version_refs: list[str] = Field(default_factory=list)
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    thread_id: str | None = None
+    checkpoint_ids: list[str] = Field(default_factory=list)
+    related_files: list[RelatedFile] = Field(default_factory=list)

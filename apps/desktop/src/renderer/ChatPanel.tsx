@@ -214,6 +214,18 @@ export function ChatPanel() {
           </p>
           <h3>Transcript (not the working project)</h3>
           <pre className="json">{JSON.stringify(conversation.transcript, null, 2)}</pre>
+          <h3>Run linkage (application records)</h3>
+          <pre className="json">
+            {JSON.stringify(
+              {
+                thread_id: conversation.current_run?.thread_id ?? null,
+                checkpoint_ids: conversation.current_run?.checkpoint_ids ?? [],
+                related_files: conversation.current_run?.related_files ?? [],
+              },
+              null,
+              2,
+            )}
+          </pre>
           <h3>Harness events</h3>
           <pre className="json">{JSON.stringify(conversation.events, null, 2)}</pre>
           <h3>Evidence (not judgement)</h3>
