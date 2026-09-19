@@ -105,6 +105,7 @@ class AgentStartRequest(BaseModel):
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     knowledge_version_refs: list[str] = Field(default_factory=list)
     source_surface: SourceSurface = "agent-run"
+    thread_id: str | None = None
 
 
 class AgentRun(BaseModel):

@@ -8,6 +8,7 @@ from pathlib import Path
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest
 from workbench_backend.chat.schemas import (
+    ChatContinuity,
     ChatConversation,
     ChatConversationCreateRequest,
     ChatConversationView,
@@ -16,6 +17,7 @@ from workbench_backend.chat.schemas import (
     ChatTranscriptReplaceRequest,
 )
 from workbench_backend.chat.store import ChatStore
+from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ChatError, HarnessError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
@@ -82,16 +84,23 @@ class ChatService:
             profile_id=profile_id,
             project_path=str(project_path),
             workspace_id=workspace_id,
+            thread_id=new_id("thread"),
             created_at=now,
             updated_at=now,
         )
         return self._view(self.store.put(conversation))
 
     def list_conversations(self) -> list[ChatConversationView]:
-        return [self._view(item) for item in self.store.list_conversations()]
+        views: list[ChatConversationView] = []
+        for item in self.store.list_conversations():
+            self._persist_thread_if_missing(item)
+            views.append(self._view(item))
+        return views
 
     def get(self, conversation_id: str) -> ChatConversationView:
-        return self._view(self._require(conversation_id), persist=True)
+        conversation = self._require(conversation_id)
+        self._persist_thread_if_missing(conversation)
+        return self._view(conversation, persist=True)
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         conversation = self._require(conversation_id)
@@ -105,13 +114,17 @@ class ChatService:
             conversation.workspace_id = workspace_id
             conversation.project_path = str(project_path)
         if conversation.current_run_id:
-            current = self.harness.get_run(conversation.current_run_id)
-            if current.status.value in {"queued", "running"}:
+            try:
+                current = self.harness.get_run(conversation.current_run_id)
+            except HarnessError:
+                current = None
+            if current is not None and is_run_lifecycle_live(current.status):
                 raise ChatError(
-                    "A Chat turn is already running on this conversation.",
+                    "A Chat turn is already live on this conversation.",
                     code="chat_turn_active",
                     status_code=409,
                 )
+        self._ensure_thread(conversation)
         task = request.task.strip()
         if not task:
             raise ChatError("Compose text is required.", code="task_required", status_code=400)
@@ -129,6 +142,7 @@ class ChatService:
                     project_path=conversation.project_path,
                     profile_id=conversation.profile_id,
                     source_surface="chat",
+                    thread_id=conversation.thread_id,
                 )
             )
         except HarnessError:
@@ -154,9 +168,15 @@ class ChatService:
         conversation_id: str,
         request: ChatTranscriptReplaceRequest,
     ) -> ChatConversationView:
-        """Replace displayed history only. Project files are not touched (STATE-002)."""
+        """Replace displayed history only.
+
+        Project files, durable knowledge, and the LangGraph thread are not
+        touched (STATE-002 / Issue #56). Edited transcript is not replayed
+        into the harness.
+        """
 
         conversation = self._require(conversation_id)
+        self._ensure_thread(conversation)
         conversation.transcript = list(request.messages)
         conversation.history_replaced = True
         conversation.updated_at = utc_now()
@@ -167,6 +187,21 @@ class ChatService:
         if conversation is None:
             raise ChatError("Unknown Chat conversation", code="chat_missing", status_code=404)
         return conversation
+
+    def _ensure_thread(self, conversation: ChatConversation) -> str:
+        """Stable LangGraph thread for this conversation. Legacy rows get one."""
+
+        if conversation.thread_id:
+            return conversation.thread_id
+        conversation.thread_id = new_id("thread")
+        return conversation.thread_id
+
+    def _persist_thread_if_missing(self, conversation: ChatConversation) -> None:
+        if conversation.thread_id:
+            return
+        self._ensure_thread(conversation)
+        conversation.updated_at = utc_now()
+        self.store.put(conversation)
 
     def _bind_profile(self, profile_id: str | None) -> str | None:
         if not profile_id:
@@ -223,10 +258,17 @@ class ChatService:
                 events = [event.model_dump(mode="json") for event in current.events]
                 if self._maybe_append_assistant(conversation, current) and persist:
                     self.store.put(conversation)
+        thread_id = conversation.thread_id or ""
         return ChatConversationView(
             **conversation.model_dump(),
             current_run=current,
             events=events,
+            continuity=ChatContinuity(
+                conversation_id=conversation.id,
+                thread_id=thread_id,
+                run_ids=list(conversation.run_ids),
+                current_run_id=conversation.current_run_id,
+            ),
         )
 
     def _maybe_append_assistant(self, conversation: ChatConversation, run: AgentRun) -> bool:

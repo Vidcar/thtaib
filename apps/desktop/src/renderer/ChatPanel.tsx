@@ -20,19 +20,22 @@ export function ChatPanel() {
   const [projectPath, setProjectPath] = useState("");
   const [task, setTask] = useState("Edit a real file in the selected project workspace.");
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
-    const [nextDeployments, nextProfiles, nextWorkspaces, tools] = await Promise.all([
+    const [nextDeployments, nextProfiles, nextWorkspaces, tools, nextConversations] = await Promise.all([
       api.deployments(),
       api.profiles(),
       api.workspaces(),
       api.agentTools(),
+      api.chatConversations(),
     ]);
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
     setEnabledTools(tools.enabled);
+    setConversations(nextConversations);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
     setProfileId((current) => current || nextProfiles[0]?.id || "");
   }
@@ -67,9 +70,11 @@ export function ChatPanel() {
     <section className="panel">
       <h2>Chat</h2>
       <p className="hint">
-        Debug-quality Chat. Start calls the same embedded Deep Agents harness as Agent-run. Filesystem
-        tools write the selected project workspace. Transcript is displayed history, not the working
-        project. This is not Builder polish.
+        Debug-quality Chat. Follow-ups reuse the conversation LangGraph thread on the embedded Deep
+        Agents harness. Transcript is displayed history, not harness context and not the working
+        project. New conversation allocates a new thread; project files and permitted durable
+        knowledge stay. History edits are display-only. A model/profile change applies to the next
+        run on the same thread. This is not Builder polish.
       </p>
 
       <div className="card">
@@ -99,11 +104,49 @@ export function ChatPanel() {
               workspace_id: workspaceId || undefined,
             });
             setConversation(next);
-            setMessage(`Started harness run ${next.current_run?.id ?? next.id}`);
+            setConversations((current) => {
+              const others = current.filter((item) => item.id !== next.id);
+              return [next, ...others];
+            });
+            setMessage(
+              `Started harness run ${next.current_run?.id ?? next.id} on thread ${next.thread_id ?? "unassigned"}`,
+            );
           })().catch(fail);
         }}
       >
         <h3>Compose</h3>
+        <label>
+          Reopen conversation
+          <select
+            value={conversation?.id ?? ""}
+            onChange={(event) => {
+              const nextId = event.target.value;
+              if (!nextId) {
+                setConversation(null);
+                setMessage("Fresh conversation. Project files and durable knowledge are unchanged.");
+                return;
+              }
+              void api
+                .chatConversation(nextId)
+                .then((next) => {
+                  setConversation(next);
+                  setDeploymentId(next.deployment_id);
+                  setProfileId(next.profile_id ?? "");
+                  setWorkspaceId(next.workspace_id ?? "");
+                  setProjectPath(next.project_path);
+                  setMessage(`Reopened ${next.id} on thread ${next.thread_id ?? "unassigned"}.`);
+                })
+                .catch(fail);
+            }}
+          >
+            <option value="">New conversation</option>
+            {conversations.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id} · thread {item.thread_id ?? "unassigned"}
+              </option>
+            ))}
+          </select>
+        </label>
         <label>
           Deployment
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
@@ -181,7 +224,7 @@ export function ChatPanel() {
             type="button"
             onClick={() => {
               setConversation(null);
-              setMessage("Fresh conversation. Project files are unchanged.");
+              setMessage("Fresh conversation. Project files and durable knowledge are unchanged.");
             }}
           >
             New conversation
@@ -215,15 +258,31 @@ export function ChatPanel() {
             project: {conversation.project_path}
           </p>
           <p>
+            conversation: {conversation.id} · thread: {conversation.thread_id ?? "unassigned"} ·
             deployment: {conversation.deployment_id} · profile: {conversation.profile_id ?? "none"}
           </p>
-          <h3>Transcript (not the working project)</h3>
+          <h3>Transcript (display only — not harness context)</h3>
           <pre className="json">{JSON.stringify(conversation.transcript, null, 2)}</pre>
+          <h3>Continuity (conversation ↔ thread ↔ run)</h3>
+          <pre className="json">
+            {JSON.stringify(
+              conversation.continuity ?? {
+                conversation_id: conversation.id,
+                thread_id: conversation.thread_id,
+                run_ids: conversation.run_ids,
+                current_run_id: conversation.current_run_id,
+              },
+              null,
+              2,
+            )}
+          </pre>
           <h3>Run linkage (application records)</h3>
           <pre className="json">
             {JSON.stringify(
               {
-                thread_id: conversation.current_run?.thread_id ?? null,
+                conversation_id: conversation.id,
+                conversation_thread_id: conversation.thread_id ?? null,
+                run_thread_id: conversation.current_run?.thread_id ?? null,
                 checkpoint_ids: conversation.current_run?.checkpoint_ids ?? [],
                 related_files: conversation.current_run?.related_files ?? [],
               },

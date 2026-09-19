@@ -36,12 +36,36 @@ class ChatTranscriptReplaceRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
 
 
+class ChatContinuity(BaseModel):
+    """Documented conversation ↔ thread ↔ run linkage (Issue #56)."""
+
+    conversation_id: str
+    thread_id: str
+    run_ids: list[str] = Field(default_factory=list)
+    current_run_id: str | None = None
+    transcript_is_harness_context: Literal[False] = False
+    history_edit_effect: Literal["display_only"] = "display_only"
+    model_switch_effect: Literal["same_thread_new_run"] = "same_thread_new_run"
+    fresh_conversation_effect: Literal["new_thread_retain_project_and_knowledge"] = (
+        "new_thread_retain_project_and_knowledge"
+    )
+    note: str = (
+        "Follow-ups reuse conversation.thread_id on the embedded harness "
+        "checkpointer. Displayed transcript is not the execution context. "
+        "History edits do not restore or delete project files and do not "
+        "rewrite the LangGraph thread. A model/profile change applies to the "
+        "next run on the same thread. A fresh conversation allocates a new "
+        "thread; project files and permitted durable knowledge stay."
+    )
+
+
 class ChatConversation(BaseModel):
     id: str
     deployment_id: str
     profile_id: str | None = None
     project_path: str
     workspace_id: str | None = None
+    thread_id: str | None = None
     transcript: list[ChatMessage] = Field(default_factory=list)
     current_run_id: str | None = None
     run_ids: list[str] = Field(default_factory=list)
@@ -56,7 +80,9 @@ class ChatConversation(BaseModel):
 class ChatConversationView(ChatConversation):
     current_run: AgentRun | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+    continuity: ChatContinuity | None = None
     note: str = (
         "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
-        "iteration. Transcript is displayed history, not the working project."
+        "iteration. Follow-ups resume conversation.thread_id. Transcript is "
+        "displayed history, not the working project and not harness context."
     )

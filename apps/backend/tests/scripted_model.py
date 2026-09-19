@@ -14,6 +14,19 @@ from pydantic import PrivateAttr
 
 # Module-level hold survives LangChain/Pydantic copies of the model instance.
 GENERATE_HOLD: threading.Event | None = None
+# Flattened model-bound prompts. Survives LangChain copies of the instance.
+RECEIVED_PROMPTS: list[str] = []
+
+
+def reset_received_prompts() -> None:
+    RECEIVED_PROMPTS.clear()
+
+
+def _message_text(message: BaseMessage) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content
+    return str(content)
 
 
 class ScriptedChatModel(BaseChatModel):
@@ -73,6 +86,7 @@ class ScriptedChatModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        RECEIVED_PROMPTS.append("\n".join(_message_text(item) for item in messages))
         message = self._next_message()
         return ChatResult(generations=[ChatGeneration(message=message)])
 

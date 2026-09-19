@@ -84,7 +84,7 @@ Attach executable checks, expected artifacts and review criteria where a task ha
 
 Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG and cross-surface sharing; Issue #17 locked only the [STATE-005 store defaults](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006) that [AGT-004](#agt-004) consumes. [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox. [OQ-015](../open-questions.md#oq-015) covers workflow import/export. [OQ-016](../open-questions.md#oq-016) records Builder v1 chrome as partially decided in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md); the remainder is the unfinished Builder surface. [WF-001](#wf-001) behaviour is unchanged. Evaluate optional middleware under [OQ-009](../open-questions.md#oq-009). Exact constructor arguments, graph APIs and middleware defaults are version-specific and are not prescribed here.
 
-The [AGT-001](#agt-001) Chat surface lands as debug-quality Chat on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Issue #12 delivered the embedded harness and an Agent-run debug panel. Agent-run is not Chat. This is not finished Chat polish.
+The [AGT-001](#agt-001) Chat surface lands as debug-quality Chat on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Issue #12 delivered the embedded harness and an Agent-run debug panel. Agent-run is not Chat. This is not finished Chat polish. [Issue #56](https://github.com/Vidcar/thtaib/issues/56) lands Chat continuity: a conversation owns one LangGraph `thread_id`, each follow-up is a new harness run on that thread, and a fresh conversation allocates a new thread. That is not effective-setup wiring and not workers.
 
 [Issue #52](https://github.com/Vidcar/thtaib/issues/52) records the high-level [Agent Chat continuity and UX](#high-level-agent-chat-continuity-issue-52) product mapping (conversation ↔ execution thread ↔ run; continue vs fresh; history-edit / model-switch effects; what reaches the harness). That mapping does **not** close [OQ-004](../open-questions.md#oq-004) and is not a claim that current Chat implements continuity. Implementation is a later Agent Chat Issue ([#56](https://github.com/Vidcar/thtaib/issues/56) / [#37](https://github.com/Vidcar/thtaib/issues/37) area 1). Effective setup (selected vs loaded vs applied) is a sibling spec, not this section.
 
@@ -207,3 +207,17 @@ Leave these visible. Do not treat this section as closing them.
 | Model Lab; Task cases and replay | Separate features; do not merge |
 
 **Not claimed:** catalogue `verified`; current Chat continuity; closing [OQ-004](../open-questions.md#oq-004); effective setup; workers; Builder; Model Lab; Chat polish.
+
+<a id="locked-milestone-defaults-issue-56-chat-continuity"></a>
+## Locked milestone defaults (Issue #56; Chat continuity / partial OQ-004)
+
+These defaults are authorised by [Issue #56](https://github.com/Vidcar/thtaib/issues/56). They satisfy Chat follow-up continuity through the embedded harness. They do **not** close [OQ-004](../open-questions.md#oq-004): identities beyond this conversation↔thread↔run link, event-order/reconnection and exactly-once stay open. They are not effective-setup ([Issue #57](https://github.com/Vidcar/thtaib/issues/57)), not workers ([OQ-003](../open-questions.md#oq-003)), and not a catalogue `verified` claim.
+
+- **Relationship:** one Chat conversation owns one LangGraph `thread_id`. Each Start creates a new `AgentRun` that passes that `thread_id` to `create_deep_agent` / the SQLite checkpointer. Agent-run and Lab without a supplied `thread_id` still use `thread_id = run.id`.
+- **Follow-up:** the next model request resumes checkpointer state for that thread. Continuity is proven at the harness/model-request boundary, not by the displayed transcript.
+- **Fresh conversation:** `POST /v1/chat/conversations` allocates a new conversation id and a new `thread_id`. Active context does not carry over. Project files and permitted durable knowledge stay.
+- **Reopen after restart:** application records keep `conversation.id → thread_id → run_ids`. A later backend process continues by starting another run on the same `thread_id`.
+- **History edit:** `PUT …/transcript` is display-only (`history_edit_effect=display_only`). It does not restore or delete project files, does not rewrite the LangGraph thread, and is not replayed as harness context.
+- **Model/profile switch:** the next run uses the selected deployment/profile on the **same** conversation thread (`model_switch_effect=same_thread_new_run`).
+- **Surfaces:** Chat `/v1/chat/` plus the debug Chat panel's reopen list. No Builder canvas. No RAG.
+- **Not claimed:** profile/knowledge content actually loaded into the request ([Issue #57](https://github.com/Vidcar/thtaib/issues/57)); event-stream reconnection; workers; Chat polish.
