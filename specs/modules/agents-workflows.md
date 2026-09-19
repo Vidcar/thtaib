@@ -87,7 +87,7 @@ The [WF-001](#wf-001) backend definition compiler lands with [Issue #35](https:/
 
 These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/issues/42). They satisfy honest harness cancel request versus confirmed stop. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection, exactly-once, worker-adapter interrupt truth and continuation beyond measured framework limits stay open.
 
-- **Statuses:** `queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`. Same field/enum names as the Slice 1 shared lifecycle vocabulary. Prefer generated shared types from [Issue #41](https://github.com/Vidcar/thtaib/issues/41) once that lands; this slice does not reimplement the OpenAPI→TS generator.
+- **Statuses:** `queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed` from the [Issue #41](https://github.com/Vidcar/thtaib/issues/41) shared `RunLifecycleStatus`. Harness `AgentRun.status` is that enum. This slice does not reimplement the OpenAPI→TS generator.
 - **Cancel request:** `POST /v1/agent-runs/{id}/cancel` (and Chat's cancel path through the same harness) transitions a live run to `cancel_requested`. `finished_at` stays unset. This is not a confirmed stop.
 - **Confirmed stop:** the worker records `cancelled` only after it has stopped (or never started) because cancel was requested.
 - **Quiescence:** `cancel_requested` is still live. Lab capture and “safe to treat the workspace as idle” must fail while any run for that workspace is `queued`, `running` or `cancel_requested`.

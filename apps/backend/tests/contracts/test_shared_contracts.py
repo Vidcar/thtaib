@@ -45,13 +45,13 @@ class SharedContractSurfaceTests(unittest.TestCase):
         self.assertTrue(is_run_lifecycle_live(RunLifecycleStatus.cancel_requested))
         self.assertFalse(is_run_lifecycle_live(RunLifecycleStatus.cancelled))
 
-    def test_harness_status_enum_is_unchanged_by_this_slice(self) -> None:
+    def test_harness_status_enum_consumes_shared_lifecycle(self) -> None:
         harness_values = {item.value for item in AgentRunStatus}
-        self.assertEqual(
-            harness_values,
-            {"queued", "running", "completed", "cancelled", "failed"},
-        )
-        self.assertNotIn("cancel_requested", harness_values)
+        shared_values = {item.value for item in RunLifecycleStatus}
+        self.assertEqual(harness_values, shared_values)
+        self.assertIs(AgentRunStatus, RunLifecycleStatus)
+        self.assertTrue(is_run_lifecycle_live(AgentRunStatus.cancel_requested))
+        self.assertFalse(is_run_lifecycle_live(AgentRunStatus.cancelled))
 
     def test_openapi_documents_header_and_lifecycle(self) -> None:
         document = build_openapi_document()

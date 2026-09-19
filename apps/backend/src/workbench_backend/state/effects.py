@@ -11,7 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from workbench_backend.agents.schemas import AgentRunStatus, is_agent_run_live
+from workbench_backend.agents.schemas import AgentRunStatus
+from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import StateError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.state.schemas import (
@@ -144,7 +145,7 @@ class EffectService:
         note = NO_REPLAY_NOTE
         if effect.run_id:
             run = self.store.get_run(effect.run_id)
-            if run is not None and is_agent_run_live(run.status):
+            if run is not None and is_run_lifecycle_live(run.status):
                 if run.status is AgentRunStatus.cancel_requested:
                     note = (
                         NO_REPLAY_NOTE

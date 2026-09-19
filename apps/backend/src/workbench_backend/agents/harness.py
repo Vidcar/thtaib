@@ -24,10 +24,12 @@ from workbench_backend.agents.schemas import (
     AgentRunStatus,
     AgentStartRequest,
     TaskCriteria,
-    TERMINAL_AGENT_RUN_STATUSES,
     ToolMode,
-    is_agent_run_live,
     label_for_tool_mode,
+)
+from workbench_backend.contracts.lifecycle import (
+    TERMINAL_RUN_LIFECYCLE_STATUSES,
+    is_run_lifecycle_live,
 )
 from workbench_backend.state.checkpointer import (
     checkpoint_ids_from_graph,
@@ -118,7 +120,7 @@ class HarnessService:
         return [
             run.id
             for run in stored.values()
-            if run.workspace_id == workspace_id and is_agent_run_live(run.status)
+            if run.workspace_id == workspace_id and is_run_lifecycle_live(run.status)
         ]
 
     def start(self, request: AgentStartRequest) -> AgentRun:
@@ -215,7 +217,7 @@ class HarnessService:
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
-            if is_agent_run_live(run.status) and run.status is not AgentRunStatus.cancel_requested:
+            if is_run_lifecycle_live(run.status) and run.status is not AgentRunStatus.cancel_requested:
                 run.status = AgentRunStatus.cancel_requested
                 run.stop_reason = None
                 run.finished_at = None
@@ -234,7 +236,7 @@ class HarnessService:
         with self._lock:
             run = self._runs[run_id]
             cancel = self._cancels[run_id]
-            already_terminal = run.status in TERMINAL_AGENT_RUN_STATUSES
+            already_terminal = run.status in TERMINAL_RUN_LIFECYCLE_STATUSES
             requested_before_start = (
                 not already_terminal
                 and (cancel.is_set() or run.status is AgentRunStatus.cancel_requested)
@@ -294,7 +296,7 @@ class HarnessService:
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
-            if run.status in TERMINAL_AGENT_RUN_STATUSES:
+            if run.status in TERMINAL_RUN_LIFECYCLE_STATUSES:
                 if run.status is AgentRunStatus.cancelled and status is not AgentRunStatus.cancelled:
                     run.stop_reason = "cancelled"
                     run.finished_at = run.finished_at or utc_now()

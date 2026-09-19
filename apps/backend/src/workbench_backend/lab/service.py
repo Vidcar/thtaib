@@ -13,9 +13,9 @@ from workbench_backend.agents.schemas import (
     AgentStartRequest,
     TaskCriteria,
     ToolMode,
-    is_agent_run_live,
     label_for_tool_mode,
 )
+from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import LabError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
@@ -136,7 +136,7 @@ class LabService:
         run: AgentRun | None = None
         if request.run_id:
             run = self.harness.get_run(request.run_id)
-            if is_agent_run_live(run.status):
+            if is_run_lifecycle_live(run.status):
                 raise LabError(
                     "Capture requires a quiescent boundary; the source run is still live "
                     "(cancel_requested is not idle).",

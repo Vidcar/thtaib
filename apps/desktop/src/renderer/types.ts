@@ -1,3 +1,5 @@
+import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
+
 export type WorkbenchSurface = "managed-inference";
 
 export type WorkbenchTab = "models" | "deployments" | "chat" | "agent-run" | "lab" | "knowledge";
@@ -167,30 +169,8 @@ export interface EngineMeasurement {
   note: string;
 }
 
-export type AgentRunStatus =
-  | "queued"
-  | "running"
-  | "cancel_requested"
-  | "cancelled"
-  | "completed"
-  | "failed";
-
-export function isAgentRunLive(status: AgentRunStatus): boolean {
-  switch (status) {
-    case "queued":
-    case "running":
-    case "cancel_requested":
-      return true;
-    case "cancelled":
-    case "completed":
-    case "failed":
-      return false;
-    default: {
-      const exhaustive: never = status;
-      return exhaustive;
-    }
-  }
-}
+export type AgentRunStatus = RunLifecycleStatus;
+export const isAgentRunLive = isRunLifecycleLive;
 
 export interface AgentRun {
   id: string;
