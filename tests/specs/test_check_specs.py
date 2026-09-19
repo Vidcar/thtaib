@@ -25,7 +25,6 @@ class SpecificationCheckerTests(unittest.TestCase):
         self.root = Path(temp.name)
         for name in check_specs.CORE_FILES:
             self.write(name, "# Synthetic test fixture\n")
-        self.write(".github/CODEOWNERS", "* @synthetic-owner\n")
         self.write("specs/architecture.md", '''# Architecture fixture
 
 <a id="mod-001"></a>
@@ -59,7 +58,7 @@ Required fixture behaviour.
                                "sha256": hashlib.sha256((self.root / "specs/sources/archive.docx").read_bytes()).hexdigest()},
             "documents": documents,
             "requirements": [{"id": "MOD-001", "document": "specs/architecture.md", "status": "planned",
-                              "code": [], "tests": [], "evidence": []}],
+                              "verifiable_by": ["ci-smoke", "uat"], "code": [], "tests": [], "evidence": []}],
         }
         self.mapping = {"schema_version": 1, "bindings": [{
             "id": "fixture-source", "state": "unbound", "path": None,
@@ -187,7 +186,7 @@ Required fixture behaviour.
     def test_requirement_outside_specification_fails(self):
         self.write("specs/commands.md", '<a id="mod-002"></a>\n### MOD-002: Misplaced\n\nText.\n\n**Acceptance:** x.\n')
         self.catalog["requirements"].append({"id": "MOD-002", "document": "specs/commands.md", "status": "planned",
-                                             "code": [], "tests": [], "evidence": []})
+                                             "verifiable_by": ["uat"], "code": [], "tests": [], "evidence": []})
         self.save()
         self.assertIn("outside a registered specification", self.errors())
 
@@ -277,6 +276,25 @@ Required fixture behaviour.
     def test_manual_evidence_cannot_verify(self):
         self.make_verified_fixture(kind="manual")
         self.assertIn("needs a passing ci-smoke or uat evidence row", self.errors())
+
+    def test_ci_smoke_cannot_verify_uat_only_requirement(self):
+        self.requirement["verifiable_by"] = ["uat"]
+        self.make_verified_fixture(kind="ci-smoke")
+        output = self.errors()
+        self.assertIn("ci-smoke evidence cannot verify this requirement", output)
+        self.assertIn("needs a passing uat evidence row", output)
+
+    def test_uat_verifies_uat_only_requirement(self):
+        self.requirement["verifiable_by"] = ["uat"]
+        self.write("specs/evidence/2026-09-19-uat.md", "# UAT\n\nReal report body.\n")
+        self.make_verified_fixture(kind="uat", ref="specs/evidence/2026-09-19-uat.md")
+        self.assertEqual(self.errors(), "")
+
+    def test_verifiable_by_must_be_valid_nonempty_tiers(self):
+        for value in ([], ["manual"], ["uat", "uat"], "uat"):
+            self.requirement["verifiable_by"] = value
+            self.save()
+            self.assertIn("verifiable_by must be a nonempty list", self.errors(), msg=repr(value))
 
     def test_manual_evidence_on_built_row_passes(self):
         self.requirement.update({"status": "built", "evidence": [self.evidence_row(kind="manual", requirement_sha256=None)]})

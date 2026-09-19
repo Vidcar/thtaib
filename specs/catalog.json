@@ -5,7 +5,7 @@
     "decision": "specs/decisions/ADR-0004-slim-specification-pack.md",
     "approval": {
       "reviewer": "David (Vidcar), product owner",
-      "reference": "Product owner approval, 2026-09-19, Project chat (The House That AI Built); recorded in ADR-0004",
+      "reference": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)",
       "date": "2026-09-19"
     }
   },
@@ -18,19 +18,19 @@
       "path": "specs/README.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/architecture.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/commands.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/contracts.md",
@@ -42,7 +42,7 @@
       "path": "specs/decisions/ADR-0001-adopt-specification-pack.md",
       "kind": "decision",
       "status": "superseded",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/decisions/ADR-0002-contract-authoring.md",
@@ -60,25 +60,25 @@
       "path": "specs/decisions/ADR-0004-slim-specification-pack.md",
       "kind": "decision",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/decisions/README.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/decisions/changelog.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/deviations.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/evidence/README.md",
@@ -90,49 +90,49 @@
       "path": "specs/modules/agents-workflows.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/backend-desktop.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/environments-tools.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/lab-evaluation.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/models.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/registry.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/state-recovery.md",
       "kind": "specification",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/open-questions.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/sources/README.md",
@@ -174,7 +174,7 @@
       "path": "specs/verification.md",
       "kind": "guide",
       "status": "accepted",
-      "approval": "Product owner approval, David (Vidcar), 2026-09-19, Project chat — ADR-0004"
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     }
   ],
   "requirements": [
@@ -182,6 +182,10 @@
       "id": "ARCH-001",
       "document": "specs/architecture.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/app.py",
         "apps/desktop/src/renderer/App.tsx"
@@ -195,6 +199,10 @@
       "id": "ARCH-002",
       "document": "specs/architecture.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/inference/adapter.py"
@@ -209,6 +217,10 @@
       "id": "ARCH-003",
       "document": "specs/architecture.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
@@ -236,6 +248,9 @@
       "id": "ARCH-004",
       "document": "specs/architecture.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
         "apps/backend/src/workbench_backend/inference/compatibility.py",
@@ -251,6 +266,9 @@
       "id": "ARCH-005",
       "document": "specs/architecture.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -259,6 +277,10 @@
       "id": "ARCH-006",
       "document": "specs/architecture.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -267,6 +289,10 @@
       "id": "ARCH-007",
       "document": "specs/architecture.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -275,6 +301,9 @@
       "id": "MOD-001",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/bundles.py"
       ],
@@ -288,6 +317,9 @@
       "id": "MOD-002",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/inspect.py"
       ],
@@ -300,6 +332,10 @@
       "id": "MOD-003",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py"
@@ -315,6 +351,9 @@
       "id": "MOD-004",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/deployments.py",
         "apps/backend/src/workbench_backend/inference/bundles.py",
@@ -334,6 +373,9 @@
       "id": "MOD-005",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/adapter.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py"
@@ -359,6 +401,10 @@
       "id": "MOD-006",
       "document": "specs/modules/models.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/compatibility.py",
         "apps/backend/src/workbench_backend/inference/compatibility_routes.py",
@@ -375,6 +421,10 @@
       "id": "AGT-001",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/chat/service.py",
@@ -406,6 +456,10 @@
       "id": "WF-001",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/definition_compiler.py"
       ],
@@ -418,6 +472,10 @@
       "id": "WF-002",
       "document": "specs/modules/agents-workflows.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -426,6 +484,10 @@
       "id": "AGT-002",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/middleware.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
@@ -442,6 +504,10 @@
       "id": "AGT-003",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/schemas.py",
@@ -458,6 +524,10 @@
       "id": "AGT-004",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
@@ -476,6 +546,10 @@
       "id": "AGT-005",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/tools.py"
       ],
@@ -488,6 +562,10 @@
       "id": "AGT-006",
       "document": "specs/modules/agents-workflows.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/evidence.py"
       ],
@@ -500,6 +578,9 @@
       "id": "ENV-001",
       "document": "specs/modules/environments-tools.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/tools.py"
@@ -513,6 +594,9 @@
       "id": "ENV-002",
       "document": "specs/modules/environments-tools.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -521,6 +605,9 @@
       "id": "ENV-003",
       "document": "specs/modules/environments-tools.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -529,6 +616,9 @@
       "id": "ENV-004",
       "document": "specs/modules/environments-tools.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -537,6 +627,9 @@
       "id": "ENV-005",
       "document": "specs/modules/environments-tools.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -545,6 +638,9 @@
       "id": "ENV-006",
       "document": "specs/modules/environments-tools.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -553,6 +649,10 @@
       "id": "STATE-001",
       "document": "specs/modules/state-recovery.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/paths.py",
         "apps/backend/src/workbench_backend/state/store.py",
@@ -583,6 +683,10 @@
       "id": "STATE-002",
       "document": "specs/modules/state-recovery.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
@@ -610,6 +714,10 @@
       "id": "STATE-003",
       "document": "specs/modules/state-recovery.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/snapshot.py",
@@ -626,6 +734,10 @@
       "id": "STATE-004",
       "document": "specs/modules/state-recovery.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/state/effects.py",
         "apps/backend/src/workbench_backend/state/effect_routes.py",
@@ -644,6 +756,10 @@
       "id": "STATE-005",
       "document": "specs/modules/state-recovery.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/knowledge/service.py",
         "apps/backend/src/workbench_backend/knowledge/store.py",
@@ -662,6 +778,10 @@
       "id": "REG-001",
       "document": "specs/modules/registry.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -670,6 +790,10 @@
       "id": "REG-002",
       "document": "specs/modules/registry.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -678,6 +802,10 @@
       "id": "REG-003",
       "document": "specs/modules/registry.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -686,6 +814,10 @@
       "id": "REG-004",
       "document": "specs/modules/registry.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -694,6 +826,10 @@
       "id": "REG-005",
       "document": "specs/modules/registry.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -702,6 +838,10 @@
       "id": "API-001",
       "document": "specs/modules/backend-desktop.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/app.py",
         "apps/backend/src/workbench_backend/local_trust.py",
@@ -718,6 +858,9 @@
       "id": "API-002",
       "document": "specs/modules/backend-desktop.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/desktop/src/renderer/App.tsx",
         "apps/desktop/src/renderer/api.ts",
@@ -731,6 +874,10 @@
       "id": "API-003",
       "document": "specs/modules/backend-desktop.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/local_trust.py",
         "apps/backend/src/workbench_backend/contracts/auth.py",
@@ -756,6 +903,10 @@
       "id": "API-004",
       "document": "specs/modules/backend-desktop.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
@@ -778,6 +929,9 @@
       "id": "API-005",
       "document": "specs/modules/backend-desktop.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -786,6 +940,9 @@
       "id": "LAB-001",
       "document": "specs/modules/lab-evaluation.md",
       "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/engine.py",
         "apps/backend/src/workbench_backend/lab/service.py"
@@ -799,6 +956,10 @@
       "id": "LAB-002",
       "document": "specs/modules/lab-evaluation.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/snapshot.py",
@@ -815,6 +976,10 @@
       "id": "LAB-003",
       "document": "specs/modules/lab-evaluation.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/export_privacy.py",
@@ -834,6 +999,10 @@
       "id": "LAB-004",
       "document": "specs/modules/lab-evaluation.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/schemas.py"
@@ -847,6 +1016,9 @@
       "id": "LAB-005",
       "document": "specs/modules/lab-evaluation.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -855,6 +1027,9 @@
       "id": "LAB-006",
       "document": "specs/modules/lab-evaluation.md",
       "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -863,6 +1038,10 @@
       "id": "CTT-001",
       "document": "specs/contracts.md",
       "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/contracts/auth.py",
         "apps/backend/src/workbench_backend/contracts/lifecycle.py",
@@ -879,6 +1058,10 @@
       "id": "CTT-002",
       "document": "specs/contracts.md",
       "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []

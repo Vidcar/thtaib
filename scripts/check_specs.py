@@ -25,7 +25,7 @@ CORE_FILES = (
     "specs/contracts.md", "specs/catalog.json", "specs/repository-map.json",
     "specs/commands.md", "specs/verification.md", "specs/open-questions.md",
     "specs/deviations.md", "specs/decisions/changelog.md", "specs/templates/feature.md",
-    "scripts/check_specs.py", "tests/specs/test_check_specs.py", ".github/CODEOWNERS",
+    "scripts/check_specs.py", "tests/specs/test_check_specs.py",
     ".github/workflows/specs.yml", ".github/workflows/backend.yml",
     ".github/workflows/desktop.yml", ".github/workflows/contracts.yml",
 )
@@ -308,7 +308,7 @@ def check_definitions(texts: dict[str, str], doc_by_path: dict[str, dict[str, An
 
 
 def check_evidence(root: Path, rid: str, status: str, evidence: list[Any],
-                   block: str | None, errors: list[str]) -> bool:
+                   block: str | None, verifiable_by: set[str], errors: list[str]) -> bool:
     """Validate evidence rows; return whether one row can support `verified`."""
     supports_verified = False
     for item in evidence:
@@ -343,7 +343,9 @@ def check_evidence(root: Path, rid: str, status: str, evidence: list[Any],
             if not body.strip() or PLACEHOLDER_RE.search(body):
                 errors.append(f"{rid}: evidence report must be nonempty Markdown without template placeholders")
         if kind in VERIFYING_KINDS and status == "verified":
-            if result != "passed":
+            if kind not in verifiable_by:
+                errors.append(f"{rid}: {kind} evidence cannot verify this requirement; allowed tiers: {sorted(verifiable_by)}")
+            elif result != "passed":
                 errors.append(f"{rid}: verified claim has a non-passing {kind} row; downgrade to built")
             elif digest is None:
                 errors.append(f"{rid}: verified claim needs requirement_sha256 on its {kind} row")
@@ -366,7 +368,7 @@ def check_requirements(root: Path, catalog: dict[str, Any], definitions: dict[st
         if not isinstance(row, dict):
             errors.append("requirement entry: expected an object")
             continue
-        exact_keys(row, {"id", "document", "status", "code", "tests", "evidence"}, errors, "requirement entry")
+        exact_keys(row, {"id", "document", "status", "verifiable_by", "code", "tests", "evidence"}, errors, "requirement entry")
         rid = row.get("id")
         if not isinstance(rid, str) or not re.fullmatch(ID_PATTERN, rid) or rid.startswith(("OQ-", "DEV-", "ADR-")):
             errors.append("requirement entry: invalid requirement ID")
@@ -379,6 +381,10 @@ def check_requirements(root: Path, catalog: dict[str, Any], definitions: dict[st
         status = row.get("status")
         if status not in IMPL_STATUSES:
             errors.append(f"{rid}: invalid status")
+        tiers = row.get("verifiable_by")
+        if not isinstance(tiers, list) or not tiers or not set(tiers) <= VERIFYING_KINDS or len(set(tiers)) != len(tiers):
+            errors.append(f"{rid}: verifiable_by must be a nonempty list drawn from {sorted(VERIFYING_KINDS)}")
+            tiers = []
         for category in ("code", "tests"):
             values = row.get(category)
             if not isinstance(values, list):
@@ -390,14 +396,14 @@ def check_requirements(root: Path, catalog: dict[str, Any], definitions: dict[st
         if not isinstance(evidence, list):
             errors.append(f"{rid}: evidence must be a list")
             evidence = []
-        supports = check_evidence(root, rid, str(status), evidence, blocks.get(rid), errors)
+        supports = check_evidence(root, rid, str(status), evidence, blocks.get(rid), set(tiers), errors)
         if status == "verified":
             if doc_by_path.get(row.get("document"), {}).get("status") != "accepted":
                 errors.append(f"{rid}: verified claims require an accepted specification")
             if not row.get("code") or not row.get("tests"):
                 errors.append(f"{rid}: verified claim needs code and tests pointers")
             if not supports:
-                errors.append(f"{rid}: verified claim needs a passing ci-smoke or uat evidence row with a matching digest")
+                errors.append(f"{rid}: verified claim needs a passing {' or '.join(sorted(tiers) or ['uat'])} evidence row with a matching digest")
     for rid in sorted(set(definitions) - registered):
         errors.append(f"requirement missing from catalogue: {rid}")
     if not definitions:
@@ -522,10 +528,12 @@ def main(argv: list[str] | None = None) -> int:
         mapping = load_json(args.root / "specs/repository-map.json")
         counts = Counter(row["status"] for row in catalog["requirements"])
         evidence_rows = sum(len(row["evidence"]) for row in catalog["requirements"])
+        uat_only = sum(row["verifiable_by"] == ["uat"] for row in catalog["requirements"])
         unbound = sum(b["state"] == "unbound" for b in mapping["bindings"])
         print(f"PASS: {len(catalog['documents'])} documents; {len(catalog['requirements'])} requirements; "
               f"{evidence_rows} evidence rows; {unbound} unbound locations; adoption {catalog['adoption']['state']}.")
-        print("Requirement status: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        print("Requirement status: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+              + f"; uat-only requirements: {uat_only}")
         return 0
     except (OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
         print(f"ERROR: unable to validate specification data: {exc}", file=sys.stderr)

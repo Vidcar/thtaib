@@ -21,3 +21,5 @@ What changes, what could break, migration and rollback, unresolved risk.
 ## Verification
 
 The executable checks and live evidence required before the implementation counts as complete.
+
+When a record is superseded, keep its original text and add a status banner naming the replacement; do not rewrite an old decision to look as if it always said the new thing.

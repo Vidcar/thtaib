@@ -1,6 +1,6 @@
 # ADR-0004: Slim the specification pack and adopt it
 
-**Status:** accepted. **Approval:** product owner approval, David (Vidcar), 2026-09-19, Project chat. **Supersedes:** [ADR-0001](ADR-0001-adopt-specification-pack.md).
+**Status:** accepted. **Approval:** product owner instruction in Project chat, 2026-09-19; recorded via [PR #84](https://github.com/Vidcar/thtaib/pull/84). **Supersedes:** [ADR-0001](ADR-0001-adopt-specification-pack.md).
 
 ## Context
 
@@ -11,8 +11,9 @@ After roughly one hundred commits the pack governing the repository had grown to
 1. Adopt the slimmed pack as the repository's working baseline: [AGENTS.md](../../AGENTS.md) as the entry point; [working rules](../README.md); one [architecture](../architecture.md) document of intended behaviour; module specifications on one fixed template; short ADRs plus this [changelog](changelog.md) in place of issue-log sections inside specifications; one machine-readable [catalogue](../catalog.json) whose `verified` status means live evidence; a [feature specification template](../templates/feature.md) that a change is specified against before implementation.
 2. Requirement IDs are preserved unchanged (ARCH, MOD, AGT, WF, ENV, STATE, REG, API, LAB, CTT families). Decision content from the removed sections moves to the changelog; behaviour that is still intended moves into the module behaviour sections.
 3. The catalogue statuses are `planned`, `built`, `verified`, `retired` with the operational definitions in [verification](../verification.md). `verified` requires evidence from the real-model CI smoke tier or David-PC UAT at a recorded commit.
-4. The checker keeps link, anchor, ID, catalogue-shape, pointer, source-hash and evidence-digest validation. The adoption gate (`--require-adopted`) and CODEOWNERS placeholder checks are removed; adoption is recorded once in the catalogue with this approval, and `.github/CODEOWNERS` names the real owner.
+4. The checker keeps link, anchor, ID, catalogue-shape, pointer, source-hash and evidence-digest validation and adds a per-requirement `verifiable_by` tier list so a tiny-model CI run can only verify plumbing requirements. The adoption gate (`--require-adopted`) and the CODEOWNERS file and checks are removed; adoption is recorded once in the catalogue with this approval. Ownership is stated in AGENTS.md: agents implement and propose, David accepts.
 5. The Revision 0.5 source document and its page map are preserved unchanged.
+6. The ADR triggers from the previous governance guide are kept in full: a new execution owner, process boundary, public contract, persistence strategy, permission model or core dependency; a change to access, recovery or snapshot guarantees; any weakening of the verification rules. The CI-security, agent-credential, dependency-upgrade and rebase-recheck rules move to [working rules](../README.md) rather than being dropped.
 
 ## Alternatives considered
 
