@@ -107,7 +107,7 @@ These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/is
 
 These defaults are authorised by [Issue #52](https://github.com/Vidcar/thtaib/issues/52) as the high-level product spec for Agent Chat continuity and UX beyond [debug-quality Chat](../../docs/glossary.md#debug-quality-chat). They satisfy the documentation gap in [#37](https://github.com/Vidcar/thtaib/issues/37) area 1 (conversation ↔ execution-thread ↔ run; continue vs fresh; history-edit / model-switch effects; inspector honesty). They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection and exactly-once stay open. They do not rewrite closed [Issue #22](https://github.com/Vidcar/thtaib/issues/22) acceptance. They are not a catalogue `verified` claim and not an implementation.
 
-Homes: [AGT-001](#agt-001), [AGT-002](#agt-002), [AGT-004](#agt-004); [STATE-001](state-recovery.md#state-001)/[STATE-002](state-recovery.md#state-002); [API-001](backend-desktop.md#api-001)/[API-004](backend-desktop.md#api-004); [ARCH-003](../architecture.md#arch-003) shared records only. Related: [#12](https://github.com/Vidcar/thtaib/issues/12), [#22](https://github.com/Vidcar/thtaib/issues/22), [#27](https://github.com/Vidcar/thtaib/issues/27), [#42](https://github.com/Vidcar/thtaib/issues/42). Implementation: [#56](https://github.com/Vidcar/thtaib/issues/56). Do not blur [Model Lab](../../docs/glossary.md#model-lab) or [Task cases and replay](../../docs/glossary.md#task-cases-and-replay). Effective setup (profile/knowledge actually applied) is [Issue #53](https://github.com/Vidcar/thtaib/issues/53), not this section.
+Homes: [AGT-001](#agt-001), [AGT-002](#agt-002), [AGT-004](#agt-004); [STATE-001](state-recovery.md#state-001)/[STATE-002](state-recovery.md#state-002); [API-001](backend-desktop.md#api-001)/[API-004](backend-desktop.md#api-004); [ARCH-003](../architecture.md#arch-003) shared records only. Related: [#12](https://github.com/Vidcar/thtaib/issues/12), [#22](https://github.com/Vidcar/thtaib/issues/22), [#27](https://github.com/Vidcar/thtaib/issues/27), [#42](https://github.com/Vidcar/thtaib/issues/42). Implementation: [#56](https://github.com/Vidcar/thtaib/issues/56). Do not blur [Model Lab](../../docs/glossary.md#model-lab) or [Task cases and replay](../../docs/glossary.md#task-cases-and-replay). Effective setup (profile/knowledge actually applied) is [Issue #53](https://github.com/Vidcar/thtaib/issues/53) / [Issue #57](https://github.com/Vidcar/thtaib/issues/57), not this section.
 
 ### Conversation, execution thread and run
 
@@ -147,7 +147,7 @@ On **continue** the harness receives:
 - Resume of the execution thread / checkpoints (active context).
 - The new user turn.
 - The bound deployment and project workspace.
-- Selected profile and knowledge version **references**. Whether those references are loaded or applied is the effective-setup contract ([Issue #53](https://github.com/Vidcar/thtaib/issues/53) / [ARCH-003](../architecture.md#arch-003) / [REG-005](registry.md#reg-005)); this section does not close that.
+- Selected profile and knowledge version **references**, resolved by the [effective setup contract](../architecture.md#effective-setup-contract) ([Issue #53](https://github.com/Vidcar/thtaib/issues/53) / [Issue #57](https://github.com/Vidcar/thtaib/issues/57) / [ARCH-003](../architecture.md#arch-003)). This section does not restate that contract.
 - Enabled tools that target project storage ([STATE-002](state-recovery.md#state-002)).
 - The same cancel path as any other harness run ([Issue #42](https://github.com/Vidcar/thtaib/issues/42)).
 
@@ -197,7 +197,7 @@ Leave these visible. Do not treat this section as closing them.
 | Event streaming / reconnection | [OQ-002](../open-questions.md#oq-002) remainder |
 | Resume of the same execution thread after a model / adapter change | Open under [OQ-004](../open-questions.md#oq-004); product rule above (explicit new attempt until proven) |
 | “New attempt from edited history” control and branch pairing | [OQ-004](../open-questions.md#oq-004) / [STATE-003](state-recovery.md#state-003); not shipped here |
-| Selected vs loaded vs applied profile / knowledge | [Issue #53](https://github.com/Vidcar/thtaib/issues/53); [ARCH-003](../architecture.md#arch-003); [REG-005](registry.md#reg-005); [OQ-006](../open-questions.md#oq-006)/[007](../open-questions.md#oq-007) remainders |
+| Selected vs loaded vs applied profile / knowledge | Implemented on the harness path by [Issue #57](https://github.com/Vidcar/thtaib/issues/57); contract [Issue #53](https://github.com/Vidcar/thtaib/issues/53); [ARCH-003](../architecture.md#arch-003); [REG-005](registry.md#reg-005); [OQ-006](../open-questions.md#oq-006)/[007](../open-questions.md#oq-007) remainders |
 | Files / images in Chat; project-free Chat; workspace ownership across surfaces | [#37](https://github.com/Vidcar/thtaib/issues/37) area 5; [delivery feature map](../../docs/delivery-feature-map.md#specs-still-needed) |
 | Knowledge steer UX | Milestone #8; [#17](https://github.com/Vidcar/thtaib/issues/17) out of scope |
 | Durable Approvals inbox | [OQ-011](../open-questions.md#oq-011) |
@@ -206,7 +206,7 @@ Leave these visible. Do not treat this section as closing them.
 | Builder | [OQ-016](../open-questions.md#oq-016) |
 | Model Lab; Task cases and replay | Separate features; do not merge |
 
-**Not claimed:** catalogue `verified`; current Chat continuity; closing [OQ-004](../open-questions.md#oq-004); effective setup; workers; Builder; Model Lab; Chat polish.
+**Not claimed:** catalogue `verified`; closing [OQ-004](../open-questions.md#oq-004); David-PC UAT for effective setup; workers; Builder; Model Lab; Chat polish.
 
 <a id="locked-milestone-defaults-issue-56-chat-continuity"></a>
 ## Locked milestone defaults (Issue #56; Chat continuity / partial OQ-004)
@@ -220,4 +220,4 @@ These defaults are authorised by [Issue #56](https://github.com/Vidcar/thtaib/is
 - **History edit:** `PUT …/transcript` is display-only (`history_edit_effect=display_only`). It does not restore or delete project files, does not rewrite the LangGraph thread, and is not replayed as harness context.
 - **Model/profile switch:** the next run uses the selected deployment/profile on the **same** conversation thread (`model_switch_effect=same_thread_new_run`).
 - **Surfaces:** Chat `/v1/chat/` plus the debug Chat panel's reopen list. No Builder canvas. No RAG.
-- **Not claimed:** profile/knowledge content actually loaded into the request ([Issue #57](https://github.com/Vidcar/thtaib/issues/57)); event-stream reconnection; workers; Chat polish.
+- **Not claimed:** event-stream reconnection; workers; Chat polish. Profile/knowledge apply-for-real is [Issue #57](https://github.com/Vidcar/thtaib/issues/57) / [ARCH-003 locked defaults](../architecture.md#locked-milestone-defaults-issue-57-effective-setup).

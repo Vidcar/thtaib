@@ -5,6 +5,7 @@ import {
   isAgentRunLive,
   type ChatConversation,
   type Deployment,
+  type KnowledgeEntry,
   type LabWorkspace,
   type RunProfile,
 } from "./types";
@@ -21,21 +22,26 @@ export function ChatPanel() {
   const [task, setTask] = useState("Edit a real file in the selected project workspace.");
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
+  const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
-    const [nextDeployments, nextProfiles, nextWorkspaces, tools, nextConversations] = await Promise.all([
-      api.deployments(),
-      api.profiles(),
-      api.workspaces(),
-      api.agentTools(),
-      api.chatConversations(),
-    ]);
+    const [nextDeployments, nextProfiles, nextWorkspaces, tools, nextConversations, nextKnowledge] =
+      await Promise.all([
+        api.deployments(),
+        api.profiles(),
+        api.workspaces(),
+        api.agentTools(),
+        api.chatConversations(),
+        api.knowledgeEntries(),
+      ]);
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
     setWorkspaces(nextWorkspaces);
     setEnabledTools(tools.enabled);
     setConversations(nextConversations);
+    setKnowledgeEntries(nextKnowledge);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
     setProfileId((current) => current || nextProfiles[0]?.id || "");
   }
@@ -71,10 +77,12 @@ export function ChatPanel() {
       <h2>Chat</h2>
       <p className="hint">
         Debug-quality Chat. Follow-ups reuse the conversation LangGraph thread on the embedded Deep
-        Agents harness. Transcript is displayed history, not harness context and not the working
-        project. New conversation allocates a new thread; project files and permitted durable
-        knowledge stay. History edits are display-only. A model/profile change applies to the next
-        run on the same thread. This is not Builder polish.
+        Agents harness. Selected profile per-request settings and selected knowledge versions are
+        resolved before the run (selected ≠ loaded ≠ applied). Transcript is displayed history, not
+        harness context and not the working project. New conversation allocates a new thread;
+        project files and permitted durable knowledge stay. History edits are display-only. A
+        model/profile change applies to the next run on the same thread. This is not Builder
+        polish.
       </p>
 
       <div className="card">
@@ -87,6 +95,7 @@ export function ChatPanel() {
         onSubmit={(event) => {
           event.preventDefault();
           void (async () => {
+            const knowledgeRefs = selectedKnowledgeIds;
             const created =
               conversation ??
               (await api.createChatConversation({
@@ -94,6 +103,7 @@ export function ChatPanel() {
                 profile_id: profileId || undefined,
                 project_path: projectPath || undefined,
                 workspace_id: workspaceId || undefined,
+                knowledge_version_refs: knowledgeRefs,
               }));
             setConversation(created);
             const next = await api.startChat(created.id, {
@@ -102,6 +112,7 @@ export function ChatPanel() {
               profile_id: profileId || undefined,
               project_path: projectPath || undefined,
               workspace_id: workspaceId || undefined,
+              knowledge_version_refs: knowledgeRefs,
             });
             setConversation(next);
             setConversations((current) => {
@@ -134,6 +145,11 @@ export function ChatPanel() {
                   setProfileId(next.profile_id ?? "");
                   setWorkspaceId(next.workspace_id ?? "");
                   setProjectPath(next.project_path);
+                  setSelectedKnowledgeIds([
+                    ...(next.memory_version_refs ?? []),
+                    ...(next.skill_version_refs ?? []),
+                    ...(next.protected_instruction_version_refs ?? []),
+                  ]);
                   setMessage(`Reopened ${next.id} on thread ${next.thread_id ?? "unassigned"}.`);
                 })
                 .catch(fail);
@@ -197,6 +213,30 @@ export function ChatPanel() {
             placeholder="%LOCALAPPDATA%\LocalAIWorkbench\workspaces\…"
           />
         </label>
+        <fieldset>
+          <legend>Knowledge versions (content is loaded; id-only does not apply)</legend>
+          {knowledgeEntries.length === 0 ? (
+            <p className="hint">No knowledge entries. Create them on the Knowledge panel.</p>
+          ) : (
+            knowledgeEntries.map((entry) => (
+              <label key={entry.id}>
+                <input
+                  type="checkbox"
+                  checked={selectedKnowledgeIds.includes(entry.current_version_id)}
+                  onChange={() => {
+                    const versionId = entry.current_version_id;
+                    setSelectedKnowledgeIds((current) =>
+                      current.includes(versionId)
+                        ? current.filter((item) => item !== versionId)
+                        : [...current, versionId],
+                    );
+                  }}
+                />{" "}
+                {entry.kind} · {entry.display_name ?? entry.id} · {entry.current_version_id}
+              </label>
+            ))
+          )}
+        </fieldset>
         <label>
           Task
           <textarea value={task} onChange={(event) => setTask(event.target.value)} />
@@ -289,6 +329,14 @@ export function ChatPanel() {
               null,
               2,
             )}
+          </pre>
+          <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
+          <pre className="json">
+            {JSON.stringify(conversation.current_run?.effective_setup ?? null, null, 2)}
+          </pre>
+          <h3>Captured model requests</h3>
+          <pre className="json">
+            {JSON.stringify(conversation.current_run?.model_requests ?? [], null, 2)}
           </pre>
           <h3>Harness events</h3>
           <pre className="json">{JSON.stringify(conversation.events, null, 2)}</pre>

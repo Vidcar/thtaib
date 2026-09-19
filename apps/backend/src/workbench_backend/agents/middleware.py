@@ -8,13 +8,10 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import BaseMessage
 
+from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
-
-RAG_GAP = "no retrieval / RAG (OQ-006 unresolved)"
-MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
-SKILL_GAP = "no skill versions bound for this run"
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -35,8 +32,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
-        self._capture(filtered)
-        return handler(filtered)
+        before = len(self.http_sink)
+        response = handler(filtered)
+        self._capture(filtered, _payload_after(self.http_sink, before))
+        return response
 
     async def awrap_model_call(
         self,
@@ -44,8 +43,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
-        self._capture(filtered)
-        return await handler(filtered)
+        before = len(self.http_sink)
+        response = await handler(filtered)
+        self._capture(filtered, _payload_after(self.http_sink, before))
+        return response
 
     def _presented(self, tools: list[Any] | None) -> list[Any]:
         allowed = set(self.run.presented_tools)
@@ -56,15 +57,19 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 selected.append(item)
         return selected
 
-    def _capture(self, request: ModelRequest) -> None:
-        http_payload = self.http_sink[-1] if self.http_sink else None
-        gaps = [RAG_GAP]
-        if not self.run.memory_version_refs:
-            gaps.append(MEMORY_GAP)
-        if not self.run.skill_version_refs:
-            gaps.append(SKILL_GAP)
+    def _capture(self, request: ModelRequest, http_payload: dict[str, Any] | None) -> None:
+        setup = self.run.effective_setup
+        gaps = list(setup.gaps) if setup is not None else [RAG_GAP]
+        if setup is None:
+            if not self.run.memory_version_refs:
+                gaps.append(MEMORY_GAP)
+            if not self.run.skill_version_refs:
+                gaps.append(SKILL_GAP)
         if http_payload is None:
-            gaps.append("http payload not yet observed at wrap_model_call time")
+            gaps.append("http payload not observed for this model call")
+        applied = dict(setup.bags.per_request.applied) if setup is not None else {}
+        generation = dict(applied)
+        generation.update(request.model_settings or {})
         self.run.model_requests.append(
             ModelRequestCapture(
                 at=utc_now(),
@@ -76,14 +81,28 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     for name in (_tool_names(request.tools))
                     if name in self.run.presented_tools
                 ],
-                generation_settings=dict(request.model_settings or {}),
+                generation_settings=generation,
                 memory_versions=list(self.run.memory_version_refs),
                 skill_versions=list(self.run.skill_version_refs),
+                loaded_knowledge=list(setup.loaded_knowledge) if setup is not None else [],
                 capture_gaps=gaps,
                 http_payload=http_payload,
+                selected_profile_id=setup.selected_profile_id if setup is not None else self.run.profile_id,
+                applied_per_request=applied,
+                startup_mismatches=(
+                    [item.model_dump(mode="json") for item in setup.startup_mismatches]
+                    if setup is not None
+                    else []
+                ),
             )
         )
         self.run.updated_at = utc_now()
+
+
+def _payload_after(sink: list[dict[str, Any]], before: int) -> dict[str, Any] | None:
+    if len(sink) <= before:
+        return None
+    return sink[-1]
 
 
 def _system_text(request: ModelRequest) -> str | None:

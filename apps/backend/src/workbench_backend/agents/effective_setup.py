@@ -1,0 +1,249 @@
+"""ARCH-003 / Issue #57: resolve one effective setup before the harness runs.
+
+Selected ≠ loaded ≠ applied. This is the Issue #53 contract made concrete on
+the existing Chat / Lab / Agent-run path. It is not a retrieval product and
+does not start inference.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from workbench_backend.errors import HarnessError
+from workbench_backend.inference.schemas import Deployment, RunProfile, SettingsBag, SettingsBags
+from workbench_backend.inference.settings import PER_REQUEST_KEYS, STARTUP_KEYS, resolve_bag
+from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
+
+RAG_GAP = "no retrieval / RAG (OQ-006 unresolved)"
+MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
+SKILL_GAP = "no skill versions bound for this run"
+KNOWLEDGE_PREAMBLE = (
+    "The following durable knowledge is application-owned versioned content "
+    "(STATE-005). It is not retrieval or RAG (OQ-006)."
+)
+
+
+class StartupMismatch(BaseModel):
+    key: str
+    selected: Any = None
+    loaded: Any = None
+    reason: str = "selected profile startup is not the loaded deployment startup"
+
+
+class LoadedKnowledgeFact(BaseModel):
+    version_id: str
+    entry_id: str
+    kind: KnowledgeKind
+    content_digest: str
+    content_available: bool
+    selected: bool = True
+
+
+class EffectiveSetup(BaseModel):
+    """Inspectable selected / loaded / applied facts for one run."""
+
+    selected_profile_id: str | None = None
+    selected_deployment_id: str
+    selected_memory_version_ids: list[str] = Field(default_factory=list)
+    selected_skill_version_ids: list[str] = Field(default_factory=list)
+    selected_protected_instruction_version_ids: list[str] = Field(default_factory=list)
+    loaded_deployment_id: str
+    loaded_startup: dict[str, Any] = Field(default_factory=dict)
+    loaded_knowledge: list[LoadedKnowledgeFact] = Field(default_factory=list)
+    bags: SettingsBags = Field(default_factory=SettingsBags)
+    startup_mismatches: list[StartupMismatch] = Field(default_factory=list)
+    unsupported: dict[str, list[str]] = Field(default_factory=dict)
+    overridden: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    system_prompt: str
+    gaps: list[str] = Field(default_factory=list)
+    knowledge_binding: str = "none"
+    note: str = (
+        "Selected ids are not proof of loaded content or applied bags. "
+        "Inspect this record and the outbound request. Not RAG."
+    )
+
+
+def content_digest(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def resolve_effective_setup(
+    *,
+    deployment: Deployment,
+    profile: RunProfile | None,
+    knowledge_refs: KnowledgeRefs,
+    knowledge_versions: list[KnowledgeVersion],
+    surface_system_prompt: str | None,
+    default_system_prompt: str,
+    per_request_overrides: dict[str, Any] | None = None,
+) -> EffectiveSetup:
+    """Resolve bags, startup mismatch and knowledge content before execution."""
+
+    if not (deployment.endpoint or "").strip():
+        raise HarnessError(
+            "Deployment has no endpoint. The adapter does not start inference.",
+            code="no_endpoint",
+            status_code=409,
+        )
+    missing = _missing_versions(knowledge_refs, knowledge_versions)
+    if missing:
+        raise HarnessError(
+            "Unknown knowledge version",
+            code="knowledge_version_missing",
+            status_code=404,
+            details={"missing_version_ids": missing},
+        )
+    per_request = _resolve_per_request(profile, deployment, per_request_overrides)
+    agent = _resolve_agent(profile)
+    startup_selected = profile.bags.startup if profile is not None else SettingsBag()
+    mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
+    loaded = [_loaded_fact(version) for version in knowledge_versions]
+    system_prompt = compose_system_prompt(
+        surface_system_prompt=surface_system_prompt,
+        profile_system_prompt=_profile_system_prompt(profile),
+        default_system_prompt=default_system_prompt,
+        versions=knowledge_versions,
+    )
+    gaps = [RAG_GAP]
+    if not knowledge_refs.memory_version_refs:
+        gaps.append(MEMORY_GAP)
+    if not knowledge_refs.skill_version_refs:
+        gaps.append(SKILL_GAP)
+    bags = SettingsBags(
+        startup=startup_selected,
+        per_request=per_request,
+        agent=agent,
+    )
+    return EffectiveSetup(
+        selected_profile_id=profile.id if profile is not None else None,
+        selected_deployment_id=deployment.id,
+        selected_memory_version_ids=list(knowledge_refs.memory_version_refs),
+        selected_skill_version_ids=list(knowledge_refs.skill_version_refs),
+        selected_protected_instruction_version_ids=list(
+            knowledge_refs.protected_instruction_version_refs
+        ),
+        loaded_deployment_id=deployment.id,
+        loaded_startup=dict(deployment.applied_startup),
+        loaded_knowledge=loaded,
+        bags=bags,
+        startup_mismatches=mismatches,
+        unsupported={
+            "startup": list(startup_selected.unsupported),
+            "per_request": list(per_request.unsupported),
+            "agent": list(agent.unsupported),
+        },
+        overridden={
+            "startup": [item.model_dump(mode="json") for item in startup_selected.overridden],
+            "per_request": [item.model_dump(mode="json") for item in per_request.overridden],
+            "agent": [item.model_dump(mode="json") for item in agent.overridden],
+        },
+        system_prompt=system_prompt,
+        gaps=gaps,
+        knowledge_binding=knowledge_refs.binding(),
+    )
+
+
+def compose_system_prompt(
+    *,
+    surface_system_prompt: str | None,
+    profile_system_prompt: str | None,
+    default_system_prompt: str,
+    versions: list[KnowledgeVersion],
+) -> str:
+    """Surface override, then profile, then default. Knowledge content is appended."""
+
+    if surface_system_prompt and surface_system_prompt.strip():
+        base = surface_system_prompt.strip()
+    elif profile_system_prompt and profile_system_prompt.strip():
+        base = profile_system_prompt.strip()
+    else:
+        base = default_system_prompt
+    knowledge_block = format_knowledge_block(versions)
+    if not knowledge_block:
+        return base
+    return f"{base}\n\n{knowledge_block}"
+
+
+def format_knowledge_block(versions: list[KnowledgeVersion]) -> str:
+    if not versions:
+        return ""
+    sections = [KNOWLEDGE_PREAMBLE]
+    for version in versions:
+        heading = _knowledge_heading(version.kind)
+        sections.append(f"### {heading} (version {version.id})\n{version.content}")
+    return "\n\n".join(sections)
+
+
+def _knowledge_heading(kind: KnowledgeKind) -> str:
+    if kind == "memory":
+        return "Memory"
+    if kind == "skill":
+        return "Skill"
+    if kind == "protected_instruction":
+        return "Protected instructions"
+    raise TypeError(f"unsupported knowledge kind: {kind}")
+
+
+def _profile_system_prompt(profile: RunProfile | None) -> str | None:
+    if profile is None:
+        return None
+    value = profile.bags.agent.applied.get("system_prompt")
+    return value if isinstance(value, str) else None
+
+
+def _resolve_per_request(
+    profile: RunProfile | None,
+    deployment: Deployment,
+    overrides: dict[str, Any] | None,
+) -> SettingsBag:
+    if profile is not None:
+        requested = dict(profile.bags.per_request.requested)
+        requested.update(overrides or {})
+        return resolve_bag(requested, PER_REQUEST_KEYS)
+    requested = dict(deployment.settings.per_request.requested)
+    requested.update(overrides or {})
+    if requested:
+        return resolve_bag(requested, PER_REQUEST_KEYS)
+    return deployment.settings.per_request
+
+
+def _resolve_agent(profile: RunProfile | None) -> SettingsBag:
+    if profile is None:
+        return SettingsBag()
+    return profile.bags.agent
+
+
+def _startup_mismatches(
+    selected: SettingsBag,
+    loaded_startup: dict[str, Any],
+) -> list[StartupMismatch]:
+    mismatches: list[StartupMismatch] = []
+    for key, requested in selected.requested.items():
+        if key not in STARTUP_KEYS:
+            continue
+        selected_value = selected.applied.get(key, requested)
+        loaded_value = loaded_startup.get(key)
+        if selected_value != loaded_value:
+            mismatches.append(
+                StartupMismatch(key=key, selected=selected_value, loaded=loaded_value)
+            )
+    return mismatches
+
+
+def _loaded_fact(version: KnowledgeVersion) -> LoadedKnowledgeFact:
+    return LoadedKnowledgeFact(
+        version_id=version.id,
+        entry_id=version.entry_id,
+        kind=version.kind,
+        content_digest=content_digest(version.content),
+        content_available=True,
+        selected=True,
+    )
+
+
+def _missing_versions(refs: KnowledgeRefs, versions: list[KnowledgeVersion]) -> list[str]:
+    present = {item.id for item in versions}
+    return [version_id for version_id in refs.all_ids() if version_id not in present]

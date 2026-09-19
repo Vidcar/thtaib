@@ -21,6 +21,8 @@ from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ChatError, HarnessError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
+from workbench_backend.knowledge.schemas import KnowledgeRefs
+from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.service import LabService
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
@@ -41,11 +43,13 @@ class ChatService:
         harness_provider: Callable[[], HarnessService],
         lab_provider: Callable[[], LabService],
         app_store: ApplicationStore | None = None,
+        knowledge_provider: Callable[[], KnowledgeService] | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._harness_provider = harness_provider
         self._lab_provider = lab_provider
         self._app_store = app_store
+        self._knowledge_provider = knowledge_provider
 
     @property
     def manager(self) -> ModelManager:
@@ -58,6 +62,16 @@ class ChatService:
     @property
     def lab(self) -> LabService:
         return self._lab_provider()
+
+    @property
+    def knowledge(self) -> KnowledgeService:
+        if self._knowledge_provider is None:
+            raise ChatError(
+                "Knowledge version refs require the application-owned knowledge store.",
+                code="knowledge_store_missing",
+                status_code=409,
+            )
+        return self._knowledge_provider()
 
     @property
     def paths(self) -> WorkbenchPaths:
@@ -77,6 +91,12 @@ class ChatService:
         workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
         profile_id = self._bind_profile(request.profile_id)
         self.manager.get_deployment(request.deployment_id)
+        refs = self._bind_knowledge(
+            memory_version_refs=request.memory_version_refs,
+            skill_version_refs=request.skill_version_refs,
+            protected_instruction_version_refs=request.protected_instruction_version_refs,
+            knowledge_version_refs=request.knowledge_version_refs,
+        )
         now = utc_now()
         conversation = ChatConversation(
             id=new_id("chat"),
@@ -85,6 +105,9 @@ class ChatService:
             project_path=str(project_path),
             workspace_id=workspace_id,
             thread_id=new_id("thread"),
+            memory_version_refs=refs.memory_version_refs,
+            skill_version_refs=refs.skill_version_refs,
+            protected_instruction_version_refs=refs.protected_instruction_version_refs,
             created_at=now,
             updated_at=now,
         )
@@ -109,6 +132,29 @@ class ChatService:
             conversation.deployment_id = request.deployment_id
         if request.profile_id is not None:
             conversation.profile_id = self._bind_profile(request.profile_id)
+        if (
+            request.memory_version_refs is not None
+            or request.skill_version_refs is not None
+            or request.protected_instruction_version_refs is not None
+            or request.knowledge_version_refs is not None
+        ):
+            refs = self._bind_knowledge(
+                memory_version_refs=request.memory_version_refs
+                if request.memory_version_refs is not None
+                else conversation.memory_version_refs,
+                skill_version_refs=request.skill_version_refs
+                if request.skill_version_refs is not None
+                else conversation.skill_version_refs,
+                protected_instruction_version_refs=(
+                    request.protected_instruction_version_refs
+                    if request.protected_instruction_version_refs is not None
+                    else conversation.protected_instruction_version_refs
+                ),
+                knowledge_version_refs=request.knowledge_version_refs or [],
+            )
+            conversation.memory_version_refs = refs.memory_version_refs
+            conversation.skill_version_refs = refs.skill_version_refs
+            conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
         if request.project_path or request.workspace_id:
             workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
             conversation.workspace_id = workspace_id
@@ -143,6 +189,9 @@ class ChatService:
                     profile_id=conversation.profile_id,
                     source_surface="chat",
                     thread_id=conversation.thread_id,
+                    memory_version_refs=conversation.memory_version_refs,
+                    skill_version_refs=conversation.skill_version_refs,
+                    protected_instruction_version_refs=conversation.protected_instruction_version_refs,
                 )
             )
         except HarnessError:
@@ -207,6 +256,29 @@ class ChatService:
         if not profile_id:
             return None
         return self.manager.get_profile(profile_id).id
+
+    def _bind_knowledge(
+        self,
+        *,
+        memory_version_refs: list[str] | None,
+        skill_version_refs: list[str] | None,
+        protected_instruction_version_refs: list[str] | None,
+        knowledge_version_refs: list[str] | None,
+    ) -> KnowledgeRefs:
+        requested = (
+            memory_version_refs
+            or skill_version_refs
+            or protected_instruction_version_refs
+            or knowledge_version_refs
+        )
+        if not requested:
+            return KnowledgeRefs()
+        return self.knowledge.resolve_refs(
+            memory_version_refs=memory_version_refs,
+            skill_version_refs=skill_version_refs,
+            protected_instruction_version_refs=protected_instruction_version_refs,
+            knowledge_version_refs=knowledge_version_refs,
+        )
 
     def _resolve_project(
         self,
