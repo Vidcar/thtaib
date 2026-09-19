@@ -10,6 +10,12 @@ from typing import Any
 from pydantic import BaseModel, TypeAdapter
 
 from workbench_backend.contracts.auth import LocalSessionTrustContract
+from workbench_backend.contracts.events import (
+    RunStreamContract,
+    RunStreamEnvelope,
+    RunStreamEventType,
+    SharedAgentEvent,
+)
 from workbench_backend.contracts.lifecycle import RunLifecycleContract, RunLifecycleStatus
 from workbench_backend.contracts.paths import (
     JSONSCHEMA_MODELS,
@@ -28,6 +34,10 @@ _SCHEMA_MODELS = {
     "LocalSessionTrustContract": LocalSessionTrustContract,
     "RunLifecycleContract": RunLifecycleContract,
     "RunLifecycleStatus": RunLifecycleStatus,
+    "RunStreamContract": RunStreamContract,
+    "RunStreamEnvelope": RunStreamEnvelope,
+    "RunStreamEventType": RunStreamEventType,
+    "SharedAgentEvent": SharedAgentEvent,
 }
 
 

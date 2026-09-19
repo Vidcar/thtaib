@@ -1,3 +1,9 @@
+import {
+  applyConversationEvent,
+  applyRunEvent,
+  subscribeWorkbenchEvents,
+} from "./sse";
+import type { RunStreamEnvelope } from "./sse";
 import type {
   AgentRun,
   ChatConversation,
@@ -223,4 +229,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, source: "debug-panel" }),
     }),
+  subscribeAgentRun: (
+    runId: string,
+    signal: AbortSignal,
+    onRun: (run: AgentRun) => void,
+  ) =>
+    subscribeWorkbenchEvents<AgentRun>({
+      runId,
+      signal,
+      apply: applyRunEvent,
+      onRecord: onRun,
+    }),
+  subscribeChatConversation: (
+    conversationId: string,
+    signal: AbortSignal,
+    onConversation: (conversation: ChatConversation) => void,
+  ) =>
+    subscribeWorkbenchEvents<ChatConversation>({
+      conversationId,
+      signal,
+      apply: applyConversationEvent,
+      onRecord: onConversation,
+    }),
 };
+
+export type { RunStreamEnvelope };

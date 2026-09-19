@@ -14,6 +14,10 @@ JSONSCHEMA_MODELS = (
     "LocalSessionTrustContract",
     "RunLifecycleContract",
     "RunLifecycleStatus",
+    "RunStreamContract",
+    "RunStreamEnvelope",
+    "RunStreamEventType",
+    "SharedAgentEvent",
 )
 
 

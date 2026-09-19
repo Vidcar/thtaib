@@ -4,6 +4,16 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-19 — SSE for same-machine run and Chat events
+
+Authority: technical owner decision from the assigned streaming outcome (coordinator brief, 2026-09-19); settles the transport default under [OQ-002](../open-questions.md#oq-002). Requirements: API-004, API-006, AGT-001, CTT-001. Closes [DEV-005](../deviations.md#dev-005).
+
+- One privileged `GET /v1/events` stream (exactly one of `run_id` or `conversation_id`). Transport is FastAPI `EventSourceResponse` (`text/event-stream`), not WebSockets and not a second broker.
+- Auth is `X-Workbench-Local-Token`. Event names: `snapshot` (GET-equivalent run or conversation record), `run_event` (one application `AgentEvent`; SSE `id` is the 1-based append index), `stream_end` (terminal, then the response closes). FastAPI keep-alive comments cover idle live streams.
+- `Last-Event-ID` resumes after that `run_event` seq; the server still sends a `snapshot` first so a reconnect reads persisted/in-memory state. Closing the client does not cancel the run.
+- The harness continues to use LangGraph `stream_mode="updates"` and map chunks to `AgentEvent`; SSE does not re-expose raw graph chunks.
+- Desktop Chat, Agent-run and Lab run views subscribe while the run is live. Lab result rows that are not run events may poll every 5 s. Agent-run Cancel is enabled only while live.
+
 ## 2026-09-19 — Managed inference start-path polish
 
 Authority: David-PC UAT observations 1, 2 and 5 ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); [issue #83](https://github.com/Vidcar/thtaib/issues/83) for desktop display. Requirements: MOD-003, MOD-004.

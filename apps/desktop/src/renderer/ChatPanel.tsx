@@ -53,26 +53,34 @@ export function ChatPanel() {
     });
   }, []);
 
+  const conversationId = conversation?.id ?? null;
+  const liveRunId =
+    conversation?.current_run && isAgentRunLive(conversation.current_run.status)
+      ? conversation.current_run.id
+      : null;
+
   useEffect(() => {
-    const run = conversation?.current_run;
-    if (!conversation || !run || !isAgentRunLive(run.status)) {
+    if (!conversationId || !liveRunId) {
       return;
     }
-    const timer = window.setInterval(() => {
-      void api
-        .chatConversation(conversation.id)
-        .then((next) => {
-          setConversation(next);
-          if (next.deploy_health?.message) {
-            setMessage(next.deploy_health.message);
-          } else if (next.current_run?.error) {
-            setMessage(next.current_run.error);
-          }
-        })
-        .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [conversation]);
+    const controller = new AbortController();
+    void api
+      .subscribeChatConversation(conversationId, controller.signal, (next) => {
+        setConversation(next);
+        if (next.deploy_health?.message) {
+          setMessage(next.deploy_health.message);
+        } else if (next.current_run?.error) {
+          setMessage(next.current_run.error);
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setMessage(error instanceof Error ? error.message : String(error));
+      });
+    return () => controller.abort();
+  }, [conversationId, liveRunId]);
 
   function fail(error: unknown): void {
     setMessage(error instanceof Error ? error.message : String(error));

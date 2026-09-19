@@ -480,7 +480,8 @@
         "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/deploy_health.py",
         "apps/backend/src/workbench_backend/inference/connection_errors.py",
-        "apps/desktop/src/renderer/ChatPanel.tsx"
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/backend/src/workbench_backend/event_stream.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
@@ -488,6 +489,7 @@
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_continuity.py",
         "apps/backend/tests/test_chat_deploy_health.py",
+        "apps/backend/tests/test_event_stream.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": [
@@ -1004,18 +1006,22 @@
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/event_stream.py",
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/deploy_health.py",
         "apps/backend/src/workbench_backend/inference/connection_errors.py",
         "apps/backend/src/workbench_backend/lab/routes.py",
         "apps/backend/src/workbench_backend/knowledge/routes.py",
-        "apps/desktop/src/renderer/ChatPanel.tsx"
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/desktop/src/renderer/LabPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_deploy_health.py",
         "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_event_stream.py",
         "apps/backend/tests/test_lab.py",
         "apps/backend/tests/test_knowledge.py"
       ],
@@ -1030,6 +1036,32 @@
       ],
       "code": [],
       "tests": [],
+      "evidence": []
+    },
+    {
+      "id": "API-006",
+      "document": "specs/modules/backend-desktop.md",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
+      "code": [
+        "apps/backend/src/workbench_backend/contracts/events.py",
+        "apps/backend/src/workbench_backend/event_stream.py",
+        "apps/backend/src/workbench_backend/agents/routes.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/desktop/src/renderer/sse.ts",
+        "apps/desktop/src/renderer/api.ts",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/desktop/src/renderer/LabPanel.tsx"
+      ],
+      "tests": [
+        "apps/backend/tests/test_event_stream.py",
+        "apps/backend/tests/contracts/test_shared_contracts.py",
+        "apps/backend/tests_integration/test_real_model_smoke.py"
+      ],
       "evidence": []
     },
     {
@@ -1141,6 +1173,7 @@
       "code": [
         "apps/backend/src/workbench_backend/contracts/auth.py",
         "apps/backend/src/workbench_backend/contracts/lifecycle.py",
+        "apps/backend/src/workbench_backend/contracts/events.py",
         "apps/backend/src/workbench_backend/contracts/schema_app.py",
         "apps/backend/src/workbench_backend/contracts/cli.py",
         "scripts/generate_shared_contracts.py"
