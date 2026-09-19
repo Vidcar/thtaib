@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,20 @@ from workbench_backend.contracts.paths import (
 )
 
 OPENAPI_TYPESCRIPT_BIN = "openapi-typescript"
+OPENAPI_TYPESCRIPT_CLI = Path("node_modules") / "openapi-typescript" / "bin" / "cli.js"
+
+
+def resolve_executable(name: str) -> str | None:
+    """Resolve a PATH executable, including Windows .cmd/.exe shims."""
+    found = shutil.which(name)
+    if found:
+        return found
+    if os.name == "nt":
+        for suffix in (".cmd", ".exe", ".bat"):
+            found = shutil.which(f"{name}{suffix}")
+            if found:
+                return found
+    return None
 
 
 def desktop_openapi_typescript_pin(repo_root: Path) -> str:
@@ -32,6 +48,34 @@ def desktop_openapi_typescript_pin(repo_root: Path) -> str:
     return version
 
 
+def openapi_typescript_command(output_root: Path, *, pnpm_dir: Path) -> list[str]:
+    """Build the OpenAPI→TS argv.
+
+    Windows ``CreateProcess`` (used by ``subprocess`` without a shell) does not
+    resolve ``pnpm`` / ``pnpm.cmd``. Invoke the pinned package through ``node``
+    and its ``bin/cli.js`` so both OSes use the same installed 7.13.0 bits.
+    """
+    output = output_root / DESKTOP_TYPES_RELATIVE
+    cli_js = pnpm_dir / OPENAPI_TYPESCRIPT_CLI
+    node = resolve_executable("node")
+    args = [
+        str(output_root / OPENAPI_RELATIVE),
+        "-o",
+        str(output),
+        "--root-types",
+    ]
+    if node and cli_js.is_file():
+        return [node, str(cli_js), *args]
+    pnpm = resolve_executable("pnpm")
+    if pnpm:
+        return [pnpm, "--dir", str(pnpm_dir), "exec", OPENAPI_TYPESCRIPT_BIN, *args]
+    raise RuntimeError(
+        "cannot run openapi-typescript: node + "
+        f"{OPENAPI_TYPESCRIPT_CLI.as_posix()} or pnpm must be available "
+        "(run `pnpm install` in apps/desktop)"
+    )
+
+
 def run_openapi_typescript(output_root: Path, *, pnpm_dir: Path) -> None:
     output = output_root / DESKTOP_TYPES_RELATIVE
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -39,17 +83,7 @@ def run_openapi_typescript(output_root: Path, *, pnpm_dir: Path) -> None:
         raise RuntimeError(
             "apps/desktop/node_modules is missing; run `pnpm install` in apps/desktop"
         )
-    command = [
-        "pnpm",
-        "--dir",
-        str(pnpm_dir),
-        "exec",
-        OPENAPI_TYPESCRIPT_BIN,
-        str(output_root / OPENAPI_RELATIVE),
-        "-o",
-        str(output),
-        "--root-types",
-    ]
+    command = openapi_typescript_command(output_root, pnpm_dir=pnpm_dir)
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         sys.stderr.write(completed.stdout)

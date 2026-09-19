@@ -14,6 +14,7 @@ from workbench_backend.contracts.auth import (
     WORKBENCH_LOCAL_TOKEN_HEADER,
     LocalSessionTrustContract,
 )
+from workbench_backend.contracts.cli import OPENAPI_TYPESCRIPT_CLI, openapi_typescript_command
 from workbench_backend.contracts.export import build_json_schema, build_openapi_document
 from workbench_backend.contracts.freshness import compare_generated_trees
 from workbench_backend.contracts.lifecycle import (
@@ -24,6 +25,7 @@ from workbench_backend.contracts.paths import (
     DESKTOP_TYPES_RELATIVE,
     OPENAPI_RELATIVE,
     generated_relative_paths,
+    repo_root_from,
 )
 from support import close_workbench_sqlite
 
@@ -77,6 +79,19 @@ class SharedContractSurfaceTests(unittest.TestCase):
                 self.assertEqual(client.get("/v1/shared-contracts/session-trust").status_code, 404)
             finally:
                 close_workbench_sqlite(app, client)
+
+
+class OpenApiTypescriptInvocationTests(unittest.TestCase):
+    def test_windows_safe_command_uses_node_and_pinned_cli(self) -> None:
+        repo = repo_root_from(Path(__file__).resolve())
+        desktop = repo / "apps" / "desktop"
+        if not (desktop / OPENAPI_TYPESCRIPT_CLI).is_file():
+            self.skipTest("desktop node_modules not installed in this environment")
+        command = openapi_typescript_command(repo, pnpm_dir=desktop)
+        self.assertNotEqual(command[0], "pnpm")
+        self.assertTrue(command[0].lower().endswith(("node", "node.exe")))
+        self.assertEqual(Path(command[1]), desktop / OPENAPI_TYPESCRIPT_CLI)
+        self.assertIn("--root-types", command)
 
 
 class FreshnessComparisonTests(unittest.TestCase):

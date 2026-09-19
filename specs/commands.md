@@ -139,7 +139,7 @@ Starts Vite as a development bundler and launches Electron. Vite's URL is not a 
 uv run python ../../scripts/generate_shared_contracts.py
 ```
 
-Exports JSON Schema and OpenAPI from the canonical Pydantic shared-contract models, then runs pinned `openapi-typescript` to write committed desktop consumer types. Generated files must not be hand-edited. This does not publish product `/openapi.json` and does not implement Electron trust or harness cancel behaviour.
+Exports JSON Schema and OpenAPI from the canonical Pydantic shared-contract models, then runs pinned `openapi-typescript` 7.13.0 via `node` and the installed `bin/cli.js` (not a bare `pnpm` argv — Windows `CreateProcess` does not resolve `pnpm.cmd`). Generated files must not be hand-edited. This does not publish product `/openapi.json` and does not implement Electron trust or harness cancel behaviour.
 
 <a id="check-shared-contract-freshness"></a>
 ## Check shared-contract freshness
