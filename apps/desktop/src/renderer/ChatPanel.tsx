@@ -60,7 +60,14 @@ export function ChatPanel() {
     const timer = window.setInterval(() => {
       void api
         .chatConversation(conversation.id)
-        .then(setConversation)
+        .then((next) => {
+          setConversation(next);
+          if (next.deploy_health?.message) {
+            setMessage(next.deploy_health.message);
+          } else if (next.current_run?.error) {
+            setMessage(next.current_run.error);
+          }
+        })
         .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
     }, 750);
     return () => window.clearInterval(timer);
@@ -81,8 +88,9 @@ export function ChatPanel() {
         resolved before the run (selected ≠ loaded ≠ applied). Transcript is displayed history, not
         harness context and not the working project. New conversation allocates a new thread;
         project files and permitted durable knowledge stay. History edits are display-only. A
-        model/profile change applies to the next run on the same thread. This is not Builder
-        polish.
+        model/profile change applies to the next run on the same thread. Live assistant completion
+        requires a healthy managed/connected llama.cpp — harness model_requests / thread reuse prove
+        continuity only. This is not Builder polish.
       </p>
 
       <div className="card">
@@ -120,7 +128,8 @@ export function ChatPanel() {
               return [next, ...others];
             });
             setMessage(
-              `Started harness run ${next.current_run?.id ?? next.id} on thread ${next.thread_id ?? "unassigned"}`,
+              next.deploy_health?.message ??
+                `Started harness run ${next.current_run?.id ?? next.id} on thread ${next.thread_id ?? "unassigned"}`,
             );
           })().catch(fail);
         }}
@@ -303,6 +312,13 @@ export function ChatPanel() {
           </p>
           <h3>Transcript (display only — not harness context)</h3>
           <pre className="json">{JSON.stringify(conversation.transcript, null, 2)}</pre>
+          {conversation.deploy_health?.message ? (
+            <p className="status">{conversation.deploy_health.message}</p>
+          ) : conversation.current_run?.error ? (
+            <p className="status">{conversation.current_run.error}</p>
+          ) : null}
+          <h3>Deploy health (live completion ≠ continuity)</h3>
+          <pre className="json">{JSON.stringify(conversation.deploy_health ?? null, null, 2)}</pre>
           <h3>Continuity (conversation ↔ thread ↔ run)</h3>
           <pre className="json">
             {JSON.stringify(

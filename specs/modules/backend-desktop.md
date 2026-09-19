@@ -14,7 +14,7 @@ Issue #40 locks the same-machine shared-secret header and loopback bind recorded
 
 ## Lifecycle and failure
 
-Represent what is active, queued, resource-constrained, awaiting intervention or failing. Handle backend startup/reconnection and external service failure without inventing successful work. Events and recorded results must distinguish a request being accepted from an action finishing. A cancel request is `cancel_requested` (still live); confirmed stop is `cancelled`. Exact event envelopes and remaining durable state transitions stay [OQ-004](../open-questions.md#oq-004).
+Represent what is active, queued, resource-constrained, awaiting intervention or failing. Handle backend startup/reconnection and external service failure without inventing successful work. Events and recorded results must distinguish a request being accepted from an action finishing. A cancel request is `cancel_requested` (still live); confirmed stop is `cancelled`. Chat/API reports a classified deploy-health / connection failure when the bound llama.cpp endpoint is unhealthy or unreachable ([Issue #78](https://github.com/Vidcar/thtaib/issues/78)); that is Chat-facing honesty, not [OQ-012](../open-questions.md#oq-012) observability. Exact event envelopes and remaining durable state transitions stay [OQ-004](../open-questions.md#oq-004).
 
 ## Requirements and acceptance checks
 

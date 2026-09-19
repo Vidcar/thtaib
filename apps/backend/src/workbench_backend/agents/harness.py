@@ -46,6 +46,10 @@ from workbench_backend.agents.tools import (
 )
 from workbench_backend.errors import HarnessError, ReplayError
 from workbench_backend.inference.adapter import chat_model_for_deployment
+from workbench_backend.inference.connection_errors import (
+    clarify_connection_error,
+    classify_connection_failure,
+)
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.diagnostics import (
@@ -357,7 +361,7 @@ class HarnessService:
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
-            run.error = str(exc)
+            run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
@@ -373,11 +377,19 @@ class HarnessService:
             run.stop_reason = stop_reason
             run.finished_at = utc_now()
             run.updated_at = run.finished_at
+            event_detail: dict[str, Any] = {
+                "stop_reason": stop_reason,
+                "error": run.error,
+                "confirmed": True,
+            }
+            failure_code = classify_connection_failure(run.error or "")
+            if failure_code:
+                event_detail["code"] = failure_code
             run.events.append(
                 AgentEvent(
                     at=run.updated_at,
                     kind=status.value,
-                    detail={"stop_reason": stop_reason, "error": run.error, "confirmed": True},
+                    detail=event_detail,
                 )
             )
             self._persist(run)
