@@ -86,6 +86,28 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 
 Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, Issue #21 runtime/pin/`flash_attn` valued-enum checks, Issue #31 MOD-006 provenance-separation and unverified≠incompatible checks, Issue #62 managed-deployment ownership checks (serialized/idempotent duplicate start, process identity before stop, foreign-healthy endpoint is not ownership, restart reconcile, connected non-destructive lifecycle; PID-reuse cases use fixtures/mocks and never kill unrelated user processes), harness/adapter tests for AGT-001/002/005/006 and MOD-005, Chat→harness wiring plus STATE-002 transcript≠project, filesystem-tools→project-storage, Issue #56 Chat continuity checks (two-turn unique detail on the next model request; reopen-after-restart thread reuse; fresh conversation reset with retained project/knowledge; model-switch same thread; history-edit display-only), Issue #78 Chat deploy-health checks (unhealthy connected fixture is reported on Chat create; live adapter against an unreachable endpoint fails with `deploy_unreachable` rather than a silent empty success; scripted continuity still completes on the same thread), STATE-001 dual `application.sqlite` / `checkpoints.sqlite` path and JSON-linkage migration plus restart follow-run-to-checkpoint-id checks, STATE-004 unknown-effect safety (no silent replay; no external-effect rollback promise), Issue #42 cancel honesty (request→`cancel_requested`; confirm→`cancelled`; `cancel_requested` is not quiescent), Issue #61 Chat start rejection while the current run is live including `cancel_requested` (canonical `is_run_lifecycle_live`; `current_run_id` unchanged until confirmed stop), Lab capture/restore/rerun plus snapshot restore-integrity (missing tree / hash mismatch / unexpected files fail; empty snapshot round-trips) and engine-unavailable checks for LAB-001…004 and STATE-003 (including Issue #65 starting-snapshot reuse and a mutating-task restore, not echo-only), durable-knowledge checks for STATE-005 (create/edit/revert/conflict/protected-deny/retention-redaction and knowledge refs from Lab/harness), Issue #64 Knowledge-policy diagnostics/export (model_requests redaction/discard/expiry and case-export sanitize/block), Issue #35 WF-001 definition-compiler checks (mixed configuration/workflow compile; configuration links are not executable steps), and Issue #40 local-trust checks (shared-secret file under `state\`, loopback bind only, missing token → 401 and wrong token → 403 on privileged `/v1` routes including Chat/Lab/project-file ops), and Issue #57 effective-setup checks (selected profile per-request bag on the outbound request, distinctive memory/skill content loaded into the harness, capture/HTTP correlation, Chat-path write-policy preservation), and Issue #67 recorded-tool fixture-identity / no-live-filesystem replay checks (arg match, missing/exhausted/mismatch failure, write_file reconstruction isolated to the replay workspace, live-tool still labelled separately). These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
 
+<a id="real-model-smoke-assets"></a>
+## Fetch the real-model smoke assets
+
+**Working directory:** `apps/backend`. **Platform:** Linux x64 (auto-download); other platforms must point `WORKBENCH_SMOKE_LLAMA_SERVER` and `WORKBENCH_SMOKE_MODEL_PATH` at a llama-server of the pinned release and a local copy of the smoke model. **Prerequisites:** `uv sync`; network on first run.
+
+```text
+uv run python -m tests_integration.assets
+```
+
+Downloads the Linux x64 CPU build of the **same** llama.cpp release the product pins (`LLAMA_CPP_RELEASE_TAG` in [runtime.py](../apps/backend/src/workbench_backend/inference/runtime.py); no second pin) and the tiny smoke model `Qwen/Qwen2.5-0.5B-Instruct-GGUF` `qwen2.5-0.5b-instruct-q4_k_m.gguf` at a pinned Hugging Face revision, via `huggingface_hub`. Both land under `.scratch/real-model-smoke/` (gitignored; override with `WORKBENCH_SMOKE_ASSETS_DIR`) and are a no-op when present. `--cache-key` prints the pin-derived CI cache key; `--show` prints resolved paths without downloading. Weights are never committed. The tiny model is for plumbing smoke only, not capability UAT.
+
+<a id="real-model-smoke"></a>
+## Run the real-model smoke tier
+
+**Working directory:** `apps/backend`. **Platform:** Linux x64 in CI; any platform with the assets resolvable. **Prerequisites:** `uv sync` and the fetch command above.
+
+```text
+uv run python -m unittest discover -s tests_integration -t . -p "test_*.py"
+```
+
+Starts one real `llama-server` on a loopback port with the tiny GGUF, then drives the product's own API in-process: attach a connected deployment and probe health (MOD-004); one Chat turn that produces a real `write_file` tool call and a file inside the project (AGT-001, STATE-002); a follow-up turn whose outbound request carries the earlier tool call and result on the same thread (Issue #56 continuity); and a profile's per-request bag (`temperature`, `top_k`, `min_p`, `seed`, `max_tokens`) appearing in the captured HTTP body with unsupported keys and startup mismatches reported (MOD-005, Issue #57). Assertions are on API responses and recorded run state, not model prose. The tier lives in [`tests_integration`](../apps/backend/tests_integration) and is never collected by the backend unittest command (`-s tests`). Missing assets skip the module; `WORKBENCH_REAL_MODEL_SMOKE=required` (set in CI) turns that into a failure so a skipped job cannot go green. This is **real-model smoke: it proves plumbing, not model capability**; see [verification](verification.md#real-model-smoke-tier). About 10–15 s locally after assets are present; not David-PC UAT and not catalogue `verified`.
+
 <a id="desktop-install"></a>
 ## Install the desktop
 
@@ -165,7 +187,7 @@ Runs the desktop build, then electron-builder with the NSIS target. An installer
 
 ## Commands not established yet
 
-Import-boundary checks, integration tests, Docker product services and migrations are not available. Shared-contract generation/freshness and the Slice 1 contract unit tests are registered above and run through backend unittest plus the freshness workflow. Resolve the remaining [open questions](open-questions.md) and bind actual files in [repository-map.json](repository-map.json).
+Import-boundary checks, Docker product services and migrations are not available. Shared-contract generation/freshness and the Slice 1 contract unit tests are registered above and run through backend unittest plus the freshness workflow. The only integration tier is the [real-model smoke](#real-model-smoke); managed (Windows CUDA) deployment, worker and MCP integration tests do not exist yet. Resolve the remaining [open questions](open-questions.md) and bind actual files in [repository-map.json](repository-map.json).
 
 When a command is implemented, replace the relevant unavailable statement with its exact working command, prerequisites, working directory, platform, expected effect and verification scope. Add it to CI where appropriate in the same change. Never document a guessed `npm test`, `pytest`, `uv` or Docker command as an existing entry point.
 
@@ -174,7 +196,7 @@ When a command is implemented, replace the relevant unavailable statement with i
 
 The [specification-integrity workflow](../.github/workflows/specs.yml) invokes the first two pack commands on Windows and Linux, with read-only repository permissions and no product credentials. Its job timeout limits the CI check, not an application agent run. A green specification-integrity run is not product stage acceptance and is not catalogue `verified` evidence.
 
-The [backend unittest workflow](../.github/workflows/backend.yml) runs the registered backend install and unittest commands on the reviewed tree. The [desktop typecheck/build workflow](../.github/workflows/desktop.yml) runs the registered desktop install, type-check and build commands. The [shared-contract freshness workflow](../.github/workflows/contracts.yml) runs the registered generate `--check` command. These use read-only repository permissions and no product credentials. CI install steps use the lockfile-enforcing forms `uv sync --frozen` and `pnpm install --frozen-lockfile`; the unittest, type-check, build and freshness invocations match the commands above exactly. Backend and desktop jobs are not the freshness gate; the freshness job is not an import-boundary or integration gate.
+The [backend unittest workflow](../.github/workflows/backend.yml) runs the registered backend install and unittest commands on the reviewed tree. The [desktop typecheck/build workflow](../.github/workflows/desktop.yml) runs the registered desktop install, type-check and build commands. The [shared-contract freshness workflow](../.github/workflows/contracts.yml) runs the registered generate `--check` command. These use read-only repository permissions and no product credentials. The [real-model smoke workflow](../.github/workflows/real-model-smoke.yml) runs the registered asset fetch and smoke-tier commands on `ubuntu-latest` only, with `WORKBENCH_REAL_MODEL_SMOKE=required`; the pinned llama-server build and tiny GGUF are restored from `actions/cache` under a key printed by `tests_integration.assets --cache-key` (derived from the product's runtime pin and the model revision, so the workflow carries no second pin). It uses read-only repository permissions, no product credentials and no Hugging Face token. CI install steps use the lockfile-enforcing forms `uv sync --frozen` and `pnpm install --frozen-lockfile`; the unittest, type-check, build, freshness and smoke invocations match the commands above exactly. Backend and desktop jobs are not the freshness gate; the freshness job is not an import-boundary or integration gate; the smoke job is not a managed-inference (Windows CUDA) gate and not capability UAT.
 
 Stable GitHub status-check names (job `name` values) are:
 
@@ -183,10 +205,11 @@ backend-unittest (ubuntu-latest)
 backend-unittest (windows-latest)
 desktop-typecheck-build (ubuntu-latest)
 desktop-typecheck-build (windows-latest)
+real-model-smoke (ubuntu-latest)
 shared-contract-freshness (ubuntu-latest)
 shared-contract-freshness (windows-latest)
 spec-integrity (ubuntu-latest)
 spec-integrity (windows-latest)
 ```
 
-These eight status-check names are **required** on public `main` (classic branch protection, strict tip). Merges need them green on the pull-request tip. Agents keep tip-gating (`behind_by` 0 plus green required checks on that tip). Green required CI is **not** catalogue `verified` and **not** build-stage product acceptance. There is **no Pro ask** — Pro is unnecessary on a public repository. See [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.
+The first eight of these (excluding `real-model-smoke`) are **required** on public `main` (classic branch protection, strict tip). `real-model-smoke (ubuntu-latest)` is registered with the same shape and is intended to join the required set; adding it to branch protection is a maintainer action that agents cannot perform, and until it is recorded here as required it is a run-on-every-PR check, not a merge gate. Merges need them green on the pull-request tip. Agents keep tip-gating (`behind_by` 0 plus green required checks on that tip). Green required CI is **not** catalogue `verified` and **not** build-stage product acceptance. There is **no Pro ask** — Pro is unnecessary on a public repository. See [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.

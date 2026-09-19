@@ -72,5 +72,8 @@ The supplied workflows pin actions to these verified upstream release commits:
 - [actions/setup-node v7.0.0](https://github.com/actions/setup-node/commit/820762786026740c76f36085b0efc47a31fe5020).
 - [astral-sh/setup-uv v10.0.1](https://github.com/astral-sh/setup-uv/commit/20cfd1bf945f4377ade1205e4dbc17946fc9a30d).
 - [pnpm/action-setup v4.3.0](https://github.com/pnpm/action-setup/commit/b906affcce14559ad1aafd4ab0e942779e9f58b1).
+- [actions/cache v6.1.0](https://github.com/actions/cache/commit/55cc8345863c7cc4c66a329aec7e433d2d1c52a9) (real-model smoke asset cache only).
+
+The real-model smoke tier consumes the Linux x64 CPU asset of the same pinned llama.cpp release ([b11045 release](https://github.com/ggml-org/llama.cpp/releases/tag/b11045), `llama-b11045-bin-ubuntu-x64.tar.gz`) and [Qwen/Qwen2.5-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) at the revision pinned in `apps/backend/tests_integration/assets.py`. The tiny model is a plumbing fixture, not a capability reference.
 
 These pins concern CI runners only. They do not pin application dependencies or imply every workflow has run in the user's repository. Review updates to the actions and runner compatibility like other dependency changes. The actual action references in the workflows are the executable source of truth.

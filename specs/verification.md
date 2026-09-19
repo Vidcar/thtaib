@@ -52,13 +52,20 @@ Introduce each gate with its first affected implementation, not after the projec
 | --- | --- |
 | Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files. Slice 1 freshness is registered as a required check on public `main` ([commands](commands.md#check-shared-contract-freshness)); it is not catalogue `verified`. Remaining fixture/compatibility gates stay open. |
 | Concrete module/package layout | Import/dependency boundary checks for the agreed direction |
-| Model/runtime integration | Real managed deployment, companion-file resolution and requested/applied-setting evidence |
+| Model/runtime integration | Real managed deployment, companion-file resolution and requested/applied-setting evidence. The [real-model smoke tier](#real-model-smoke-tier) covers connected attach/health and applied per-request settings against a real CPU llama-server; managed (Windows CUDA) deployment and companion files remain open. |
 | Tool/worker execution | Permission, cancellation, denied-access and real filesystem/process checks |
 | Durable runs/recovery | State transitions, crash/effect reconciliation and no-duplicate continuation checks |
 | Snapshots/branching | Consistent capture, isolated restore and parent-preservation checks |
 | Live Lab cases | Restored starting inputs and recorded-tool versus live-tool distinction |
 
-The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest, desktop type-check/build, shared-contract freshness and specification-integrity now have registered required checks on public `main` ([commands CI scope](commands.md#ci-scope)); that does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
+The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest, desktop type-check/build, shared-contract freshness and specification-integrity now have registered required checks on public `main` ([commands CI scope](commands.md#ci-scope)); the [real-model smoke tier](#real-model-smoke-tier) is registered alongside them. That does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
+
+<a id="real-model-smoke-tier"></a>
+### Real-model smoke tier — proves plumbing, not model capability
+
+The [real-model smoke](commands.md#real-model-smoke) runs the product against a real `llama-server` from the pinned llama.cpp release (Linux x64 CPU build) and a real, tiny, revision-pinned instruct GGUF on every pull request. It replaces "scripted model / fake HTTP server" proof with wire-level proof for: connected attach and health, a real tool call that writes into the project, thread continuity on a follow-up turn, and a profile's per-request settings in the outbound request body. It asserts on API responses and recorded run state, not on model prose.
+
+It is distinct from **David-PC capability UAT**: the smoke uses a 0.5B CPU model and therefore establishes nothing about reply quality, tool-calling reliability, vision, MTP or GPU/managed (Windows CUDA) behaviour. Capability claims and the managed-inference path still need the preferred capability UAT model on David-PC. A green smoke job is executable plumbing evidence for the listed checks only; it may be cited in an evidence report but does not by itself make a catalogue row `verified`.
 
 ## Build-stage acceptance from revision 0.5
 
