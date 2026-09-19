@@ -357,10 +357,8 @@ class RecordedToolLabTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _install_script(self, script: list[AIMessage]) -> None:
-        model = ScriptedChatModel(script)
-
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return model
+            return ScriptedChatModel(script)
 
         self.app.state.harness = HarnessService(
             lambda: self.manager,
@@ -395,6 +393,11 @@ class RecordedToolLabTests(unittest.TestCase):
             json={"workspace_id": workspace["id"], "run_id": live["id"]},
         ).json()
         restore = self.client.post(f"/v1/lab/cases/{case['id']}/restore").json()
+        self.assertEqual(restore.get("input_origin"), "starting_snapshot")
+        self.assertFalse(
+            (Path(restore["workspace"]["path"]) / "case.md").exists(),
+            "starting snapshot must not already contain the live write; reconstruction is the replay step",
+        )
         parent_before = (Path(workspace["path"]) / "notes.md").read_text(encoding="utf-8")
         constructions: list[object] = []
         real = harness_mod.FilesystemBackend
