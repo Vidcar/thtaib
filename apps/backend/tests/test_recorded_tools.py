@@ -184,6 +184,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "recorded-fixture"},
         ).json()["id"]
         self.fs_constructions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        self.shell_constructions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
     def tearDown(self) -> None:
         close_workbench_sqlite(self.app, getattr(self, "client", None))
@@ -211,9 +212,19 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
         return patch.object(harness_backend_mod, "FilesystemBackend", side_effect=wrapper)
 
+    def _spy_local_shell_backend(self) -> Any:
+        constructions = self.shell_constructions
+        real = harness_backend_mod.LocalShellBackend
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            constructions.append((args, kwargs))
+            return real(*args, **kwargs)
+
+        return patch.object(harness_backend_mod, "LocalShellBackend", side_effect=wrapper)
+
     def test_recorded_write_file_does_not_use_live_filesystem_backend(self) -> None:
         self._install_script(write_then_reply("/replay.md", "fixture-bytes"))
-        with self._spy_filesystem_backend():
+        with self._spy_filesystem_backend(), self._spy_local_shell_backend():
             started = self.client.post(
                 "/v1/agent-runs",
                 json={
@@ -238,6 +249,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertIn("not proof", body["tool_mode_label"])
         self.assertTrue(body["recorded_is_not_live_proof"])
         self.assertEqual(self.fs_constructions, [])
+        self.assertEqual(self.shell_constructions, [])
         self.assertEqual((self.project / "replay.md").read_text(encoding="utf-8"), "fixture-bytes")
         self.assertEqual(self.outside.read_text(encoding="utf-8"), "untouched")
         kinds = [event["kind"] for event in body["events"]]
@@ -245,7 +257,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
     def test_two_write_file_args_do_not_consume_each_other(self) -> None:
         self._install_script(write_then_reply("/b.md", "BBB", call_id="call_b"))
-        with self._spy_filesystem_backend():
+        with self._spy_filesystem_backend(), self._spy_local_shell_backend():
             started = self.client.post(
                 "/v1/agent-runs",
                 json={
@@ -271,6 +283,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
             body = wait_for_run(self.client, started.json()["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertEqual(self.fs_constructions, [])
+        self.assertEqual(self.shell_constructions, [])
         self.assertFalse((self.project / "a.md").exists())
         self.assertEqual((self.project / "b.md").read_text(encoding="utf-8"), "BBB")
 
@@ -318,7 +331,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
     def test_live_write_file_still_uses_project_backend_and_is_labelled(self) -> None:
         self._install_script(write_then_reply("/live.md", "live-bytes"))
-        with self._spy_filesystem_backend():
+        with self._spy_filesystem_backend(), self._spy_local_shell_backend():
             started = self.client.post(
                 "/v1/agent-runs",
                 json={
@@ -334,12 +347,17 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertEqual(body["tool_mode"], "live-tool")
         self.assertEqual(body["tool_mode_label"], "live-tool")
         self.assertFalse(body["recorded_is_not_live_proof"])
-        self.assertEqual(len(self.fs_constructions), 3)
+        self.assertEqual(len(self.shell_constructions), 1)
+        self.assertEqual(len(self.fs_constructions), 2)
+        shell_roots = [
+            Path(kwargs.get("root_dir") or (args[0] if args else "")).resolve()
+            for args, kwargs in self.shell_constructions
+        ]
+        self.assertEqual(shell_roots, [self.project.resolve()])
         roots = [
             Path(kwargs.get("root_dir") or (args[0] if args else "")).resolve()
             for args, kwargs in self.fs_constructions
         ]
-        self.assertIn(self.project.resolve(), roots)
         self.assertTrue(any(path.name == "large_tool_results" for path in roots))
         self.assertTrue(any(path.name == "conversation_history" for path in roots))
         self.assertEqual((self.project / "live.md").read_text(encoding="utf-8"), "live-bytes")
