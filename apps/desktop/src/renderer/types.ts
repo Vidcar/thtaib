@@ -1,3 +1,5 @@
+import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
+
 export type WorkbenchSurface = "managed-inference";
 
 export type WorkbenchTab = "models" | "deployments" | "chat" | "agent-run" | "lab" | "knowledge";
@@ -167,9 +169,12 @@ export interface EngineMeasurement {
   note: string;
 }
 
+export type AgentRunStatus = RunLifecycleStatus;
+export const isAgentRunLive = isRunLifecycleLive;
+
 export interface AgentRun {
   id: string;
-  status: "queued" | "running" | "completed" | "cancelled" | "failed";
+  status: AgentRunStatus;
   deployment_id: string;
   task: string;
   enabled_tools: string[];

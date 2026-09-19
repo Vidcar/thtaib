@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
-import type { AgentRun, Deployment } from "./types";
+import { isAgentRunLive, type AgentRun, type Deployment } from "./types";
 
 export function AgentRunPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -25,7 +25,7 @@ export function AgentRunPanel() {
   }, []);
 
   useEffect(() => {
-    if (!run || (run.status !== "queued" && run.status !== "running")) {
+    if (!run || !isAgentRunLive(run.status)) {
       return;
     }
     const timer = window.setInterval(() => {

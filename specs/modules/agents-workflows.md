@@ -14,7 +14,7 @@ Memory content/versioning is application-owned; consumption and active-context m
 
 ## Lifecycle and failure
 
-The backend exposes start, progress, intervention, pause/cancel and recovery as supported by the integration. Exactly how interrupts, threads, checkpoints and continuation map to a pinned framework version must be tested before claiming resumability. A disconnected client is not evidence a run ended. Do not silently replay uncertain tool effects during recovery.
+The backend exposes start, progress, intervention, pause/cancel and recovery as supported by the integration. Exactly how interrupts, threads, checkpoints and continuation map to a pinned framework version must be tested before claiming resumability. A disconnected client is not evidence a run ended. A cancel request is not a confirmed stop: `cancel_requested` means work may still be running; `cancelled` is the confirmed stop. Do not silently replay uncertain tool effects during recovery.
 
 ## Requirements and acceptance checks
 
@@ -51,7 +51,7 @@ Instrument the final model-adapter boundary after context middleware. Link actua
 
 Do not impose arbitrary task-level time, token, model/tool-call, reasoning-effort or revision ceilings. Optional budgets are user-selected. Explicitly configure framework/middleware limits and timeouts, support checkpointed continuation, and distinguish actual boundaries from product budgets. A limit or stalled-progress warning is not successful completion; no uncertain action may be replayed silently.
 
-**Acceptance:** Demonstrate work beyond the pinned framework's default limit without hidden quotas, duplicated effects or lost state. Separately exercise a selected budget, cancellation, completion and a real runtime boundary; each must have its actual stop reason.
+**Acceptance:** Demonstrate work beyond the pinned framework's default limit without hidden quotas, duplicated effects or lost state. Separately exercise a selected budget, cancellation, completion and a real runtime boundary; each must have its actual stop reason. A cancel request must be recorded as `cancel_requested` until the worker confirms stop as `cancelled`.
 
 <a id="agt-004"></a>
 ### AGT-004: Separate active context from durable knowledge
@@ -81,3 +81,15 @@ Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics. 
 The [AGT-001](#agt-001) Chat surface lands as debug-quality Chat on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Issue #12 delivered the embedded harness and an Agent-run debug panel. Agent-run is not Chat. This is not finished Chat polish.
 
 The [WF-001](#wf-001) backend definition compiler lands with [Issue #35](https://github.com/Vidcar/thtaib/issues/35): configuration connections resolve one Deep Agents setup, and only workflow connections compile into sequencing. That is not a Builder-shipped claim. v1 chrome remains locked in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md) (config via node badge/popover, not a canvas config edge); [WF-001](#wf-001) behaviour is unchanged. [ARCH-003](../architecture.md#arch-003) is not reopened. The Agent-run panel is still not Builder. [WF-002](#wf-002) (delegation and cycle ownership) is deferred to Wave 2 and is not implemented here.
+
+<a id="locked-milestone-defaults-issue-42-cancel-honesty"></a>
+## Locked milestone defaults (Issue #42; cancel honesty / partial OQ-004)
+
+These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/issues/42). They satisfy honest harness cancel request versus confirmed stop. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection, exactly-once, worker-adapter interrupt truth and continuation beyond measured framework limits stay open.
+
+- **Statuses:** `queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed` from the [Issue #41](https://github.com/Vidcar/thtaib/issues/41) shared `RunLifecycleStatus`. Harness `AgentRun.status` is that enum. This slice does not reimplement the OpenAPI→TS generator.
+- **Cancel request:** `POST /v1/agent-runs/{id}/cancel` (and Chat's cancel path through the same harness) transitions a live run to `cancel_requested`. `finished_at` stays unset. This is not a confirmed stop.
+- **Confirmed stop:** the worker records `cancelled` only after it has stopped (or never started) because cancel was requested.
+- **Quiescence:** `cancel_requested` is still live. Lab capture and “safe to treat the workspace as idle” must fail while any run for that workspace is `queued`, `running` or `cancel_requested`.
+- **STATE-004 intersection:** a cancel request is not evidence that an in-flight external effect finished. Recovery still reports uncertainty and does not silently replay. See [STATE-004 locked defaults](state-recovery.md#locked-milestone-defaults-issue-42-cancel-honesty).
+- **Not claimed:** full OQ-004 close; worker-adapter interrupt ([ENV-003](environments-tools.md#env-003)); durable Approvals inbox; host execute.

@@ -1,6 +1,7 @@
 """Shared run/cancel lifecycle names for cancel honesty (Issue #42).
 
-Harness cancel semantics stay unchanged in this slice. #42 consumes these names.
+Issue #42 consumes these names for harness cancel request vs confirmed stop.
+`cancel_requested` is still live; confirmed `cancelled` is not.
 """
 
 from __future__ import annotations

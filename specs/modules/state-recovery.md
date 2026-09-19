@@ -50,7 +50,7 @@ Pair checkpoint branching with an application-owned project snapshot captured at
 
 Snapshots do not undo external actions or restore a whole environment unless an adapter explicitly supports it. Preserve unresolved side effects. Reconnect/resume/restart must not silently repeat an operation whose outcome is unknown.
 
-**Acceptance:** Crash between an external effect and its local acknowledgement. Recovery reports the uncertainty or reconciles with authoritative evidence rather than blindly retrying the operation.
+**Acceptance:** Crash between an external effect and its local acknowledgement. Recovery reports the uncertainty or reconciles with authoritative evidence rather than blindly retrying the operation. A `cancel_requested` run is still live: recovery must not treat that request as a confirmed stop or as permission to replay an unknown effect.
 
 <a id="state-005"></a>
 ### STATE-005: Version durable knowledge and enforce its write policy
@@ -83,6 +83,17 @@ These defaults are authorised by [Issue #31](https://github.com/Vidcar/thtaib/is
 - **Surfaces:** `POST /v1/effects`, acknowledge / recover / reconcile, and a rollback path that returns 409. Lab snapshot/restore carry the honesty fields. No Builder canvas.
 - **Not claimed:** exactly-once, a real worker-adapter interrupt (see [ENV-003](environments-tools.md#env-003)), or that reconnect event ordering is finished.
 
+<a id="locked-milestone-defaults-issue-42-cancel-honesty"></a>
+## Locked milestone defaults (Issue #42; cancel honesty / STATE-004 intersection)
+
+These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/issues/42). They align [STATE-004](#state-004) unknown-effect recovery with harness cancel honesty. They do **not** close [OQ-004](../open-questions.md#oq-004). They are not a catalogue `verified` claim.
+
+- **Cancel request ≠ confirmed stop.** `cancel_requested` means the worker may still be running. `cancelled` is the confirmed stop.
+- **No false quiescence.** A workspace with a `cancel_requested` run is not idle. Snapshot capture must fail (`not_quiescent`) until the run is confirmed `cancelled`, `completed` or `failed`.
+- **Unknown effects stay unknown.** Recover/reconnect/resume/restart of an effect linked to a `cancel_requested` (or otherwise live) run reports `unknown`, sets `replayed` false, and does not repeat the operation. The cancel request is not acknowledgement.
+- **No rollback promise.** Snapshots still do not undo external actions. `rollback_promise` remains `none`.
+- **Not claimed:** exactly-once, event-order/reconnection contracts, or worker-adapter interrupt truth.
+
 <a id="locked-milestone-defaults-issue-17-partial-oq-006"></a>
 ## Locked milestone defaults (Issue #17; partial OQ-006)
 
@@ -100,4 +111,4 @@ These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-Issue #27 locked the dual-DB and app-linkage defaults above. Issue #31 locked the [STATE-004](#state-004) unknown-effect ledger (no silent replay; no external-effect rollback promise). Resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities, event ordering/reconnection and exactly-once. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. No exactly-once guarantee or migration library is selected by revision 0.5.
+Issue #27 locked the dual-DB and app-linkage defaults above. Issue #31 locked the [STATE-004](#state-004) unknown-effect ledger (no silent replay; no external-effect rollback promise). Issue #42 locked cancel request versus confirmed stop and the [STATE-004 intersection](#locked-milestone-defaults-issue-42-cancel-honesty) (no false quiescence; no silent replay while `cancel_requested`). Resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities, event ordering/reconnection and exactly-once. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. No exactly-once guarantee or migration library is selected by revision 0.5.

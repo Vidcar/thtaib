@@ -27,6 +27,10 @@ from workbench_backend.agents.schemas import (
     ToolMode,
     label_for_tool_mode,
 )
+from workbench_backend.contracts.lifecycle import (
+    TERMINAL_RUN_LIFECYCLE_STATUSES,
+    is_run_lifecycle_live,
+)
 from workbench_backend.state.checkpointer import (
     checkpoint_ids_from_graph,
     open_sqlite_checkpointer,
@@ -104,15 +108,20 @@ class HarnessService:
         return stored.model_copy(deep=True)
 
     def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
-        """Runs still writing or executing against a workspace (quiescent check)."""
+        """Runs still writing or executing against a workspace (quiescent check).
+
+        `cancel_requested` is still live. Confirmed `cancelled` is not.
+        """
 
         with self._lock:
-            return [
-                run.id
-                for run in self._runs.values()
-                if run.workspace_id == workspace_id
-                and run.status in {AgentRunStatus.queued, AgentRunStatus.running}
-            ]
+            memory = {run.id: run for run in self._runs.values()}
+        stored = {item.id: item for item in self.store.list_runs()}
+        stored.update(memory)
+        return [
+            run.id
+            for run in stored.values()
+            if run.workspace_id == workspace_id and is_run_lifecycle_live(run.status)
+        ]
 
     def start(self, request: AgentStartRequest) -> AgentRun:
         deployment = self.manager.get_deployment(request.deployment_id)
@@ -199,6 +208,8 @@ class HarnessService:
             self._threads.clear()
 
     def cancel(self, run_id: str) -> AgentRun:
+        """Accept a cancel request. Do not claim cancelled until the worker stops."""
+
         with self._lock:
             run = self._runs.get(run_id)
             if run is None:
@@ -206,12 +217,17 @@ class HarnessService:
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
-            if run.status in {AgentRunStatus.queued, AgentRunStatus.running}:
-                run.status = AgentRunStatus.cancelled
-                run.stop_reason = "cancelled"
+            if is_run_lifecycle_live(run.status) and run.status is not AgentRunStatus.cancel_requested:
+                run.status = AgentRunStatus.cancel_requested
+                run.stop_reason = None
+                run.finished_at = None
                 run.updated_at = utc_now()
                 run.events.append(
-                    AgentEvent(at=run.updated_at, kind="cancelled", detail={"requested": True})
+                    AgentEvent(
+                        at=run.updated_at,
+                        kind="cancel_requested",
+                        detail={"requested": True, "confirmed": False},
+                    )
                 )
                 self._persist(run)
             return run.model_copy(deep=True)
@@ -220,11 +236,21 @@ class HarnessService:
         with self._lock:
             run = self._runs[run_id]
             cancel = self._cancels[run_id]
-            if cancel.is_set() or run.status == AgentRunStatus.cancelled:
-                return
-            run.status = AgentRunStatus.running
-            run.updated_at = utc_now()
-            run.events.append(AgentEvent(at=run.updated_at, kind="started", detail={}))
+            already_terminal = run.status in TERMINAL_RUN_LIFECYCLE_STATUSES
+            requested_before_start = (
+                not already_terminal
+                and (cancel.is_set() or run.status is AgentRunStatus.cancel_requested)
+            )
+            if not already_terminal and not requested_before_start:
+                run.status = AgentRunStatus.running
+                run.updated_at = utc_now()
+                run.events.append(AgentEvent(at=run.updated_at, kind="started", detail={}))
+                self._persist(run)
+        if already_terminal:
+            return
+        if requested_before_start:
+            self._finish(run, AgentRunStatus.cancelled, "cancelled")
+            return
         http_sink: list[dict[str, Any]] = []
         agent = None
         try:
@@ -270,11 +296,12 @@ class HarnessService:
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
-            if run.status == AgentRunStatus.cancelled and status != AgentRunStatus.cancelled:
-                run.stop_reason = "cancelled"
-                run.finished_at = run.finished_at or utc_now()
-                run.updated_at = run.finished_at
-                self._persist(run)
+            if run.status in TERMINAL_RUN_LIFECYCLE_STATUSES:
+                if run.status is AgentRunStatus.cancelled and status is not AgentRunStatus.cancelled:
+                    run.stop_reason = "cancelled"
+                    run.finished_at = run.finished_at or utc_now()
+                    run.updated_at = run.finished_at
+                    self._persist(run)
                 return
             run.status = status
             run.stop_reason = stop_reason
@@ -284,7 +311,7 @@ class HarnessService:
                 AgentEvent(
                     at=run.updated_at,
                     kind=status.value,
-                    detail={"stop_reason": stop_reason, "error": run.error},
+                    detail={"stop_reason": stop_reason, "error": run.error, "confirmed": True},
                 )
             )
             self._persist(run)

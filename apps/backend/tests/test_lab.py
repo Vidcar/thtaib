@@ -13,8 +13,9 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
@@ -315,6 +316,28 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 409)
         self.assertEqual(blocked.json()["code"], "not_quiescent")
         wait_for_run(self.client, started["id"])
+
+    def test_capture_fails_while_cancel_requested(self) -> None:
+        workspace = self._workspace()
+        now = utc_now()
+        run = AgentRun(
+            id="agent_lab_cancel_requested",
+            status=AgentRunStatus.cancel_requested,
+            deployment_id=self.deployment_id,
+            task="held for capture",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+            workspace_id=workspace["id"],
+        )
+        self.app.state.harness.store.put_run(run)
+        blocked = self.client.post(
+            "/v1/lab/cases/capture",
+            json={"workspace_id": workspace["id"], "run_id": run.id},
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.json()["code"], "not_quiescent")
 
     def test_recorded_and_live_modes_are_labelled(self) -> None:
         workspace = self._workspace()

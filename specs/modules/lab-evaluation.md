@@ -21,7 +21,7 @@ Capture a case from a real run, restore its initial inputs into an appropriate w
 
 These defaults are authorised by [Issue #15](https://github.com/Vidcar/thtaib/issues/15). They do not close [OQ-005](../open-questions.md#oq-005) or [OQ-014](../open-questions.md#oq-014).
 
-- **Snapshot:** application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary. Capture fails if live tools or harness runs are still writing. Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Git commits are not snapshots.
+- **Snapshot:** application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary. Capture fails if live tools or harness runs are still writing. `cancel_requested` is still live — do not treat a cancel request as a quiescent boundary. Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Git commits are not snapshots.
 - **Restore / branch:** restore into a new workspace directory and a linked branch run. Never overwrite the parent workspace or the original attempt.
 - **Include:** allowlisted project files, task, profile and deployment ids, dependency versions, memory/skill/protected-instruction version refs from the [STATE-005 store](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006), tool fixtures and acceptance checks. Knowledge version ids use the same reference pattern as profile and deployment ids. This does not select RAG.
 - **Exclude:** secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.

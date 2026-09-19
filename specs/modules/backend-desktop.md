@@ -14,7 +14,7 @@ Issue #40 locks the same-machine shared-secret header and loopback bind recorded
 
 ## Lifecycle and failure
 
-Represent what is active, queued, resource-constrained, awaiting intervention or failing. Handle backend startup/reconnection and external service failure without inventing successful work. Events and recorded results must distinguish a request being accepted from an action finishing. Exact event envelopes and durable state transitions remain open.
+Represent what is active, queued, resource-constrained, awaiting intervention or failing. Handle backend startup/reconnection and external service failure without inventing successful work. Events and recorded results must distinguish a request being accepted from an action finishing. A cancel request is `cancel_requested` (still live); confirmed stop is `cancelled`. Exact event envelopes and remaining durable state transitions stay [OQ-004](../open-questions.md#oq-004).
 
 ## Requirements and acceptance checks
 
@@ -44,7 +44,7 @@ Use Pydantic and JSON Schema for data/configuration validation. Application rule
 
 Present run hierarchy, progress, approvals, artifacts, checks, applied configuration and relevant context/knowledge information from shared records/events. Make active, queued, resource-constrained and failing sessions understandable; do not equate model confidence or a preview with completed work.
 
-**Acceptance:** Follow a real task through progress, intervention, cancellation or failure to its persisted outcome. Compare visible state and evidence with actual execution records.
+**Acceptance:** Follow a real task through progress, intervention, cancellation or failure to its persisted outcome. Compare visible state and evidence with actual execution records. Visible cancel state must distinguish `cancel_requested` from confirmed `cancelled`; do not present a requested cancel as idle.
 
 <a id="api-005"></a>
 ### API-005: Keep provisioning distinct from job execution

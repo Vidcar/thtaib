@@ -7,16 +7,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from workbench_backend.contracts.lifecycle import RunLifecycleStatus
 from workbench_backend.knowledge.schemas import KnowledgeBinding
 from workbench_backend.state.schemas import RelatedFile
 
-
-class AgentRunStatus(str, Enum):
-    queued = "queued"
-    running = "running"
-    completed = "completed"
-    cancelled = "cancelled"
-    failed = "failed"
+# Harness run records use the shared #41 lifecycle vocabulary. Do not keep a
+# second enum of queued/running/cancel_requested/cancelled/completed/failed.
+AgentRunStatus = RunLifecycleStatus
 
 
 class AgentBudgets(BaseModel):

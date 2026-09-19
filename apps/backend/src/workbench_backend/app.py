@@ -18,7 +18,7 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.routes import router as agent_router
 from workbench_backend.chat.routes import router as chat_router
 from workbench_backend.chat.service import ChatService
-from workbench_backend.errors import WorkbenchError, workbench_error_handler
+from workbench_backend.errors import HarnessError, WorkbenchError, workbench_error_handler
 from workbench_backend.inference.compatibility import CompatibilityService
 from workbench_backend.inference.compatibility_routes import router as compatibility_router
 from workbench_backend.inference.routes import router
@@ -75,7 +75,16 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.middleware("http")(require_local_trust)
     application.state.app_store = open_application_store(application.state.manager.paths)
     application.state.compatibility = CompatibilityService(application.state.manager.paths)
-    application.state.effects = EffectService(application.state.app_store)
+    def _lookup_run(run_id: str):
+        try:
+            return application.state.harness.get_run(run_id)
+        except HarnessError:
+            return None
+
+    application.state.effects = EffectService(
+        application.state.app_store,
+        run_lookup=_lookup_run,
+    )
     application.state.knowledge = KnowledgeService(application.state.manager.paths)
     application.state.harness = HarnessService(
         lambda: application.state.manager,

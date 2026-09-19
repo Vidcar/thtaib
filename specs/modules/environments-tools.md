@@ -14,7 +14,7 @@ Windows, WSL, Linux, Docker and remote workers are supported execution choices i
 
 ## Lifecycle and failure
 
-Each adapter declares reconnect, resume, restart, cancellation, snapshot support and external side effects. Connect/provision and start-job are different operations. A cancellation request and confirmed cancellation are different facts. Resolve precise worker protocols and authority before host shell execution; see the open questions below.
+Each adapter declares reconnect, resume, restart, cancellation, snapshot support and external side effects. Connect/provision and start-job are different operations. A cancellation request and confirmed cancellation are different facts. Harness cancel honesty for `cancel_requested` versus confirmed `cancelled` is locked by [Issue #42](https://github.com/Vidcar/thtaib/issues/42); that does not implement worker-adapter interrupt. Resolve precise worker protocols and authority before host shell execution; see the open questions below.
 
 ## Requirements and acceptance checks
 
@@ -62,6 +62,6 @@ Treat the source's beta Deep Agents interpreter integration as a separate option
 
 ## Unresolved details
 
-[OQ-003](../open-questions.md#oq-003) blocks real worker access until provisioning, isolation, identities and permissions are defined; it is also the tool sandbox-isolation question, and MCP is not isolation. [OQ-004](../open-questions.md#oq-004) covers effect acknowledgement/recovery. [OQ-009](../open-questions.md#oq-009) covers optional interpreter and interactive-host details and whether MCP is the default tool bus or optional.
+[OQ-003](../open-questions.md#oq-003) blocks real worker access until provisioning, isolation, identities and permissions are defined; it is also the tool sandbox-isolation question, and MCP is not isolation. [OQ-004](../open-questions.md#oq-004) covers effect acknowledgement/recovery. Harness cancel request versus confirmed stop is the [Issue #42](https://github.com/Vidcar/thtaib/issues/42) partial; [ENV-003](#env-003) worker-adapter interrupt remains open. [OQ-009](../open-questions.md#oq-009) covers optional interpreter and interactive-host details and whether MCP is the default tool bus or optional.
 
 Enabled catalogue includes visibility tools (`echo`, `time_now`) under [AGT-005](agents-workflows.md#agt-005) and Deep Agents filesystem tools bound to project storage ([STATE-002](state-recovery.md#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22)). That is not a worker-isolation decision and does not reopen this module as a second sandbox owner. ComfyUI, MCP Apps and interpreter orchestration remain unimplemented.

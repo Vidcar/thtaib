@@ -447,7 +447,9 @@
       "document": "specs/modules/agents-workflows.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/agents/harness.py"
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/schemas.py",
+        "apps/backend/src/workbench_backend/contracts/lifecycle.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py"
@@ -584,10 +586,12 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
-        "apps/backend/src/workbench_backend/lab/snapshot.py"
+        "apps/backend/src/workbench_backend/lab/snapshot.py",
+        "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
-        "apps/backend/tests/test_lab.py"
+        "apps/backend/tests/test_lab.py",
+        "apps/backend/tests/test_harness.py"
       ],
       "evidence": []
     },
@@ -599,11 +603,13 @@
         "apps/backend/src/workbench_backend/state/effects.py",
         "apps/backend/src/workbench_backend/state/effect_routes.py",
         "apps/backend/src/workbench_backend/state/store.py",
-        "apps/backend/src/workbench_backend/lab/schemas.py"
+        "apps/backend/src/workbench_backend/lab/schemas.py",
+        "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
         "apps/backend/tests/test_effects.py",
-        "apps/backend/tests/test_lab.py"
+        "apps/backend/tests/test_lab.py",
+        "apps/backend/tests/test_harness.py"
       ],
       "evidence": []
     },
@@ -710,6 +716,7 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/agents/routes.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/lab/routes.py",
         "apps/backend/src/workbench_backend/knowledge/routes.py"
       ],

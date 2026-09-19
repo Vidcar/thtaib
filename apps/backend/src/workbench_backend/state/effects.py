@@ -7,10 +7,13 @@ exactly-once claim and does not close OQ-004.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.contracts.lifecycle import RunLifecycleStatus, is_run_lifecycle_live
 from workbench_backend.errors import StateError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.state.schemas import (
@@ -23,6 +26,17 @@ from workbench_backend.state.store import ApplicationStore
 NO_REPLAY_NOTE = (
     "Outcome is unknown. The operation will not be silently repeated. "
     "Snapshots do not roll back external effects."
+)
+
+CANCEL_REQUESTED_RECOVERY_NOTE = (
+    NO_REPLAY_NOTE
+    + " Linked run is cancel_requested, which is still live; "
+    "that is not a confirmed stop and not permission to replay."
+)
+
+LIVE_RUN_RECOVERY_NOTE = (
+    NO_REPLAY_NOTE
+    + " Linked run is still live; recovery reports uncertainty and does not replay."
 )
 
 
@@ -70,8 +84,29 @@ class RollbackRefusal(BaseModel):
 class EffectService:
     """Application-owned external-effect ledger. No silent replay. No rollback promise."""
 
-    def __init__(self, store: ApplicationStore) -> None:
+    def __init__(
+        self,
+        store: ApplicationStore,
+        *,
+        run_lookup: Callable[[str], AgentRun | None] | None = None,
+    ) -> None:
         self.store = store
+        self._run_lookup = run_lookup
+
+    def _linked_run(self, run_id: str) -> AgentRun | None:
+        if self._run_lookup is not None:
+            found = self._run_lookup(run_id)
+            if found is not None:
+                return found
+        return self.store.get_run(run_id)
+
+    def _recovery_note_for_linked_run(self, run: AgentRun) -> str:
+        status = RunLifecycleStatus(run.status)
+        if status == RunLifecycleStatus.cancel_requested:
+            return CANCEL_REQUESTED_RECOVERY_NOTE
+        if is_run_lifecycle_live(status):
+            return LIVE_RUN_RECOVERY_NOTE
+        return NO_REPLAY_NOTE
 
     def list_effects(self, *, run_id: str | None = None, unresolved_only: bool = False) -> list[ExternalEffect]:
         return self.store.list_effects(run_id=run_id, unresolved_only=unresolved_only)
@@ -140,13 +175,18 @@ class EffectService:
                 reconciled=True,
                 note="Outcome already reconciled. The operation was not replayed.",
             )
+        note = NO_REPLAY_NOTE
+        if effect.run_id:
+            run = self._linked_run(effect.run_id)
+            if run is not None:
+                note = self._recovery_note_for_linked_run(run)
         updated = effect.model_copy(
             update={
                 "outcome": ExternalEffectOutcome.unknown,
                 "unresolved": True,
                 "recovered_at": utc_now(),
                 "last_recovery_action": request.action,
-                "note": NO_REPLAY_NOTE,
+                "note": note,
             }
         )
         stored = self.store.put_effect(updated)
@@ -155,6 +195,7 @@ class EffectService:
             action=request.action,
             uncertainty=True,
             reconciled=False,
+            note=note,
         )
 
     def reconcile(self, effect_id: str, request: ReconcileEffectRequest) -> ExternalEffect:
