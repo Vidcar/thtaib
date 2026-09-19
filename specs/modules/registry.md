@@ -58,3 +58,5 @@ Configuration includes settings schemas, defaults, required fields, applied valu
 ## Unresolved details
 
 [OQ-008](../open-questions.md#oq-008) covers definition/version compatibility, plugin discovery/trust, invalidation and skills/plugins discovery UX. [OQ-004](../open-questions.md#oq-004) covers shared identities/events. [OQ-015](../open-questions.md#oq-015) covers workflow import/export; it is not a second registry or runtime. Do not add dynamic code loading, remote plugin execution or hot reload merely because the registry is extensible; those are separate decisions.
+
+No application registry is implemented on main. A stored graph, third-party adapter or shared definition version still blocks on [OQ-008](../open-questions.md#oq-008).

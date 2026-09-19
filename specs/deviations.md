@@ -1,6 +1,8 @@
 # Known deviations from the intended design
 
-No application repository has been assessed while preparing this pack. There are **no recorded deviations yet**, which is not a claim that the implementation conforms.
+The application repository has been inspected through Issues #1, #3, #12, #15 and #17 (Issue #23 audit). Implementation gaps are recorded as `planned` / `partial` catalogue rows and [open questions](open-questions.md), not as deviations, unless running code is known to contradict intended design.
+
+There are **no recorded deviations** at this audit. JSON file stores under `%LOCALAPPDATA%\LocalAIWorkbench\state\` instead of the intended application/checkpoint SQLite pair are incomplete [STATE-001](modules/state-recovery.md#state-001) implementation ([OQ-004](open-questions.md#oq-004)), not an approved waiver. That is not a claim that the implementation conforms.
 
 Use this file for observed divergence. Use [open questions](open-questions.md) for unresolved design, not for known bugs hidden as questions. Keep the affected requirements' actual implementation status in [the catalogue](catalog.json).
 

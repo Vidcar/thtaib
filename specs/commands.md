@@ -84,7 +84,7 @@ Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTT
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, harness/adapter tests for AGT-001/002/005/006 and MOD-005, Lab capture/restore/rerun plus engine-unavailable checks for LAB-001…004 and STATE-003, and durable-knowledge checks for STATE-005 (create/edit/revert/conflict/protected-deny/retention-redaction and knowledge refs from Lab/harness). These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
+Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, Issue #21 runtime/pin/`flash_attn` valued-enum checks, harness/adapter tests for AGT-001/002/005/006 and MOD-005, Lab capture/restore/rerun plus engine-unavailable checks for LAB-001…004 and STATE-003, and durable-knowledge checks for STATE-005 (create/edit/revert/conflict/protected-deny/retention-redaction and knowledge refs from Lab/harness). These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
 
 <a id="desktop-install"></a>
 ## Install the desktop
@@ -128,7 +128,7 @@ Type-checks, then Vite-builds the renderer and Electron main/preload into `dist/
 pnpm run dev
 ```
 
-Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat and Builder are not present. Optional Agent-run, Lab and Knowledge debug panels may call the harness, Lab and knowledge APIs. This is not Chat/Builder polish and does not close [OQ-016](open-questions.md#oq-016) or [OQ-014](open-questions.md#oq-014).
+Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat and Builder are not present. The [AGT-001](modules/agents-workflows.md#agt-001) Chat surface remains open on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Optional Agent-run, Lab and Knowledge debug panels may call the harness, Lab and knowledge APIs. This is not Chat/Builder polish and does not close [OQ-016](open-questions.md#oq-016) or [OQ-014](open-questions.md#oq-014).
 
 <a id="desktop-package"></a>
 ## Package a Windows installer
