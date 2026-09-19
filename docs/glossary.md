@@ -61,6 +61,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | mutate LangGraph tables | App links checkpoint ids only — never mutate checkpointer private tables |
 | clear chat deletes project | STATE-002 — history ≠ project |
 | close OQ-004 | Partial OQ-004 defaults only |
+| CORS is login | CORS is not authorisation |
+| custom desktop auth header | `X-Workbench-Local-Token` (Issue #40 / #41) |
+| secret in the repo | LocalAppData `state\desktop_backend_shared_secret` |
+| remote backend v1 | unsupported (partial OQ-002) |
+| renderer holds the token | Electron main injects `X-Workbench-Local-Token` |
+| close OQ-002 | Partial OQ-002 defaults only |
 | unverified means incompatible | Unverified ≠ incompatible |
 | silently retry unknown tool | Unknown-effect safety (STATE-004) |
 | snapshot undoes the email | No external-effect rollback promise |
@@ -79,7 +85,15 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Repository-map binding** is a real path recorded in `specs/repository-map.json`. Unbound entries stay `null` until their `required_before` trigger.
 
-**Provisional localhost HTTP** is loopback smoke for the FastAPI process. It does not close [OQ-002](../specs/open-questions.md#oq-002) and is not a trust model.
+**Provisional localhost HTTP** is the v1 loopback bind (`127.0.0.1` only). [Issue #40](https://github.com/Vidcar/thtaib/issues/40) adds shared-secret header checks; that does not close [OQ-002](../specs/open-questions.md#oq-002) and is not a remote-backend claim.
+
+**`X-Workbench-Local-Token`** is the locked desktop↔backend local-trust header. Electron main injects it from the LocalAppData shared secret. The renderer must not hold or send the secret. Issue #41 owns the generated envelope name; this product path hard-aligns the same string.
+
+**LocalAppData `state\desktop_backend_shared_secret`** is the shared-secret file under `%LOCALAPPDATA%\LocalAIWorkbench\state\` (or the portable `state\` sibling). It is created on first use if missing. Never commit it.
+
+**Partial OQ-002 defaults only** means Issue #40 locked same-machine shared-secret + loopback bind. Event reconnection and remote backend stay [OQ-002](../specs/open-questions.md#oq-002).
+
+**CORS is not authorisation.** Allowed origins do not grant privileged `/v1` access. Missing token → 401; wrong token → 403.
 
 **Docker Compose stub** is `infra/docker-compose.yml` with no product services. Compose is reserved for later container services.
 

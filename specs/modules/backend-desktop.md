@@ -10,7 +10,7 @@ Python/FastAPI owns APIs, jobs, resources, run events, approvals, artifacts, opt
 
 The desktop sends typed definitions and user actions, then displays backend state, progress, evidence and approvals. Model management supplies deployments; the agent/workflow integration owns task execution; adapters own external jobs; the backend coordinates these without introducing another agent loop. Pydantic/JSON Schema validate data; application rules validate capabilities and policy.
 
-No HTTP routes, event transport, IPC arrangement, authentication mechanism or public port is selected here. Resolve these at the contract boundary before connecting a privileged desktop to real execution. Proposed contract generation is in [contracts](../contracts.md).
+Issue #40 locks the same-machine shared-secret header and loopback bind recorded below. Event transport, remaining IPC origin checks and remote backend access are not selected here. Resolve those remainders at the contract boundary before claiming a finished trust model. Proposed contract generation is in [contracts](../contracts.md); Issue #41 owns the generated header envelope name `X-Workbench-Local-Token`.
 
 ## Lifecycle and failure
 
@@ -55,6 +55,17 @@ The environment manager provisions workers/access, maps project storage and mana
 
 ## Unresolved details
 
-[OQ-002](../open-questions.md#oq-002) blocks privileged API/desktop connectivity until authentication, origin/IPC trust, event reconnection and transport are specified. [OQ-001](../open-questions.md#oq-001) records the scaffold layout, manifests and packaging owner; a provisional loopback health endpoint does not close that trust question. [OQ-004](../open-questions.md#oq-004) covers state/events and [OQ-010](../open-questions.md#oq-010) covers remaining product test locations. [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox; a framework interrupt is not that inbox. [OQ-016](../open-questions.md#oq-016) records Builder v1 chrome as partially decided in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md); the remainder is the unfinished surface.
+[OQ-002](../open-questions.md#oq-002) is **partially** constrained by [Issue #40](https://github.com/Vidcar/thtaib/issues/40) for same-machine shared-secret + loopback bind. Event streaming/reconnection, origin/IPC remainder, and remote backend access stay open. [OQ-001](../open-questions.md#oq-001) records the scaffold layout, manifests and packaging owner. [OQ-004](../open-questions.md#oq-004) covers state/events and [OQ-010](../open-questions.md#oq-010) covers remaining product test locations. [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox; a framework interrupt is not that inbox. [OQ-016](../open-questions.md#oq-016) records Builder v1 chrome as partially decided in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md); the remainder is the unfinished surface.
 
 Present desktop surfaces are Models, Deployments, debug-quality Chat, and optional Agent-run / Lab / Knowledge debug panels. Builder is not shipped. [API-002](#api-002) still requires the visual graph not to be executable authority. The [AGT-001](agents-workflows.md#agt-001) Chat tab is [Issue #22](https://github.com/Vidcar/thtaib/issues/22) and is not finished polish. Worker provisioning in [API-005](#api-005) stays [OQ-003](../open-questions.md#oq-003).
+
+<a id="locked-milestone-defaults-issue-40-partial-oq-002"></a>
+## Locked milestone defaults (Issue #40; partial OQ-002)
+
+These defaults are authorised by [Issue #40](https://github.com/Vidcar/thtaib/issues/40). They satisfy the same-machine trust prerequisite for privileged Chat/Lab/project-file routes. They do **not** close [OQ-002](../open-questions.md#oq-002): event reconnection, remaining origin/IPC details, and remote backend access stay open. They are not a catalogue `verified` claim. David-PC UAT remains required.
+
+- **Secret file:** `%LOCALAPPDATA%\LocalAIWorkbench\state\desktop_backend_shared_secret` (or the same filename under the portable product `state\` directory). Created on first use if missing. Never stored in the repository.
+- **Header:** `X-Workbench-Local-Token`. Name is hard-aligned with the Issue #41 shared-contract envelope. Electron **main** injects the header on loopback backend requests. The renderer must not hold or send the secret.
+- **Bind:** `127.0.0.1` only (v1). Non-loopback hosts are refused at process start. Remote backend is unsupported.
+- **Unauthenticated / wrong token:** privileged routes, including Chat, Lab, project-file / workspace-file operations, knowledge, harness, effects, compatibility and model-manager `/v1` routes, return **401** (missing token) or **403** (wrong token). `GET /health` stays public for smoke identity. CORS is not authorisation.
+- **Not claimed:** remote desktop/backend pairing, event-stream reconnection, a second auth scheme, or that UAT on David-PC has been run.

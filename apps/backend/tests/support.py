@@ -5,10 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from gguf import GGUFWriter
 
+from workbench_backend.local_trust import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.store import ApplicationStore
+
+
+def workbench_client(application: FastAPI, *, token: str | None = None) -> TestClient:
+    """Test client that presents the local shared-secret token by default."""
+    headers = {}
+    if token != "":
+        headers[WORKBENCH_LOCAL_TOKEN_HEADER] = token or application.state.local_trust_token
+    return TestClient(application, headers=headers)
 
 
 def close_workbench_sqlite(*objects: object) -> None:

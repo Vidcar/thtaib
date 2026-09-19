@@ -14,7 +14,7 @@ from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import close_workbench_sqlite, write_tiny_gguf
+from support import close_workbench_sqlite, workbench_client, write_tiny_gguf
 
 
 class FakeHF:
@@ -75,7 +75,7 @@ class ModelManagerApiTests(unittest.TestCase):
         )
         self.app = create_app(data_root=self.root)
         self.app.state.manager = self.manager
-        self.client = TestClient(self.app)
+        self.client = workbench_client(self.app)
 
     def tearDown(self) -> None:
         close_workbench_sqlite(self.app, getattr(self, "client", None))

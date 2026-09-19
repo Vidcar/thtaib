@@ -17,6 +17,7 @@ PRODUCT_DATA_DIR = "LocalAIWorkbench"
 DATA_ROOT_ENV = "WORKBENCH_DATA_ROOT"
 APPLICATION_DB_NAME = "application.sqlite"
 CHECKPOINTS_DB_NAME = "checkpoints.sqlite"
+SHARED_SECRET_FILENAME = "desktop_backend_shared_secret"
 
 
 def resolve_data_root(
@@ -56,6 +57,7 @@ class WorkbenchPaths:
         self.knowledge = self.root / "knowledge"
         self.application_db = self.root / APPLICATION_DB_NAME
         self.checkpoints_db = self.root / CHECKPOINTS_DB_NAME
+        self.desktop_backend_shared_secret = self.state / SHARED_SECRET_FILENAME
 
     def ensure(self) -> "WorkbenchPaths":
         for path in (

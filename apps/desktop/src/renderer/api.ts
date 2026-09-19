@@ -37,6 +37,7 @@ function backendUrl(): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Electron main injects X-Workbench-Local-Token. The renderer must not.
   const response = await fetch(`${backendUrl()}${path}`, {
     ...init,
     headers: {

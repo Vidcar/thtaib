@@ -1,7 +1,7 @@
 """Local AI Workbench FastAPI application.
 
-Provisional localhost HTTP is for smoke only. It does not select a trust
-model and does not close OQ-002.
+Loopback HTTP plus the Issue #40 shared-secret header. This is a partial
+OQ-002 default, not remote-backend support and not a closed trust model.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
+from workbench_backend.local_trust import ensure_shared_secret, require_local_trust
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.effect_routes import router as effect_router
 from workbench_backend.state.effects import EffectService
@@ -70,6 +71,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.state.manager = manager_from_env(data_root)
+    application.state.local_trust_token = ensure_shared_secret(application.state.manager.paths)
+    application.middleware("http")(require_local_trust)
     application.state.app_store = open_application_store(application.state.manager.paths)
     application.state.compatibility = CompatibilityService(application.state.manager.paths)
     application.state.effects = EffectService(application.state.app_store)
