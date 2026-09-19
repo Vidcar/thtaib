@@ -4,9 +4,31 @@ This is the four-layer plan for Local AI Workbench feature delivery. It is not a
 
 **Standing rules (unchanged from [Issue #44](https://github.com/Vidcar/thtaib/issues/44)):** Project Status is agent pipeline state only. Milestone is which delivery an Issue belongs to. No due dates, sprints, or velocity. One Milestone per delivery; close it when that delivery’s Issues are done. Soft “I can…” slogan titles are superseded — the feature name is the title; done-when lives on the GitHub Milestone description. Locked terms are in the [glossary](glossary.md#issue-tracking). The process note is in [governance](../specs/governance.md#project-status-and-delivery-milestones).
 
-**How to use this map.** Feature Milestones [**#3–#12**](https://github.com/Vidcar/thtaib/milestones) are the delivery homes for future Ready Issues. File a focused Issue under the matching feature Milestone; do not open a mega-implementation Issue. Process Milestones (Slice 1, standing rules, this map) are not feature homes.
+**How to use this map.** Feature Milestones [**#3–#12**](https://github.com/Vidcar/thtaib/milestones) are the delivery homes for future Ready Issues. File a focused Issue under the matching feature Milestone; do not open a mega-implementation Issue. Process Milestones (Slice 1, standing rules, this map) are not feature homes. The ordered next work is [Next path](#next-path); [Deferred](#deferred) names later items so they are not silent scope.
 
 Catalogue `implementation_status` on main is `partial` or `planned`. Nothing below is a catalogue `verified` claim.
+
+<a id="next-path"></a>
+## Next path
+
+Ordered next slices, in plain English. File one focused Issue when that slice is actually Ready. This is not a board, not a mega-Issue, and not a catalogue `verified` claim.
+
+1. **Agent Chat continuity (implementation)** — after or together with Chat continuity docs. Conversation ↔ execution-thread ↔ run must actually reach the harness ([#37](https://github.com/Vidcar/thtaib/issues/37) area 1). Sibling docs: [#52](https://github.com/Vidcar/thtaib/issues/52).
+2. **Effective setup (implementation)** — after continuity. Selected profile and knowledge must change the request, not labels only ([ARCH-003](../specs/architecture.md#arch-003); [#37](https://github.com/Vidcar/thtaib/issues/37) area 2). Sibling docs: [#53](https://github.com/Vidcar/thtaib/issues/53).
+3. **Workers / project tools** — only after 1 and 2, and only when [OQ-003](../specs/open-questions.md#oq-003) is locked or explicitly parked blocked. Trust-before-workers still applies ([#37](https://github.com/Vidcar/thtaib/issues/37)).
+4. **Model Lab docs** may proceed in parallel with Chat docs. Model Lab **implementation** does not jump the Chat build order above. Sibling docs: [#54](https://github.com/Vidcar/thtaib/issues/54). Model Lab is not Task cases and replay.
+
+<a id="deferred"></a>
+## Deferred (named, not Ready)
+
+Named so Access, Optional extras, and later UX are not silent scope. These are **not** Ready Issues. Do not file a mega-Issue from this list.
+
+- **Workers surface** — product UX to authorise command/browser/graphical workers. Distinct from the gated workers/project-tools slice above; still blocked on [OQ-003](../specs/open-questions.md#oq-003).
+- **Builder beyond chrome** — canvas, node library, run inspector after Chat/worker contracts ([ADR-0003](../specs/decisions/ADR-0003-builder-v1-chrome.md) is presentation only).
+- **Knowledge steer UX** — version, revert, and steer on the existing store. Not a RAG product ([OQ-006](../specs/open-questions.md#oq-006) stays open).
+- **Snapshot product UX** — branch / try-another-route beyond Lab restore ([OQ-005](../specs/open-questions.md#oq-005) remainder).
+- **Task-case compare / export UX** — [OQ-014](../specs/open-questions.md#oq-014). Not Model Lab.
+- **Access / connectors** — approvals, environment policy, guided add-tool. Later/visible. Optional extras stay later/thin ([ARCH-007](../specs/architecture.md#arch-007)).
 
 <a id="integration-handoffs"></a>
 ## Integration handoffs
@@ -173,7 +195,7 @@ Write these as focused docs/ADR/OQ resolutions **before** treating the matching 
 <a id="implementation-slices"></a>
 ## 4. Implementation slices
 
-Subsequent focused Issues under the **feature** Milestone. Not a mega-implementation Issue. Trust-before-workers ([#37](https://github.com/Vidcar/thtaib/issues/37) order) still applies.
+Per-feature reminders, not the ordered next work — that is [Next path](#next-path). Subsequent focused Issues under the **feature** Milestone. Not a mega-implementation Issue. Trust-before-workers ([#37](https://github.com/Vidcar/thtaib/issues/37) order) still applies.
 
 ### Managed models and inference (Milestone #3)
 
