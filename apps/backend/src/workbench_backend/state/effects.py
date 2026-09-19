@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from workbench_backend.agents.schemas import AgentRunStatus, is_agent_run_live
 from workbench_backend.errors import StateError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.state.schemas import (
@@ -140,13 +141,29 @@ class EffectService:
                 reconciled=True,
                 note="Outcome already reconciled. The operation was not replayed.",
             )
+        note = NO_REPLAY_NOTE
+        if effect.run_id:
+            run = self.store.get_run(effect.run_id)
+            if run is not None and is_agent_run_live(run.status):
+                if run.status is AgentRunStatus.cancel_requested:
+                    note = (
+                        NO_REPLAY_NOTE
+                        + " Linked run is cancel_requested, which is still live; "
+                        "that is not a confirmed stop and not permission to replay."
+                    )
+                else:
+                    note = (
+                        NO_REPLAY_NOTE
+                        + " Linked run is still live; recovery reports uncertainty "
+                        "and does not replay."
+                    )
         updated = effect.model_copy(
             update={
                 "outcome": ExternalEffectOutcome.unknown,
                 "unresolved": True,
                 "recovered_at": utc_now(),
                 "last_recovery_action": request.action,
-                "note": NO_REPLAY_NOTE,
+                "note": note,
             }
         )
         stored = self.store.put_effect(updated)
@@ -155,6 +172,7 @@ class EffectService:
             action=request.action,
             uncertainty=True,
             reconciled=False,
+            note=note,
         )
 
     def reconcile(self, effect_id: str, request: ReconcileEffectRequest) -> ExternalEffect:

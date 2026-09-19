@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -18,13 +19,22 @@ class ScriptedChatModel(BaseChatModel):
     _script: list[AIMessage] = PrivateAttr(default_factory=list)
     _index: int = PrivateAttr(default=0)
     _delay_s: float = PrivateAttr(default=0.0)
+    _hold: threading.Event | None = PrivateAttr(default=None)
     _bound_tools: list[Any] = PrivateAttr(default_factory=list)
 
-    def __init__(self, script: list[AIMessage], *, delay_s: float = 0.0, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        script: list[AIMessage],
+        *,
+        delay_s: float = 0.0,
+        hold: threading.Event | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._script = list(script)
         self._index = 0
         self._delay_s = delay_s
+        self._hold = hold
         self._bound_tools = []
 
     @property
@@ -40,6 +50,8 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def _next_message(self) -> AIMessage:
+        if self._hold is not None:
+            self._hold.wait(timeout=30)
         if self._delay_s:
             time.sleep(self._delay_s)
         if self._index >= len(self._script):

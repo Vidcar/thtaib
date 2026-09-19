@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
-import type {
-  AgentRun,
-  Deployment,
-  EngineMeasurement,
-  LabCase,
-  LabRestore,
-  LabResult,
-  LabToolMode,
-  LabWorkspace,
+import {
+  isAgentRunLive,
+  type AgentRun,
+  type Deployment,
+  type EngineMeasurement,
+  type LabCase,
+  type LabRestore,
+  type LabResult,
+  type LabToolMode,
+  type LabWorkspace,
 } from "./types";
 
 export function LabPanel() {
@@ -38,7 +39,7 @@ export function LabPanel() {
   }, []);
 
   useEffect(() => {
-    if (!run || (run.status !== "queued" && run.status !== "running")) {
+    if (!run || !isAgentRunLive(run.status)) {
       return;
     }
     const timer = window.setInterval(() => {

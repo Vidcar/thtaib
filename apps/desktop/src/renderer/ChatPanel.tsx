@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
-import type { ChatConversation, Deployment, LabWorkspace, RunProfile } from "./types";
+import {
+  isAgentRunLive,
+  type ChatConversation,
+  type Deployment,
+  type LabWorkspace,
+  type RunProfile,
+} from "./types";
 
 export function ChatPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -39,7 +45,7 @@ export function ChatPanel() {
 
   useEffect(() => {
     const run = conversation?.current_run;
-    if (!conversation || !run || (run.status !== "queued" && run.status !== "running")) {
+    if (!conversation || !run || !isAgentRunLive(run.status)) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -55,8 +61,7 @@ export function ChatPanel() {
     setMessage(error instanceof Error ? error.message : String(error));
   }
 
-  const runBusy =
-    conversation?.current_run?.status === "queued" || conversation?.current_run?.status === "running";
+  const runBusy = conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false;
 
   return (
     <section className="panel">

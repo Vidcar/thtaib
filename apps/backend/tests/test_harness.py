@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -31,6 +32,24 @@ def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> d
             return body
         time.sleep(0.05)
     raise TimeoutError(f"run {run_id} did not finish: {body}")
+
+
+def wait_for_status(
+    client: TestClient,
+    run_id: str,
+    status: str,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = client.get(f"/v1/agent-runs/{run_id}")
+        body = response.json()
+        if body.get("status") == status:
+            return body
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -171,6 +190,67 @@ class HarnessApiTests(unittest.TestCase):
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["status"], "cancelled")
         self.assertEqual(body["stop_reason"], "cancelled")
+
+    def test_cancel_request_is_not_immediately_confirmed(self) -> None:
+        hold = threading.Event()
+        held = ScriptedChatModel(echo_then_reply(), hold=hold)
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return held
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
+        started = self._start()
+        try:
+            wait_for_status(self.client, started["id"], "running")
+            requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+            self.assertEqual(requested.status_code, 200, requested.text)
+            body = requested.json()
+            self.assertEqual(body["status"], "cancel_requested")
+            self.assertIsNone(body["stop_reason"])
+            self.assertIsNone(body["finished_at"])
+            kinds = [event["kind"] for event in body["events"]]
+            self.assertIn("cancel_requested", kinds)
+            self.assertNotIn("cancelled", kinds)
+            observed = self.client.get(f"/v1/agent-runs/{started['id']}")
+            self.assertEqual(observed.json()["status"], "cancel_requested")
+        finally:
+            hold.set()
+        confirmed = wait_for_run(self.client, started["id"])
+        self.assertEqual(confirmed["status"], "cancelled")
+        self.assertEqual(confirmed["stop_reason"], "cancelled")
+        self.assertIsNotNone(confirmed["finished_at"])
+        confirmed_kinds = [event["kind"] for event in confirmed["events"]]
+        self.assertIn("cancel_requested", confirmed_kinds)
+        self.assertIn("cancelled", confirmed_kinds)
+
+    def test_cancel_requested_is_still_live_for_quiescence(self) -> None:
+        hold = threading.Event()
+        held = ScriptedChatModel(echo_then_reply(), hold=hold)
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return held
+
+        harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
+        self.app.state.harness = harness
+        started = self._start(workspace_id="ws_cancel_live")
+        try:
+            wait_for_status(self.client, started["id"], "running")
+            requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+            self.assertEqual(requested.json()["status"], "cancel_requested")
+            self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [started["id"]])
+        finally:
+            hold.set()
+        confirmed = wait_for_run(self.client, started["id"])
+        self.assertEqual(confirmed["status"], "cancelled")
+        self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [])
 
     def test_default_run_has_no_product_budget_or_rag(self) -> None:
         started = self._start()

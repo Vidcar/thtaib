@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -236,6 +237,58 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         self.assertTrue(after["unresolved"])
         self.assertEqual(after["outcome"], "dispatched")
         self.assertEqual(after["replay_count"], 0)
+
+    def test_recover_during_cancel_requested_does_not_replay(self) -> None:
+        hold = threading.Event()
+        held = ScriptedChatModel(echo_then_reply(), hold=hold)
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return held
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            app_store=self.app.state.app_store,
+        )
+        started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "Echo the text harness-ok using the echo tool.",
+                "presented_tools": ["echo"],
+            },
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        run_id = started.json()["id"]
+        try:
+            deadline = time.time() + 10
+            status = started.json()["status"]
+            while time.time() < deadline and status != "running":
+                status = self.client.get(f"/v1/agent-runs/{run_id}").json()["status"]
+                time.sleep(0.05)
+            self.assertEqual(status, "running")
+            effect = self.client.post(
+                "/v1/effects",
+                json={"operation": "notify-external", "run_id": run_id},
+            ).json()
+            requested = self.client.post(f"/v1/agent-runs/{run_id}/cancel")
+            self.assertEqual(requested.json()["status"], "cancel_requested")
+            recovered = self.client.post(
+                f"/v1/effects/{effect['id']}/recover",
+                json={"action": "reconnect"},
+            )
+            self.assertEqual(recovered.status_code, 200, recovered.text)
+            report = recovered.json()
+            self.assertFalse(report["replayed"])
+            self.assertTrue(report["uncertainty"])
+            self.assertEqual(report["effect"]["outcome"], "unknown")
+            self.assertEqual(report["effect"]["replay_count"], 0)
+            self.assertIn("not be silently repeated", report["note"])
+            self.assertIn("cancel_requested", report["note"])
+            self.assertIn("not a confirmed stop", report["note"])
+        finally:
+            hold.set()
+        wait_for_run(self.client, run_id)
 
 
 if __name__ == "__main__":

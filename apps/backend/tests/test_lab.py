@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -314,6 +315,43 @@ class LabApiTests(unittest.TestCase):
         )
         self.assertEqual(blocked.status_code, 409)
         self.assertEqual(blocked.json()["code"], "not_quiescent")
+        wait_for_run(self.client, started["id"])
+
+    def test_capture_fails_while_cancel_requested(self) -> None:
+        workspace = self._workspace()
+        hold = threading.Event()
+        held = ScriptedChatModel(echo_then_reply(), hold=hold)
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return held
+
+        self.app.state.harness = HarnessService(lambda: self.manager, model_factory=factory)
+        started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "slow",
+                "workspace_id": workspace["id"],
+                "presented_tools": ["echo"],
+            },
+        ).json()
+        try:
+            deadline = time.time() + 10
+            status = started["status"]
+            while time.time() < deadline and status != "running":
+                status = self.client.get(f"/v1/agent-runs/{started['id']}").json()["status"]
+                time.sleep(0.05)
+            self.assertEqual(status, "running")
+            requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+            self.assertEqual(requested.json()["status"], "cancel_requested")
+            blocked = self.client.post(
+                "/v1/lab/cases/capture",
+                json={"workspace_id": workspace["id"], "run_id": started["id"]},
+            )
+            self.assertEqual(blocked.status_code, 409)
+            self.assertEqual(blocked.json()["code"], "not_quiescent")
+        finally:
+            hold.set()
         wait_for_run(self.client, started["id"])
 
     def test_recorded_and_live_modes_are_labelled(self) -> None:

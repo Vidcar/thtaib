@@ -12,11 +12,37 @@ from workbench_backend.state.schemas import RelatedFile
 
 
 class AgentRunStatus(str, Enum):
+    """Shared run lifecycle names. cancel_requested is still live (#41/#42)."""
+
     queued = "queued"
     running = "running"
-    completed = "completed"
+    cancel_requested = "cancel_requested"
     cancelled = "cancelled"
+    completed = "completed"
     failed = "failed"
+
+
+LIVE_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
+    {
+        AgentRunStatus.queued,
+        AgentRunStatus.running,
+        AgentRunStatus.cancel_requested,
+    }
+)
+
+TERMINAL_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
+    {
+        AgentRunStatus.cancelled,
+        AgentRunStatus.completed,
+        AgentRunStatus.failed,
+    }
+)
+
+
+def is_agent_run_live(status: AgentRunStatus | str) -> bool:
+    """Quiescence helper: cancel_requested is still live. Confirmed cancelled is not."""
+
+    return AgentRunStatus(status) in LIVE_AGENT_RUN_STATUSES
 
 
 class AgentBudgets(BaseModel):

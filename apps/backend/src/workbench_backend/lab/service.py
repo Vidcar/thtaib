@@ -10,10 +10,10 @@ from typing import Any
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import (
     AgentRun,
-    AgentRunStatus,
     AgentStartRequest,
     TaskCriteria,
     ToolMode,
+    is_agent_run_live,
     label_for_tool_mode,
 )
 from workbench_backend.errors import LabError
@@ -136,9 +136,10 @@ class LabService:
         run: AgentRun | None = None
         if request.run_id:
             run = self.harness.get_run(request.run_id)
-            if run.status in {AgentRunStatus.queued, AgentRunStatus.running}:
+            if is_agent_run_live(run.status):
                 raise LabError(
-                    "Capture requires a quiescent boundary; the source run is still live.",
+                    "Capture requires a quiescent boundary; the source run is still live "
+                    "(cancel_requested is not idle).",
                     code="not_quiescent",
                     status_code=409,
                 )

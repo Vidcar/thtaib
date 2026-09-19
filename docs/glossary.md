@@ -136,7 +136,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **STATE-002 — history ≠ project** means editing or clearing Chat history alone neither restores nor deletes project files. Filesystem tools write project storage only.
 
-**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Issue #31 locked unknown-effect safety ([STATE-004](../specs/modules/state-recovery.md#state-004)). Identities, event-order/reconnection and exactly-once stay [OQ-004](../specs/open-questions.md#oq-004).
+**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Issue #31 locked unknown-effect safety ([STATE-004](../specs/modules/state-recovery.md#state-004)). Issue #42 locked cancel honesty (`cancel_requested` is still live; `cancelled` is the confirmed stop; no false quiescence). Identities, event-order/reconnection and exactly-once stay [OQ-004](../specs/open-questions.md#oq-004).
+
+**cancel_requested vs cancelled** means a cancel request is accepted and the run remains live until the worker confirms stop. Quiescence / “safe to treat the workspace as idle” must not treat `cancel_requested` as idle.
 
 **Debug-quality Chat (Issue #22)** is the Chat tab that calls the embedded harness. Agent-run is not that surface. Do not call it finished Chat polish.
 
