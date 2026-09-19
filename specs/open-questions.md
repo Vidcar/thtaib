@@ -100,13 +100,16 @@ The remainder stays open. Choose retrieval/indexing integration separately from 
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details
 
-**Status:** partial lifecycle rules are implemented for Issue #3 (failed/interrupted download is not a successful deployment; connected endpoints have no destructive lifecycle; PATH llama-server is unsupported). Full compatibility evidence, capability claims and complete setting-mapping verification remain open.
+**Status:** partial lifecycle and Windows CUDA defaults are implemented for [Issue #3](https://github.com/Vidcar/thtaib/issues/3) and [Issue #21](https://github.com/Vidcar/thtaib/issues/21). The CUDA pin and `flash_attn` mapping have landed. Full compatibility evidence, capability claims and complete setting-mapping verification remain open.
 
 **Owner:** Model-management boundary. **Blocks:** declaring model capabilities/configurations supported or exposing managed runtime controls as reliable.
 
 Define compatibility-record schemas, evidence provenance, GGUF/companion-file resolution, runtime version identifiers, startup/request setting mapping and unsupported/unknown treatment. Specify cache reuse/interrupted download handling and the lifecycle authority over externally managed endpoints. Determine actual model-adapter parameter support against pinned dependencies.
 
-Implemented now, without closing this question: import jobs that fail or are interrupted do not create a complete bundle or a successful deployment; connected attachments report `scope=connected` and reject start/stop/kill; a compatibility-records stub exists and does not claim support.
+Implemented now, without closing this question:
+
+- Issue #3: import jobs that fail or are interrupted do not create a complete bundle or a successful deployment; connected attachments report `scope=connected` and reject start/stop/kill; a compatibility-records stub exists and does not claim support; PATH llama-server is unsupported.
+- Issue #21: managed Windows NVIDIA hosts pin llama.cpp **b11045** CUDA 13.4 (`llama-b11045-bin-win-cuda-13.4-x64.zip` + `cudart-llama-bin-win-cuda-13.4-x64.zip`); NVIDIA absence is a clear error (no silent GPU claim); default GPU profile is `ctx_size` 65536, `n_gpu_layers` -1, valued `flash_attn`; `flash_attn` serializes as `--flash-attn on|off|auto` only; `local_executable` pins the full runtime directory; pin-while-running is reject or stop-first. Locked defaults are in [models](modules/models.md#locked-milestone-defaults-issue-21-partial-oq-007).
 
 Multi-model routing and hybrid local GGUF / remote OpenAI-compatible deployments are [OQ-013](#oq-013). The model manager remains the owner; do not add a second inference engine.
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api } from "./api";
+import { api, DEFAULT_GPU_STARTUP } from "./api";
 import type { Deployment, ModelBundle, RuntimeManifest } from "./types";
 
 export function DeploymentsPanel() {
@@ -41,8 +41,9 @@ export function DeploymentsPanel() {
         <h3>Managed runtime</h3>
         {runtime ? (
           <p>
-            {runtime.status} · {runtime.platform} · {runtime.release_tag} · path fallback{" "}
-            {runtime.path_fallback}
+            {runtime.status} · {runtime.platform} · {runtime.flavor ?? "flavor unknown"} ·{" "}
+            {runtime.release_tag} · path fallback {runtime.path_fallback}
+            {runtime.error ? ` · ${runtime.error}` : ""}
           </p>
         ) : (
           <p className="hint">No runtime pinned yet.</p>
@@ -54,12 +55,16 @@ export function DeploymentsPanel() {
               .pinRuntime()
               .then((manifest) => {
                 setRuntime(manifest);
-                setMessage(`Runtime pin ${manifest.status}`);
+                setMessage(
+                  manifest.error
+                    ? `Runtime pin ${manifest.status}: ${manifest.error}`
+                    : `Runtime pin ${manifest.status}`,
+                );
               })
               .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
           }}
         >
-          Pin Windows llama-server
+          Pin Windows CUDA 13.4 runtime
         </button>
       </div>
 
@@ -78,6 +83,10 @@ export function DeploymentsPanel() {
           }}
         >
           <h3>Start managed</h3>
+          <p className="hint">
+            Binds the default GPU profile: ctx_size {DEFAULT_GPU_STARTUP.ctx_size}, n_gpu_layers{" "}
+            {DEFAULT_GPU_STARTUP.n_gpu_layers}, flash_attn {DEFAULT_GPU_STARTUP.flash_attn}.
+          </p>
           <label>
             Bundle
             <select value={bundleId} onChange={(event) => setBundleId(event.target.value)}>

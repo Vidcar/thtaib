@@ -168,16 +168,23 @@ class RuntimeManifest(BaseModel):
     path_fallback: Literal["unsupported"] = "unsupported"
     status: Literal["ready", "failed", "interrupted"] = "ready"
     error: str | None = None
+    companion_asset_name: str | None = None
+    companion_sha256: str | None = None
 
 
 class PinRuntimeRequest(BaseModel):
-    """Production pin downloads the Windows llama-server asset.
+    """Production pin downloads the Windows CUDA 13.4 llama-server pair.
 
-    ``local_executable`` is only for an already-managed binary or a test
-    fixture. It still writes a runtime-manifest and never uses PATH.
+    ``local_executable`` pins an already-managed runtime directory (the
+    executable plus sibling CUDA DLLs) or a test fixture. It still writes
+    a runtime-manifest and never uses PATH.
+
+    Pinning while a managed server is running is rejected unless
+    ``stop_first`` is true.
     """
 
     local_executable: str | None = None
+    stop_first: bool = False
 
 
 class ManagedDeploymentRequest(BaseModel):

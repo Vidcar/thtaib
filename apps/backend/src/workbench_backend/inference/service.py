@@ -11,6 +11,7 @@ from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import inspect_gguf_file
 from workbench_backend.inference.process import HttpProbe, ProcessSupervisor
+from workbench_backend.inference.hardware import NvidiaPresent
 from workbench_backend.inference.runtime import RuntimeInstaller, RuntimeService
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
@@ -42,11 +43,17 @@ class ModelManager:
         installer: RuntimeInstaller | None = None,
         processes: ProcessSupervisor | None = None,
         probe: HttpProbe | None = None,
+        nvidia_present: NvidiaPresent | None = None,
     ) -> None:
         self.paths = paths.ensure()
         self.store = RecordStore(self.paths)
         self.bundles = BundleService(self.paths, self.store, hf=hf)
-        self.runtime = RuntimeService(self.paths, self.store, installer=installer)
+        self.runtime = RuntimeService(
+            self.paths,
+            self.store,
+            installer=installer,
+            nvidia_present=nvidia_present,
+        )
         self.deployments = DeploymentService(
             self.store,
             self.runtime,
@@ -139,6 +146,19 @@ class ModelManager:
         return self.runtime.current()
 
     def pin_runtime(self, request: PinRuntimeRequest | None = None) -> RuntimeManifest:
+        request = request or PinRuntimeRequest()
+        running = self.runtime.running_managed_deployments()
+        if running:
+            if not request.stop_first:
+                raise ManagerError(
+                    "Cannot pin the managed runtime while a managed llama-server is running. "
+                    "Stop the deployment first, or retry with stop_first. "
+                    "A half-finished pin is not recorded as success.",
+                    code="runtime_pin_busy",
+                    status_code=409,
+                )
+            for deployment in running:
+                self.deployments.stop(deployment.id)
         return self.runtime.pin(request)
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:

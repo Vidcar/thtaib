@@ -24,6 +24,12 @@ import type {
   SettingsBags,
 } from "./types";
 
+export const DEFAULT_GPU_STARTUP = {
+  ctx_size: 65536,
+  n_gpu_layers: -1,
+  flash_attn: "on",
+} as const;
+
 function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
@@ -81,7 +87,12 @@ export const api = {
   startManaged: (bundle_id: string, profile_id?: string, startup?: object) =>
     request<Deployment>("/v1/deployments/managed", {
       method: "POST",
-      body: JSON.stringify({ bundle_id, profile_id, startup: startup ?? {}, auto_start: true }),
+      body: JSON.stringify({
+        bundle_id,
+        profile_id,
+        startup: startup ?? { ...DEFAULT_GPU_STARTUP },
+        auto_start: true,
+      }),
     }),
   attachConnected: (endpoint: string, display_name?: string) =>
     request<Deployment>("/v1/deployments/connected", {
