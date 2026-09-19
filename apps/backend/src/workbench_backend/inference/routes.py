@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 
-from workbench_backend.errors import ManagerError
+from workbench_backend.errors import manager_error_handler
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
     HuggingFaceImportRequest,
@@ -148,8 +147,4 @@ def deployment_smoke(request: Request, deployment_id: str) -> object:
     return get_manager(request).deployment_smoke(deployment_id)
 
 
-def manager_error_handler(_request: Request, exc: ManagerError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": exc.message, "code": exc.code},
-    )
+__all__ = ["get_manager", "manager_error_handler", "router"]

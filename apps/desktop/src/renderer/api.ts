@@ -1,4 +1,5 @@
 import type {
+  AgentRun,
   Deployment,
   ImportJob,
   InspectReport,
@@ -76,4 +77,12 @@ export const api = {
   stop: (id: string) => request<Deployment>(`/v1/deployments/${id}/stop`, { method: "POST" }),
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
   healthOf: (id: string) => request<Deployment>(`/v1/deployments/${id}/health`),
+  agentTools: () => request<{ enabled: string[] }>("/v1/agent-tools"),
+  startAgentRun: (deployment_id: string, task: string, presented_tools?: string[]) =>
+    request<AgentRun>("/v1/agent-runs", {
+      method: "POST",
+      body: JSON.stringify({ deployment_id, task, presented_tools }),
+    }),
+  agentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}`),
+  cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
 };

@@ -1,6 +1,6 @@
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "models" | "deployments";
+export type WorkbenchTab = "models" | "deployments" | "agent-run";
 
 export interface PathsInfo {
   root: string;
@@ -87,6 +87,36 @@ export interface RuntimeManifest {
   path_fallback: "unsupported";
   status: "ready" | "failed" | "interrupted";
   error: string | null;
+}
+
+export interface AgentRun {
+  id: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed";
+  deployment_id: string;
+  task: string;
+  enabled_tools: string[];
+  presented_tools: string[];
+  events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
+  model_requests: Array<{
+    at: string;
+    instructions: string | null;
+    presented_tools: string[];
+    available_tools: string[];
+    capture_gaps: string[];
+    http_payload: Record<string, unknown> | null;
+  }>;
+  completion: {
+    evidence: {
+      executable_checks: Array<{ name: string; passed: boolean; detail: string | null }>;
+      expected_artifacts: Array<{ name: string; present: boolean; detail: string | null }>;
+    };
+    judgement: { model_review: string | null; note: string };
+  } | null;
+  stop_reason: string | null;
+  error: string | null;
+  budgets: { max_steps: number | null; max_tool_calls: number | null } | null;
+  knowledge: "none";
+  harness: "deepagents";
 }
 
 export interface InspectReport {

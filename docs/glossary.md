@@ -33,6 +33,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | CDF fork | out of scope |
 | TooGraph as pixel target / fork | OQ-016 — Builder canvas and chrome UX (inspiration only) |
 | invent Builder chrome | OQ-016 unresolved |
+| Chat agent / Builder agent graph | embedded harness + MOD-005 (not Chat or Builder) |
+| complete real agent work | harness + MOD-005 against managed inference |
+| second agent loop | Deep Agents owns the loop; application owns config/lifecycle |
 
 ## Product and layout
 
@@ -59,6 +62,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state). Durable product and managed-inference state is never the repository root and never `.scratch/`.
 
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
+
+**Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. It is not Chat and not Builder. A thin desktop Agent-run debug panel may call that API.
+
+**MOD-005 adapter** is the narrow LangChain ChatOpenAI client aimed at a model-manager deployment OpenAI-compatible endpoint. The adapter starts no inference process.
 
 **Model bundle** is the canonical recorded manifest (quant, shards, companions, HF repo+revision, hashes, paths). It is not “the model in Chat”.
 

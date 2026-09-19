@@ -335,9 +335,13 @@
     {
       "id": "MOD-005",
       "document": "specs/modules/models.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/inference/adapter.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_adapter.py"
+      ],
       "evidence": []
     },
     {
@@ -351,9 +355,13 @@
     {
       "id": "AGT-001",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/harness.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {
@@ -375,41 +383,61 @@
     {
       "id": "AGT-002",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/middleware.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {
       "id": "AGT-003",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/harness.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {
       "id": "AGT-004",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/harness.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {
       "id": "AGT-005",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/tools.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {
       "id": "AGT-006",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "unassessed",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/evidence.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_harness.py"
+      ],
       "evidence": []
     },
     {

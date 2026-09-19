@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AgentRunPanel } from "./AgentRunPanel";
 import { api } from "./api";
 import { DeploymentsPanel } from "./DeploymentsPanel";
 import { ModelsPanel } from "./ModelsPanel";
@@ -22,6 +23,8 @@ function tabLabel(tab: WorkbenchTab): string {
       return "Models";
     case "deployments":
       return "Deployments";
+    case "agent-run":
+      return "Agent run";
     default: {
       const unexpected: never = tab;
       return unexpected;
@@ -48,6 +51,8 @@ export function App() {
         return <ModelsPanel />;
       case "deployments":
         return <DeploymentsPanel />;
+      case "agent-run":
+        return <AgentRunPanel />;
       default: {
         const unexpected: never = current;
         return unexpected;
@@ -55,15 +60,15 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["models", "deployments"];
+  const tabs: WorkbenchTab[] = ["models", "deployments", "agent-run"];
 
   return (
     <main className="shell">
       <p className="eyebrow">Local AI Workbench</p>
       <h1>{productName}</h1>
       <p className="lede">
-        {surfaceLabel(surface)}. Chat, Lab, and Builder are not part of this
-        milestone.
+        {surfaceLabel(surface)}. The Agent-run tab is a harness debug panel, not
+        Chat or Builder.
       </p>
       <p className="hint">{backendStatus}</p>
       <nav className="tabs" aria-label="Workbench surfaces">

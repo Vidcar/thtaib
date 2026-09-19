@@ -73,7 +73,7 @@ Creates `.venv` and installs the locked dependencies from `uv.lock`, including t
 uv run python -m workbench_backend
 ```
 
-Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the managed-inference identity. Model-manager routes are under `/v1`. OpenAPI/docs routes are disabled.
+Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the managed-inference identity. Model-manager routes are under `/v1`. Harness routes are `POST /v1/agent-runs`, `GET /v1/agent-runs/{id}`, `POST /v1/agent-runs/{id}/cancel`, and `GET /v1/agent-tools`. OpenAPI/docs routes are disabled.
 
 <a id="backend-test"></a>
 ## Test the backend
@@ -84,7 +84,7 @@ Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTT
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments. These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
+Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, plus harness/adapter tests for AGT-001/002/005/006 and MOD-005. These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
 
 <a id="desktop-install"></a>
 ## Install the desktop
@@ -128,7 +128,7 @@ Type-checks, then Vite-builds the renderer and Electron main/preload into `dist/
 pnpm run dev
 ```
 
-Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat, Lab and Builder are not present.
+Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat, Lab and Builder are not present. An optional Agent-run debug panel may call the harness API.
 
 <a id="desktop-package"></a>
 ## Package a Windows installer
