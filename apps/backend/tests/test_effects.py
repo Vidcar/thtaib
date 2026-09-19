@@ -19,6 +19,7 @@ from workbench_backend.lab.schemas import RestoreResult, SnapshotManifest
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
+from tests.support import close_workbench_sqlite
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -69,6 +70,7 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def test_crash_between_effect_and_ack_reports_uncertainty_without_replay(self) -> None:
