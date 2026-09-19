@@ -617,6 +617,7 @@
       ],
       "tests": [
         "apps/backend/tests/test_lab.py",
+        "apps/backend/tests/test_snapshot_restore.py",
         "apps/backend/tests/test_harness.py"
       ],
       "evidence": []
@@ -790,7 +791,8 @@
         "apps/backend/src/workbench_backend/lab/snapshot.py"
       ],
       "tests": [
-        "apps/backend/tests/test_lab.py"
+        "apps/backend/tests/test_lab.py",
+        "apps/backend/tests/test_snapshot_restore.py"
       ],
       "evidence": []
     },

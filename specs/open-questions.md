@@ -102,7 +102,7 @@ A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is
 <a id="oq-005"></a>
 ## OQ-005: Consistent project snapshots and restoration
 
-**Status:** partially constrained by [Issue #15](https://github.com/Vidcar/thtaib/issues/15) for Lab reuse. The question stays open.
+**Status:** partially constrained by [Issue #15](https://github.com/Vidcar/thtaib/issues/15) for Lab reuse and [Issue #66](https://github.com/Vidcar/thtaib/issues/66) for restore integrity. The question stays open.
 
 **Owner:** Persistence/environment boundary. **Blocks:** remaining snapshot policy beyond the locked defaults — retention, concurrent-writer details beyond “fail if live tools are writing”, environment-snapshot adapters, and any mechanism other than the application-owned directory snapshot.
 
@@ -115,7 +115,12 @@ Issue #15 locked these defaults for LAB-001…004 and STATE-003. They are record
 - Exclude secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
 - No full environment restore this milestone; record exclusions.
 
-Choose the snapshot mechanism, quiescent/consistent capture boundary, concurrent writer policy, included/excluded files, metadata and memory/configuration linkage, workspace isolation, retention and restoration validation. Define the boundary between project files and an environment snapshot. Do not assume checkpoints or Git commits capture untracked files, dependencies, services or remote effects.
+[Issue #66](https://github.com/Vidcar/thtaib/issues/66) additionally locked restore integrity for that directory snapshot. Recorded in [Lab integration](modules/lab-evaluation.md#locked-milestone-defaults-issue-66-restore-integrity) and [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-66-restore-integrity):
+
+- The captured tree directory must exist. A missing tree fails even when `included_files` is empty. An intentionally empty snapshot keeps an empty tree.
+- Restore verifies every recorded path/sha256/size, rejects unexpected tree files, stages into a new workspace, and registers success only after validation. Failed staging is discarded.
+
+Choose remaining snapshot policy: retention, concurrent writer details beyond the quiescent-capture fail, environment-snapshot adapters, and any mechanism other than the application-owned directory snapshot. Restore integrity for missing-tree / hash-mismatch / unexpected-file failure is no longer an open choice. Define the boundary between project files and an environment snapshot. Do not assume checkpoints or Git commits capture untracked files, dependencies, services or remote effects.
 
 **Evidence needed:** capture during a controlled execution boundary, restore into a separate workspace, verify included inputs, expose exclusions and show the parent remains unchanged. UAT of the locked defaults remains local-machine-required on David-PC.
 
