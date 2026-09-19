@@ -1,76 +1,40 @@
 # Local AI Workbench
 
-Local AI Workbench is a Windows-first, local-first workbench for running models and agent work on your machine. One FastAPI backend coordinates the product; one Electron desktop presents it. llama.cpp owns supported inference. Deep Agents, LangGraph and LangChain stay behind application boundaries — the workbench owns configuration, lifecycle, visibility and connecting contracts, not a second implementation of those loops.
+Local AI Workbench is a Windows-first, local-first workbench for running models and agent work on your own machine. One FastAPI backend does the work; one Electron desktop shows it. Inference comes from llama.cpp, the agent loop from Deep Agents, LangGraph and LangChain. The workbench integrates those projects behind a coherent user experience instead of reimplementing them.
+
+## Where things stand
+
+Working today, seen live with a small model on Linux: the backend starts and refuses requests without the desktop token; a running llama-server can be attached; Chat sends a task to the agent, the agent writes a real file into the project folder, and a follow-up turn continues the same conversation; a saved profile's settings reach the model. Built but not yet proven on real hardware: managed download and start of llama.cpp on a Windows NVIDIA GPU, Hugging Face import, Lab capture and replay, durable knowledge. Not started: workers (shell, browser), Builder, Model Lab runners, approvals, retrieval.
+
+The honest status of every requirement is in [the catalogue](specs/catalog.json); what "built" and "verified" mean is in [verification](specs/verification.md). The next piece of work is proving managed inference on David's PC, as the original build order says.
 
 ## Coding agents
 
-Coding agents start at [AGENTS.md](AGENTS.md).
-
-## Requirements
-
-- Python 3.12.x and [uv](https://docs.astral.sh/uv/) (uv can install 3.12)
-- Node.js ≥22 and <25 (develop on 24) and pnpm 10+
-- Windows is the supported target; Linux/macOS are used for smoke
+Start at [AGENTS.md](AGENTS.md). Specifications live under [`specs/`](specs/README.md).
 
 ## Install and run
 
-Use only the commands recorded in [commands](specs/commands.md). Application commands name their working directory.
+Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js ≥22 and <25 with pnpm 10+. Windows is the supported target; Linux and macOS are used for smoke tests. All commands are listed in [commands](specs/commands.md).
 
-### Backend
+Backend (in `apps/backend`): `uv sync`, then `uv run python -m workbench_backend`.
 
-**Working directory:** `apps/backend`. **Platform:** Windows (supported target); also runs on Linux/macOS for smoke. **Prerequisites:** [uv](https://docs.astral.sh/uv/) and Python 3.12.x (uv can install 3.12).
+Desktop (in `apps/desktop`): `pnpm install`, then `pnpm run dev` (needs a machine that can open a window). `pnpm run typecheck` and `pnpm run build` check and build it.
 
-```text
-uv sync
-```
+## Where data lives
 
-```text
-uv run python -m workbench_backend
-```
-
-### Desktop
-
-**Working directory:** `apps/desktop`. **Platform:** Windows (supported target); also runs on Linux/macOS for install/type-check/build. **Prerequisites:** Node.js ≥22 and <25 (develop on 24) and pnpm 10+.
-
-```text
-pnpm install
-```
-
-```text
-pnpm run dev
-```
-
-Type-check and build from the same directory after `pnpm install`:
-
-```text
-pnpm run typecheck
-```
-
-```text
-pnpm run build
-```
-
-`pnpm run dev` needs a machine that can open an Electron window (David-PC for UAT). See [commands](specs/commands.md) for what each command does.
-
-## Durable data
-
-Durable product and managed-inference data stays under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway UAT and temp files belong only under `.scratch/` at the repository root (the entire tree is gitignored).
-
-## What exists and what does not
-
-Present today: the model manager, the embedded Deep Agents harness, debug-quality Chat, Lab capture/restore/rerun, and durable knowledge versioning. The desktop exposes Models, Deployments and Chat. Optional Agent-run, Lab and Knowledge debug panels remain for raw debug. Chat is not finished polish. Builder is not shipped.
-
-## Specification pack
-
-The [specification index](specs/README.md) is the behavioural home. To check pack integrity, use [commands](specs/commands.md#spec-integrity). [Repository setup](specs/repository-setup.md) covers adoption and protections.
+Product data — models, runtimes, state, cases, snapshots, knowledge, the two SQLite databases — lives under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway files belong only under `.scratch/` at the repository root, which git ignores. Model weights and secrets are never committed.
 
 ## Entry points
 
 | Need | Open |
 | --- | --- |
 | Agent working rules | [AGENTS.md](AGENTS.md) |
-| Specification index | [specs/README.md](specs/README.md) |
+| Index and working rules | [specs/README.md](specs/README.md) |
+| Architecture | [specs/architecture.md](specs/architecture.md) |
+| Status and evidence | [specs/catalog.json](specs/catalog.json) |
 | Commands | [specs/commands.md](specs/commands.md) |
-| Glossary | [docs/glossary.md](docs/glossary.md) |
-| Delivery feature map | [docs/delivery-feature-map.md](docs/delivery-feature-map.md) |
+| Decisions | [specs/decisions/](specs/decisions/README.md) |
 | Open questions | [specs/open-questions.md](specs/open-questions.md) |
+| Glossary | [docs/glossary.md](docs/glossary.md) |
+| Delivery plan | [docs/delivery-feature-map.md](docs/delivery-feature-map.md) |
+| Original vision (Revision 0.5) | [specs/sources/README.md](specs/sources/README.md) |

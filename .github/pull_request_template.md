@@ -1,34 +1,28 @@
-## Outcome and scope
+## What changed and why
 
-Describe the actual change. Link the task and affected requirement IDs/specifications.
+Plain English first. Link the issue and the requirement IDs touched. If this implements a feature, link or paste the filled [feature template](../specs/templates/feature.md).
 
-## Architecture and specification impact
+## Design impact
 
-Choose and explain: **within accepted design** / **approved architecture change** / **proposal only**.
+**Within the accepted design** / **design change with ADR** (link and approval) / **enforcement change** (checker, catalogue schema, workflows, tests — say exactly what and why).
 
-- Affected boundaries, contracts, data and permissions:
-- ADR and genuine human approval reference, when required:
-- Specification changes, or why intended behaviour is unchanged:
-- Open questions/deviations and compatibility/migration handling:
+Specification text changed, or unchanged because:
 
-## Verification actually performed
+## Checks actually run
 
-| Command / check | Platform / configuration | Result | Evidence |
+| Command | Where | Result | Live / mocked / recorded |
 | --- | --- | --- | --- |
-| Replace with commands actually run | Replace | Passed / failed / skipped | Real report or log |
+| | | | |
 
-Distinguish product tests from specification tooling, live tools from recordings/mocks, and executable checks from model judgements. Explain every required skipped check. Do not call unrun checks passing.
+Skipped checks and why. Executable results versus your own judgement.
 
-## Drift and enforcement review
+## Reconciliation
 
-- [ ] Requirement IDs, implementation status and real code/test/evidence pointers are updated where affected.
-- [ ] Relevant changed behaviour is verified, or claims are downgraded and gaps recorded.
-- [ ] Moved links, repository-map bindings, commands and ownership patterns are repaired.
-- [ ] Shared contracts/generated consumers/migrations are aligned, or not affected with explanation.
-- [ ] Specification checker and checker regression tests passed on this change.
-- [ ] Changes to instructions, catalogue, checker, tests, workflows or permissions are explicitly identified for human review.
-- [ ] No secrets, large model files, private project data or unredacted context were added.
+- [ ] Catalogue rows (status, code, tests, evidence) updated or confirmed unchanged
+- [ ] Changelog entry added for any settled default or decision
+- [ ] Links, repository-map bindings and commands repaired
+- [ ] No secrets, weights, private data or unredacted model context added
 
-## Remaining limitations and next step
+## Left open
 
-State incomplete/unverified work and the smallest next concrete step. Checkbox completion is an author statement, not independent proof or approval.
+Unverified behaviour, deferred leftovers (`Deferred: #N`), blockers for David, next concrete step.
