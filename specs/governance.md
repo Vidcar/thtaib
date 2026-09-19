@@ -24,6 +24,10 @@ Before editing, read the current baseline and linked open questions, then identi
 
 No blanket rule requires a meaningless documentation edit for every code change. A no-spec-change explanation is valid when behaviour remains compliant. Conversely, changing a requirement ID reference or a timestamp is not a substantive review.
 
+## Project Status and delivery Milestones
+
+**Project Status** is agent pipeline state only. **Milestone** names the plain-English delivery the Issue belongs to. They are not interchangeable. Spec sets the Milestone and Project Status=Ready when opening a Ready Issue. Builder, Reviewer, UAT and Release keep Status accurate as the Issue moves; they do not invent parallel boards, due dates, sprints or a second Status column. One Milestone per delivery; close it when that delivery’s Issues are done. A Tracking Issue stays open until the whole proof is done; focused Issues link to it and share the Milestone. Locked terms and rejected phrases are in [the glossary](../docs/glossary.md#issue-tracking).
+
 ## Keep evidence from going stale
 
 The [verification guide](verification.md) defines evidence. Each verified catalogue entry records a digest of its current normative requirement block. A wording change makes that evidence structurally stale until reviewed and refreshed with real checking; do not mechanically substitute a new digest to conceal the change.
