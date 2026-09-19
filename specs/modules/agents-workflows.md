@@ -1,38 +1,49 @@
 # Agents and workflows
 
-[Specification index](../README.md) · [Status and evidence](../catalog.json)
+[Architecture](../architecture.md) · [Status and evidence](../catalog.json) · [Decisions](../decisions/changelog.md)
 
-## Ownership, scope and source
+## Purpose
 
-Deep Agents owns each agent's model/tool loop and active context. LangGraph owns its runtime and Builder's outer graph. LangChain supplies adapters and interfaces. Source: [revision 0.5, page 5](../sources/README.md#agents-and-workflows) and [the connection rules on page 7](../sources/README.md#integration-registry).
+Run agent tasks through the embedded Deep Agents harness, keep Chat continuity honest, and compile Builder definitions so that configuration and workflow sequencing stay distinct.
 
-## Public contracts and collaboration
+## Boundaries and ownership
 
-Consume a resolved agent setup, model adapter, enabled tool/file backends, selected memory/skill versions and task criteria. The resolved setup is the shared [effective setup contract](../architecture.md#effective-setup-contract): resolve it before the harness runs; the harness and inspector must show the same selected, loaded and applied facts. Emit events into the backend's run hierarchy and link checkpoints through [state and recovery](state-recovery.md). Builder supplies typed step inputs/outputs; Chat invokes the same harness without requiring an outer workflow.
+Deep Agents owns each agent's model/tool loop and active context. LangGraph owns the runtime, checkpoints and Builder's outer graph. LangChain supplies model, message and tool interfaces. The application owns the resolved setup, knowledge versions, run records, lifecycle visibility and cancellation semantics. Chat, Lab and Agent-run call the same harness; nothing in the application replays a transcript or loops over tools itself. Source: [Revision 0.5, page 5](../sources/README.md#agents-and-workflows) and [page 7](../sources/README.md#integration-registry).
 
-Memory content/versioning is application-owned; consumption and active-context management are harness responsibilities. Retrieved documents are neither durable project memory nor model training. Retrieval/index storage selection remains open.
+## Interfaces and contracts
 
-## Lifecycle and failure
+The harness consumes the resolved [effective setup](../architecture.md#effective-setup) (deployment, bags, tools and policy, knowledge versions), a task and an execution `thread_id`; it emits run events, checkpoint ids and captured model requests into the application run record. Routes: `/v1/agent-runs` (start, get, `cancel`), `/v1/agent-tools`, `/v1/chat/conversations` (create, list, get, `start`, `cancel`, `transcript`). Run lifecycle uses the shared `RunLifecycleStatus` (`queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`) from [contracts](../contracts.md).
 
-The backend exposes start, progress, intervention, pause/cancel and recovery as supported by the integration. Exactly how interrupts, threads, checkpoints and continuation map to a pinned framework version must be tested before claiming resumability. A disconnected client is not evidence a run ended. A cancel request is not a confirmed stop: `cancel_requested` means work may still be running; `cancelled` is the confirmed stop. Do not silently replay uncertain tool effects during recovery.
+## Behaviour
 
-## Requirements and acceptance checks
+**Harness.** `HarnessService.start` resolves the effective setup, then calls `create_deep_agent` with the model adapter, enabled tools, system prompt, application middleware, the SQLite checkpointer and a Deep Agents filesystem backend rooted at the project. Enabled tools are visibility (`echo`, `time_now`) plus Deep Agents `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`; `execute`, `task` and `delete` are excluded until a worker environment is decided. Selected knowledge versions are loaded as content before the run. The harness's own scratch files must not land in the user's project (use the framework's composite backend for internal paths).
+
+<a id="chat-continuity"></a>
+**Chat without a project.** A conversation binds a deployment and optionally a profile and a project folder. Chat works with no project bound (product owner decision, 2026-09-19): the harness runs with visibility tools only, filesystem tools are absent from the enabled catalogue and the surface says so, and binding a project later applies to the next run. Refusing to start a conversation because no project is set is a gap against this specification.
+
+**Chat continuity.** A *conversation* is the application Chat record (displayed history, bound deployment / profile and optional project, links to runs). An *execution thread* is the LangGraph `thread_id` the harness resumes. A *run* is one harness invocation for one turn. **Continue** = same conversation + same thread + new run; the harness resumes checkpoints, not the transcript. **Fresh** = new conversation + new thread; project files and durable knowledge stay, active context does not. A history edit is display-only: it changes no project file, no thread and no next request. A deployment or profile switch applies to the next run on the same thread; whether the thread can resume across a model change is unproven, so until proven such a switch must be an explicit new attempt rather than a silent continue. No new turn starts while a run on the conversation is `queued`, `running` or `cancel_requested`. An unhealthy or unreachable deployment is reported as `deploy_unhealthy` / `deploy_unreachable` and the run is `failed`; Chat never invents a reply.
+
+**Cancellation.** A cancel request moves a live run to `cancel_requested` and nothing else; only the worker records `cancelled` once it has stopped. `cancel_requested` is still live for every quiescence check.
+
+**Budgets.** No task-level time, token, call or revision ceilings by default. Framework limits (LangGraph recursion limit, middleware timeouts) are configured explicitly and reported as the real stop reason when hit.
+
+**Definitions.** The backend compiles a Builder definition: configuration connections (profile, tools, skills, memory, environment, access, policy) resolve one agent setup; only workflow connections (next step, typed data/artifact handover) compile into sequencing. The result is a validated definition; the outer graph is built by LangGraph at run time.
+
+## Requirements
 
 <a id="agt-001"></a>
 ### AGT-001: Use the embedded harness
 
-Run agent tasks with Deep Agents using LangChain components and LangGraph. Chat calls this harness directly; do not add an application-written model-and-tool loop.
+Run agent tasks with Deep Agents using LangChain components and LangGraph. Chat calls this harness directly, with or without a bound project folder; do not add an application-written model-and-tool loop.
 
-**Acceptance:** Complete a real file-editing task through Chat and inspect the execution path to confirm that the harness owns the model/tool iteration.
+**Acceptance:** Complete a real file-editing task through Chat with a project bound and inspect the execution path to confirm that the harness owns the model/tool iteration. Start a conversation with no project bound and confirm it runs with filesystem tools absent and reported as such.
 
 <a id="wf-001"></a>
 ### WF-001: Keep configuration links out of execution sequencing
 
-Configuration connections supply model profile, tools, skills, memory, environment, access and execution policy. Resolve one validated Deep Agents setup. Workflow connections define next steps and typed data/artifact handovers; only these compile into workflow sequencing.
+Configuration connections supply model profile, tools, skills, memory, environment, access and execution policy and resolve into one validated Deep Agents setup. Workflow connections define next steps and typed data/artifact handovers; only these compile into workflow sequencing.
 
 **Acceptance:** Compile a mixed configuration/workflow definition and show that configuration links do not become executable workflow steps.
-
-Those configuration links contribute to the one resolved [effective setup](../architecture.md#effective-setup-contract). They still are not executable steps.
 
 <a id="wf-002"></a>
 ### WF-002: Make delegation and cycle ownership explicit
@@ -44,13 +55,9 @@ Builder invokes Deep Agents as named subgraphs with declared inputs and outputs.
 <a id="agt-002"></a>
 ### AGT-002: Capture the actual model request
 
-Instrument the final model-adapter boundary after context middleware. Link actual instructions, memory/skill versions, retrieved material, available tools, summaries and offloaded content to each call. Expose capture gaps, usage and provenance with configurable local retention/redaction. This is request visibility, not access to hidden model reasoning.
+Instrument the final model-adapter boundary after context middleware. Link actual instructions, memory/skill versions, retrieved material, available tools, summaries and offloaded content to each call. Expose capture gaps, usage and provenance with configurable local retention/redaction. The capture must agree with the effective setup the harness used. This is request visibility, not access to hidden model reasoning.
 
 **Acceptance:** Capture a request after compaction and compare it with what the adapter sends, accounting explicitly for redaction and any capture gap.
-
-The capture must agree with the [effective setup](../architecture.md#effective-setup-contract) the harness used. Listing a selected profile or knowledge id is not proof it was loaded or applied.
-
-Diagnostic copies use the [STATE-005](state-recovery.md#state-005) Knowledge capture policy ([Issue #64](https://github.com/Vidcar/thtaib/issues/64)): retain / `redact_secrets` / discard and optional retention expiry apply to persisted `model_requests` (including HTTP payloads) before store. Conversation transcripts, checkpoints and operational event history are not discarded by that setting. The detector is pattern-based and incomplete.
 
 <a id="agt-003"></a>
 ### AGT-003: Leave task budgets unset by default
@@ -62,11 +69,9 @@ Do not impose arbitrary task-level time, token, model/tool-call, reasoning-effor
 <a id="agt-004"></a>
 ### AGT-004: Separate active context from durable knowledge
 
-Use application-versioned user, agent and project memory/skills through configured backends. Automatic writes require explicit scope policy, provenance and concurrent-write handling; protected instructions must not be overwritten. Fresh conversations retain selected project files and durable knowledge without inheriting the previous active context. Background consolidation is a visible job under the same policy, not training.
+Use application-versioned user, agent and project memory/skills through configured backends. Automatic writes require explicit scope policy, provenance and concurrent-write handling; protected instructions must not be overwritten. Fresh conversations retain selected project files and durable knowledge without inheriting the previous active context. Selected knowledge versions are loaded as content before the run; referencing an id is not loading. Background consolidation is a visible job under the same policy, not training.
 
 **Acceptance:** Start a fresh conversation against retained files/knowledge, edit and revert a memory version, and exercise a denied or conflicting write. Verify protected instructions are unchanged.
-
-Selected knowledge version refs must be loaded through the configured backends before the run ([effective setup](../architecture.md#effective-setup-contract)). Referencing an id is not loading. This is not a retrieval/RAG product ([OQ-006](../open-questions.md#oq-006)).
 
 <a id="agt-005"></a>
 ### AGT-005: Do not silently remove enabled tools
@@ -78,159 +83,14 @@ Tool-selection middleware may narrow tools presented for a call, while applicati
 <a id="agt-006"></a>
 ### AGT-006: Keep completion evidence distinct from judgement
 
-Attach executable checks, expected artifacts and review criteria where a task has a definition of done. Preserve evidence and distinguish test outcomes from model assessments. The source identifies rubric middleware as a beta extension, not a prerequisite for completion checking.
+Attach executable checks, expected artifacts and review criteria where a task has a definition of done. Preserve evidence and distinguish test outcomes from model assessments. Rubric middleware is a beta extension, not a prerequisite for completion checking.
 
 **Acceptance:** Report one executable success/failure, one expected artifact and one model review separately. Verify that removing rubric integration does not remove basic acceptance checks.
 
-## Unresolved details
+## Status and evidence
 
-Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG and cross-surface sharing; Issue #17 locked only the [STATE-005 store defaults](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006) that [AGT-004](#agt-004) consumes. [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox. [OQ-015](../open-questions.md#oq-015) covers workflow import/export. [OQ-016](../open-questions.md#oq-016) records Builder v1 chrome as partially decided in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md); the remainder is the unfinished Builder surface. [WF-001](#wf-001) behaviour is unchanged. Evaluate optional middleware under [OQ-009](../open-questions.md#oq-009). Exact constructor arguments, graph APIs and middleware defaults are version-specific and are not prescribed here.
+Rows AGT-001…006, WF-001, WF-002 in [the catalogue](../catalog.json). Chat → tool call → file and thread continuity were seen working live with a tiny model on Linux ([evidence](../evidence/2026-09-19-linux-live-smoke.md)); nothing has run on David-PC.
 
-The [AGT-001](#agt-001) Chat surface lands as debug-quality Chat on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Issue #12 delivered the embedded harness and an Agent-run debug panel. Agent-run is not Chat. This is not finished Chat polish. [Issue #56](https://github.com/Vidcar/thtaib/issues/56) lands Chat continuity: a conversation owns one LangGraph `thread_id`, each follow-up is a new harness run on that thread, and a fresh conversation allocates a new thread. That is not effective-setup wiring and not workers. [Issue #78](https://github.com/Vidcar/thtaib/issues/78) adds Chat-facing deploy-health honesty when the bound llama.cpp endpoint is unhealthy or unreachable; it does not reopen #56 acceptance.
+## Open questions
 
-[Issue #52](https://github.com/Vidcar/thtaib/issues/52) records the high-level [Agent Chat continuity and UX](#high-level-agent-chat-continuity-issue-52) product mapping (conversation ↔ execution thread ↔ run; continue vs fresh; history-edit / model-switch effects; what reaches the harness). That mapping does **not** close [OQ-004](../open-questions.md#oq-004) and is not a claim that current Chat implements continuity. Implementation is a later Agent Chat Issue ([#56](https://github.com/Vidcar/thtaib/issues/56) / [#37](https://github.com/Vidcar/thtaib/issues/37) area 1). Effective setup (selected vs loaded vs applied) is a sibling spec, not this section.
-
-The [WF-001](#wf-001) backend definition compiler lands with [Issue #35](https://github.com/Vidcar/thtaib/issues/35): configuration connections resolve one Deep Agents setup, and only workflow connections compile into sequencing. That is not a Builder-shipped claim. v1 chrome remains locked in [ADR-0003](../decisions/ADR-0003-builder-v1-chrome.md) (config via node badge/popover, not a canvas config edge); [WF-001](#wf-001) behaviour is unchanged. [ARCH-003](../architecture.md#arch-003) is not reopened. The Agent-run panel is still not Builder. [WF-002](#wf-002) (delegation and cycle ownership) is deferred to Wave 2 and is not implemented here.
-
-<a id="locked-milestone-defaults-issue-42-cancel-honesty"></a>
-## Locked milestone defaults (Issue #42; cancel honesty / partial OQ-004)
-
-These defaults are authorised by [Issue #42](https://github.com/Vidcar/thtaib/issues/42). They satisfy honest harness cancel request versus confirmed stop. They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection, exactly-once, worker-adapter interrupt truth and continuation beyond measured framework limits stay open.
-
-- **Statuses:** `queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed` from the [Issue #41](https://github.com/Vidcar/thtaib/issues/41) shared `RunLifecycleStatus`. Harness `AgentRun.status` is that enum. This slice does not reimplement the OpenAPI→TS generator.
-- **Cancel request:** `POST /v1/agent-runs/{id}/cancel` (and Chat's cancel path through the same harness) transitions a live run to `cancel_requested`. `finished_at` stays unset. This is not a confirmed stop.
-- **Confirmed stop:** the worker records `cancelled` only after it has stopped (or never started) because cancel was requested.
-- **Quiescence:** `cancel_requested` is still live. Lab capture and “safe to treat the workspace as idle” must fail while any run for that workspace is `queued`, `running` or `cancel_requested`.
-- **STATE-004 intersection:** a cancel request is not evidence that an in-flight external effect finished. Recovery still reports uncertainty and does not silently replay. See [STATE-004 locked defaults](state-recovery.md#locked-milestone-defaults-issue-42-cancel-honesty).
-- **Not claimed:** full OQ-004 close; worker-adapter interrupt ([ENV-003](environments-tools.md#env-003)); durable Approvals inbox; host execute.
-
-<a id="high-level-agent-chat-continuity-issue-52"></a>
-## High-level Agent Chat continuity and UX (Issue #52)
-
-These defaults are authorised by [Issue #52](https://github.com/Vidcar/thtaib/issues/52) as the high-level product spec for Agent Chat continuity and UX beyond [debug-quality Chat](../../docs/glossary.md#debug-quality-chat). They satisfy the documentation gap in [#37](https://github.com/Vidcar/thtaib/issues/37) area 1 (conversation ↔ execution-thread ↔ run; continue vs fresh; history-edit / model-switch effects; inspector honesty). They do **not** close [OQ-004](../open-questions.md#oq-004): identities, event-order/reconnection and exactly-once stay open. They do not rewrite closed [Issue #22](https://github.com/Vidcar/thtaib/issues/22) acceptance. They are not a catalogue `verified` claim and not an implementation.
-
-Homes: [AGT-001](#agt-001), [AGT-002](#agt-002), [AGT-004](#agt-004); [STATE-001](state-recovery.md#state-001)/[STATE-002](state-recovery.md#state-002); [API-001](backend-desktop.md#api-001)/[API-004](backend-desktop.md#api-004); [ARCH-003](../architecture.md#arch-003) shared records only. Related: [#12](https://github.com/Vidcar/thtaib/issues/12), [#22](https://github.com/Vidcar/thtaib/issues/22), [#27](https://github.com/Vidcar/thtaib/issues/27), [#42](https://github.com/Vidcar/thtaib/issues/42). Implementation: [#56](https://github.com/Vidcar/thtaib/issues/56). Do not blur [Model Lab](../../docs/glossary.md#model-lab) or [Task cases and replay](../../docs/glossary.md#task-cases-and-replay). Effective setup (profile/knowledge actually applied) is [Issue #53](https://github.com/Vidcar/thtaib/issues/53) / [Issue #57](https://github.com/Vidcar/thtaib/issues/57), not this section.
-
-### Conversation, execution thread and run
-
-| Record | Owner | Meaning |
-| --- | --- | --- |
-| **Conversation** | Application Chat records in `application.sqlite` | Chat-surface identity: displayed history, bound project / deployment / profile refs, and links to runs. Not the working project. Not the harness loop. |
-| **Execution thread** | Application-owned thread identity; LangGraph owns checkpoint bytes | Continuation identity the harness resumes. This is what **continue** uses. Exact namespace and identifier format stay [OQ-004](../open-questions.md#oq-004). |
-| **Run** | Application run record plus harness lifecycle | One harness invocation (one turn). Status, events and checkpoint-id links live here. A run belongs to one conversation and one execution thread. |
-
-- One conversation has zero or more runs. Listing historical run ids is not proof those runs share an execution thread.
-- **Continue** = same conversation + same execution thread + new run.
-- **Fresh** = new conversation (or an explicit reset that creates one) + new execution thread + no previous active context.
-- The Agent-run debug panel is not a conversation and is not Chat.
-- Deep Agents / LangGraph remain the loop. Do not add an application-written conversation or agent loop that replays the transcript as a substitute for the execution thread.
-
-**Current code is not this mapping.** Debug-quality Chat stores a transcript and starts a new harness run with the latest task only; the reviewed path assigns a new thread per run. Displayed transcript is therefore not continued execution context. That is the [#37](https://github.com/Vidcar/thtaib/issues/37) area 1 gap. This section defines the intended relationship; it does not claim the current path implements it.
-
-### Continue versus fresh
-
-**Continue** is the normal follow-up on an existing conversation:
-
-- Reuse the conversation and its execution thread. Start a new run for the new user turn.
-- The harness resumes the intended active context through that thread / checkpoints, independently of the displayed transcript.
-- After backend restart, reopen and continue use the persisted conversation → thread → run linkage ([STATE-001](state-recovery.md#state-001)). Missing linkage is an explicit gap, not a silent new thread presented as the same conversation.
-- Do not start another turn while a run on that conversation is `queued`, `running` or `cancel_requested`.
-
-**Fresh** is an explicit user action (New conversation):
-
-- New conversation and new execution thread. Previous active context is not inherited ([AGT-004](#agt-004)).
-- Selected project files and permitted durable knowledge are retained. Fresh does not delete or restore project files ([STATE-002](state-recovery.md#state-002)).
-- Clearing only the desktop panel without creating a new conversation record is not the product Fresh action.
-
-### What reaches the harness
-
-On **continue** the harness receives:
-
-- Resume of the execution thread / checkpoints (active context).
-- The new user turn.
-- The bound deployment and project workspace.
-- Selected profile and knowledge version **references**, resolved by the [effective setup contract](../architecture.md#effective-setup-contract) ([Issue #53](https://github.com/Vidcar/thtaib/issues/53) / [Issue #57](https://github.com/Vidcar/thtaib/issues/57) / [ARCH-003](../architecture.md#arch-003)). This section does not restate that contract.
-- Enabled tools that target project storage ([STATE-002](state-recovery.md#state-002)).
-- The same cancel path as any other harness run ([Issue #42](https://github.com/Vidcar/thtaib/issues/42)).
-
-On **continue** the harness does **not** receive the displayed transcript as a substitute for the execution thread, and it does not receive a second application-written agent loop.
-
-On **fresh** the harness receives a new execution thread and the new turn only. Previous conversation active context is omitted. Project files and permitted durable knowledge remain available under the same [AGT-004](#agt-004) / [STATE-005](state-recovery.md#state-005) rules.
-
-[AGT-002](#agt-002) remains the home for what the adapter actually sent. A stored reference or a visible transcript line is not that capture.
-
-### History-edit effects
-
-- Displayed history is application-owned ([STATE-002](state-recovery.md#state-002)). Editing or clearing it alone neither restores nor deletes project files.
-- A display-only edit does not silently become the next model request. Continue after a display-only edit still resumes the execution thread.
-- The inspector must show when displayed history and harness active context differ. Do not hide that divergence behind a matching transcript.
-- If the user wants the edited history to become execution context, that is an explicit **new attempt** (new execution thread / linked branch), not a silent rewrite of the live thread. The exact branch / checkpoint mechanism stays [OQ-004](../open-questions.md#oq-004) / [STATE-003](state-recovery.md#state-003).
-- A “start new attempt from edited history” control is not specified as shipped UX here. Until an implementation Issue adds it, history replace remains display-only.
-
-### Model-switch effects
-
-- Changing the selected deployment or profile on a conversation applies to the **next** run, not retroactively to past runs.
-- A switch does not rewrite displayed history or project files.
-- Selecting a profile or deployment is not proof the next request applied those settings. That proof is [Issue #53](https://github.com/Vidcar/thtaib/issues/53).
-- Whether the same execution thread can continue after a model / adapter change is **open** ([OQ-004](../open-questions.md#oq-004) remainder / pinned-framework compatibility). Until an implementation Issue proves resume across that change, a switch that cannot resume the thread must be an explicit new attempt, not a silent continue.
-- A model switch is not Fresh: the conversation and project may be retained. Resume of active context across the switch is the open part.
-
-### Inspector honesty and UX beyond debug
-
-Chat is a first-class surface, not the Agent-run debug panel. Beyond debug-quality Chat, the surface must:
-
-- Distinguish conversation, execution thread and current / past runs when those identities exist, and show a gap when they do not.
-- Label **continue** versus **fresh**.
-- Show run lifecycle honestly (`cancel_requested` is still live; `cancelled` is confirmed stop; no false idle).
-- Stream harness progress. A preview or model-confidence line is not completion ([API-004](backend-desktop.md#api-004)).
-- Not present displayed transcript as proof the harness has that context.
-- Not present profile or knowledge ids as applied ([Issue #53](https://github.com/Vidcar/thtaib/issues/53)).
-- Support: open / continue a conversation; explicit Fresh; compose a turn; stream; cancel; see displayed history labelled as history; bind deployment, profile and project workspace.
-
-This is not Chat polish (rich editor, token chrome, themes) and not a finished product claim.
-
-### Open gaps (honest)
-
-Leave these visible. Do not treat this section as closing them.
-
-| Gap | Home |
-| --- | --- |
-| Exact thread / checkpoint identity format, parent/child semantics, event-order / reconnection, exactly-once | [OQ-004](../open-questions.md#oq-004) remainder |
-| Event streaming / reconnection | [OQ-002](../open-questions.md#oq-002) remainder |
-| Resume of the same execution thread after a model / adapter change | Open under [OQ-004](../open-questions.md#oq-004); product rule above (explicit new attempt until proven) |
-| “New attempt from edited history” control and branch pairing | [OQ-004](../open-questions.md#oq-004) / [STATE-003](state-recovery.md#state-003); not shipped here |
-| Selected vs loaded vs applied profile / knowledge | Implemented on the harness path by [Issue #57](https://github.com/Vidcar/thtaib/issues/57); contract [Issue #53](https://github.com/Vidcar/thtaib/issues/53); [ARCH-003](../architecture.md#arch-003); [REG-005](registry.md#reg-005); [OQ-006](../open-questions.md#oq-006)/[007](../open-questions.md#oq-007) remainders |
-| Files / images in Chat; project-free Chat; workspace ownership across surfaces | [#37](https://github.com/Vidcar/thtaib/issues/37) area 5; [delivery feature map](../../docs/delivery-feature-map.md#specs-still-needed) |
-| Knowledge steer UX | Milestone #8; [#17](https://github.com/Vidcar/thtaib/issues/17) out of scope |
-| Durable Approvals inbox | [OQ-011](../open-questions.md#oq-011) |
-| Run observability outside Lab | [OQ-012](../open-questions.md#oq-012) |
-| Command / browser / graphical workers | [OQ-003](../open-questions.md#oq-003); Milestone #5 |
-| Builder | [OQ-016](../open-questions.md#oq-016) |
-| Model Lab; Task cases and replay | Separate features; do not merge |
-
-**Not claimed:** catalogue `verified`; closing [OQ-004](../open-questions.md#oq-004); David-PC UAT for effective setup; workers; Builder; Model Lab; Chat polish.
-
-<a id="locked-milestone-defaults-issue-56-chat-continuity"></a>
-## Locked milestone defaults (Issue #56; Chat continuity / partial OQ-004)
-
-These defaults are authorised by [Issue #56](https://github.com/Vidcar/thtaib/issues/56). They satisfy Chat follow-up continuity through the embedded harness. They do **not** close [OQ-004](../open-questions.md#oq-004): identities beyond this conversation↔thread↔run link, event-order/reconnection and exactly-once stay open. They are not effective-setup ([Issue #57](https://github.com/Vidcar/thtaib/issues/57)), not workers ([OQ-003](../open-questions.md#oq-003)), and not a catalogue `verified` claim.
-
-- **Relationship:** one Chat conversation owns one LangGraph `thread_id`. Each Start creates a new `AgentRun` that passes that `thread_id` to `create_deep_agent` / the SQLite checkpointer. Agent-run and Lab without a supplied `thread_id` still use `thread_id = run.id`.
-- **Follow-up:** the next model request resumes checkpointer state for that thread. Continuity is proven at the harness/model-request boundary, not by the displayed transcript.
-- **Fresh conversation:** `POST /v1/chat/conversations` allocates a new conversation id and a new `thread_id`. Active context does not carry over. Project files and permitted durable knowledge stay.
-- **Reopen after restart:** application records keep `conversation.id → thread_id → run_ids`. A later backend process continues by starting another run on the same `thread_id`.
-- **History edit:** `PUT …/transcript` is display-only (`history_edit_effect=display_only`). It does not restore or delete project files, does not rewrite the LangGraph thread, and is not replayed as harness context.
-- **Model/profile switch:** the next run uses the selected deployment/profile on the **same** conversation thread (`model_switch_effect=same_thread_new_run`).
-- **Surfaces:** Chat `/v1/chat/` plus the debug Chat panel's reopen list. No Builder canvas. No RAG.
-- **Not claimed:** event-stream reconnection; workers; Chat polish. Profile/knowledge apply-for-real is [Issue #57](https://github.com/Vidcar/thtaib/issues/57) / [ARCH-003 locked defaults](../architecture.md#locked-milestone-defaults-issue-57-effective-setup).
-
-<a id="locked-milestone-defaults-issue-78-chat-deploy-health"></a>
-## Locked milestone defaults (Issue #78; Chat deploy-health honesty)
-
-These defaults are authorised by [Issue #78](https://github.com/Vidcar/thtaib/issues/78) (leftover from [#56](https://github.com/Vidcar/thtaib/issues/56) / [PR #69](https://github.com/Vidcar/thtaib/pull/69) UAT). They make Chat/API connection and deploy-health failures honest. They do **not** reopen closed #56 acceptance, do not close [OQ-012](../open-questions.md#oq-012), and do not duplicate [Issue #62](https://github.com/Vidcar/thtaib/issues/62) process ownership.
-
-- **Surface:** `GET`/`POST /v1/chat/conversations` include `deploy_health`. An unhealthy stored deployment reports `code=deploy_unhealthy`. A live adapter transport failure (including the opaque OpenAI/httpx `Connection error.`) is rewritten to `code=deploy_unreachable` on the Chat view and on `current_run.error`.
-- **Not silent success:** a failed live completion is `current_run.status=failed` with that classified message. Chat does not invent an assistant reply.
-- **Continuity unchanged:** conversation ↔ `thread_id` ↔ run linkage from [Issue #56](#locked-milestone-defaults-issue-56-chat-continuity) stays. Start still records the thread even when the live endpoint is down.
-- **UAT checklist:** David-PC live completion requires a **healthy** managed/connected llama.cpp. Harness `model_requests` / thread reuse prove continuity only — not live assistant completion. Reuse the existing deployment health probe from #62; do not treat this as a new ownership owner.
-- **Not claimed:** catalogue `verified`; David-PC live UAT (local-machine-required); token/trace/parent-child observability ([OQ-012](../open-questions.md#oq-012)); rewriting #56 or #62 acceptance.
+[OQ-004](../open-questions.md#oq-004) run identities, event order and exactly-once; [OQ-006](../open-questions.md#oq-006) retrieval through LangChain components (decision pending research) and cross-surface knowledge; [OQ-009](../open-questions.md#oq-009) optional middleware; [OQ-011](../open-questions.md#oq-011) Approvals inbox; [OQ-015](../open-questions.md#oq-015) workflow import/export; [OQ-016](../open-questions.md#oq-016) Builder surface. Technical question to settle when Chat is next touched: whether a profile's own `system_prompt` should win over the Chat surface prompt (today the surface prompt silently wins).

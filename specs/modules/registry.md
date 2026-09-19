@@ -1,24 +1,24 @@
 # Versioned integration registry
 
-[Specification index](../README.md) · [Status and evidence](../catalog.json)
+[Architecture](../architecture.md) · [Status and evidence](../catalog.json) · [Decisions](../decisions/changelog.md)
 
-## Ownership, scope and source
+## Purpose
 
-The application owns the integration model. React Flow, LangChain tools and LangGraph consume its contracts. Source: [revision 0.5, page 7](../sources/README.md#integration-registry).
+One application-owned, versioned description of every model, agent, tool, environment and adapter integration, consumed by React Flow for presentation, LangChain for tool exposure and LangGraph for compilation, so that no consumer keeps its own copy of the integration model.
 
-## Definition content
+## Boundaries and ownership
 
-A definition carries stable identity/version and dependency support; typed inputs/outputs and connection kind; configuration/defaults/applied values; capabilities and discovery; environment/access/approvals/memory scope; progress/results/errors/cancellation; run/checkpoint/effect/recovery/snapshot behaviour; context/evidence/provenance; and presentation controls/renderers/MCP Apps permissions.
+The application owns the integration model and its validation. React Flow, LangChain tools and LangGraph consume it. Adapters and their contract tests prove that a registered behaviour is actually implemented; a registry entry only declares it. Source: [Revision 0.5, page 7](../sources/README.md#integration-registry).
 
-This is a semantic inventory, not an approved JSON object schema. The exact model is created once at the contract boundary, under [contracts](../contracts.md), rather than independently in backend, desktop and plugins.
+## Interfaces and contracts
 
-## Lifecycle and collaboration
+A definition carries stable identity and version with dependency support; typed inputs and outputs with connection kind (configuration or workflow); configuration schema, defaults and applied values; capabilities and discovery; environment, access, approval and memory scope; progress, results, errors and cancellation; run, checkpoint, effect, recovery and snapshot behaviour; context, evidence and provenance; presentation controls, renderers and MCP Apps permissions. This is a semantic inventory; the exact schema is authored once at the contract boundary ([contracts](../contracts.md)). Nothing is implemented yet (`integration-definitions` is unbound in [the repository map](../repository-map.json)).
 
-Definitions are registered, validated and resolved before execution. A stored graph must identify the definitions it uses. Invalid wiring is rejected with an explanation; an unverified capability is not silently promoted to supported. The backend repeats validation at run start because deployment, environment, access or configuration may have changed since editing.
+## Behaviour
 
-A registry entry declares behaviour; it does not prove the adapter implements it. Adapters and their contract tests supply that evidence.
+Definitions are registered, validated and resolved before execution; a stored graph names the definitions it uses. Invalid wiring is rejected with an explanation; an unverified capability is never promoted to supported. The backend repeats validation at run start because deployment, environment, access or configuration may have changed since editing; that is the same resolve-before-run step as the [effective setup](../architecture.md#effective-setup). Effective controls are the applied bag plus the actual runtime limits; user-selected budgets are distinguished from runtime boundaries. The registry does not imply dynamic code loading, remote plugin execution or hot reload.
 
-## Requirements and acceptance checks
+## Requirements
 
 <a id="reg-001"></a>
 ### REG-001: Define identity, capabilities and execution together
@@ -33,8 +33,6 @@ A node/adapter definition includes the identity, connections, configuration, cap
 Use types, required capabilities, configuration completeness and execution policy to reject known-incompatible connections. Distinguish configuration links from workflow/data/artifact links. Repeat backend validation immediately before execution and enforce policy in the executing tools/workers.
 
 **Acceptance:** Try compatible, incompatible, incomplete and unverified connections. Change an environment permission after editing and confirm run-start validation detects the new restriction.
-
-Run-start validation is the same resolve-before-run rule as the [effective setup contract](../architecture.md#effective-setup-contract). A stored definition is not a resolved run.
 
 <a id="reg-003"></a>
 ### REG-003: Keep a single integration authority
@@ -53,14 +51,14 @@ Map agent, workflow, tool, interpreter and interactive-panel events to one run h
 <a id="reg-005"></a>
 ### REG-005: Expose effective controls and limits
 
-Configuration includes settings schemas, defaults, required fields, applied values, optional budgets and effective technical limits. Preserve supported controls and distinguish user-selected budgets from runtime boundaries.
+Configuration includes settings schemas, defaults, required fields, applied values, optional budgets and effective technical limits. Preserve supported controls and distinguish user-selected budgets from runtime boundaries. Selected ≠ applied.
 
 **Acceptance:** Render and resolve a configuration containing runtime-specific settings and an unset budget. Verify the applied values and any actual limiting boundary are visible.
 
-Effective controls are the applied bag plus actual limits. Selected ≠ applied. The shared rule is [effective setup](../architecture.md#effective-setup-contract); this requirement remains the registry configuration home.
+## Status and evidence
 
-## Unresolved details
+Rows REG-001…005 in [the catalogue](../catalog.json). No registry exists on `main`.
 
-[OQ-008](../open-questions.md#oq-008) covers definition/version compatibility, plugin discovery/trust, invalidation and skills/plugins discovery UX. [OQ-004](../open-questions.md#oq-004) covers shared identities/events. [OQ-015](../open-questions.md#oq-015) covers workflow import/export; it is not a second registry or runtime. Do not add dynamic code loading, remote plugin execution or hot reload merely because the registry is extensible; those are separate decisions.
+## Open questions
 
-No application registry is implemented on main. A stored graph, third-party adapter or shared definition version still blocks on [OQ-008](../open-questions.md#oq-008). [Issue #53](https://github.com/Vidcar/thtaib/issues/53) records the shared [effective setup](../architecture.md#effective-setup-contract) that a future registry must resolve at run start; it does not implement this module or close [OQ-008](../open-questions.md#oq-008).
+[OQ-008](../open-questions.md#oq-008) schemas, compatibility, discovery and extension trust; [OQ-004](../open-questions.md#oq-004) shared identities and events; [OQ-015](../open-questions.md#oq-015) workflow import/export.
