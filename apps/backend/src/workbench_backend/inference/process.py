@@ -10,15 +10,17 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import IO, Any, Literal
 
 import httpx
 import psutil
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.process_logs import RotatingLogWriter, pump_stream_to_log
 from workbench_backend.inference.schemas import (
     HealthReport,
     ProcessIdentity,
@@ -29,6 +31,14 @@ from workbench_backend.inference.schemas import (
 IdentityVerdict = Literal["match", "mismatch", "gone"]
 
 CREATE_TIME_TOLERANCE_SECONDS = 0.05
+
+# Honest wait for a warm load (David-PC UAT: 9 s from page cache). A cold
+# 14 GB load still takes longer than this budget; the HTTP handler returns
+# unhealthy and the client keeps polling GET /health. Do not raise this to
+# minutes — that would block the start request.
+OWNED_HEALTH_ATTEMPTS = 60
+OWNED_HEALTH_DELAY_SECONDS = 0.5
+OWNED_HEALTH_BUDGET_SECONDS = OWNED_HEALTH_ATTEMPTS * OWNED_HEALTH_DELAY_SECONDS
 
 PROCESS_IDENTITY_MISMATCH = "process_identity_mismatch"
 PROCESS_IDENTITY_UNPROVEN = "process_identity_unproven"
@@ -155,20 +165,60 @@ class ProcessSupervisor:
     def __init__(self, *, inspector: ProcessInspector | None = None) -> None:
         self.inspector = inspector or PsutilInspector()
         self._children: dict[int, subprocess.Popen[bytes]] = {}
+        self._log_pumps: dict[int, threading.Thread] = {}
+        self._log_writers: dict[int, RotatingLogWriter] = {}
 
-    def start(self, argv: list[str], *, cwd: Path | None = None) -> ProcessIdentity:
+    def start(
+        self,
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        log_path: Path | None = None,
+    ) -> ProcessIdentity:
+        stdout: IO[bytes] | int = subprocess.DEVNULL
+        stderr: IO[bytes] | int = subprocess.DEVNULL
+        writer: RotatingLogWriter | None = None
+        if log_path is not None:
+            writer = RotatingLogWriter(log_path)
+            banner = (
+                f"# workbench llama-server start {utc_now()}\n"
+                f"# argv: {argv_for_host(argv)}\n"
+            ).encode("utf-8")
+            writer.write(banner)
+            stdout = subprocess.PIPE
+            stderr = subprocess.STDOUT
         process = subprocess.Popen(  # noqa: S603 - argv is built from managed records
             argv_for_host(argv),
             cwd=str(cwd) if cwd else None,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
         )
         pid = int(process.pid)
         self._children[pid] = process
+        if writer is not None and process.stdout is not None:
+            self._log_writers[pid] = writer
+            pump = threading.Thread(
+                target=pump_stream_to_log,
+                args=(process.stdout, writer),
+                name=f"llama-server-log-{pid}",
+                daemon=True,
+            )
+            self._log_pumps[pid] = pump
+            pump.start()
+        elif writer is not None:
+            writer.close()
         identity = self.inspector.identity_of(pid)
         if identity is None:
             return ProcessIdentity(pid=pid, create_time=0.0, executable="")
         return identity
+
+    def _release_log(self, pid: int) -> None:
+        pump = self._log_pumps.pop(int(pid), None)
+        if pump is not None and pump.is_alive():
+            pump.join(timeout=1.0)
+        writer = self._log_writers.pop(int(pid), None)
+        if writer is not None:
+            writer.close()
 
     def classify(self, identity: ProcessIdentity) -> IdentityVerdict:
         return classify_identity(identity, inspector=self.inspector)
@@ -210,6 +260,7 @@ class ProcessSupervisor:
                     child.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass
+            self._release_log(identity.pid)
             return
         child = self._children.pop(identity.pid, None)
         if child is not None and child.poll() is None:
@@ -227,6 +278,7 @@ class ProcessSupervisor:
         if self.classify(identity) == "match":
             self._stop_process_tree(identity.pid, timeout=timeout, force=True)
             self.wait_until_gone(identity.pid, timeout=timeout)
+        self._release_log(identity.pid)
 
     def wait_until_gone(self, pid: int, *, timeout: float = 5.0) -> None:
         """Poll until the PID is gone. Does not terminate; callers must have verified identity."""
@@ -366,8 +418,8 @@ def wait_for_owned_health(
     identity: ProcessIdentity,
     *,
     port: int | None = None,
-    attempts: int = 20,
-    delay: float = 0.1,
+    attempts: int = OWNED_HEALTH_ATTEMPTS,
+    delay: float = OWNED_HEALTH_DELAY_SECONDS,
 ) -> tuple[IdentityVerdict, HealthReport, bool | None]:
     """Probe health only while the launched process still matches identity.
 

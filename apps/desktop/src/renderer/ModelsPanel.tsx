@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
-import type { InspectReport, ModelBundle, PathsInfo, SettingsBags } from "./types";
+import { SettingsNotes } from "./settingsNotes";
+import type { InspectReport, ModelBundle, PathsInfo, RunProfile, SettingsBags } from "./types";
 
 function parseJsonObject(raw: string, fallback: object): object {
   try {
@@ -26,12 +27,18 @@ export function ModelsPanel() {
   const [requestRaw, setRequestRaw] = useState('{"temperature": 0.7}');
   const [agentRaw, setAgentRaw] = useState('{"tools_enabled": false}');
   const [preview, setPreview] = useState<SettingsBags | null>(null);
+  const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [message, setMessage] = useState<string>("");
 
   async function refresh(): Promise<void> {
-    const [nextPaths, nextBundles] = await Promise.all([api.paths(), api.bundles()]);
+    const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
+      api.paths(),
+      api.bundles(),
+      api.profiles(),
+    ]);
     setPaths(nextPaths);
     setBundles(nextBundles);
+    setProfiles(nextProfiles);
   }
 
   useEffect(() => {
@@ -193,6 +200,14 @@ export function ModelsPanel() {
               <dd>{preview.startup.unsupported.join(", ") || "none"}</dd>
             </div>
             <div>
+              <dt>Startup retired</dt>
+              <dd>
+                {preview.startup.retired.length
+                  ? preview.startup.retired.map((note) => `${note.key}: ${note.reason}`).join(" | ")
+                  : "none"}
+              </dd>
+            </div>
+            <div>
               <dt>Per-request applied</dt>
               <dd>{JSON.stringify(preview.per_request.applied)}</dd>
             </div>
@@ -210,7 +225,25 @@ export function ModelsPanel() {
             </div>
           </dl>
         ) : null}
-      </form>
+        </form>
+
+      <div className="card">
+        <h3>Saved profiles</h3>
+        <p className="hint">Unsupported and retired keys are re-resolved on read from the stored requested bags.</p>
+        {profiles.length === 0 ? <p className="hint">No saved profiles.</p> : null}
+        <ul className="list">
+          {profiles.map((profile) => (
+            <li key={profile.id}>
+              <strong>{profile.display_name}</strong>
+              <span className="badge">{profile.id}</span>
+              <SettingsNotes
+                unsupported={profile.bags.startup.unsupported}
+                retired={profile.bags.startup.retired}
+              />
+            </li>
+          ))}
+        </ul>
+      </div>
       {message ? <p className="status">{message}</p> : null}
     </section>
   );

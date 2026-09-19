@@ -93,13 +93,26 @@ class ModelManager:
         return inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id)
 
     def list_profiles(self) -> list[RunProfile]:
-        return self.store.list_profiles()
+        return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
 
     def get_profile(self, profile_id: str) -> RunProfile:
         profile = self.store.get_profile(profile_id)
         if profile is None:
             raise ManagerError("Unknown profile", code="profile_missing", status_code=404)
-        return profile
+        return self._resolved_profile(profile)
+
+    def _resolved_profile(self, profile: RunProfile) -> RunProfile:
+        """Re-resolve requested keys so pre-correction profiles show retired notes."""
+
+        return profile.model_copy(
+            update={
+                "bags": resolve_bags(
+                    startup=profile.bags.startup.requested,
+                    per_request=profile.bags.per_request.requested,
+                    agent=profile.bags.agent.requested,
+                )
+            }
+        )
 
     def create_profile(self, request: ProfileWriteRequest) -> RunProfile:
         now = utc_now()

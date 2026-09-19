@@ -37,12 +37,20 @@ class RecordingSupervisor(ProcessSupervisor):
         super().__init__()
         self.launched: list[list[str]] = []
 
-    def start(self, argv: list[str], *, cwd: Path | None = None) -> ProcessIdentity:
+    def start(
+        self,
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        log_path: Path | None = None,
+    ) -> ProcessIdentity:
         self.launched.append(list(argv))
-        return super().start(argv, cwd=cwd)
+        return super().start(argv, cwd=cwd, log_path=log_path)
 
 
 class FakeWindowsInstaller(RuntimeInstaller):
+    verify_release_digest = False
+
     def __init__(self) -> None:
         self.urls: list[str] = []
 

@@ -2,9 +2,10 @@
 
 On Windows the layout is ``%LOCALAPPDATA%\\LocalAIWorkbench\\`` with
 ``models\\``, ``runtimes\\``, ``state\\``, ``cases\\``, ``snapshots\\``,
-``workspaces\\``, ``knowledge\\``, plus ``application.sqlite`` and
-``checkpoints.sqlite``. Other platforms use the same names under a portable
-data root so tests and smoke can run without claiming a second product mode.
+``workspaces\\``, ``knowledge\\``, ``logs\\``, plus ``application.sqlite``
+and ``checkpoints.sqlite``. Other platforms use the same names under a
+portable data root so tests and smoke can run without claiming a second
+product mode.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ class WorkbenchPaths:
         self.snapshots = self.root / "snapshots"
         self.workspaces = self.root / "workspaces"
         self.knowledge = self.root / "knowledge"
+        self.logs = self.root / "logs"
         self.application_db = self.root / APPLICATION_DB_NAME
         self.checkpoints_db = self.root / CHECKPOINTS_DB_NAME
         self.desktop_backend_shared_secret = self.state / SHARED_SECRET_FILENAME
@@ -69,6 +71,7 @@ class WorkbenchPaths:
             self.snapshots,
             self.workspaces,
             self.knowledge,
+            self.logs,
         ):
             path.mkdir(parents=True, exist_ok=True)
         return self
@@ -83,9 +86,10 @@ class WorkbenchPaths:
             "snapshots": str(self.snapshots),
             "workspaces": str(self.workspaces),
             "knowledge": str(self.knowledge),
+            "logs": str(self.logs),
             "application_db": str(self.application_db),
             "checkpoints_db": str(self.checkpoints_db),
             "windows_layout": (
-                r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state,cases,snapshots,workspaces,knowledge,application.sqlite,checkpoints.sqlite}"
+                r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state,cases,snapshots,workspaces,knowledge,logs,application.sqlite,checkpoints.sqlite}"
             ),
         }

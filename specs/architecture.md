@@ -36,7 +36,7 @@ The desktop talks only to the backend. The backend resolves records, definitions
 
 ## Persistence
 
-Product data lives under `%LOCALAPPDATA%\LocalAIWorkbench\` on Windows (`~/.local/share/LocalAIWorkbench/` on Linux, overridable with `WORKBENCH_DATA_ROOT`): `models\`, `runtimes\`, `state\`, `cases\`, `snapshots\`, `workspaces\`, `knowledge\`, `application.sqlite` and `checkpoints.sqlite`. Never the repository, never `.scratch/`.
+Product data lives under `%LOCALAPPDATA%\LocalAIWorkbench\` on Windows (`~/.local/share/LocalAIWorkbench/` on Linux, overridable with `WORKBENCH_DATA_ROOT`): `models\`, `runtimes\`, `state\`, `cases\`, `snapshots\`, `workspaces\`, `knowledge\`, `logs\`, `application.sqlite` and `checkpoints.sqlite`. Never the repository, never `.scratch/`.
 
 - `application.sqlite` is the application system of record for runs, chat conversations and transcripts, checkpoint-id links, external-effect ledger rows and file references.
 - `checkpoints.sqlite` belongs to the LangGraph SQLite checkpointer. The application stores checkpoint ids and never reads or writes its tables directly.

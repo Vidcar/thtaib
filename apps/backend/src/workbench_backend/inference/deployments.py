@@ -23,6 +23,7 @@ from workbench_backend.inference.process import (
     ProcessSupervisor,
     wait_for_owned_health,
 )
+from workbench_backend.inference.process_logs import deployment_log_path
 from workbench_backend.inference.runtime import RuntimeService
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
@@ -227,7 +228,11 @@ class DeploymentService:
         self.store.put_deployment(starting)
         identity: ProcessIdentity | None = None
         try:
-            identity = self.processes.start(argv, cwd=Path(executable).parent)
+            identity = self.processes.start(
+                argv,
+                cwd=Path(executable).parent,
+                log_path=deployment_log_path(self.runtime.paths.logs, starting.id),
+            )
             recorded = starting.model_copy(
                 update={
                     "pid": identity.pid,
