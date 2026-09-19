@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
+from workbench_backend.inference.deployments import managed_argv
+from workbench_backend.inference.process import HttpProbe, ProcessIdentity, ProcessSupervisor
 from workbench_backend.inference.runtime import RuntimeInstaller
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
@@ -23,6 +28,18 @@ from workbench_backend.paths import WorkbenchPaths
 
 from support import write_tiny_gguf
 from test_app import FakeHF
+
+
+class RecordingSupervisor(ProcessSupervisor):
+    """Real supervisor that also keeps the argv it launched."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.launched: list[list[str]] = []
+
+    def start(self, argv: list[str], *, cwd: Path | None = None) -> ProcessIdentity:
+        self.launched.append(list(argv))
+        return super().start(argv, cwd=cwd)
 
 
 class FakeWindowsInstaller(RuntimeInstaller):
@@ -46,13 +63,82 @@ class FailingInstaller(RuntimeInstaller):
         raise InterruptedError("runtime download interrupted")
 
 
+class PropsVariantHandler(BaseHTTPRequestHandler):
+    """Healthy OpenAI-compatible stub whose ``/props`` is broken in a configurable way."""
+
+    props_mode = "missing"
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/health":
+            self._send(200, b'{"status":"ok"}', "application/json")
+            return
+        if self.path == "/props":
+            if self.props_mode == "missing":
+                self._send(404, b'{"error":"not found"}', "application/json")
+            elif self.props_mode == "html":
+                self._send(200, b"<html><body>not json</body></html>", "text/html")
+            else:
+                self._send(200, json.dumps(["not", "a", "dict"]).encode("utf-8"), "application/json")
+            return
+        self._send(404, b'{"error":"not found"}', "application/json")
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class BrokenPropsEndpointTests(unittest.TestCase):
+    """A healthy endpoint without usable ``/props`` stays running with nothing recorded."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.manager = ModelManager(WorkbenchPaths(Path(self.tmp.name)).ensure())
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), PropsVariantHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.endpoint = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def test_props_404_non_json_or_list_leave_deployment_running(self) -> None:
+        for mode in ("missing", "html", "list"):
+            with self.subTest(mode=mode):
+                PropsVariantHandler.props_mode = mode
+                self.assertIsNone(HttpProbe().props(self.endpoint))
+                deployment = self.manager.attach_connected(
+                    ConnectedDeploymentRequest(endpoint=self.endpoint)
+                )
+                self.assertEqual(deployment.status.value, "running")
+                self.assertTrue(deployment.health and deployment.health.healthy)
+                self.assertIsNone(deployment.server_props)
+                refreshed = self.manager.deployment_health(deployment.id)
+                self.assertEqual(refreshed.status.value, "running")
+                self.assertTrue(refreshed.health and refreshed.health.healthy)
+                self.assertIsNone(refreshed.server_props)
+                self.manager.detach_deployment(deployment.id)
+
+
 class DeploymentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.paths = WorkbenchPaths(self.root).ensure()
         self.gguf = write_tiny_gguf(self.root / "incoming" / "tiny.gguf")
-        self.manager = ModelManager(self.paths, hf=FakeHF(error=RuntimeError("boom")))
+        self.supervisor = RecordingSupervisor()
+        self.manager = ModelManager(
+            self.paths,
+            hf=FakeHF(error=RuntimeError("boom")),
+            processes=self.supervisor,
+        )
         job = self.manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
         self.bundle_id = job.bundle_id or ""
         self.manager.pin_runtime(
@@ -100,6 +186,99 @@ class DeploymentTests(unittest.TestCase):
         stopped = self.manager.stop_deployment(deployment.id)
         self.assertEqual(stopped.status.value, "stopped")
         self.assertIsNone(stopped.pid)
+
+    def test_managed_argv_uses_load_mode_and_omits_retired_flags(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18081, "load_mode": "mlock", "mlock": True, "no_mmap": True},
+            )
+        )
+        self.assertIn(deployment.status.value, {"running", "unhealthy"})
+        self.assertEqual(deployment.applied_startup["load_mode"], "mlock")
+        self.assertNotIn("mlock", deployment.applied_startup)
+        self.assertEqual({note.key for note in deployment.settings.startup.retired}, {"mlock", "no_mmap"})
+        self.assertEqual(len(self.supervisor.launched), 1)
+        argv = self.supervisor.launched[0]
+        self.assertEqual(argv[argv.index("--load-mode") + 1], "mlock")
+        self.assertNotIn("--mlock", argv)
+        self.assertNotIn("--no-mmap", argv)
+        self.assertNotIn("--mmproj", argv)
+        self.manager.stop_deployment(deployment.id)
+
+    def test_mmproj_companion_is_passed_on_managed_start(self) -> None:
+        source = self.root / "incoming" / "vision"
+        write_tiny_gguf(source / "vision-model-Q4_K_M.gguf", name="vision")
+        write_tiny_gguf(source / "mmproj-vision-F16.gguf", name="projector")
+        job = self.manager.import_local(LocalImportRequest(source_path=str(source)))
+        bundle = self.manager.get_bundle(job.bundle_id or "")
+        self.assertEqual([item.name for item in bundle.companions], ["mmproj-vision-F16.gguf"])
+        self.assertTrue(bundle.primary_path and bundle.primary_path.endswith("vision-model-Q4_K_M.gguf"))
+
+        argv = managed_argv("llama-server", bundle, {"ctx_size": 4096})
+        self.assertEqual(argv[:3], ["llama-server", "-m", bundle.primary_path])
+        self.assertEqual(argv[argv.index("--mmproj") + 1], bundle.companions[0].path)
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "4096")
+
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=bundle.id, startup={"port": 18082})
+        )
+        self.assertIn(deployment.status.value, {"running", "unhealthy"})
+        launched = self.supervisor.launched[-1]
+        self.assertEqual(launched[launched.index("--mmproj") + 1], bundle.companions[0].path)
+        self.assertIsNotNone(deployment.server_props)
+        assert deployment.server_props is not None
+        self.assertTrue(deployment.server_props.modalities.get("vision"))
+        self.manager.stop_deployment(deployment.id)
+
+    def test_missing_mmproj_file_is_a_clear_failure(self) -> None:
+        source = self.root / "incoming" / "broken"
+        write_tiny_gguf(source / "model.gguf")
+        write_tiny_gguf(source / "mmproj-model.gguf", name="projector")
+        job = self.manager.import_local(LocalImportRequest(source_path=str(source)))
+        bundle = self.manager.get_bundle(job.bundle_id or "")
+        Path(bundle.companions[0].path).unlink()
+        with self.assertRaises(ManagerError) as caught:
+            managed_argv("llama-server", bundle, {})
+        self.assertEqual(caught.exception.code, "bundle_file_missing")
+        self.assertIn("mmproj", caught.exception.message)
+
+    def test_server_props_recorded_when_healthy_and_cleared_on_stop(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18083, "alias": "tiny"})
+        )
+        self.assertEqual(deployment.status.value, "running")
+        props = deployment.server_props
+        self.assertIsNotNone(props)
+        assert props is not None
+        self.assertTrue(props.source_url.endswith("/props"))
+        self.assertEqual(props.model_alias, "tiny")
+        self.assertEqual(props.build_info, "fake-llama-server")
+        self.assertEqual(props.modalities, {"vision": False, "video": False, "audio": False})
+        self.assertTrue(props.chat_template_caps.get("supports_tools"))
+        self.assertEqual(props.chat_template, "{{ fake }}")
+        self.assertEqual(props.n_ctx, 4096)
+        stopped = self.manager.stop_deployment(deployment.id)
+        self.assertIsNone(stopped.server_props)
+
+    def test_connected_attach_records_props_and_tolerates_missing_endpoint(self) -> None:
+        managed = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18084})
+        )
+        self.assertEqual(managed.status.value, "running")
+        connected = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:18084/v1")
+        )
+        self.assertIsNotNone(connected.server_props)
+        assert connected.server_props is not None
+        self.assertEqual(connected.server_props.source_url, "http://127.0.0.1:18084/props")
+        self.manager.detach_deployment(connected.id)
+        self.manager.stop_deployment(managed.id)
+        unreachable = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:9")
+        )
+        self.assertIsNone(unreachable.server_props)
+        self.manager.detach_deployment(unreachable.id)
 
     def test_failed_import_cannot_become_deployment(self) -> None:
         job = self.manager.import_huggingface(

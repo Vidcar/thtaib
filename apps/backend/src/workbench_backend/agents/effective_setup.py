@@ -14,7 +14,12 @@ from pydantic import BaseModel, Field
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.schemas import Deployment, RunProfile, SettingsBag, SettingsBags
-from workbench_backend.inference.settings import PER_REQUEST_KEYS, STARTUP_KEYS, resolve_bag
+from workbench_backend.inference.settings import (
+    PER_REQUEST_KEYS,
+    STARTUP_KEYS,
+    resolve_bag,
+    resolve_bags,
+)
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
 
 RAG_GAP = "no retrieval / RAG (OQ-006 unresolved)"
@@ -57,6 +62,7 @@ class EffectiveSetup(BaseModel):
     startup_mismatches: list[StartupMismatch] = Field(default_factory=list)
     unsupported: dict[str, list[str]] = Field(default_factory=dict)
     overridden: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    retired: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     system_prompt: str
     gaps: list[str] = Field(default_factory=list)
     knowledge_binding: str = "none"
@@ -98,7 +104,7 @@ def resolve_effective_setup(
         )
     per_request = _resolve_per_request(profile, deployment, per_request_overrides)
     agent = _resolve_agent(profile)
-    startup_selected = profile.bags.startup if profile is not None else SettingsBag()
+    startup_selected = _resolve_startup(profile)
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
     loaded = [_loaded_fact(version) for version in knowledge_versions]
     system_prompt = compose_system_prompt(
@@ -139,6 +145,9 @@ def resolve_effective_setup(
             "startup": [item.model_dump(mode="json") for item in startup_selected.overridden],
             "per_request": [item.model_dump(mode="json") for item in per_request.overridden],
             "agent": [item.model_dump(mode="json") for item in agent.overridden],
+        },
+        retired={
+            "startup": [item.model_dump(mode="json") for item in startup_selected.retired],
         },
         system_prompt=system_prompt,
         gaps=gaps,
@@ -214,6 +223,18 @@ def _resolve_agent(profile: RunProfile | None) -> SettingsBag:
     if profile is None:
         return SettingsBag()
     return profile.bags.agent
+
+
+def _resolve_startup(profile: RunProfile | None) -> SettingsBag:
+    """Re-resolve the selected startup bag from its requested keys.
+
+    The stored bag was resolved when the profile was saved; a key the pinned
+    runtime has since retired (``mlock``, ``no_mmap``) would otherwise still
+    sit in ``applied`` and never be reported here.
+    """
+    if profile is None:
+        return SettingsBag()
+    return resolve_bags(startup=profile.bags.startup.requested).startup
 
 
 def _startup_mismatches(

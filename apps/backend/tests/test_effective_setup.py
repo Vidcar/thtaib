@@ -175,6 +175,47 @@ class EffectiveSetupResolverTests(unittest.TestCase):
         self.assertEqual(mismatch.loaded, 65536)
         self.assertIn("no retrieval", " ".join(setup.gaps))
 
+    def test_pre_correction_profile_reports_retired_startup_keys(self) -> None:
+        now = utc_now()
+        deployment = Deployment(
+            id="deploy_b",
+            display_name="connected",
+            scope=ManagementScope.connected,
+            status=DeploymentStatus.running,
+            endpoint="http://127.0.0.1:9/v1",
+            applied_startup={"ctx_size": 65536, "flash_attn": "on"},
+            created_at=now,
+            updated_at=now,
+        )
+        manager = ModelManager(WorkbenchPaths(Path(tempfile.mkdtemp())).ensure())
+        profile = manager.create_profile(
+            ProfileWriteRequest(display_name="old", startup={"mlock": True, "ctx_size": 65536})
+        )
+        # A profile saved before the load_mode correction still carries the
+        # retired key in its stored applied bag; simulate that record shape.
+        stale_bag = profile.bags.startup.model_copy(
+            update={
+                "applied": {**profile.bags.startup.applied, "mlock": True},
+                "unsupported": [],
+                "retired": [],
+            }
+        )
+        stale = profile.model_copy(update={"bags": profile.bags.model_copy(update={"startup": stale_bag})})
+        self.assertIn("mlock", stale.bags.startup.applied)
+        setup = resolve_effective_setup(
+            deployment=deployment,
+            profile=stale,
+            knowledge_refs=KnowledgeRefs(),
+            knowledge_versions=[],
+            surface_system_prompt=None,
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+        )
+        self.assertNotIn("mlock", setup.bags.startup.applied)
+        self.assertIn("mlock", setup.unsupported["startup"])
+        self.assertEqual([note["key"] for note in setup.retired["startup"]], ["mlock"])
+        self.assertIn("load_mode", setup.retired["startup"][0]["reason"])
+        self.assertEqual(setup.startup_mismatches, [])
+
 
 class EffectiveSetupLiveAdapterTests(unittest.TestCase):
     def setUp(self) -> None:

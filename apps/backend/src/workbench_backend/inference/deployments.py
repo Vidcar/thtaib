@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from workbench_backend.errors import ManagerError
+from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.process import (
     PROCESS_IDENTITY_MISMATCH,
@@ -30,6 +31,7 @@ from workbench_backend.inference.schemas import (
     ImportStatus,
     ManagedDeploymentRequest,
     ManagementScope,
+    ModelBundle,
     ProcessIdentity,
     ResourceUsage,
     SmokeResult,
@@ -133,6 +135,7 @@ class DeploymentService:
                 available=False,
                 reason="connected endpoint — external process is not managed",
             ),
+            server_props=self.probe.props(endpoint) if health.healthy else None,
             created_at=utc_now(),
             updated_at=utc_now(),
         )
@@ -211,14 +214,7 @@ class DeploymentService:
                 status_code=409,
             )
         executable = self.runtime.require_executable()
-        model_path = bundle.primary_path
-        if not model_path or not Path(model_path).is_file():
-            raise ManagerError(
-                "Bundle primary GGUF is missing on disk",
-                code="bundle_file_missing",
-                status_code=409,
-            )
-        argv = [str(executable), "-m", model_path, *startup_cli_args(deployment.applied_startup)]
+        argv = managed_argv(executable, bundle, deployment.applied_startup)
         starting = deployment.model_copy(
             update={
                 "status": DeploymentStatus.starting,
@@ -270,6 +266,7 @@ class DeploymentService:
                 )
             usage = self.processes.resource_usage(identity)
             status = DeploymentStatus.running if health.healthy else DeploymentStatus.unhealthy
+            props = self.probe.props(recorded.endpoint or "") if health.healthy else None
             return self.store.put_deployment(
                 recorded.model_copy(
                     update={
@@ -278,6 +275,7 @@ class DeploymentService:
                         "process_identity": identity,
                         "health": health,
                         "resource_usage": usage,
+                        "server_props": props,
                         "error": None,
                         "updated_at": utc_now(),
                     }
@@ -348,6 +346,9 @@ class DeploymentService:
                     )
                 )
         report = self.probe.health(deployment.endpoint)
+        props = deployment.server_props
+        if report.healthy and props is None:
+            props = self.probe.props(deployment.endpoint)
         if deployment.scope == ManagementScope.connected:
             usage = ResourceUsage(
                 available=False,
@@ -358,6 +359,7 @@ class DeploymentService:
                     update={
                         "health": report,
                         "resource_usage": usage,
+                        "server_props": props,
                         "status": deployment.status,
                         "updated_at": utc_now(),
                     }
@@ -373,6 +375,7 @@ class DeploymentService:
                 update={
                     "health": report,
                     "resource_usage": usage,
+                    "server_props": props,
                     "status": status,
                     "updated_at": utc_now(),
                 }
@@ -463,6 +466,7 @@ class DeploymentService:
                     "pid": None,
                     "process_identity": None,
                     "health": None,
+                    "server_props": None,
                     "resource_usage": ResourceUsage(available=False, reason=usage_reason),
                     "error": error,
                     "updated_at": utc_now(),
@@ -493,6 +497,35 @@ class DeploymentService:
         port = _first_free_port(host, requested_port)
         overrides: dict[str, Any] = {"host": host, "port": port}
         return host, port, overrides
+
+
+def managed_argv(executable: Path | str, bundle: ModelBundle, applied_startup: dict[str, Any]) -> list[str]:
+    """Build the llama-server argv for a managed start.
+
+    Passes the primary GGUF with ``-m`` and, when the bundle recorded a
+    classified ``mmproj`` companion, that projector with ``--mmproj`` so a
+    vision-capable bundle can start through the managed path. Both files
+    must exist on disk; a missing file is a clear failure, not a start.
+    """
+    model_path = bundle.primary_path
+    if not model_path or not Path(model_path).is_file():
+        raise ManagerError(
+            "Bundle primary GGUF is missing on disk",
+            code="bundle_file_missing",
+            status_code=409,
+        )
+    argv = [str(executable), "-m", model_path]
+    projector = mmproj_companion(bundle)
+    if projector is not None:
+        if not Path(projector.path).is_file():
+            raise ManagerError(
+                f"Bundle mmproj companion is missing on disk: {projector.name}",
+                code="bundle_file_missing",
+                status_code=409,
+            )
+        argv.extend(["--mmproj", projector.path])
+    argv.extend(startup_cli_args(applied_startup))
+    return argv
 
 
 def _endpoint_port(endpoint: str | None) -> int | None:

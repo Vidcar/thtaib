@@ -12,14 +12,19 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import psutil
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.schemas import HealthReport, ProcessIdentity, ResourceUsage
+from workbench_backend.inference.schemas import (
+    HealthReport,
+    ProcessIdentity,
+    ResourceUsage,
+    ServerProperties,
+)
 
 IdentityVerdict = Literal["match", "mismatch", "gone"]
 
@@ -306,6 +311,28 @@ class HttpProbe:
             detail=last_error,
         )
 
+    def props(self, endpoint: str) -> ServerProperties | None:
+        """Read llama-server ``GET /props``; ``None`` when the endpoint does not offer it.
+
+        Only a healthy deployment is asked. A non-llama OpenAI-compatible
+        endpoint may legitimately return 404 or a different shape; that is
+        recorded as "nothing reported", never as a failure of the deployment.
+        """
+        url = _props_url(endpoint)
+        try:
+            response = httpx.get(url, timeout=self.timeout)
+        except httpx.HTTPError:
+            return None
+        if response.status_code >= 400:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return server_properties_from_payload(payload, source_url=url)
+
     def smoke(self, endpoint: str) -> tuple[bool, str]:
         url = _chat_url(endpoint)
         payload = {
@@ -391,3 +418,42 @@ def _chat_url(endpoint: str) -> str:
     if base.endswith("/v1"):
         return f"{base}/chat/completions"
     return f"{base}/v1/chat/completions"
+
+
+def _props_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return f"{base}/props"
+
+
+def server_properties_from_payload(payload: dict[str, Any], *, source_url: str) -> ServerProperties:
+    """Copy the b11045 ``/props`` fields the workbench records. Unknown keys are ignored."""
+    generation = payload.get("default_generation_settings")
+    n_ctx = generation.get("n_ctx") if isinstance(generation, dict) else None
+    return ServerProperties(
+        fetched=utc_now(),
+        source_url=source_url,
+        build_info=_optional_str(payload.get("build_info")),
+        model_alias=_optional_str(payload.get("model_alias")),
+        model_path=_optional_str(payload.get("model_path")),
+        n_ctx=int(n_ctx) if isinstance(n_ctx, int) else None,
+        total_slots=(
+            int(payload["total_slots"]) if isinstance(payload.get("total_slots"), int) else None
+        ),
+        modalities=_bool_map(payload.get("modalities")),
+        chat_template_caps=_bool_map(payload.get("chat_template_caps")),
+        chat_template=_optional_str(payload.get("chat_template")),
+        bos_token=_optional_str(payload.get("bos_token")),
+        eos_token=_optional_str(payload.get("eos_token")),
+    )
+
+
+def _optional_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _bool_map(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): bool(item) for key, item in value.items() if isinstance(item, bool)}
