@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.replay import is_replay_failure
 from workbench_backend.agents.schemas import (
     AgentRun,
+    AgentRunStatus,
     AgentStartRequest,
     TaskCriteria,
     ToolMode,
@@ -404,10 +406,19 @@ class LabService:
 
     def _refresh_result(self, result: LabResult) -> LabResult:
         run = self.harness.get_run(result.agent_run_id)
+        deviations = list(result.deviations)
+        if run.status is AgentRunStatus.failed and is_replay_failure(run.error):
+            note = (
+                "recorded-tool fixture missing, exhausted, or mismatched — "
+                "structured replay failure, not live-equivalent success."
+            )
+            if note not in deviations:
+                deviations.append(note)
         updated = result.model_copy(
             update={
                 "evidence": _evidence_from_run(run),
                 "judgement": run.completion.judgement.model_dump() if run.completion else result.judgement,
+                "deviations": deviations,
             }
         )
         return self.store.put_result(updated)

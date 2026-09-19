@@ -3,7 +3,8 @@
 Visibility tools are application-owned. Filesystem tools are Deep Agents
 built-ins, bound to project storage via FilesystemBackend (STATE-002).
 ``execute`` / ``task`` stay out of the enabled catalogue (OQ-003).
-Recorded-tool wrappers replay fixtures; they are not live integrations.
+Recorded-tool wrappers replay fixtures by invocation identity; they are not
+live integrations and are not proof of live behaviour.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool, tool
 
+from workbench_backend.agents.replay import FixtureBank
 from workbench_backend.inference.ids import utc_now
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
@@ -66,35 +68,22 @@ def tools_for_names(
     names: list[str],
     *,
     recorded_fixtures: list[dict[str, Any]] | None = None,
+    fixture_bank: FixtureBank | None = None,
 ) -> list[BaseTool]:
     selected = [name for name in names if name in ENABLED_TOOLS]
-    if not recorded_fixtures:
+    bank = fixture_bank
+    if bank is None and recorded_fixtures:
+        bank = FixtureBank(recorded_fixtures)
+    if bank is None:
         return [ENABLED_TOOLS[name] for name in selected]
-    bank = _FixtureBank(recorded_fixtures)
     return [_recorded_wrapper(name, bank) for name in selected]
 
 
-class _FixtureBank:
-    def __init__(self, fixtures: list[dict[str, Any]]) -> None:
-        self._remaining = [dict(item) for item in fixtures]
-
-    def take(self, name: str) -> str:
-        for index, item in enumerate(self._remaining):
-            if str(item.get("name")) == name:
-                self._remaining.pop(index)
-                result = item.get("result")
-                return result if isinstance(result, str) else str(result)
-        return (
-            f"[recorded-tool] no fixture for {name}. "
-            "This is not a live tool call and is not proof of a current live integration."
-        )
-
-
-def _recorded_wrapper(name: str, bank: _FixtureBank) -> BaseTool:
+def _recorded_wrapper(name: str, bank: FixtureBank) -> BaseTool:
     original = ENABLED_TOOLS[name]
 
-    def replay(**_kwargs: Any) -> str:
-        return bank.take(name)
+    def replay(**kwargs: Any) -> str:
+        return bank.take(name, kwargs)
 
     replay.__name__ = f"recorded_{name}"
     replay.__doc__ = (
@@ -106,6 +95,7 @@ def _recorded_wrapper(name: str, bank: _FixtureBank) -> BaseTool:
         name=name,
         description=replay.__doc__,
         args_schema=original.args_schema,
+        handle_tool_error=False,
     )
 
 
