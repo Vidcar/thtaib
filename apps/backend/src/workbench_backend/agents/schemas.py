@@ -99,6 +99,51 @@ def label_for_tool_mode(mode: ToolMode) -> str:
 
 SourceSurface = Literal["agent-run", "chat", "lab"]
 
+HOST_SHELL_NOTE = (
+    "Host shell has no isolation. Commands run through Deep Agents "
+    "LocalShellBackend with the bound project as cwd. permissions= apply to "
+    "routed filesystem prefixes only while the default backend is a sandbox. "
+    "interrupt_on pauses dangerous execute calls. Not a durable Approvals "
+    "inbox (OQ-011)."
+)
+
+
+class HostShellFacts(BaseModel):
+    """Declared first worker environment for one run. Not WSL or Docker."""
+
+    available: bool = False
+    environment: Literal["windows_host_shell"] = "windows_host_shell"
+    isolation: Literal["none"] = "none"
+    cwd: str | None = None
+    inherit_env: bool = True
+    note: str = HOST_SHELL_NOTE
+
+
+class PendingInterruptAction(BaseModel):
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    description: str | None = None
+    allowed_decisions: list[str] = Field(default_factory=lambda: ["approve", "reject"])
+
+
+class PendingInterrupt(BaseModel):
+    """Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011)."""
+
+    kind: Literal["deepagents_interrupt_on"] = "deepagents_interrupt_on"
+    environment: Literal["windows_host_shell"] = "windows_host_shell"
+    isolation: Literal["none"] = "none"
+    note: str = HOST_SHELL_NOTE
+    action_requests: list[PendingInterruptAction] = Field(default_factory=list)
+
+
+class InterruptDecision(BaseModel):
+    type: Literal["approve", "reject"]
+    message: str | None = None
+
+
+class InterruptDecisionRequest(BaseModel):
+    decisions: list[InterruptDecision]
+
 
 class AgentStartRequest(BaseModel):
     deployment_id: str
@@ -161,3 +206,5 @@ class AgentRun(BaseModel):
     related_files: list[RelatedFile] = Field(default_factory=list)
     effective_setup: EffectiveSetup | None = None
     starting_snapshot_id: str | None = None
+    host_shell: HostShellFacts = Field(default_factory=HostShellFacts)
+    pending_interrupt: PendingInterrupt | None = None

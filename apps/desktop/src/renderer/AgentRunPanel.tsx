@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { InterruptApproval } from "./InterruptApproval";
 import { EffectiveSetupNotes } from "./settingsNotes";
-import { isAgentRunLive, type AgentRun, type Deployment } from "./types";
+import { isAgentRunLive, visiblePendingInterrupt, type AgentRun, type Deployment } from "./types";
 
 export function AgentRunPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
   const [task, setTask] = useState("Use the echo tool to repeat: harness-ok");
+  const [projectPath, setProjectPath] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
   const [message, setMessage] = useState("");
 
@@ -26,6 +28,7 @@ export function AgentRunPanel() {
   }, []);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
+  const pendingInterrupt = visiblePendingInterrupt(run);
 
   useEffect(() => {
     if (!liveRunId) {
@@ -47,7 +50,8 @@ export function AgentRunPanel() {
       <p className="hint">
         Embedded Deep Agents harness debug panel. This is not Chat and not Builder. The
         adapter talks only to a model-manager deployment endpoint and starts no inference
-        process.
+        process. Host shell execute needs a bound project cwd and pauses dangerous
+        commands here for Approve or Deny.
       </p>
 
       <div className="card">
@@ -60,7 +64,7 @@ export function AgentRunPanel() {
         onSubmit={(event) => {
           event.preventDefault();
           void api
-            .startAgentRun(deploymentId, task)
+            .startAgentRun(deploymentId, task, undefined, undefined, projectPath || undefined)
             .then((next) => {
               setRun(next);
               setMessage(`Started ${next.id}`);
@@ -78,6 +82,14 @@ export function AgentRunPanel() {
               </option>
             ))}
           </select>
+        </label>
+        <label>
+          Project workspace path (required for host shell)
+          <input
+            value={projectPath}
+            onChange={(event) => setProjectPath(event.target.value)}
+            placeholder="%LOCALAPPDATA%\LocalAIWorkbench\workspaces\…"
+          />
         </label>
         <label>
           Task
@@ -113,7 +125,24 @@ export function AgentRunPanel() {
             {run.id}
             <span className="badge">{run.status}</span>
           </h3>
-          <p>harness: {run.harness} · stop: {run.stop_reason ?? "n/a"} · budgets: {run.budgets ? "set" : "unset"}</p>
+          <p>
+            harness: {run.harness} · stop: {run.stop_reason ?? "n/a"} · budgets:{" "}
+            {run.budgets ? "set" : "unset"} · host shell:{" "}
+            {run.host_shell?.available ? `cwd ${run.host_shell.cwd ?? ""}` : "unavailable"}
+          </p>
+          {pendingInterrupt ? (
+            <InterruptApproval
+              pending={pendingInterrupt}
+              onDecide={(type) => {
+                void api
+                  .decideAgentRunInterrupt(run.id, type)
+                  .then(setRun)
+                  .catch((error: unknown) =>
+                    setMessage(error instanceof Error ? error.message : String(error)),
+                  );
+              }}
+            />
+          ) : null}
           <h3>Run linkage (application records)</h3>
           <pre className="json">
             {JSON.stringify(

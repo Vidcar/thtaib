@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from workbench_backend.agents.effective_setup import (
     KNOWLEDGE_PREAMBLE,
+    SURFACE_PROMPT_HEADING,
     compose_system_prompt,
     content_digest,
     resolve_effective_setup,
@@ -125,15 +126,27 @@ class EffectiveSetupResolverTests(unittest.TestCase):
         )
         prompt = compose_system_prompt(
             surface_system_prompt="Chat surface prompt.",
-            profile_system_prompt="profile prompt should lose",
+            profile_system_prompt="Profile identity prompt.",
             default_system_prompt=DEFAULT_SYSTEM_PROMPT,
             versions=[version],
         )
+        self.assertIn("Profile identity prompt.", prompt)
         self.assertIn("Chat surface prompt.", prompt)
-        self.assertNotIn("profile prompt should lose", prompt)
+        self.assertIn(SURFACE_PROMPT_HEADING, prompt)
+        self.assertLess(prompt.index("Profile identity prompt."), prompt.index("Chat surface prompt."))
         self.assertIn(MEMORY_TOKEN, prompt)
         self.assertIn("knv_mem", prompt)
         self.assertIn(KNOWLEDGE_PREAMBLE, prompt)
+
+    def test_surface_prompt_does_not_replace_identical_profile_prompt(self) -> None:
+        prompt = compose_system_prompt(
+            surface_system_prompt="same identity",
+            profile_system_prompt="same identity",
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+            versions=[],
+        )
+        self.assertEqual(prompt, "same identity")
+        self.assertNotIn(SURFACE_PROMPT_HEADING, prompt)
 
     def test_profile_per_request_and_startup_mismatch(self) -> None:
         now = utc_now()
@@ -344,6 +357,29 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["code"], "knowledge_version_missing")
+
+    def test_chat_composes_profile_system_prompt_instead_of_replacing(self) -> None:
+        profile_id = self._profile(agent={"system_prompt": "PROFILE-IDENTITY-TOKEN"})
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={
+                "deployment_id": self.deployment_id,
+                "profile_id": profile_id,
+                "project_path": str(self.project),
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        started = self.client.post(
+            f"/v1/chat/conversations/{created.json()['id']}/start",
+            json={"task": "Say pong.", "presented_tools": ["echo"]},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        body = wait_for_chat(self.client, created.json()["id"])
+        prompt = body["current_run"]["effective_setup"]["system_prompt"]
+        self.assertIn("PROFILE-IDENTITY-TOKEN", prompt)
+        self.assertIn(SURFACE_PROMPT_HEADING, prompt)
+        self.assertIn("Chat surface", prompt)
+        self.assertLess(prompt.index("PROFILE-IDENTITY-TOKEN"), prompt.index(SURFACE_PROMPT_HEADING))
 
     def test_chat_applies_profile_and_knowledge_and_preserves_write_policy(self) -> None:
         profile_id = self._profile()

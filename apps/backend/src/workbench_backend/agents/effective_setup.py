@@ -155,6 +155,9 @@ def resolve_effective_setup(
     )
 
 
+SURFACE_PROMPT_HEADING = "## Surface instructions"
+
+
 def compose_system_prompt(
     *,
     surface_system_prompt: str | None,
@@ -162,12 +165,22 @@ def compose_system_prompt(
     default_system_prompt: str,
     versions: list[KnowledgeVersion],
 ) -> str:
-    """Surface override, then profile, then default. Knowledge content is appended."""
+    """Prefer the profile identity prompt; compose the surface prompt after it.
 
-    if surface_system_prompt and surface_system_prompt.strip():
-        base = surface_system_prompt.strip()
-    elif profile_system_prompt and profile_system_prompt.strip():
-        base = profile_system_prompt.strip()
+    A Chat (or other surface) system prompt must not silently replace
+    ``profile.bags.agent.applied['system_prompt']``. When both are set and
+    differ, the profile prompt is the base and the surface prompt is appended
+    under ``SURFACE_PROMPT_HEADING``. Knowledge content is appended last.
+    """
+
+    profile = (profile_system_prompt or "").strip() or None
+    surface = (surface_system_prompt or "").strip() or None
+    if profile and surface and surface != profile:
+        base = f"{profile}\n\n{SURFACE_PROMPT_HEADING}\n{surface}"
+    elif profile:
+        base = profile
+    elif surface:
+        base = surface
     else:
         base = default_system_prompt
     knowledge_block = format_knowledge_block(versions)

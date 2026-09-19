@@ -134,7 +134,17 @@ class HarnessApiTests(unittest.TestCase):
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
         self.assertEqual(
             catalogue,
-            ["echo", "time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+            [
+                "echo",
+                "time_now",
+                "ls",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "glob",
+                "grep",
+                "execute",
+            ],
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])

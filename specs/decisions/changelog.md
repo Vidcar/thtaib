@@ -4,6 +4,24 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-19 — Host shell attaches only when execute is presented
+
+Authority: independent review of [PR #89](https://github.com/Vidcar/thtaib/pull/89) (F1). Requirements: ENV-001, ENV-002, ARCH-005.
+
+- Deep Agents 0.7.15 puts `execute` on the tool node whenever the composite default is a sandbox. Attaching `LocalShellBackend` on every project-bound live run therefore made a scripted `touch` succeed with `presented_tools=["echo"]` and no `interrupt_on`.
+- Current rule: `LocalShellBackend` and `interrupt_on` are attached together, and only when `execute` is presented. Other project-bound live runs use `FilesystemBackend`. Middleware rejects an unpresented `execute` even if the builtin is still visible to the tool node.
+
+## 2026-09-19 — Windows host shell with approvals (first worker)
+
+Authority: David, product owner (first worker is Windows host shell with Deep Agents `permissions=` / `interrupt_on=` / `LocalShellBackend`, Project chat 2026-09-19); technical owner delivery on that accepted design. Requirements: ENV-001, ENV-002, ARCH-005, AGT-001, AGT-005, API-004. Narrows [OQ-003](../open-questions.md#oq-003). Does not close [OQ-011](../open-questions.md#oq-011).
+
+- Live project-bound runs attach `LocalShellBackend(root_dir=project, virtual_mode=True, inherit_env=True)` as the composite default **only when `execute` is presented** (F1 correction in the entry above). `execute` is in the enabled catalogue and presented only when a project (cwd) is bound. Requesting it without a project is `shell_requires_project` (400). No home-directory default. A project-bound live run that does not present `execute` keeps `FilesystemBackend`.
+- Dangerous `execute` calls pause via Deep Agents `interrupt_on=` (`when` predicate). Auto-allow is a small read-only prefix list without metacharacters. Resume is `Command(resume={"decisions": [...]})` on the existing SQLite checkpointer. Run stays `running` with `pending_interrupt`. Chat and Agent-run show Approve/Deny. Cancel while interrupted reject-resumes then finishes `cancelled`.
+- `permissions=` are route-scoped write-deny rules on unused `/large_tool_results/denied/**` and `/conversation_history/denied/**`. Deep Agents 0.7.15 refuses project-wide `permissions=` when the default backend supports execution. `permissions=` do not gate `execute`.
+- Chat surface `system_prompt` no longer silently replaces `profile.bags.agent.applied['system_prompt']`; the profile identity wins and the surface prompt is composed under `## Surface instructions`.
+- Linux CI proves the path with a scripted model and the real `LocalShellBackend` on the runner. Live Windows proof is David-PC UAT; catalogue rows stay `built`.
+- Sources consulted 2026-09-19: [backends](https://docs.langchain.com/oss/python/deepagents/backends), [human-in-the-loop](https://docs.langchain.com/oss/python/deepagents/human-in-the-loop), [permissions](https://docs.langchain.com/oss/python/deepagents/permissions); installed `deepagents==0.7.15`.
+
 ## 2026-09-19 — SSE for same-machine run and Chat events
 
 Authority: technical owner decision from the assigned streaming outcome (coordinator brief, 2026-09-19); settles the transport default under [OQ-002](../open-questions.md#oq-002). Requirements: API-004, API-006, AGT-001, CTT-001. Closes [DEV-005](../deviations.md#dev-005).

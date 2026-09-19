@@ -269,6 +269,51 @@ export interface AgentRun {
   checkpoint_ids?: string[];
   related_files?: Array<{ path: string; kind: "project_root" | "written_file" | "artifact" }>;
   starting_snapshot_id?: string | null;
+  host_shell?: HostShellFacts;
+  pending_interrupt?: PendingInterrupt | null;
+}
+
+export interface HostShellFacts {
+  available: boolean;
+  environment: "windows_host_shell";
+  isolation: "none";
+  cwd: string | null;
+  inherit_env: boolean;
+  note: string;
+}
+
+export interface PendingInterruptAction {
+  name: string;
+  args: Record<string, unknown>;
+  description: string | null;
+  allowed_decisions: string[];
+}
+
+export interface PendingInterrupt {
+  kind: "deepagents_interrupt_on";
+  environment: "windows_host_shell";
+  isolation: "none";
+  note: string;
+  action_requests: PendingInterruptAction[];
+}
+
+export function visiblePendingInterrupt(run: AgentRun | null | undefined): PendingInterrupt | null {
+  if (!run) {
+    return null;
+  }
+  if (run.pending_interrupt) {
+    return run.pending_interrupt;
+  }
+  for (let index = run.events.length - 1; index >= 0; index -= 1) {
+    const event = run.events[index];
+    if (event.kind === "interrupt_resolved") {
+      return null;
+    }
+    if (event.kind === "interrupt") {
+      return event.detail as unknown as PendingInterrupt;
+    }
+  }
+  return null;
 }
 
 export interface ChatMessage {
@@ -322,6 +367,7 @@ export interface ChatConversation {
   continuity?: ChatContinuity | null;
   deploy_health?: ChatDeployHealth | null;
   filesystem_tools_available?: boolean;
+  shell_tools_available?: boolean;
   enabled_tools?: string[];
   created_at: string;
   updated_at: string;

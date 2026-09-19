@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { InterruptApproval } from "./InterruptApproval";
 import { EffectiveSetupNotes, SettingsNotes } from "./settingsNotes";
 import {
   isAgentRunLive,
+  visiblePendingInterrupt,
   type ChatConversation,
   type Deployment,
   type KnowledgeEntry,
@@ -88,6 +90,7 @@ export function ChatPanel() {
 
   const runBusy = conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false;
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
+  const pendingInterrupt = visiblePendingInterrupt(conversation?.current_run);
 
   return (
     <section className="panel">
@@ -98,10 +101,13 @@ export function ChatPanel() {
         resolved before the run (selected ≠ loaded ≠ applied). Transcript is displayed history, not
         harness context and not the working project. New conversation allocates a new thread;
         project files and permitted durable knowledge stay. A project folder is optional; file
-        tools are unavailable until one is bound. History edits are display-only. A
-        model/profile change applies to the next run on the same thread. Live assistant completion
-        requires a healthy managed/connected llama.cpp — harness model_requests / thread reuse prove
-        continuity only. This is not Builder polish.
+        tools and the host shell are unavailable until one is bound. Dangerous host-shell
+        commands pause here for Approve or Deny (Deep Agents interrupt_on, not a durable
+        inbox). History edits are display-only. A model/profile change applies to the next run
+        on the same thread. A profile agent.system_prompt is the identity; Chat surface
+        instructions are composed under it, not a silent replacement. Live assistant
+        completion requires a healthy managed/connected llama.cpp — harness model_requests /
+        thread reuse prove continuity only. This is not Builder polish.
       </p>
 
       <div className="card">
@@ -113,6 +119,12 @@ export function ChatPanel() {
         </p>
         {conversation && conversation.filesystem_tools_available === false ? (
           <p className="hint">File tools are unavailable until a project folder is bound.</p>
+        ) : null}
+        {conversation && conversation.shell_tools_available === false ? (
+          <p className="hint">
+            Host shell (execute) is unavailable until a project folder is bound as cwd. A
+            home-directory default is not invented.
+          </p>
         ) : null}
       </div>
 
@@ -332,8 +344,17 @@ export function ChatPanel() {
           <p>
             harness: {conversation.harness} · second loop: {String(conversation.second_agent_loop)} ·
             project: {conversation.project_path ?? "(none)"} · file tools:{" "}
-            {conversation.filesystem_tools_available ? "available" : "unavailable"}
+            {conversation.filesystem_tools_available ? "available" : "unavailable"} · host
+            shell: {conversation.shell_tools_available ? "available" : "unavailable"}
           </p>
+          {pendingInterrupt ? (
+            <InterruptApproval
+              pending={pendingInterrupt}
+              onDecide={(type) => {
+                void api.decideChatInterrupt(conversation.id, type).then(setConversation).catch(fail);
+              }}
+            />
+          ) : null}
           <p>
             conversation: {conversation.id} · thread: {conversation.thread_id ?? "unassigned"} ·
             deployment: {conversation.deployment_id} · profile: {conversation.profile_id ?? "none"}

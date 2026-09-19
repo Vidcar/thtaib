@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 
 from workbench_backend.chat.schemas import (
     ChatConversationCreateRequest,
+    ChatInterruptDecisionRequest,
     ChatStartRequest,
     ChatTranscriptReplaceRequest,
 )
@@ -41,6 +42,15 @@ def start_conversation(request: Request, conversation_id: str, body: ChatStartRe
 @router.post("/conversations/{conversation_id}/cancel")
 def cancel_conversation(request: Request, conversation_id: str) -> object:
     return get_chat(request).cancel(conversation_id)
+
+
+@router.post("/conversations/{conversation_id}/interrupt-decision")
+def decide_conversation_interrupt(
+    request: Request,
+    conversation_id: str,
+    body: ChatInterruptDecisionRequest,
+) -> object:
+    return get_chat(request).resume_interrupt(conversation_id, body)
 
 
 @router.put("/conversations/{conversation_id}/transcript")

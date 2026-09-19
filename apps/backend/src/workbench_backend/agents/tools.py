@@ -1,8 +1,9 @@
 """Enabled tool catalogue for the embedded harness (AGT-005).
 
 Visibility tools are application-owned. Filesystem tools are Deep Agents
-built-ins, bound to project storage via FilesystemBackend (STATE-002).
-``execute`` / ``task`` stay out of the enabled catalogue (OQ-003).
+built-ins, bound to project storage. ``execute`` is the host-shell tool from
+``LocalShellBackend`` and is enabled only when a project (cwd) is bound.
+``task`` and ``delete`` stay out of the enabled catalogue.
 Recorded-tool wrappers replay fixtures by invocation identity; they are not
 live integrations and are not proof of live behaviour.
 """
@@ -18,7 +19,8 @@ from workbench_backend.inference.ids import utc_now
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
 FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
-ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES)
+SHELL_TOOL_NAMES = ("execute",)
+ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES)
 
 
 @tool("echo")
@@ -48,7 +50,7 @@ def enabled_catalogue() -> list[str]:
 
 
 def enabled_for_project(project_bound: bool) -> list[str]:
-    """Tools enabled for one run. Filesystem tools need a project folder."""
+    """Tools enabled for one run. File and host-shell tools need a project cwd."""
 
     if project_bound:
         return list(ENABLED_TOOL_NAMES)
@@ -59,19 +61,21 @@ def resolve_presented_tools(
     requested: list[str] | None,
     *,
     project_bound: bool,
-) -> tuple[list[str], list[str], list[str]]:
-    """Return (presented, denied, filesystem_blocked).
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Return (presented, denied, filesystem_blocked, shell_blocked).
 
     Denied names are not in the product catalogue. Filesystem names requested
-    without a project are blocked separately (``filesystem_requires_project``).
+    without a project are ``filesystem_requires_project``. ``execute`` without
+    a project is ``shell_requires_project``.
     """
 
     enabled = enabled_for_project(project_bound)
     if requested is None:
-        return enabled, [], []
+        return enabled, [], [], []
     presented: list[str] = []
     denied: list[str] = []
     filesystem_blocked: list[str] = []
+    shell_blocked: list[str] = []
     seen: set[str] = set()
     for name in requested:
         if name in seen:
@@ -81,11 +85,13 @@ def resolve_presented_tools(
             denied.append(name)
         elif name in FILESYSTEM_TOOL_NAMES and not project_bound:
             filesystem_blocked.append(name)
+        elif name in SHELL_TOOL_NAMES and not project_bound:
+            shell_blocked.append(name)
         elif name in enabled:
             presented.append(name)
         else:
             denied.append(name)
-    return presented, denied, filesystem_blocked
+    return presented, denied, filesystem_blocked, shell_blocked
 
 
 def tools_for_names(

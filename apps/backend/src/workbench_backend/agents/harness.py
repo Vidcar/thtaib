@@ -15,10 +15,18 @@ from typing import Any
 from deepagents import create_deep_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
+from workbench_backend.agents.host_shell import (
+    filesystem_permissions_for_run,
+    interrupt_on_for_run,
+    pending_interrupt_from_raw,
+    reject_decisions_for,
+    validated_decision_payloads,
+)
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.replay import FixtureBank
 from workbench_backend.agents.schemas import (
@@ -26,6 +34,8 @@ from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
     AgentStartRequest,
+    HostShellFacts,
+    InterruptDecisionRequest,
     TaskCriteria,
     ToolMode,
     label_for_tool_mode,
@@ -93,6 +103,8 @@ class HarnessService:
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._decision_ready: dict[str, threading.Event] = {}
+        self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
 
@@ -171,7 +183,7 @@ class HarnessService:
             stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
             if stored is not None:
                 project_path = _resolved_project_path(stored.path)
-        presented, denied, filesystem_blocked = resolve_presented_tools(
+        presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
             request.presented_tools,
             project_bound=project_path is not None,
         )
@@ -187,6 +199,14 @@ class HarnessService:
                 code="filesystem_requires_project",
                 status_code=400,
                 details={"tools": filesystem_blocked},
+            )
+        if shell_blocked:
+            raise HarnessError(
+                "The host shell requires a bound project folder as cwd. "
+                "A home-directory default is not invented.",
+                code="shell_requires_project",
+                status_code=400,
+                details={"tools": shell_blocked},
             )
         if not presented:
             raise HarnessError(
@@ -235,6 +255,13 @@ class HarnessService:
             related_files=_initial_related_files(project_path),
             effective_setup=setup,
             starting_snapshot_id=starting_snapshot_id,
+            host_shell=HostShellFacts(
+                available=project_path is not None
+                and "execute" in presented
+                and request.tool_mode is not ToolMode.recorded_tool,
+                cwd=project_path,
+                inherit_env=True,
+            ),
         )
         # Agent-run / Lab own one thread per run. Chat follow-ups pass the
         # conversation thread so LangGraph resumes the same checkpointer state.
@@ -243,6 +270,8 @@ class HarnessService:
         with self._lock:
             self._runs[run.id] = run
             self._cancels[run.id] = cancel
+            self._decision_ready[run.id] = threading.Event()
+            self._pending_decisions[run.id] = None
             self._persist_and_notify(run)
         thread = threading.Thread(target=self._execute, args=(run.id,), daemon=True)
         with self._lock:
@@ -255,6 +284,8 @@ class HarnessService:
         with self._lock:
             for cancel in self._cancels.values():
                 cancel.set()
+            for ready in self._decision_ready.values():
+                ready.set()
             threads = list(self._threads.values())
         for thread in threads:
             thread.join(timeout=timeout)
@@ -271,6 +302,9 @@ class HarnessService:
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
+            ready = self._decision_ready.get(run_id)
+            if ready is not None:
+                ready.set()
             if is_run_lifecycle_live(run.status) and run.status is not AgentRunStatus.cancel_requested:
                 run.status = AgentRunStatus.cancel_requested
                 run.stop_reason = None
@@ -285,6 +319,65 @@ class HarnessService:
                 )
                 self._persist_and_notify(run)
             return run.model_copy(deep=True)
+
+    def resume_interrupt(self, run_id: str, request: InterruptDecisionRequest) -> AgentRun:
+        """Apply Deep Agents HITL decisions. Does not invent a durable inbox."""
+
+        with self._lock:
+            run = self._require_run(run_id)
+            pending = run.pending_interrupt
+            if pending is None:
+                raise HarnessError(
+                    "This run has no pending host-shell interrupt.",
+                    code="interrupt_missing",
+                    status_code=409,
+                )
+            if not is_run_lifecycle_live(run.status):
+                raise HarnessError(
+                    "Interrupt decisions require a live run.",
+                    code="run_not_live",
+                    status_code=409,
+                )
+            if run.status is AgentRunStatus.cancel_requested:
+                raise HarnessError(
+                    "This run is already cancelling; the host-shell command will be rejected.",
+                    code="run_cancelling",
+                    status_code=409,
+                )
+            if self._pending_decisions.get(run_id):
+                raise HarnessError(
+                    "A host-shell decision is already being applied.",
+                    code="interrupt_decision_pending",
+                    status_code=409,
+                )
+            try:
+                payloads = validated_decision_payloads(pending, request.decisions)
+            except ValueError as exc:
+                code = str(exc)
+                if code not in {"interrupt_decision_count", "interrupt_decision_not_allowed"}:
+                    code = "interrupt_decision_invalid"
+                raise HarnessError(
+                    "Interrupt decision does not match the pending host-shell request.",
+                    code=code,
+                    status_code=400,
+                ) from exc
+            thread = self._threads.get(run_id)
+            if thread is not None and thread.is_alive():
+                self._pending_decisions[run_id] = payloads
+                self._decision_ready.setdefault(run_id, threading.Event()).set()
+                return self._expose_run(run)
+            cancel = self._cancels.setdefault(run_id, threading.Event())
+            self._decision_ready.setdefault(run_id, threading.Event())
+            self._pending_decisions[run_id] = None
+        worker = threading.Thread(
+            target=self._resume_after_restart,
+            args=(run_id, payloads, cancel),
+            daemon=True,
+        )
+        with self._lock:
+            self._threads[run_id] = worker
+        worker.start()
+        return self.get_run(run_id)
 
     def _execute(self, run_id: str) -> None:
         with self._lock:
@@ -308,46 +401,18 @@ class HarnessService:
         http_sink: list[dict[str, Any]] = []
         agent = None
         try:
-            model = self._model_factory(run, http_sink)
             fixture_bank = (
                 FixtureBank(run.recorded_fixtures)
                 if run.tool_mode is ToolMode.recorded_tool
                 else None
             )
-            agent_kwargs: dict[str, Any] = {}
-            backend = build_run_backend(run, self.manager.paths)
-            if backend is not None:
-                agent_kwargs["backend"] = backend
-            agent = create_deep_agent(
-                model=model,
-                tools=tools_for_names(run.presented_tools, fixture_bank=fixture_bank),
-                system_prompt=run.system_prompt,
-                middleware=[
-                    WorkbenchHarnessMiddleware(
-                        run,
-                        http_sink,
-                        settings_provider=self._capture_settings,
-                        fixture_bank=fixture_bank,
-                    )
-                ],
-                name="workbench-embedded-harness",
-                checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
-                **agent_kwargs,
-            )
-            config = _invoke_config(run)
-            for chunk in agent.stream(
+            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
+            self._drive_until_terminal(
+                run,
+                agent,
+                cancel,
                 {"messages": [{"role": "user", "content": run.task}]},
-                config=config,
-                stream_mode="updates",
-            ):
-                if cancel.is_set():
-                    self._link_run(run, agent)
-                    self._finish(run, AgentRunStatus.cancelled, "cancelled")
-                    return
-                self._ingest_stream(run, chunk)
-            run.completion = build_completion(run)
-            self._link_run(run, agent)
-            self._finish(run, AgentRunStatus.completed, "completed")
+            )
         except ReplayError as exc:
             if agent is not None:
                 self._link_run(run, agent)
@@ -375,6 +440,228 @@ class HarnessService:
                 return
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
+
+    def _resume_after_restart(
+        self,
+        run_id: str,
+        decisions: list[dict[str, str]],
+        cancel: threading.Event,
+    ) -> None:
+        """Resume a persisted interrupt from the same LangGraph thread."""
+
+        with self._lock:
+            run = self._require_run(run_id)
+        http_sink: list[dict[str, Any]] = []
+        agent = None
+        try:
+            fixture_bank = (
+                FixtureBank(run.recorded_fixtures)
+                if run.tool_mode is ToolMode.recorded_tool
+                else None
+            )
+            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
+            self._clear_pending_interrupt(run, decisions)
+            self._drive_until_terminal(
+                run,
+                agent,
+                cancel,
+                Command(resume={"decisions": decisions}),
+            )
+        except ReplayError as exc:
+            if agent is not None:
+                self._link_run(run, agent)
+            else:
+                self._collect_related_files(run)
+            if cancel.is_set():
+                self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                return
+            run.error = str(exc)
+            run.events.append(
+                AgentEvent(
+                    at=utc_now(),
+                    kind="recorded_replay_failed",
+                    detail={"code": exc.code, "error": exc.message, **exc.details},
+                )
+            )
+            self._finish(run, AgentRunStatus.failed, "failed")
+        except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
+            if agent is not None:
+                self._link_run(run, agent)
+            else:
+                self._collect_related_files(run)
+            if cancel.is_set():
+                self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                return
+            run.error = clarify_connection_error(exc)
+            self._finish(run, AgentRunStatus.failed, "failed")
+
+    def _create_compiled_agent(
+        self,
+        run: AgentRun,
+        http_sink: list[dict[str, Any]],
+        fixture_bank: FixtureBank | None,
+    ) -> Any:
+        model = self._model_factory(run, http_sink)
+        agent_kwargs: dict[str, Any] = {}
+        backend = build_run_backend(run, self.manager.paths)
+        if backend is not None:
+            agent_kwargs["backend"] = backend
+        permissions = filesystem_permissions_for_run(run)
+        if permissions:
+            agent_kwargs["permissions"] = permissions
+        interrupt_on = interrupt_on_for_run(run)
+        if interrupt_on:
+            agent_kwargs["interrupt_on"] = interrupt_on
+        return create_deep_agent(
+            model=model,
+            tools=tools_for_names(run.presented_tools, fixture_bank=fixture_bank),
+            system_prompt=run.system_prompt,
+            middleware=[
+                WorkbenchHarnessMiddleware(
+                    run,
+                    http_sink,
+                    settings_provider=self._capture_settings,
+                    fixture_bank=fixture_bank,
+                )
+            ],
+            name="workbench-embedded-harness",
+            checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
+            **agent_kwargs,
+        )
+
+    def _drive_until_terminal(
+        self,
+        run: AgentRun,
+        agent: Any,
+        cancel: threading.Event,
+        payload: Any,
+    ) -> None:
+        config = _invoke_config(run)
+        current = payload
+        while True:
+            if cancel.is_set():
+                self._link_run(run, agent)
+                self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                return
+            pending = self._stream_until_pause(agent, run, current, cancel, config)
+            if cancel.is_set():
+                if pending is not None:
+                    self._resume_reject_then_stop(agent, run, pending, config)
+                else:
+                    self._link_run(run, agent)
+                    self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                return
+            if pending is None:
+                run.completion = build_completion(run)
+                self._link_run(run, agent)
+                self._finish(run, AgentRunStatus.completed, "completed")
+                return
+            self._publish_interrupt(run, pending)
+            decisions = self._wait_for_interrupt_decisions(run.id, cancel)
+            if decisions is None:
+                self._resume_reject_then_stop(agent, run, pending, config)
+                return
+            self._clear_pending_interrupt(run, decisions)
+            current = Command(resume={"decisions": decisions})
+
+    def _stream_until_pause(
+        self,
+        agent: Any,
+        run: AgentRun,
+        payload: Any,
+        cancel: threading.Event,
+        config: dict[str, Any],
+    ) -> Any:
+        try:
+            for chunk in agent.stream(payload, config=config, stream_mode="updates"):
+                found = _pending_from_chunk(chunk)
+                if found is not None:
+                    return found
+                if cancel.is_set():
+                    return None
+                self._ingest_stream(run, chunk)
+        except Exception as exc:  # noqa: BLE001 - interrupt may surface as GraphInterrupt
+            found = pending_interrupt_from_raw(exc) or pending_interrupt_from_raw(
+                getattr(exc, "interrupts", None)
+            )
+            if found is not None:
+                return found
+            raise
+        try:
+            state = agent.get_state(config)
+        except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
+            return None
+        return pending_interrupt_from_raw(getattr(state, "interrupts", None))
+
+    def _publish_interrupt(self, run: AgentRun, pending: Any) -> None:
+        with self._lock:
+            run.pending_interrupt = pending
+            run.updated_at = utc_now()
+            run.events.append(
+                AgentEvent(
+                    at=run.updated_at,
+                    kind="interrupt",
+                    detail=pending.model_dump(mode="json"),
+                )
+            )
+            self._persist_and_notify(run)
+
+    def _clear_pending_interrupt(self, run: AgentRun, decisions: list[dict[str, str]]) -> None:
+        with self._lock:
+            run.pending_interrupt = None
+            run.updated_at = utc_now()
+            run.events.append(
+                AgentEvent(
+                    at=run.updated_at,
+                    kind="interrupt_resolved",
+                    detail={"decisions": decisions},
+                )
+            )
+            self._persist_and_notify(run)
+
+    def _wait_for_interrupt_decisions(
+        self,
+        run_id: str,
+        cancel: threading.Event,
+    ) -> list[dict[str, str]] | None:
+        while True:
+            if cancel.is_set():
+                return None
+            with self._lock:
+                ready = self._decision_ready.get(run_id)
+            if ready is None:
+                return None
+            if ready.wait(timeout=0.2):
+                with self._lock:
+                    decisions = self._pending_decisions.get(run_id)
+                    self._pending_decisions[run_id] = None
+                    ready.clear()
+                if cancel.is_set():
+                    return None
+                return decisions
+
+    def _resume_reject_then_stop(
+        self,
+        agent: Any,
+        run: AgentRun,
+        pending: Any,
+        config: dict[str, Any],
+    ) -> None:
+        payloads = reject_decisions_for(pending)
+        self._clear_pending_interrupt(run, payloads)
+        try:
+            for chunk in agent.stream(
+                Command(resume={"decisions": payloads}),
+                config=config,
+                stream_mode="updates",
+            ):
+                if _pending_from_chunk(chunk) is not None:
+                    break
+                self._ingest_stream(run, chunk)
+        except Exception:  # noqa: BLE001 - cancel still wins if reject resume fails
+            pass
+        self._link_run(run, agent)
+        self._finish(run, AgentRunStatus.cancelled, "cancelled")
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
@@ -626,6 +913,17 @@ def _resolved_project_path(project_path: str | None) -> str | None:
             status_code=400,
         )
     return str(path)
+
+
+def _pending_from_chunk(chunk: Any) -> Any:
+    """Normalize a LangGraph ``stream_mode='updates'`` interrupt chunk."""
+
+    if not isinstance(chunk, dict):
+        return None
+    raw = chunk.get("__interrupt__")
+    if raw is None:
+        return None
+    return pending_interrupt_from_raw(raw)
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

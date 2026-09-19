@@ -112,13 +112,24 @@ export const api = {
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
   healthOf: (id: string) => request<Deployment>(`/v1/deployments/${id}/health`),
   agentTools: () => request<{ enabled: string[] }>("/v1/agent-tools"),
-  startAgentRun: (deployment_id: string, task: string, presented_tools?: string[], workspace_id?: string) =>
+  startAgentRun: (
+    deployment_id: string,
+    task: string,
+    presented_tools?: string[],
+    workspace_id?: string,
+    project_path?: string,
+  ) =>
     request<AgentRun>("/v1/agent-runs", {
       method: "POST",
-      body: JSON.stringify({ deployment_id, task, presented_tools, workspace_id }),
+      body: JSON.stringify({ deployment_id, task, presented_tools, workspace_id, project_path }),
     }),
   agentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
+  decideAgentRunInterrupt: (id: string, type: "approve" | "reject") =>
+    request<AgentRun>(`/v1/agent-runs/${id}/interrupt-decision`, {
+      method: "POST",
+      body: JSON.stringify({ decisions: [{ type }] }),
+    }),
   createChatConversation: (payload: {
     deployment_id: string;
     profile_id?: string;
@@ -156,6 +167,11 @@ export const api = {
     }),
   cancelChat: (id: string) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, { method: "POST" }),
+  decideChatInterrupt: (id: string, type: "approve" | "reject") =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/interrupt-decision`, {
+      method: "POST",
+      body: JSON.stringify({ decisions: [{ type }] }),
+    }),
   replaceChatTranscript: (id: string, messages: ChatMessage[]) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/transcript`, {
       method: "PUT",

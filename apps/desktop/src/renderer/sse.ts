@@ -1,5 +1,5 @@
 import type { RunStreamEnvelope, RunStreamEventType, SharedAgentEvent } from "./sharedContracts";
-import type { AgentRun, AgentRunStatus, ChatConversation } from "./types";
+import type { AgentRun, AgentRunStatus, ChatConversation, PendingInterrupt } from "./types";
 
 export type { RunStreamEnvelope, RunStreamEventType, SharedAgentEvent };
 
@@ -72,6 +72,7 @@ function mergeRunEvent<T>(current: T, envelope: RunStreamEnvelope): T {
     return current;
   }
   const events = [...(record.events ?? []), event];
+  const pendingPatch = interruptFieldFromEvent(event);
   if (record.current_run) {
     const runEvents = [...record.current_run.events, event];
     return {
@@ -81,6 +82,7 @@ function mergeRunEvent<T>(current: T, envelope: RunStreamEnvelope): T {
         ...record.current_run,
         status: envelope.status ?? record.current_run.status,
         events: runEvents,
+        ...(pendingPatch !== undefined ? { pending_interrupt: pendingPatch } : {}),
       },
     };
   }
@@ -89,9 +91,21 @@ function mergeRunEvent<T>(current: T, envelope: RunStreamEnvelope): T {
       ...current,
       status: envelope.status ?? record.status,
       events,
+      ...(pendingPatch !== undefined ? { pending_interrupt: pendingPatch } : {}),
     };
   }
   return current;
+}
+
+function interruptFieldFromEvent(event: SharedAgentEvent): PendingInterrupt | null | undefined {
+  switch (event.kind) {
+    case "interrupt":
+      return event.detail as unknown as PendingInterrupt;
+    case "interrupt_resolved":
+      return null;
+    default:
+      return undefined;
+  }
 }
 
 async function readEventStream(

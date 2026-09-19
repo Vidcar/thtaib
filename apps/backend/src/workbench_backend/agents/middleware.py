@@ -16,7 +16,7 @@ from workbench_backend.agents.replay import (
     apply_recorded_reconstruction,
 )
 from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
-from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, tool_name
+from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
@@ -70,7 +70,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
-        blocked = self._reject_projectless_filesystem(request)
+        blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
         if self.fixture_bank is None:
@@ -82,28 +82,48 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
-        blocked = self._reject_projectless_filesystem(request)
+        blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
         if self.fixture_bank is None:
             return await handler(request)
         return self._replay_tool_call(request)
 
-    def _reject_projectless_filesystem(self, request: ToolCallRequest) -> ToolMessage | None:
-        """File tools without a project must not write into a surprise directory."""
+    def _reject_projectless_privileged_tool(self, request: ToolCallRequest) -> ToolMessage | None:
+        """File and host-shell tools need a project; execute must also be presented."""
 
         name, _args, call_id = _tool_call_parts(request)
-        if name not in FILESYSTEM_TOOL_NAMES or self.run.project_path:
-            return None
-        return ToolMessage(
-            content=(
-                "Filesystem tools require a bound project folder. "
-                "This run has no project; the file was not written."
-            ),
-            name=name,
-            tool_call_id=call_id,
-            status="error",
-        )
+        if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
+            return ToolMessage(
+                content=(
+                    "Filesystem tools require a bound project folder. "
+                    "This run has no project; the file was not written."
+                ),
+                name=name,
+                tool_call_id=call_id,
+                status="error",
+            )
+        if name in SHELL_TOOL_NAMES and not self.run.project_path:
+            return ToolMessage(
+                content=(
+                    "The host shell requires a bound project folder as cwd. "
+                    "This run has no project; the command was not executed."
+                ),
+                name=name,
+                tool_call_id=call_id,
+                status="error",
+            )
+        if name in SHELL_TOOL_NAMES and name not in self.run.presented_tools:
+            return ToolMessage(
+                content=(
+                    "The host shell is not presented on this run. "
+                    "The command was not executed."
+                ),
+                name=name,
+                tool_call_id=call_id,
+                status="error",
+            )
+        return None
 
     def _replay_tool_call(self, request: ToolCallRequest) -> ToolMessage:
         """Replay from fixtures. Never invoke the live tool handler."""

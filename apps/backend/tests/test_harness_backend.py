@@ -6,12 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
 
 from workbench_backend.agents.harness_backend import (
     RESERVED_FRAMEWORK_PREFIXES,
     build_run_backend,
     harness_scratch_root,
+    host_shell_requested,
     is_reserved_framework_path,
     sanitize_thread_id,
 )
@@ -20,7 +21,13 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
 
 
-def _run(*, project_path: str | None, thread_id: str = "thread_test", tool_mode: ToolMode = ToolMode.live_tool) -> AgentRun:
+def _run(
+    *,
+    project_path: str | None,
+    thread_id: str = "thread_test",
+    tool_mode: ToolMode = ToolMode.live_tool,
+    presented_tools: list[str] | None = None,
+) -> AgentRun:
     now = utc_now()
     return AgentRun(
         id="agent_backend_test",
@@ -28,7 +35,7 @@ def _run(*, project_path: str | None, thread_id: str = "thread_test", tool_mode:
         deployment_id="deploy_test",
         task="backend unit",
         enabled_tools=["echo"],
-        presented_tools=["echo"],
+        presented_tools=list(presented_tools or ["echo"]),
         created_at=now,
         updated_at=now,
         project_path=project_path,
@@ -68,6 +75,8 @@ class HarnessBackendHelperTests(unittest.TestCase):
             self.assertIsInstance(backend, CompositeBackend)
             assert isinstance(backend, CompositeBackend)
             self.assertIsInstance(backend.default, FilesystemBackend)
+            self.assertNotIsInstance(backend.default, LocalShellBackend)
+            self.assertFalse(host_shell_requested(_run(project_path=str(project))))
             self.assertEqual(backend.artifacts_root, "/")
             write = backend.write("/hello.txt", "in-project")
             self.assertFalse(write.error, write.error)
@@ -80,6 +89,24 @@ class HarnessBackendHelperTests(unittest.TestCase):
                 (scratch / "large_tool_results" / "hello.txt").read_text(encoding="utf-8"),
                 "in-scratch",
             )
+
+    def test_project_run_attaches_host_shell_only_when_execute_presented(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            paths = WorkbenchPaths(root).ensure()
+            shell_run = _run(
+                project_path=str(project),
+                thread_id="thread_shell",
+                presented_tools=["execute"],
+            )
+            self.assertTrue(host_shell_requested(shell_run))
+            backend = build_run_backend(shell_run, paths)
+            self.assertIsInstance(backend, CompositeBackend)
+            assert isinstance(backend, CompositeBackend)
+            self.assertIsInstance(backend.default, LocalShellBackend)
+            self.assertIn("PATH", getattr(backend.default, "_env", {}))
 
     def test_projectless_run_uses_state_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
