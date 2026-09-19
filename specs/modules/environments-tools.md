@@ -68,7 +68,7 @@ Treat the beta Deep Agents interpreter integration as a separate optional tool-o
 
 ## Status and evidence
 
-Rows ENV-001…006 in [the catalogue](../catalog.json). ENV-001 and ENV-002 are `built` for the host-shell path (Chat and Agent-run); not `verified` until David-PC UAT. ENV-003…006 are unstarted. WSL/Docker are out of scope.
+Rows ENV-001…006 in [the catalogue](../catalog.json). ENV-001 and ENV-002 are `built` for the host-shell path (Chat and Agent-run). David-PC UAT on 2026-09-19 covered Chat HTTP approve, deny, and `shell_requires_project` at `8887f9f` ([evidence](../evidence/2026-09-19-david-pc-host-shell.md)); not `verified` — acceptance still lacks other invocation paths, Electron, and the durable Approvals inbox ([OQ-011](../open-questions.md#oq-011)). ENV-003…006 are unstarted. WSL/Docker are out of scope.
 
 ## Open questions
 

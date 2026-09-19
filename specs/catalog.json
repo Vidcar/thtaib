@@ -280,7 +280,17 @@
       "tests": [
         "apps/backend/tests/test_host_shell.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-host-shell.md",
+          "commit": "8887f9f86fab29db3bdf57e3b4c81e47ba3a2dcd",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; origin/main 8887f9f",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "ARCH-006",
@@ -521,6 +531,15 @@
           "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
           "result": "passed",
           "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-host-shell.md",
+          "commit": "8887f9f86fab29db3bdf57e3b4c81e47ba3a2dcd",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; origin/main 8887f9f",
+          "result": "passed",
+          "requirement_sha256": null
         }
       ]
     },
@@ -679,7 +698,17 @@
         "apps/backend/tests/test_host_shell.py",
         "apps/backend/tests/test_harness_backend.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-host-shell.md",
+          "commit": "8887f9f86fab29db3bdf57e3b4c81e47ba3a2dcd",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; origin/main 8887f9f",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "ENV-002",
@@ -699,7 +728,17 @@
       "tests": [
         "apps/backend/tests/test_host_shell.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-host-shell.md",
+          "commit": "8887f9f86fab29db3bdf57e3b4c81e47ba3a2dcd",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; origin/main 8887f9f",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "ENV-003",

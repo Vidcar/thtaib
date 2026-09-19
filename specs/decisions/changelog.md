@@ -4,6 +4,14 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-19 — David-PC host-shell UAT recorded
+
+Authority: live run on David-PC against `8887f9f` ([PR #89](https://github.com/Vidcar/thtaib/pull/89)); report [evidence](../evidence/2026-09-19-david-pc-host-shell.md). Requirements: ENV-001, ENV-002, ARCH-005, AGT-001. Does not close [OQ-011](../open-questions.md#oq-011).
+
+- Chat HTTP: a dangerous `execute` paused; approve wrote `uat-shell.txt`; deny left `uat-shell-denied.txt` absent; no-project `presented_tools=["execute"]` is `shell_requires_project` (400).
+- Catalogue `uat` rows attached on those IDs; statuses stay `built` (partial acceptance coverage; Electron and the durable inbox were not exercised).
+- No CI run URL — this was host UAT, not `ci-smoke`.
+
 ## 2026-09-19 — Host shell attaches only when execute is presented
 
 Authority: independent review of [PR #89](https://github.com/Vidcar/thtaib/pull/89) (F1). Requirements: ENV-001, ENV-002, ARCH-005.
