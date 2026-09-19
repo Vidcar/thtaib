@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -15,6 +15,8 @@ from pydantic import PrivateAttr
 
 class ScriptedChatModel(BaseChatModel):
     """Returns a fixed sequence of AI messages, including optional tool calls."""
+
+    generate_hold: ClassVar[threading.Event | None] = None
 
     _script: list[AIMessage] = PrivateAttr(default_factory=list)
     _index: int = PrivateAttr(default=0)
@@ -50,8 +52,9 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def _next_message(self) -> AIMessage:
-        if self._hold is not None:
-            self._hold.wait(timeout=30)
+        hold = ScriptedChatModel.generate_hold or self._hold
+        if hold is not None:
+            hold.wait(timeout=30)
         if self._delay_s:
             time.sleep(self._delay_s)
         if self._index >= len(self._script):

@@ -320,6 +320,7 @@ class LabApiTests(unittest.TestCase):
     def test_capture_fails_while_cancel_requested(self) -> None:
         workspace = self._workspace()
         hold = threading.Event()
+        ScriptedChatModel.generate_hold = hold
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -352,6 +353,7 @@ class LabApiTests(unittest.TestCase):
             self.assertEqual(blocked.json()["code"], "not_quiescent")
         finally:
             hold.set()
+            ScriptedChatModel.generate_hold = None
         wait_for_run(self.client, started["id"])
 
     def test_recorded_and_live_modes_are_labelled(self) -> None:

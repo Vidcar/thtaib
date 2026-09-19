@@ -193,6 +193,7 @@ class HarnessApiTests(unittest.TestCase):
 
     def test_cancel_request_is_not_immediately_confirmed(self) -> None:
         hold = threading.Event()
+        ScriptedChatModel.generate_hold = hold
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -219,6 +220,7 @@ class HarnessApiTests(unittest.TestCase):
             self.assertEqual(observed.json()["status"], "cancel_requested")
         finally:
             hold.set()
+            ScriptedChatModel.generate_hold = None
         confirmed = wait_for_run(self.client, started["id"])
         self.assertEqual(confirmed["status"], "cancelled")
         self.assertEqual(confirmed["stop_reason"], "cancelled")
@@ -229,6 +231,7 @@ class HarnessApiTests(unittest.TestCase):
 
     def test_cancel_requested_is_still_live_for_quiescence(self) -> None:
         hold = threading.Event()
+        ScriptedChatModel.generate_hold = hold
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -245,9 +248,12 @@ class HarnessApiTests(unittest.TestCase):
             wait_for_status(self.client, started["id"], "running")
             requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
             self.assertEqual(requested.json()["status"], "cancel_requested")
+            still = self.client.get(f"/v1/agent-runs/{started['id']}").json()
+            self.assertEqual(still["status"], "cancel_requested")
             self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [started["id"]])
         finally:
             hold.set()
+            ScriptedChatModel.generate_hold = None
         confirmed = wait_for_run(self.client, started["id"])
         self.assertEqual(confirmed["status"], "cancelled")
         self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [])

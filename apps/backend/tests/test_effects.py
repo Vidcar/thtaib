@@ -240,6 +240,7 @@ class UnknownEffectSafetyTests(unittest.TestCase):
 
     def test_recover_during_cancel_requested_does_not_replay(self) -> None:
         hold = threading.Event()
+        ScriptedChatModel.generate_hold = hold
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -273,6 +274,8 @@ class UnknownEffectSafetyTests(unittest.TestCase):
             ).json()
             requested = self.client.post(f"/v1/agent-runs/{run_id}/cancel")
             self.assertEqual(requested.json()["status"], "cancel_requested")
+            still = self.client.get(f"/v1/agent-runs/{run_id}").json()
+            self.assertEqual(still["status"], "cancel_requested")
             recovered = self.client.post(
                 f"/v1/effects/{effect['id']}/recover",
                 json={"action": "reconnect"},
@@ -288,6 +291,7 @@ class UnknownEffectSafetyTests(unittest.TestCase):
             self.assertIn("not a confirmed stop", report["note"])
         finally:
             hold.set()
+            ScriptedChatModel.generate_hold = None
         wait_for_run(self.client, run_id)
 
 
