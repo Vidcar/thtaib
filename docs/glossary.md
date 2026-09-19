@@ -28,6 +28,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | Chat memory UI | Out of scope |
 | Chat shipped / Chat tab done | Debug-quality Chat (Issue #22); not polish |
 | Agent-run is Chat | Agent-run debug panel is not Chat |
+| transcript is the harness context | Displayed history ≠ execution thread |
+| continue = last message only | Continue = same conversation + execution thread + new run |
+| new chat wipes the project | Fresh resets active context; project + durable knowledge retained |
+| edit history rewrites the live thread | History edit is display-only unless an explicit new attempt |
+| model switch is Fresh | Model switch applies to the next run; resume across switch is open |
+| Chat polish landed with the continuity spec | High-level continuity + UX spec (#52); not polish; not implemented |
 | CUDA 13.4 / GPU default / valued flash_attn landed | partial OQ-007 landed on #21; remainder open |
 | bare --flash-attn is the mapping | valued `--flash-attn on` / `off` / `auto` only (#21) |
 | MCP is the bus | open — default tool bus vs optional (OQ-009 / OQ-003) |
@@ -142,7 +148,20 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. Debug-quality Chat calls this harness directly. It is not a second application-written agent loop and not Builder. A thin desktop Agent-run debug panel may still call that API.
 
+<a id="debug-quality-chat"></a>
 **Debug-quality Chat** is the Chat tab that binds a deployment/profile and project workspace path, starts/cancels one harness task, and streams harness events. Transcript / conversation history is displayed history in `application.sqlite`, not the working project (STATE-002). Deep Agents filesystem tools target project storage. This is not Chat polish and not Builder.
+
+<a id="conversation-thread-run"></a>
+**Conversation / execution thread / run** is the [Issue #52](https://github.com/Vidcar/thtaib/issues/52) Agent Chat continuity mapping. A **conversation** is the Chat-surface record (displayed history and links). An **execution thread** is the harness continuation identity (LangGraph checkpoints). A **run** is one harness invocation. Continue = same conversation + same execution thread + new run. Fresh = new conversation + new execution thread. The displayed transcript is not a substitute for the execution thread. Exact identity formats stay [OQ-004](../specs/open-questions.md#oq-004). Implementation is a later Issue, not this spec.
+
+<a id="continue-vs-fresh"></a>
+**Continue vs fresh:** **Continue** is a follow-up that resumes the execution thread. **Fresh** is an explicit New conversation that resets active context while retaining the selected project and permitted durable knowledge. Clearing only the desktop panel is not Fresh.
+
+<a id="displayed-history-not-execution-thread"></a>
+**Displayed history ≠ execution thread** means the Chat transcript is application-owned presentation. Continue must resume the execution thread independently of that transcript. A display-only history edit does not silently become the next model request and does not restore or delete project files.
+
+<a id="inspector-honesty"></a>
+**Inspector honesty** means Chat must distinguish conversation, execution thread and run; label continue vs fresh; show `cancel_requested` as still live; and not present a transcript or a profile/knowledge id as proof the harness received that context or applied those settings.
 
 **Separate application.sqlite and checkpoints.sqlite** is the Issue #27 pair under the product root. `application.sqlite` is the workbench system of record for runs, chat linkage, profile/deployment refs, checkpoint id links and file refs. `checkpoints.sqlite` is the LangGraph checkpointer file.
 
@@ -150,7 +169,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **STATE-002 — history ≠ project** means editing or clearing Chat history alone neither restores nor deletes project files. Filesystem tools write project storage only.
 
-**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Issue #31 locked unknown-effect safety ([STATE-004](../specs/modules/state-recovery.md#state-004)). Issue #42 locked cancel honesty (`cancel_requested` is still live; `cancelled` is the confirmed stop; no false quiescence). Identities, event-order/reconnection and exactly-once stay [OQ-004](../specs/open-questions.md#oq-004).
+**Partial OQ-004 defaults only** means Issue #27 locked the dual-DB + app linkage pattern. Issue #31 locked unknown-effect safety ([STATE-004](../specs/modules/state-recovery.md#state-004)). Issue #42 locked cancel honesty (`cancel_requested` is still live; `cancelled` is the confirmed stop; no false quiescence). [Issue #52](https://github.com/Vidcar/thtaib/issues/52) records the high-level conversation ↔ execution-thread ↔ run product mapping; it does not close this question. Identities, event-order/reconnection and exactly-once stay [OQ-004](../specs/open-questions.md#oq-004).
 
 **cancel_requested vs cancelled** means a cancel request is accepted and the run remains live until the worker confirms stop. Quiescence / “safe to treat the workspace as idle” must not treat `cancel_requested` as idle.
 
