@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Read-only, standard-library integrity checks for the specification pack.
 
-This validates pointers and evidence metadata, not product behaviour or human
-approval authenticity. See specs/verification.md for the precise scope.
+Validates links, requirement IDs, catalogue and repository-map shape, file
+pointers, the archived source hash and evidence-row shape. It does not run
+tests, judge semantics or inspect GitHub settings; see specs/verification.md.
 """
 from __future__ import annotations
 
@@ -21,15 +22,14 @@ from urllib.parse import unquote, urlsplit
 
 CORE_FILES = (
     "README.md", "AGENTS.md", "specs/README.md", "specs/architecture.md",
-    "specs/governance.md", "specs/contracts.md", "specs/catalog.json",
-    "specs/repository-map.json", "specs/commands.md", "specs/verification.md",
-    "specs/open-questions.md", "specs/repository-setup.md",
-    "specs/decisions/ADR-0001-adopt-specification-pack.md",
-    "scripts/check_specs.py", "tests/specs/test_check_specs.py",
-    ".github/CODEOWNERS.example", ".github/workflows/specs.yml",
-    ".github/workflows/backend.yml", ".github/workflows/desktop.yml",
-    ".github/workflows/contracts.yml",
+    "specs/contracts.md", "specs/catalog.json", "specs/repository-map.json",
+    "specs/commands.md", "specs/verification.md", "specs/open-questions.md",
+    "specs/deviations.md", "specs/decisions/changelog.md", "specs/templates/feature.md",
+    "scripts/check_specs.py", "tests/specs/test_check_specs.py", ".github/CODEOWNERS",
+    ".github/workflows/specs.yml", ".github/workflows/backend.yml",
+    ".github/workflows/desktop.yml", ".github/workflows/contracts.yml",
 )
+SCHEMA_VERSION = 2
 ID_PATTERN = r"[A-Z]{2,8}-\d{3}"
 ID_RE = re.compile(rf"\b({ID_PATTERN})\b")
 DEFINITION_RE = re.compile(rf"^### ({ID_PATTERN}): [^\n]+", re.M)
@@ -39,15 +39,19 @@ BLOCK_RE = re.compile(
     re.M | re.S,
 )
 LINK_RE = re.compile(r"!?\[[^\]\n]*\]\(([^\n)]+)\)")
-PLACEHOLDER_RE = re.compile(r"REPLACE_WITH|YOUR_[A-Z]|EXAMPLE_OWNER", re.I)
-DOC_STATUSES = {"baseline", "draft", "accepted", "superseded"}
-IMPL_STATUSES = {"unassessed", "planned", "partial", "verified", "retired"}
-KINDS = {"guide", "specification", "decision", "source", "reference", "template"}
-BASES = {"revision-0.5", "pack-proposal", "mixed"}
+PLACEHOLDER_RE = re.compile(r"REPLACE_WITH|YOUR_[A-Z]", re.I)
+HEX_ID_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+NON_REQUIREMENT_IDS = {"SHA-256", "SHA-512"}
+DOC_STATUSES = {"accepted", "draft", "superseded", "informational"}
+DOC_KINDS = {"guide", "specification", "decision", "source", "reference", "template"}
+IMPL_STATUSES = {"planned", "built", "verified", "retired"}
+EVIDENCE_KINDS = {"ci-smoke", "uat", "manual"}
+VERIFYING_KINDS = {"ci-smoke", "uat"}
+EVIDENCE_RESULTS = {"passed", "failed", "skipped"}
 
 
 def without_fences(text: str) -> str:
-    """Remove fenced examples so example IDs/links are not treated as live ones."""
+    """Blank fenced examples so example IDs and links are not treated as live."""
     output: list[str] = []
     fence_char: str | None = None
     fence_length = 0
@@ -105,6 +109,10 @@ def load_json(path: Path) -> Any:
 
 def valid_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip()) and not PLACEHOLDER_RE.search(value)
+
+
+def is_url(value: Any) -> bool:
+    return isinstance(value, str) and urlsplit(value).scheme in {"http", "https"} and bool(urlsplit(value).netloc)
 
 
 def root_path(root: Path, value: Any, errors: list[str], label: str,
@@ -174,8 +182,9 @@ def check_markdown_links(root: Path, texts: dict[str, str], errors: list[str]) -
 
 def compare_baseline(root: Path, base_ref: str, current_ids: set[str]) -> list[str]:
     """Catch requirement deletion even when both current text and catalogue vanish."""
-    if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", base_ref):
+    if not HEX_ID_RE.fullmatch(base_ref):
         return ["base-ref: supply a full Git commit/object ID, not a branch expression"]
+
     def git(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(["git", *args], cwd=root, text=True,
                               capture_output=True, timeout=15, check=False)
@@ -187,7 +196,7 @@ def compare_baseline(root: Path, base_ref: str, current_ids: set[str]) -> list[s
         if tree.returncode:
             return ["base-ref: could not inspect the base tree"]
         if not tree.stdout.strip():
-            return []  # First import of this pack; no earlier catalogue exists.
+            return []  # No earlier catalogue exists.
         previous = git("show", f"{base_ref}:specs/catalog.json")
         if previous.returncode:
             return ["base-ref: could not read the previous catalogue"]
@@ -200,51 +209,19 @@ def compare_baseline(root: Path, base_ref: str, current_ids: set[str]) -> list[s
         return [f"base-ref: failed to compare the prior catalogue: {exc}"]
 
 
-def validate_repo(root: Path, *, require_adopted: bool = False,
-                  base_ref: str | None = None) -> list[str]:
-    root = root.resolve()
-    errors: list[str] = []
-    for path in CORE_FILES:
-        root_path(root, path, errors, "required pack file")
-    try:
-        catalog = load_json(root / "specs/catalog.json")
-        mapping = load_json(root / "specs/repository-map.json")
-    except (OSError, ValueError) as exc:
-        return errors + [f"manifest read failed: {exc}"]
-    if not isinstance(catalog, dict) or not isinstance(mapping, dict):
-        return errors + ["catalogue and repository map must be JSON objects"]
-    exact_keys(catalog, {"schema_version", "adoption", "source_archive", "documents", "requirements"}, errors, "catalogue")
-    exact_keys(mapping, {"schema_version", "bindings"}, errors, "repository map")
-    if catalog.get("schema_version") != 1 or mapping.get("schema_version") != 1:
-        errors.append("unsupported manifest schema_version (expected 1)")
-
-    texts: dict[str, str] = {}
-    for path in markdown_files(root):
-        if not path.resolve().is_relative_to(root):
-            errors.append(f"Markdown file escapes root through a symlink: {path}")
-            continue
-        try:
-            texts[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            errors.append(f"cannot read Markdown {path}: {exc}")
-    check_markdown_links(root, texts, errors)
-
+def check_adoption(root: Path, catalog: dict[str, Any], errors: list[str]) -> dict[str, Any]:
     adoption = catalog.get("adoption")
-    adoption_ok = False
     if not isinstance(adoption, dict):
         errors.append("adoption: expected an object")
-        adoption = {}
-    else:
-        exact_keys(adoption, {"state", "decision", "approval"}, errors, "adoption")
+        return {}
+    exact_keys(adoption, {"state", "decision", "approval"}, errors, "adoption")
     if adoption.get("state") not in {"pending", "accepted"}:
         errors.append("adoption: state must be pending or accepted")
     root_path(root, adoption.get("decision"), errors, "adoption decision")
-    if require_adopted and adoption.get("state") != "accepted":
-        errors.append("adoption: approval has not been recorded")
+    approval = adoption.get("approval")
     if adoption.get("state") == "accepted":
-        approval = adoption.get("approval")
         if not isinstance(approval, dict):
-            errors.append("adoption: accepted state requires actual approval metadata")
+            errors.append("adoption: accepted state requires approval metadata")
         else:
             exact_keys(approval, {"reviewer", "reference", "date"}, errors, "adoption approval")
             if not all(valid_text(approval.get(k)) for k in ("reviewer", "reference", "date")):
@@ -252,31 +229,15 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
             else:
                 try:
                     date.fromisoformat(approval["date"])
-                    adoption_ok = True
                 except ValueError:
                     errors.append("adoption: approval date must be ISO YYYY-MM-DD")
-        owners = root_path(root, ".github/CODEOWNERS", errors, "adoption ownership")
-        if owners:
-            lines = [line.strip() for line in owners.read_text(encoding="utf-8").splitlines()
-                     if line.strip() and not line.lstrip().startswith("#")]
-            if not lines or any(PLACEHOLDER_RE.search(line) for line in lines):
-                errors.append("CODEOWNERS: active rules are empty or contain placeholder owners")
-            elif not all(re.search(r"\s@[A-Za-z0-9][A-Za-z0-9_/-]*", line) for line in lines):
-                errors.append("CODEOWNERS: each active rule needs an actual owner handle")
-    elif adoption.get("approval") is not None:
+    elif approval is not None:
         errors.append("adoption: pending state must not contain a claimed approval")
+    return adoption
 
-    archive = catalog.get("source_archive")
-    if not isinstance(archive, dict):
-        errors.append("source_archive: expected an object")
-    else:
-        exact_keys(archive, {"path", "sha256"}, errors, "source archive")
-        archived_path = root_path(root, archive.get("path"), errors, "source archive")
-        if not re.fullmatch(r"[0-9a-f]{64}", str(archive.get("sha256", ""))):
-            errors.append("source archive: invalid SHA-256")
-        elif archived_path and hashlib.sha256(archived_path.read_bytes()).hexdigest() != archive["sha256"]:
-            errors.append("source archive: SHA-256 mismatch; archived source bytes changed")
 
+def check_documents(root: Path, catalog: dict[str, Any], texts: dict[str, str],
+                    adoption: dict[str, Any], errors: list[str]) -> dict[str, dict[str, Any]]:
     documents = catalog.get("documents")
     if not isinstance(documents, list):
         errors.append("documents: expected a list")
@@ -286,9 +247,9 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
         if not isinstance(row, dict):
             errors.append("document entry: expected an object")
             continue
-        exact_keys(row, {"path", "kind", "basis", "owner", "status", "approval_reference"}, errors, "document entry")
+        exact_keys(row, {"path", "kind", "status", "approval"}, errors, "document entry")
         path = row.get("path")
-        target = root_path(root, path, errors, "catalogue document")
+        root_path(root, path, errors, "catalogue document")
         if not isinstance(path, str):
             continue
         if path in doc_by_path:
@@ -296,28 +257,33 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
         doc_by_path[path] = row
         if not path.startswith("specs/") or not path.endswith(".md"):
             errors.append(f"catalogue document must be Markdown under specs/: {path}")
-        if row.get("kind") not in KINDS or row.get("basis") not in BASES:
-            errors.append(f"document {path}: invalid kind or basis")
-        if row.get("status") not in DOC_STATUSES or not valid_text(row.get("owner")):
-            errors.append(f"document {path}: invalid status or missing owner")
-        if row.get("approval_reference") is not None and not valid_text(row["approval_reference"]):
-            errors.append(f"document {path}: invalid approval_reference")
-        if row.get("status") in {"accepted", "superseded"} and not valid_text(row.get("approval_reference")):
+        if row.get("kind") not in DOC_KINDS:
+            errors.append(f"document {path}: invalid kind")
+        if row.get("status") not in DOC_STATUSES:
+            errors.append(f"document {path}: invalid status")
+        if row.get("status") == "informational" and row.get("kind") in {"specification", "decision"}:
+            errors.append(f"document {path}: specifications and decisions cannot be informational")
+        if row.get("approval") is not None and not valid_text(row["approval"]):
+            errors.append(f"document {path}: invalid approval")
+        if row.get("status") in {"accepted", "superseded"} and not valid_text(row.get("approval")):
             errors.append(f"document {path}: accepted/superseded status needs a real approval reference")
-    if adoption_ok and doc_by_path.get(adoption.get("decision"), {}).get("status") != "accepted":
+    if adoption.get("state") == "accepted" and doc_by_path.get(adoption.get("decision"), {}).get("status") != "accepted":
         errors.append("adoption: the adoption decision itself must be accepted in the catalogue")
     for path in texts:
         is_report = path.startswith("specs/evidence/") and path != "specs/evidence/README.md"
         if path.startswith("specs/") and not is_report and path not in doc_by_path:
             errors.append(f"unregistered specification document: {path}")
+    return doc_by_path
 
+
+def check_definitions(texts: dict[str, str], doc_by_path: dict[str, dict[str, Any]],
+                      errors: list[str]) -> tuple[dict[str, str], dict[str, str]]:
     definitions: dict[str, str] = {}
     blocks: dict[str, str] = {}
     for path, text in texts.items():
         clean = without_fences(text)
-        block_matches = list(BLOCK_RE.finditer(clean))
         local_blocks = requirement_blocks(text)
-        for match in block_matches:
+        for match in BLOCK_RE.finditer(clean):
             if match.group("anchor") != match.group("id").lower():
                 errors.append(f"{path}: requirement anchor must match {match.group('id').lower()}")
         for rid in DEFINITION_RE.findall(clean):
@@ -334,11 +300,63 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
                 errors.append(f"{path}: normative requirement {rid} is outside a registered specification")
     for path, text in texts.items():
         for rid in set(ID_RE.findall(without_fences(text))):
-            if rid.startswith(("OQ-", "DEV-")) or rid in {"SHA-256", "SHA-512"}:
-                continue  # Question/deviation identifiers and standard hash names.
+            if rid.startswith(("OQ-", "DEV-", "ADR-")) or rid in NON_REQUIREMENT_IDS:
+                continue
             if rid not in definitions:
                 errors.append(f"{path}: unknown requirement reference: {rid}")
+    return definitions, blocks
 
+
+def check_evidence(root: Path, rid: str, status: str, evidence: list[Any],
+                   block: str | None, errors: list[str]) -> bool:
+    """Validate evidence rows; return whether one row can support `verified`."""
+    supports_verified = False
+    for item in evidence:
+        if not isinstance(item, dict):
+            errors.append(f"{rid}: evidence entry must be an object")
+            continue
+        exact_keys(item, {"kind", "ref", "commit", "date", "environment", "result", "requirement_sha256"},
+                   errors, f"{rid} evidence")
+        kind = item.get("kind")
+        if kind not in EVIDENCE_KINDS:
+            errors.append(f"{rid}: evidence kind must be one of {sorted(EVIDENCE_KINDS)}")
+        ref = item.get("ref")
+        report: Path | None = None
+        if not is_url(ref):
+            report = root_path(root, ref, errors, f"{rid} evidence ref")
+        if not HEX_ID_RE.fullmatch(str(item.get("commit", ""))):
+            errors.append(f"{rid}: evidence requires a full tested Git object ID")
+        try:
+            date.fromisoformat(str(item.get("date")))
+        except (TypeError, ValueError):
+            errors.append(f"{rid}: evidence date must be ISO YYYY-MM-DD")
+        if not valid_text(item.get("environment")):
+            errors.append(f"{rid}: evidence environment is empty or a placeholder")
+        result = item.get("result")
+        if result not in EVIDENCE_RESULTS:
+            errors.append(f"{rid}: invalid evidence result")
+        digest = item.get("requirement_sha256")
+        if digest is not None and not (isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+            errors.append(f"{rid}: requirement_sha256 must be null or a 64-character hex digest")
+        if report and report.suffix == ".md":
+            body = report.read_text(encoding="utf-8")
+            if not body.strip() or PLACEHOLDER_RE.search(body):
+                errors.append(f"{rid}: evidence report must be nonempty Markdown without template placeholders")
+        if kind in VERIFYING_KINDS and status == "verified":
+            if result != "passed":
+                errors.append(f"{rid}: verified claim has a non-passing {kind} row; downgrade to built")
+            elif digest is None:
+                errors.append(f"{rid}: verified claim needs requirement_sha256 on its {kind} row")
+            elif block is not None and digest != requirement_digest(block):
+                errors.append(f"{rid}: stale evidence; requirement text changed")
+            else:
+                supports_verified = True
+    return supports_verified
+
+
+def check_requirements(root: Path, catalog: dict[str, Any], definitions: dict[str, str],
+                       blocks: dict[str, str], doc_by_path: dict[str, dict[str, Any]],
+                       errors: list[str]) -> set[str]:
     requirements = catalog.get("requirements")
     if not isinstance(requirements, list):
         errors.append("requirements: expected a list")
@@ -348,9 +366,9 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
         if not isinstance(row, dict):
             errors.append("requirement entry: expected an object")
             continue
-        exact_keys(row, {"id", "document", "implementation_status", "code", "tests", "evidence"}, errors, "requirement entry")
+        exact_keys(row, {"id", "document", "status", "code", "tests", "evidence"}, errors, "requirement entry")
         rid = row.get("id")
-        if not isinstance(rid, str) or not re.fullmatch(ID_PATTERN, rid) or rid.startswith(("OQ-", "DEV-")):
+        if not isinstance(rid, str) or not re.fullmatch(ID_PATTERN, rid) or rid.startswith(("OQ-", "DEV-", "ADR-")):
             errors.append("requirement entry: invalid requirement ID")
             continue
         if rid in registered:
@@ -358,9 +376,9 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
         registered.add(rid)
         if definitions.get(rid) != row.get("document"):
             errors.append(f"{rid}: catalogue document does not match its unique definition")
-        status = row.get("implementation_status")
+        status = row.get("status")
         if status not in IMPL_STATUSES:
-            errors.append(f"{rid}: invalid implementation_status")
+            errors.append(f"{rid}: invalid status")
         for category in ("code", "tests"):
             values = row.get(category)
             if not isinstance(values, list):
@@ -372,43 +390,27 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
         if not isinstance(evidence, list):
             errors.append(f"{rid}: evidence must be a list")
             evidence = []
+        supports = check_evidence(root, rid, str(status), evidence, blocks.get(rid), errors)
         if status == "verified":
             if doc_by_path.get(row.get("document"), {}).get("status") != "accepted":
                 errors.append(f"{rid}: verified claims require an accepted specification")
-            if not row.get("code") or not row.get("tests") or not evidence:
-                errors.append(f"{rid}: verified claim needs code, tests and passing evidence")
-        for item in evidence:
-            if not isinstance(item, dict):
-                errors.append(f"{rid}: evidence entry must be an object")
-                continue
-            exact_keys(item, {"path", "code_revision", "requirement_sha256", "environment", "result"}, errors, f"{rid} evidence")
-            report = root_path(root, item.get("path"), errors, f"{rid} evidence report")
-            if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", str(item.get("code_revision", ""))):
-                errors.append(f"{rid}: evidence requires a full tested Git object ID")
-            digest = item.get("requirement_sha256")
-            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-                errors.append(f"{rid}: evidence requires a valid requirement_sha256")
-            if not valid_text(item.get("environment")):
-                errors.append(f"{rid}: evidence environment is empty or a placeholder")
-            if item.get("result") not in {"passed", "failed", "skipped", "incomplete"}:
-                errors.append(f"{rid}: invalid evidence result")
-            if status == "verified":
-                if item.get("result") != "passed":
-                    errors.append(f"{rid}: verified claim contains non-passing evidence")
-                if rid in blocks and digest != requirement_digest(blocks[rid]):
-                    errors.append(f"{rid}: stale evidence; requirement text changed")
-                if report and (report.suffix != ".md" or not report.read_text(encoding="utf-8").strip()
-                               or PLACEHOLDER_RE.search(report.read_text(encoding="utf-8"))):
-                    errors.append(f"{rid}: passing report must be nonempty Markdown without template placeholders")
+            if not row.get("code") or not row.get("tests"):
+                errors.append(f"{rid}: verified claim needs code and tests pointers")
+            if not supports:
+                errors.append(f"{rid}: verified claim needs a passing ci-smoke or uat evidence row with a matching digest")
     for rid in sorted(set(definitions) - registered):
         errors.append(f"requirement missing from catalogue: {rid}")
     if not definitions:
         errors.append("no normative requirements found")
+    return registered
 
+
+def check_bindings(root: Path, mapping: dict[str, Any], doc_by_path: dict[str, dict[str, Any]],
+                   errors: list[str]) -> None:
     bindings = mapping.get("bindings")
     if not isinstance(bindings, list):
         errors.append("repository map: bindings must be a list")
-        bindings = []
+        return
     binding_ids: set[str] = set()
     for binding in bindings:
         if not isinstance(binding, dict):
@@ -433,6 +435,53 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
             root_path(root, binding.get("path"), errors, f"binding {bid}", kind=binding.get("kind", "file"))
         else:
             errors.append(f"binding {bid}: state must be bound or unbound")
+
+
+def validate_repo(root: Path, *, base_ref: str | None = None) -> list[str]:
+    root = root.resolve()
+    errors: list[str] = []
+    for path in CORE_FILES:
+        root_path(root, path, errors, "required pack file")
+    try:
+        catalog = load_json(root / "specs/catalog.json")
+        mapping = load_json(root / "specs/repository-map.json")
+    except (OSError, ValueError) as exc:
+        return errors + [f"manifest read failed: {exc}"]
+    if not isinstance(catalog, dict) or not isinstance(mapping, dict):
+        return errors + ["catalogue and repository map must be JSON objects"]
+    exact_keys(catalog, {"schema_version", "adoption", "source_archive", "documents", "requirements"}, errors, "catalogue")
+    exact_keys(mapping, {"schema_version", "bindings"}, errors, "repository map")
+    if catalog.get("schema_version") != SCHEMA_VERSION or mapping.get("schema_version") != 1:
+        errors.append(f"unsupported manifest schema_version (catalogue {SCHEMA_VERSION}, repository map 1)")
+
+    texts: dict[str, str] = {}
+    for path in markdown_files(root):
+        if not path.resolve().is_relative_to(root):
+            errors.append(f"Markdown file escapes root through a symlink: {path}")
+            continue
+        try:
+            texts[path.relative_to(root).as_posix()] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"cannot read Markdown {path}: {exc}")
+    check_markdown_links(root, texts, errors)
+
+    adoption = check_adoption(root, catalog, errors)
+
+    archive = catalog.get("source_archive")
+    if not isinstance(archive, dict):
+        errors.append("source_archive: expected an object")
+    else:
+        exact_keys(archive, {"path", "sha256"}, errors, "source archive")
+        archived_path = root_path(root, archive.get("path"), errors, "source archive")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(archive.get("sha256", ""))):
+            errors.append("source archive: invalid SHA-256")
+        elif archived_path and hashlib.sha256(archived_path.read_bytes()).hexdigest() != archive["sha256"]:
+            errors.append("source archive: SHA-256 mismatch; archived source bytes changed")
+
+    doc_by_path = check_documents(root, catalog, texts, adoption, errors)
+    definitions, blocks = check_definitions(texts, doc_by_path, errors)
+    registered = check_requirements(root, catalog, definitions, blocks, doc_by_path, errors)
+    check_bindings(root, mapping, doc_by_path, errors)
     if base_ref:
         errors.extend(compare_baseline(root, base_ref, registered))
     return errors
@@ -441,16 +490,14 @@ def validate_repo(root: Path, *, require_adopted: bool = False,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--require-adopted", action="store_true")
     parser.add_argument("--requirement-hash", metavar="ID")
     parser.add_argument("--base-ref", default=os.environ.get("SPEC_BASE_REF") or None,
                         help="full base commit ID; compare historical requirement IDs (needs Git)")
     args = parser.parse_args(argv)
     try:
         if args.requirement_hash:
-            errors = validate_repo(args.root)  # Do not print hashes for an invalid pack.
-            # Stale evidence is expected when obtaining the new digest for review.
-            errors = [e for e in errors if ": stale evidence;" not in e]
+            # Stale-evidence errors are expected while obtaining the new digest.
+            errors = [e for e in validate_repo(args.root) if ": stale evidence;" not in e]
             if errors:
                 for error in errors:
                     print(f"ERROR: {error}", file=sys.stderr)
@@ -465,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(requirement_digest(found[0]))
             return 0
-        errors = validate_repo(args.root, require_adopted=args.require_adopted, base_ref=args.base_ref)
+        errors = validate_repo(args.root, base_ref=args.base_ref)
         if errors:
             for error in errors:
                 print(f"ERROR: {error}", file=sys.stderr)
@@ -473,13 +520,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         catalog = load_json(args.root / "specs/catalog.json")
         mapping = load_json(args.root / "specs/repository-map.json")
-        counts = Counter(row["implementation_status"] for row in catalog["requirements"])
+        counts = Counter(row["status"] for row in catalog["requirements"])
+        evidence_rows = sum(len(row["evidence"]) for row in catalog["requirements"])
         unbound = sum(b["state"] == "unbound" for b in mapping["bindings"])
-        print(f"PASS: {len(catalog['documents'])} registered documents; "
-              f"{len(catalog['requirements'])} requirements; local pointers/metadata checked.")
-        print(f"Adoption: {catalog['adoption']['state']}. Unbound implementation locations: {unbound}.")
-        print("Implementation claims: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-        print("Scope: specification integrity only; not product verification or repository-permission validation.")
+        print(f"PASS: {len(catalog['documents'])} documents; {len(catalog['requirements'])} requirements; "
+              f"{evidence_rows} evidence rows; {unbound} unbound locations; adoption {catalog['adoption']['state']}.")
+        print("Requirement status: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         return 0
     except (OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
         print(f"ERROR: unable to validate specification data: {exc}", file=sys.stderr)
