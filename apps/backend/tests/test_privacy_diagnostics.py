@@ -170,8 +170,13 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         return wait_for_run(self.client, response.json()["id"])
 
     def _sqlite_run(self, run_id: str) -> dict[str, Any]:
-        with sqlite3.connect(self.paths.application_db) as conn:
+        # sqlite3 connection context managers do not close; Windows then cannot
+        # delete application.sqlite in TemporaryDirectory.cleanup().
+        conn = sqlite3.connect(self.paths.application_db)
+        try:
             row = conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()
+        finally:
+            conn.close()
         self.assertIsNotNone(row)
         return json.loads(row[0])
 
