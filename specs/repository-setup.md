@@ -14,11 +14,11 @@ Copy [CODEOWNERS.example](../.github/CODEOWNERS.example) to `.github/CODEOWNERS`
 
 The example makes human maintainers owners of all paths initially. That protects new contracts, tests, manifests and instruction files without relying on guessed code folders. As the team grows, more specific ownership may be added, but governance and critical-boundary changes must still have human ownership. The last matching CODEOWNERS pattern wins; two owners on a line mean either can approve, not that both are required.
 
-CODEOWNERS must be on the pull request's base branch for normal review routing. Enable required code-owner review separately. A file alone does not enforce approval. Consult the [official code-owner documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
+CODEOWNERS must be on the pull request's base branch for normal review routing. A file alone does not enforce approval. Required code-owner review is **optional Pro/public-only**. On this private free-plan repository it is unavailable (classic branch protection and rulesets return **403** without Pro or making the repository public) and is **not** open human work. Consult the [official code-owner documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 
-## 3. Run checks, then protect the target branch
+## 3. Run checks; required branch protection is optional Pro/public-only
 
-Run the working commands in [commands](commands.md). Let the workflows run in GitHub, then select the exact observed status names as required checks. Current job names are:
+Run the working commands in [commands](commands.md). The following GitHub Actions jobs exist and run as **advisory CI only**. Merges are **not** blocked by required checks. Current job names are:
 
 ```text
 spec-integrity (ubuntu-latest)
@@ -29,11 +29,13 @@ desktop-typecheck-build (ubuntu-latest)
 desktop-typecheck-build (windows-latest)
 ```
 
-The first pair is the [specification-integrity workflow](../.github/workflows/specs.yml). The backend and desktop names come from [backend.yml](../.github/workflows/backend.yml) and [desktop.yml](../.github/workflows/desktop.yml). Do not add invented contract-generation, import-boundary or integration required checks. Selecting names as branch-protection required checks is a maintainer action; listing them here does not claim those settings are already enabled.
+The first pair is the [specification-integrity workflow](../.github/workflows/specs.yml). The backend and desktop names come from [backend.yml](../.github/workflows/backend.yml) and [desktop.yml](../.github/workflows/desktop.yml). Do not add invented contract-generation, import-boundary or integration required checks.
 
-Protect the actual default/release branch, whether named `main` or otherwise. Require pull requests, at least one eligible human approval, required code-owner review, current required status checks, resolution of blocking discussions, and dismissal of stale approvals after new reviewable changes. Disable routine force-push/deletion and avoid agent/admin bypass privileges. Where available, restrict the expected source of required status checks.
+**Current reality (locked, [Issue #36](https://github.com/Vidcar/thtaib/issues/36)):** this repository stays **private** on a free personal GitHub account. Classic branch protection and rulesets return **403** without Pro or making the repository public. David will **not** upgrade to Pro. The workflows (`backend-unittest`, `desktop-typecheck-build`, `spec-integrity`) therefore run as **advisory CI only**. Merges are **not** blocked by required checks. Enabling required status checks, default-branch protection, or required CODEOWNERS review is **not** open human work and is **not** a product requirement.
 
-A pull-request author cannot supply their own independent approval. Use the other eligible maintainer, or a properly separate agent/contributor identity reviewed by a human; do not defeat the rule with shared administrator credentials. Features vary by plan and repository visibility. Verify the available settings rather than claiming equivalent enforcement when unavailable. See [official protected-branch documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+Selecting those observed status names as required checks, and protecting the default/release branch (require pull requests, human approval, required code-owner review, required status checks, resolution of blocking discussions, dismissal of stale approvals, disable force-push/deletion, avoid agent/admin bypass), remains **optional Pro/public-only**. Features vary by plan and repository visibility. Do not claim equivalent enforcement when unavailable. See [official protected-branch documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+
+A pull-request author cannot supply their own independent approval. Use the other eligible maintainer, or a properly separate agent/contributor identity reviewed by a human; do not defeat the rule with shared administrator credentials. Advisory CI does not replace that human review.
 
 Use an ordinary `pull_request` context, read-only repository permissions, hosted runners and no secrets for these checks. Do not move untrusted code execution to `pull_request_target` or privileged self-hosted workers to bypass a failure. Adding product checks may need separate controlled environments and an explicit trust review.
 
@@ -51,7 +53,7 @@ Run:
 python scripts/check_specs.py --require-adopted
 ```
 
-After adoption is recorded, the normal checker also applies its adoption-file checks. The checks confirm local metadata and a non-placeholder ownership file only. A human must verify that review settings really work, preferably with a harmless test pull request that needs the expected approval/checks. The initial adoption PR requires deliberate manual review before protections are fully in place.
+After adoption is recorded, the normal checker also applies its adoption-file checks. The checks confirm local metadata and a non-placeholder ownership file only. They cannot inspect server-side branch protections. On this private free-plan repository those protections are unavailable and are not pending setup. Adoption still needs genuine human review; advisory CI does not replace that review.
 
 ## 5. Bind implementation locations and introduce real gates
 

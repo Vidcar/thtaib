@@ -31,7 +31,7 @@ Runs [the checker regression tests](../tests/specs/test_check_specs.py), includi
 python scripts/check_specs.py --require-adopted
 ```
 
-This is expected to fail on an unadopted pack. After [repository setup](repository-setup.md), it checks that adoption metadata and an active non-placeholder CODEOWNERS file exist. It cannot authenticate the stated human reviewer or inspect server-side branch protections. Those require maintainer confirmation in the hosting service.
+This is expected to fail on an unadopted pack. After [repository setup](repository-setup.md), it checks that adoption metadata and an active non-placeholder CODEOWNERS file exist. It cannot authenticate the stated human reviewer or inspect server-side branch protections. Reviewer identity still needs maintainer confirmation. Required branch-protection checks are unavailable on this private free-plan repository and are **not** an open ask; see [repository setup](repository-setup.md).
 
 <a id="requirement-hash"></a>
 ## Obtain the digest for a verified requirement
@@ -165,4 +165,4 @@ desktop-typecheck-build (ubuntu-latest)
 desktop-typecheck-build (windows-latest)
 ```
 
-Selecting these as required branch-protection checks is a maintainer action recorded in [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.
+These jobs run as **advisory CI only**. Merges are **not** blocked by required checks. Selecting them as required branch-protection checks is optional Pro/public-only and is **not** open human work; see [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.
