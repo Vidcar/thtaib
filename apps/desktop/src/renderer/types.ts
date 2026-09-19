@@ -59,6 +59,7 @@ export interface SettingsBag {
   unsupported: string[];
   overridden: Array<{ key: string; requested: unknown; applied: unknown; reason: string }>;
   unverified: string[];
+  retired: Array<{ key: string; requested: unknown; applied: unknown; reason: string }>;
 }
 
 export interface SettingsBags {
@@ -85,6 +86,20 @@ export interface Deployment {
   settings: SettingsBags;
   health: { healthy: boolean; detail: string | null } | null;
   resource_usage: { available: boolean; cpu_percent: number | null; rss_bytes: number | null; reason: string | null } | null;
+  server_props: {
+    fetched: string;
+    source_url: string;
+    build_info: string | null;
+    model_alias: string | null;
+    model_path: string | null;
+    n_ctx: number | null;
+    total_slots: number | null;
+    modalities: Record<string, boolean>;
+    chat_template_caps: Record<string, boolean>;
+    chat_template: string | null;
+    bos_token: string | null;
+    eos_token: string | null;
+  } | null;
   error: string | null;
 }
 

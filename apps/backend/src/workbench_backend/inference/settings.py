@@ -4,10 +4,16 @@ Known keys may be passed through. Unknown keys are unsupported. Values the
 workbench accepts but has not UAT-verified remain unverified. This does not
 close OQ-007.
 
-Valued startup enums (Issue #21): ``flash_attn`` is the only current
-STARTUP_KEYS enum and must serialize as ``--flash-attn on|off|auto``.
-Boolean flags (``mlock``, ``no_mmap``) stay bare flags. Numeric/string
-keys always take a value. Never emit a bare ``--flash-attn``.
+Valued startup enums (Issue #21): ``flash_attn`` serializes as
+``--flash-attn on|off|auto`` and ``load_mode`` as ``--load-mode MODE``.
+Every current STARTUP_KEY takes a value; there are no bare flags. Never
+emit a bare ``--flash-attn``.
+
+The pinned llama.cpp b11045 rejects ``--mlock`` and ``--no-mmap``
+(``error: invalid argument``); upstream replaced both with ``--load-mode``.
+The retired ``mlock`` / ``no_mmap`` keys are therefore reported as
+unsupported with a migration note instead of being emitted or silently
+dropped.
 """
 
 from __future__ import annotations
@@ -26,15 +32,26 @@ STARTUP_KEYS: dict[str, str] = {
     "batch_size": "--batch-size",
     "ubatch_size": "--ubatch-size",
     "flash_attn": "--flash-attn",
-    "mlock": "--mlock",
-    "no_mmap": "--no-mmap",
+    "load_mode": "--load-mode",
     "alias": "--alias",
 }
 
-# Issue #21 audit of STARTUP_KEYS value kinds. Only flash_attn is a valued enum.
-STARTUP_FLAG_KEYS: frozenset[str] = frozenset({"mlock", "no_mmap"})
 STARTUP_ENUMS: dict[str, frozenset[str]] = {
     "flash_attn": frozenset({"on", "off", "auto"}),
+    "load_mode": frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
+}
+
+# Keys the workbench used to map to llama-server flags that b11045 no longer accepts.
+# The value is the note shown to the user; the key is never emitted on argv.
+RETIRED_STARTUP_KEYS: dict[str, str] = {
+    "mlock": (
+        "llama.cpp b11045 rejects --mlock; use load_mode: 'mmap+mlock' "
+        "(or 'mlock' to also disable mmap). Not applied."
+    ),
+    "no_mmap": (
+        "llama.cpp b11045 rejects --no-mmap; use load_mode: 'none' "
+        "(or 'mlock' to also lock memory). Not applied."
+    ),
 }
 
 PER_REQUEST_KEYS: frozenset[str] = frozenset(
@@ -50,7 +67,6 @@ PER_REQUEST_KEYS: frozenset[str] = frozenset(
         "max_tokens",
         "stop",
         "seed",
-        "stream",
     }
 )
 
@@ -105,18 +121,46 @@ def normalize_flash_attn(value: Any) -> str | None:
     return None
 
 
+def normalize_load_mode(value: Any) -> str | None:
+    """Map a requested load_mode value to a b11045 ``--load-mode`` mode, or None if invalid."""
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in STARTUP_ENUMS["load_mode"]:
+            return candidate
+    return None
+
+
+def normalize_startup_enum(key: str, value: Any) -> str | None:
+    if key == "flash_attn":
+        return normalize_flash_attn(value)
+    if key == "load_mode":
+        return normalize_load_mode(value)
+    return None
+
+
 def normalize_startup_requested(requested: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Normalise valued startup enums. Invalid enums become unsupported."""
     cleaned = dict(requested)
     invalid: list[str] = []
-    if "flash_attn" in cleaned:
-        normalized = normalize_flash_attn(cleaned["flash_attn"])
+    for key in STARTUP_ENUMS:
+        if key not in cleaned:
+            continue
+        normalized = normalize_startup_enum(key, cleaned[key])
         if normalized is None:
-            invalid.append("flash_attn")
-            del cleaned["flash_attn"]
+            invalid.append(key)
+            del cleaned[key]
         else:
-            cleaned["flash_attn"] = normalized
+            cleaned[key] = normalized
     return cleaned, invalid
+
+
+def retired_startup_notes(requested: dict[str, Any]) -> list[SettingNote]:
+    """Explain each retired key the caller still requested. Never applied."""
+    return [
+        SettingNote(key=key, requested=requested[key], applied=None, reason=reason)
+        for key, reason in RETIRED_STARTUP_KEYS.items()
+        if key in requested
+    ]
 
 
 def resolve_bag(
@@ -170,15 +214,13 @@ def resolve_bags(
         defaults=DEFAULT_STARTUP,
         overrides=startup_overrides,
     )
-    if invalid_enums:
-        startup_bag = startup_bag.model_copy(
-            update={
-                "requested": dict(startup or {}),
-                "unsupported": sorted(set(startup_bag.unsupported) | set(invalid_enums)),
-            }
-        )
-    else:
-        startup_bag = startup_bag.model_copy(update={"requested": dict(startup or {})})
+    startup_bag = startup_bag.model_copy(
+        update={
+            "requested": dict(startup or {}),
+            "unsupported": sorted(set(startup_bag.unsupported) | set(invalid_enums)),
+            "retired": retired_startup_notes(startup or {}),
+        }
+    )
     return SettingsBags(
         startup=startup_bag,
         per_request=resolve_bag(per_request or {}, PER_REQUEST_KEYS),
@@ -189,8 +231,9 @@ def resolve_bags(
 def startup_cli_args(applied: dict[str, Any]) -> list[str]:
     """Serialize applied startup keys to llama-server argv.
 
-    Valued enums always include the value. Boolean flags stay bare. ``flash_attn``
-    never becomes a bare ``--flash-attn``.
+    Valued enums always include the value; an invalid enum value is skipped
+    rather than emitted. Retired keys are never in ``STARTUP_KEYS`` so they
+    never reach argv. ``flash_attn`` never becomes a bare ``--flash-attn``.
     """
     args: list[str] = []
     for key, flag in STARTUP_KEYS.items():
@@ -198,20 +241,10 @@ def startup_cli_args(applied: dict[str, Any]) -> list[str]:
             continue
         value = applied[key]
         if key in STARTUP_ENUMS:
-            allowed = STARTUP_ENUMS[key]
-            if key == "flash_attn":
-                normalized = normalize_flash_attn(value)
-            elif isinstance(value, str) and value.strip().lower() in allowed:
-                normalized = value.strip().lower()
-            else:
-                normalized = None
+            normalized = normalize_startup_enum(key, value)
             if normalized is None:
                 continue
             args.extend([flag, normalized])
-            continue
-        if key in STARTUP_FLAG_KEYS:
-            if value:
-                args.append(flag)
             continue
         if isinstance(value, bool):
             if value:

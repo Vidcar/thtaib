@@ -30,6 +30,26 @@ QUANT_RE = re.compile(
     re.I,
 )
 COMPANION_HINTS = ("mmproj", "projector", "tokenizer", "chat_template")
+MMPROJ_HINT = "mmproj"
+
+
+def mmproj_companion(bundle: ModelBundle) -> BundleFile | None:
+    """The recorded multimodal projector GGUF, if the bundle has one.
+
+    llama-server takes exactly one ``--mmproj``; when several projector
+    files were imported the lowest-sorted name is used deterministically.
+    """
+    candidates = sorted(
+        (
+            item
+            for item in bundle.companions
+            if item.role == FileRole.companion
+            and item.name.lower().endswith(".gguf")
+            and MMPROJ_HINT in item.name.lower()
+        ),
+        key=lambda item: item.name.lower(),
+    )
+    return candidates[0] if candidates else None
 
 
 def detect_quantization(names: list[str]) -> str | None:

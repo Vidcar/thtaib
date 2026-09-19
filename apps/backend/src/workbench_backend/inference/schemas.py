@@ -106,6 +106,8 @@ class SettingsBag(BaseModel):
     unsupported: list[str] = Field(default_factory=list)
     overridden: list[SettingNote] = Field(default_factory=list)
     unverified: list[str] = Field(default_factory=list)
+    retired: list[SettingNote] = Field(default_factory=list)
+    """Requested keys the pinned runtime no longer accepts; each note says what replaces it."""
 
 
 class SettingsBags(BaseModel):
@@ -158,6 +160,27 @@ class ProcessIdentity(BaseModel):
     pid: int
     create_time: float
     executable: str
+
+
+class ServerProperties(BaseModel):
+    """What llama-server's ``GET /props`` reported once the deployment was healthy.
+
+    Recorded as reported, not interpreted. This is not a compatibility
+    record and not a capability claim (MOD-006 / OQ-007 stay open).
+    """
+
+    fetched: str
+    source_url: str
+    build_info: str | None = None
+    model_alias: str | None = None
+    model_path: str | None = None
+    n_ctx: int | None = None
+    total_slots: int | None = None
+    modalities: dict[str, bool] = Field(default_factory=dict)
+    chat_template_caps: dict[str, bool] = Field(default_factory=dict)
+    chat_template: str | None = None
+    bos_token: str | None = None
+    eos_token: str | None = None
 
 
 class RuntimeManifest(BaseModel):
@@ -222,6 +245,7 @@ class Deployment(BaseModel):
     process_identity: ProcessIdentity | None = None
     health: HealthReport | None = None
     resource_usage: ResourceUsage | None = None
+    server_props: ServerProperties | None = None
     error: str | None = None
     created_at: str
     updated_at: str

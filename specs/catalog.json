@@ -364,6 +364,7 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/inference/deployments.py",
+        "apps/backend/src/workbench_backend/inference/bundles.py",
         "apps/backend/src/workbench_backend/inference/process.py",
         "apps/backend/src/workbench_backend/inference/runtime.py",
         "apps/backend/src/workbench_backend/inference/hardware.py"

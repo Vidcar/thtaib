@@ -10,6 +10,8 @@ import zipfile
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
+from workbench_backend.inference.deployments import managed_argv
+from workbench_backend.inference.process import ProcessIdentity, ProcessSupervisor
 from workbench_backend.inference.runtime import RuntimeInstaller
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
@@ -23,6 +25,18 @@ from workbench_backend.paths import WorkbenchPaths
 
 from support import write_tiny_gguf
 from test_app import FakeHF
+
+
+class RecordingSupervisor(ProcessSupervisor):
+    """Real supervisor that also keeps the argv it launched."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.launched: list[list[str]] = []
+
+    def start(self, argv: list[str], *, cwd: Path | None = None) -> ProcessIdentity:
+        self.launched.append(list(argv))
+        return super().start(argv, cwd=cwd)
 
 
 class FakeWindowsInstaller(RuntimeInstaller):
@@ -52,7 +66,12 @@ class DeploymentTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.paths = WorkbenchPaths(self.root).ensure()
         self.gguf = write_tiny_gguf(self.root / "incoming" / "tiny.gguf")
-        self.manager = ModelManager(self.paths, hf=FakeHF(error=RuntimeError("boom")))
+        self.supervisor = RecordingSupervisor()
+        self.manager = ModelManager(
+            self.paths,
+            hf=FakeHF(error=RuntimeError("boom")),
+            processes=self.supervisor,
+        )
         job = self.manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
         self.bundle_id = job.bundle_id or ""
         self.manager.pin_runtime(
@@ -100,6 +119,99 @@ class DeploymentTests(unittest.TestCase):
         stopped = self.manager.stop_deployment(deployment.id)
         self.assertEqual(stopped.status.value, "stopped")
         self.assertIsNone(stopped.pid)
+
+    def test_managed_argv_uses_load_mode_and_omits_retired_flags(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18081, "load_mode": "mlock", "mlock": True, "no_mmap": True},
+            )
+        )
+        self.assertIn(deployment.status.value, {"running", "unhealthy"})
+        self.assertEqual(deployment.applied_startup["load_mode"], "mlock")
+        self.assertNotIn("mlock", deployment.applied_startup)
+        self.assertEqual({note.key for note in deployment.settings.startup.retired}, {"mlock", "no_mmap"})
+        self.assertEqual(len(self.supervisor.launched), 1)
+        argv = self.supervisor.launched[0]
+        self.assertEqual(argv[argv.index("--load-mode") + 1], "mlock")
+        self.assertNotIn("--mlock", argv)
+        self.assertNotIn("--no-mmap", argv)
+        self.assertNotIn("--mmproj", argv)
+        self.manager.stop_deployment(deployment.id)
+
+    def test_mmproj_companion_is_passed_on_managed_start(self) -> None:
+        source = self.root / "incoming" / "vision"
+        write_tiny_gguf(source / "vision-model-Q4_K_M.gguf", name="vision")
+        write_tiny_gguf(source / "mmproj-vision-F16.gguf", name="projector")
+        job = self.manager.import_local(LocalImportRequest(source_path=str(source)))
+        bundle = self.manager.get_bundle(job.bundle_id or "")
+        self.assertEqual([item.name for item in bundle.companions], ["mmproj-vision-F16.gguf"])
+        self.assertTrue(bundle.primary_path and bundle.primary_path.endswith("vision-model-Q4_K_M.gguf"))
+
+        argv = managed_argv("llama-server", bundle, {"ctx_size": 4096})
+        self.assertEqual(argv[:3], ["llama-server", "-m", bundle.primary_path])
+        self.assertEqual(argv[argv.index("--mmproj") + 1], bundle.companions[0].path)
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "4096")
+
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=bundle.id, startup={"port": 18082})
+        )
+        self.assertIn(deployment.status.value, {"running", "unhealthy"})
+        launched = self.supervisor.launched[-1]
+        self.assertEqual(launched[launched.index("--mmproj") + 1], bundle.companions[0].path)
+        self.assertIsNotNone(deployment.server_props)
+        assert deployment.server_props is not None
+        self.assertTrue(deployment.server_props.modalities.get("vision"))
+        self.manager.stop_deployment(deployment.id)
+
+    def test_missing_mmproj_file_is_a_clear_failure(self) -> None:
+        source = self.root / "incoming" / "broken"
+        write_tiny_gguf(source / "model.gguf")
+        write_tiny_gguf(source / "mmproj-model.gguf", name="projector")
+        job = self.manager.import_local(LocalImportRequest(source_path=str(source)))
+        bundle = self.manager.get_bundle(job.bundle_id or "")
+        Path(bundle.companions[0].path).unlink()
+        with self.assertRaises(ManagerError) as caught:
+            managed_argv("llama-server", bundle, {})
+        self.assertEqual(caught.exception.code, "bundle_file_missing")
+        self.assertIn("mmproj", caught.exception.message)
+
+    def test_server_props_recorded_when_healthy_and_cleared_on_stop(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18083, "alias": "tiny"})
+        )
+        self.assertEqual(deployment.status.value, "running")
+        props = deployment.server_props
+        self.assertIsNotNone(props)
+        assert props is not None
+        self.assertTrue(props.source_url.endswith("/props"))
+        self.assertEqual(props.model_alias, "tiny")
+        self.assertEqual(props.build_info, "fake-llama-server")
+        self.assertEqual(props.modalities, {"vision": False, "video": False, "audio": False})
+        self.assertTrue(props.chat_template_caps.get("supports_tools"))
+        self.assertEqual(props.chat_template, "{{ fake }}")
+        self.assertEqual(props.n_ctx, 4096)
+        stopped = self.manager.stop_deployment(deployment.id)
+        self.assertIsNone(stopped.server_props)
+
+    def test_connected_attach_records_props_and_tolerates_missing_endpoint(self) -> None:
+        managed = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18084})
+        )
+        self.assertEqual(managed.status.value, "running")
+        connected = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:18084/v1")
+        )
+        self.assertIsNotNone(connected.server_props)
+        assert connected.server_props is not None
+        self.assertEqual(connected.server_props.source_url, "http://127.0.0.1:18084/props")
+        self.manager.detach_deployment(connected.id)
+        self.manager.stop_deployment(managed.id)
+        unreachable = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:9")
+        )
+        self.assertIsNone(unreachable.server_props)
+        self.manager.detach_deployment(unreachable.id)
 
     def test_failed_import_cannot_become_deployment(self) -> None:
         job = self.manager.import_huggingface(

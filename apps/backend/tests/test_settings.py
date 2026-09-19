@@ -10,8 +10,9 @@ from workbench_backend.inference.schemas import ProfileWriteRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.settings import (
     DEFAULT_GPU_PROFILE,
+    PER_REQUEST_KEYS,
+    RETIRED_STARTUP_KEYS,
     STARTUP_ENUMS,
-    STARTUP_FLAG_KEYS,
     STARTUP_KEYS,
     resolve_bags,
     startup_cli_args,
@@ -96,26 +97,59 @@ class SettingsBagTests(unittest.TestCase):
         self.assertNotEqual(bare, ["--flash-attn"])
 
     def test_valued_startup_enums_audit(self) -> None:
-        self.assertEqual(set(STARTUP_ENUMS), {"flash_attn"})
+        self.assertEqual(set(STARTUP_ENUMS), {"flash_attn", "load_mode"})
         self.assertEqual(STARTUP_ENUMS["flash_attn"], frozenset({"on", "off", "auto"}))
-        self.assertEqual(STARTUP_FLAG_KEYS, frozenset({"mlock", "no_mmap"}))
+        self.assertEqual(
+            STARTUP_ENUMS["load_mode"],
+            frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
+        )
         for key in STARTUP_KEYS:
             if key in STARTUP_ENUMS:
-                continue
-            if key in STARTUP_FLAG_KEYS:
-                args = startup_cli_args({key: True})
-                self.assertEqual(args, [STARTUP_KEYS[key]])
                 continue
             args = startup_cli_args({key: "sample"})
             self.assertEqual(args, [STARTUP_KEYS[key], "sample"])
         invalid = resolve_bags(startup={"flash_attn": "maybe"})
         self.assertIn("flash_attn", invalid.startup.unsupported)
         self.assertEqual(invalid.startup.applied["flash_attn"], "on")
-        args = startup_cli_args({"mlock": True, "no_mmap": True, "flash_attn": "on"})
-        self.assertEqual(args.count("--flash-attn"), 1)
-        self.assertEqual(args[args.index("--flash-attn") + 1], "on")
-        self.assertIn("--mlock", args)
-        self.assertIn("--no-mmap", args)
+
+    def test_load_mode_is_valued_enum_matching_b11045(self) -> None:
+        for mode in ("auto", "none", "mmap", "mlock", "mmap+mlock", "dio"):
+            with self.subTest(mode=mode):
+                bags = resolve_bags(startup={"load_mode": mode.upper()})
+                self.assertEqual(bags.startup.applied["load_mode"], mode)
+                args = startup_cli_args(bags.startup.applied)
+                self.assertEqual(args[args.index("--load-mode") + 1], mode)
+        self.assertNotIn("load_mode", resolve_bags(startup={}).startup.applied)
+        invalid = resolve_bags(startup={"load_mode": "bogus"})
+        self.assertIn("load_mode", invalid.startup.unsupported)
+        self.assertNotIn("load_mode", invalid.startup.applied)
+        self.assertNotIn("--load-mode", startup_cli_args(invalid.startup.applied))
+        self.assertNotIn("--load-mode", startup_cli_args({"load_mode": True}))
+
+    def test_retired_mlock_and_no_mmap_are_reported_never_emitted(self) -> None:
+        self.assertEqual(set(RETIRED_STARTUP_KEYS), {"mlock", "no_mmap"})
+        for key in RETIRED_STARTUP_KEYS:
+            self.assertNotIn(key, STARTUP_KEYS)
+        bags = resolve_bags(startup={"mlock": True, "no_mmap": True, "load_mode": "mlock"})
+        self.assertIn("mlock", bags.startup.unsupported)
+        self.assertIn("no_mmap", bags.startup.unsupported)
+        self.assertNotIn("mlock", bags.startup.applied)
+        self.assertNotIn("no_mmap", bags.startup.applied)
+        notes = {note.key: note for note in bags.startup.retired}
+        self.assertEqual(set(notes), {"mlock", "no_mmap"})
+        self.assertTrue(notes["mlock"].requested)
+        self.assertIsNone(notes["mlock"].applied)
+        self.assertIn("load_mode", notes["mlock"].reason)
+        self.assertIn("load_mode", notes["no_mmap"].reason)
+        args = startup_cli_args(bags.startup.applied)
+        self.assertNotIn("--mlock", args)
+        self.assertNotIn("--no-mmap", args)
+        self.assertEqual(args[args.index("--load-mode") + 1], "mlock")
+        self.assertEqual(resolve_bags(startup={"ctx_size": 8}).startup.retired, [])
+
+    def test_stream_is_not_a_per_request_key(self) -> None:
+        self.assertNotIn("stream", PER_REQUEST_KEYS)
+        self.assertIn("stream", resolve_bags(per_request={"stream": True}).per_request.unsupported)
 
 
 if __name__ == "__main__":
