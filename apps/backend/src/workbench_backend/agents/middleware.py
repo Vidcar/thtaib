@@ -16,7 +16,7 @@ from workbench_backend.agents.replay import (
     apply_recorded_reconstruction,
 )
 from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
-from workbench_backend.agents.tools import ENABLED_TOOL_NAMES, tool_name
+from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, tool_name
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
@@ -70,6 +70,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
+        blocked = self._reject_projectless_filesystem(request)
+        if blocked is not None:
+            return blocked
         if self.fixture_bank is None:
             return handler(request)
         return self._replay_tool_call(request)
@@ -79,23 +82,33 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
+        blocked = self._reject_projectless_filesystem(request)
+        if blocked is not None:
+            return blocked
         if self.fixture_bank is None:
             return await handler(request)
         return self._replay_tool_call(request)
 
+    def _reject_projectless_filesystem(self, request: ToolCallRequest) -> ToolMessage | None:
+        """File tools without a project must not write into a surprise directory."""
+
+        name, _args, call_id = _tool_call_parts(request)
+        if name not in FILESYSTEM_TOOL_NAMES or self.run.project_path:
+            return None
+        return ToolMessage(
+            content=(
+                "Filesystem tools require a bound project folder. "
+                "This run has no project; the file was not written."
+            ),
+            name=name,
+            tool_call_id=call_id,
+            status="error",
+        )
+
     def _replay_tool_call(self, request: ToolCallRequest) -> ToolMessage:
         """Replay from fixtures. Never invoke the live tool handler."""
 
-        call = request.tool_call
-        if isinstance(call, dict):
-            name = str(call.get("name") or "")
-            raw_args = call.get("args")
-            call_id = call.get("id")
-        else:
-            name = str(getattr(call, "name", "") or "")
-            raw_args = getattr(call, "args", {})
-            call_id = getattr(call, "id", None)
-        args = raw_args if isinstance(raw_args, dict) else {}
+        name, args, call_id = _tool_call_parts(request)
         result = self.fixture_bank.take(name, args) if self.fixture_bank is not None else ""
         reconstructions = apply_recorded_reconstruction(name, args, self.run.project_path)
         now = utc_now()
@@ -118,7 +131,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return ToolMessage(
             content=result,
             name=name,
-            tool_call_id=str(call_id) if call_id is not None else "",
+            tool_call_id=call_id,
             status="success",
         )
 
@@ -154,7 +167,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 at=utc_now(),
                 instructions=_system_text(request),
                 messages=[_message_dict(message) for message in request.messages],
-                available_tools=list(ENABLED_TOOL_NAMES),
+                available_tools=list(self.run.enabled_tools),
                 presented_tools=[
                     name
                     for name in (_tool_names(request.tools))
@@ -178,6 +191,20 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         )
         self.run.model_requests.append(captured)
         self.run.updated_at = utc_now()
+
+
+def _tool_call_parts(request: ToolCallRequest) -> tuple[str, dict[str, Any], str]:
+    call = request.tool_call
+    if isinstance(call, dict):
+        name = str(call.get("name") or "")
+        raw_args = call.get("args")
+        call_id = call.get("id")
+    else:
+        name = str(getattr(call, "name", "") or "")
+        raw_args = getattr(call, "args", {})
+        call_id = getattr(call, "id", None)
+    args = raw_args if isinstance(raw_args, dict) else {}
+    return name, args, str(call_id) if call_id is not None else ""
 
 
 def _payload_after(sink: list[dict[str, Any]], before: int) -> dict[str, Any] | None:

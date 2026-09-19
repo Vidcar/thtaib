@@ -7,6 +7,7 @@ from pathlib import Path
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest
+from workbench_backend.agents.tools import enabled_for_project
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
     ChatContinuity,
@@ -34,6 +35,12 @@ CHAT_SYSTEM_PROMPT = (
     "using the embedded Deep Agents harness. Filesystem tools target the bound "
     "project workspace, not conversation history. Do not invent durable "
     "knowledge or retrieval."
+)
+CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT = (
+    "You are the Local AI Workbench Chat surface. Complete the user's task "
+    "using the embedded Deep Agents harness. This conversation has no project "
+    "folder. Filesystem tools are unavailable. Use visibility tools only. "
+    "Do not invent a project directory or durable knowledge."
 )
 
 
@@ -103,7 +110,7 @@ class ChatService:
             id=new_id("chat"),
             deployment_id=request.deployment_id,
             profile_id=profile_id,
-            project_path=str(project_path),
+            project_path=str(project_path) if project_path is not None else None,
             workspace_id=workspace_id,
             thread_id=new_id("thread"),
             memory_version_refs=refs.memory_version_refs,
@@ -159,7 +166,7 @@ class ChatService:
         if request.project_path or request.workspace_id:
             workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
             conversation.workspace_id = workspace_id
-            conversation.project_path = str(project_path)
+            conversation.project_path = str(project_path) if project_path is not None else None
         if conversation.current_run_id:
             try:
                 current = self.harness.get_run(conversation.current_run_id)
@@ -184,7 +191,11 @@ class ChatService:
                     deployment_id=conversation.deployment_id,
                     task=task,
                     presented_tools=request.presented_tools,
-                    system_prompt=CHAT_SYSTEM_PROMPT,
+                    system_prompt=(
+                        CHAT_SYSTEM_PROMPT
+                        if conversation.project_path
+                        else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
+                    ),
                     workspace_id=conversation.workspace_id,
                     project_path=conversation.project_path,
                     profile_id=conversation.profile_id,
@@ -285,7 +296,7 @@ class ChatService:
         self,
         workspace_id: str | None,
         project_path: str | None,
-    ) -> tuple[str | None, Path]:
+    ) -> tuple[str | None, Path | None]:
         if workspace_id:
             workspace = self.lab.get_workspace(workspace_id)
             resolved = Path(workspace.path).expanduser().resolve()
@@ -305,11 +316,7 @@ class ChatService:
                 )
             return workspace.id, resolved
         if not project_path or not project_path.strip():
-            raise ChatError(
-                "Chat requires a project workspace path (STATE-002).",
-                code="project_required",
-                status_code=400,
-            )
+            return None, None
         resolved = Path(project_path).expanduser().resolve()
         if not resolved.is_dir():
             raise ChatError(
@@ -344,6 +351,8 @@ class ChatService:
                 current_run_id=conversation.current_run_id,
             ),
             deploy_health=report_chat_deploy_health(deployment, current),
+            filesystem_tools_available=bool(conversation.project_path),
+            enabled_tools=enabled_for_project(bool(conversation.project_path)),
         )
 
     def _maybe_append_assistant(self, conversation: ChatConversation, run: AgentRun) -> bool:

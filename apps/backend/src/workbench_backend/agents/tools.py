@@ -42,26 +42,50 @@ ENABLED_TOOLS: dict[str, BaseTool] = {
 
 
 def enabled_catalogue() -> list[str]:
+    """Product discovery catalogue. Independent of whether a run has a project."""
+
     return list(ENABLED_TOOL_NAMES)
 
 
-def resolve_presented_tools(requested: list[str] | None) -> tuple[list[str], list[str]]:
-    """Return (presented, denied). Denied names are not in the enabled catalogue."""
+def enabled_for_project(project_bound: bool) -> list[str]:
+    """Tools enabled for one run. Filesystem tools need a project folder."""
 
+    if project_bound:
+        return list(ENABLED_TOOL_NAMES)
+    return list(VISIBILITY_TOOL_NAMES)
+
+
+def resolve_presented_tools(
+    requested: list[str] | None,
+    *,
+    project_bound: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (presented, denied, filesystem_blocked).
+
+    Denied names are not in the product catalogue. Filesystem names requested
+    without a project are blocked separately (``filesystem_requires_project``).
+    """
+
+    enabled = enabled_for_project(project_bound)
     if requested is None:
-        return list(ENABLED_TOOL_NAMES), []
+        return enabled, [], []
     presented: list[str] = []
     denied: list[str] = []
+    filesystem_blocked: list[str] = []
     seen: set[str] = set()
     for name in requested:
         if name in seen:
             continue
         seen.add(name)
-        if name in ENABLED_TOOL_NAMES:
+        if name not in ENABLED_TOOL_NAMES:
+            denied.append(name)
+        elif name in FILESYSTEM_TOOL_NAMES and not project_bound:
+            filesystem_blocked.append(name)
+        elif name in enabled:
             presented.append(name)
         else:
             denied.append(name)
-    return presented, denied
+    return presented, denied, filesystem_blocked
 
 
 def tools_for_names(
