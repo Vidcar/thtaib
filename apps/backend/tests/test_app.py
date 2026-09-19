@@ -14,7 +14,7 @@ from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import write_tiny_gguf
+from support import close_workbench_sqlite, write_tiny_gguf
 
 
 class FakeHF:
@@ -40,19 +40,27 @@ class FakeHF:
 class HealthEndpointTests(unittest.TestCase):
     def test_health_returns_managed_inference_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            client = TestClient(create_app(data_root=Path(tmp)))
-            response = client.get("/health")
-            self.assertEqual(response.status_code, 200)
-            body = response.json()
-            self.assertEqual(body["status"], "ok")
-            self.assertEqual(body["product"], PRODUCT_NAME)
-            self.assertEqual(body["surface"], SURFACE)
+            app = create_app(data_root=Path(tmp))
+            client = TestClient(app)
+            try:
+                response = client.get("/health")
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["status"], "ok")
+                self.assertEqual(body["product"], PRODUCT_NAME)
+                self.assertEqual(body["surface"], SURFACE)
+            finally:
+                close_workbench_sqlite(app, client)
 
     def test_openapi_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            client = TestClient(create_app(data_root=Path(tmp)))
-            self.assertEqual(client.get("/openapi.json").status_code, 404)
-            self.assertEqual(client.get("/docs").status_code, 404)
+            app = create_app(data_root=Path(tmp))
+            client = TestClient(app)
+            try:
+                self.assertEqual(client.get("/openapi.json").status_code, 404)
+                self.assertEqual(client.get("/docs").status_code, 404)
+            finally:
+                close_workbench_sqlite(app, client)
 
 
 class ModelManagerApiTests(unittest.TestCase):
@@ -70,6 +78,7 @@ class ModelManagerApiTests(unittest.TestCase):
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def test_paths_use_models_runtimes_state(self) -> None:

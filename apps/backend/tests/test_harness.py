@@ -18,6 +18,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
+from tests.support import close_workbench_sqlite
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -66,6 +67,7 @@ class HarnessApiTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def _start(self, **extra: Any) -> dict[str, Any]:

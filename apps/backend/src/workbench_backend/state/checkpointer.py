@@ -46,6 +46,34 @@ def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
         return saver
 
 
+def close_sqlite_checkpointer(path: Path) -> None:
+    """Close the cached saver for ``path``, if this process opened it."""
+    resolved = path.expanduser().resolve()
+    _close_holder(str(resolved))
+
+
+def close_all_sqlite_checkpointers() -> None:
+    """Close every cached checkpointer connection owned by this process."""
+    with _LOCK:
+        keys = list(_HOLDERS)
+    for key in keys:
+        _close_holder(key)
+
+
+def _close_holder(key: str) -> None:
+    with _LOCK:
+        holder = _HOLDERS.pop(key, None)
+    if holder is None:
+        return
+    conn, _saver = holder
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.commit()
+    except sqlite3.Error:
+        pass
+    conn.close()
+
+
 def checkpoint_ids_from_graph(agent: object, config: dict[str, object]) -> list[str]:
     """Collect checkpoint ids via LangGraph public APIs only."""
 

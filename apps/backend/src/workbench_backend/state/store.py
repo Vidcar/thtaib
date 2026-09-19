@@ -88,7 +88,9 @@ class ApplicationStore:
         if self.path.resolve() == self.paths.checkpoints_db.resolve():
             raise ValueError("Application store must not share the checkpointer path.")
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._conn: sqlite3.Connection | None = sqlite3.connect(
+            str(self.path), check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -99,6 +101,26 @@ class ApplicationStore:
                 ("schema_version", SCHEMA_VERSION),
             )
             self._conn.commit()
+
+    def close(self) -> None:
+        """Release ``application.sqlite`` so Windows can delete the workroot."""
+        with self._lock:
+            conn = self._conn
+            self._conn = None
+        if conn is None:
+            return
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.commit()
+        except sqlite3.Error:
+            pass
+        conn.close()
+
+    def __enter__(self) -> "ApplicationStore":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
     def table_names(self) -> set[str]:
         with self._lock:

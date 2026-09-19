@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
+from workbench_backend.inference.process import argv_for_host
 from workbench_backend.inference.runtime import (
     NVIDIA_ABSENT_MESSAGE,
     WINDOWS_CUDA_ASSET,
@@ -208,6 +210,19 @@ class RuntimePinTests(unittest.TestCase):
         stopped = manager.get_deployment(deployment.id)
         self.assertEqual(stopped.status.value, "stopped")
         self.assertIsNone(stopped.pid)
+
+    def test_argv_for_host_prefixes_python_only_for_windows_shebang(self) -> None:
+        script = self.root / "llama-server"
+        script.write_text("#!/usr/bin/env python3\nprint('ok')\n", encoding="utf-8")
+        argv = [str(script), "-m", "tiny.gguf"]
+        result = argv_for_host(argv)
+        if os.name == "nt":
+            self.assertEqual(result[0], sys.executable)
+            self.assertEqual(result[1:], argv)
+        else:
+            self.assertEqual(result, argv)
+        native = [str(self.root / "llama-server.exe"), "-m", "tiny.gguf"]
+        self.assertEqual(argv_for_host(native), native)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from workbench_backend.state.checkpointer import open_sqlite_checkpointer
 from workbench_backend.state.store import json_chat_root
 
 from tests.scripted_model import ScriptedChatModel
+from tests.support import close_workbench_sqlite
 
 LANGGRAPH_PRIVATE_TABLES = {"checkpoints", "writes"}
 
@@ -79,14 +80,17 @@ class DualDatabasePathTests(unittest.TestCase):
             self.assertEqual(paths.application_db.parent, paths.root)
             self.assertEqual(paths.checkpoints_db.parent, paths.root)
             store = open_application_store(paths)
-            self.assertTrue(paths.application_db.is_file())
-            self.assertFalse(paths.checkpoints_db.is_file())
-            self.assertNotIn("checkpoints", store.table_names())
-            self.assertNotIn("writes", store.table_names())
-            open_sqlite_checkpointer(paths.checkpoints_db)
-            self.assertTrue(paths.checkpoints_db.is_file())
-            self.assertTrue(LANGGRAPH_PRIVATE_TABLES.issubset(sqlite_tables(paths.checkpoints_db)))
-            self.assertFalse(LANGGRAPH_PRIVATE_TABLES & store.table_names())
+            try:
+                self.assertTrue(paths.application_db.is_file())
+                self.assertFalse(paths.checkpoints_db.is_file())
+                self.assertNotIn("checkpoints", store.table_names())
+                self.assertNotIn("writes", store.table_names())
+                open_sqlite_checkpointer(paths.checkpoints_db)
+                self.assertTrue(paths.checkpoints_db.is_file())
+                self.assertTrue(LANGGRAPH_PRIVATE_TABLES.issubset(sqlite_tables(paths.checkpoints_db)))
+                self.assertFalse(LANGGRAPH_PRIVATE_TABLES & store.table_names())
+            finally:
+                close_workbench_sqlite(store)
 
 
 class JsonLinkageMigrationTests(unittest.TestCase):
@@ -110,21 +114,24 @@ class JsonLinkageMigrationTests(unittest.TestCase):
             json_path.write_text(json.dumps(conversation.model_dump(mode="json"), indent=2), encoding="utf-8")
 
             store = open_application_store(paths)
-            loaded = store.get_conversation(conversation.id)
-            self.assertIsNotNone(loaded)
-            assert loaded is not None
-            self.assertEqual(loaded.transcript[0].content, "old json")
-            self.assertTrue(store.migration_done("state/chat"))
-            self.assertFalse(json_path.exists())
-            self.assertTrue((chat_dir / "migrated" / json_path.name).is_file())
+            try:
+                loaded = store.get_conversation(conversation.id)
+                self.assertIsNotNone(loaded)
+                assert loaded is not None
+                self.assertEqual(loaded.transcript[0].content, "old json")
+                self.assertTrue(store.migration_done("state/chat"))
+                self.assertFalse(json_path.exists())
+                self.assertTrue((chat_dir / "migrated" / json_path.name).is_file())
 
-            loaded.transcript = [ChatMessage(role="user", content="app db only", at=utc_now())]
-            loaded.updated_at = utc_now()
-            store.put_conversation(loaded)
-            archived = json.loads((chat_dir / "migrated" / json_path.name).read_text(encoding="utf-8"))
-            self.assertEqual(archived["transcript"][0]["content"], "old json")
-            self.assertEqual(store.get_conversation(conversation.id).transcript[0].content, "app db only")
-            self.assertFalse(any(chat_dir.glob("chat_*.json")))
+                loaded.transcript = [ChatMessage(role="user", content="app db only", at=utc_now())]
+                loaded.updated_at = utc_now()
+                store.put_conversation(loaded)
+                archived = json.loads((chat_dir / "migrated" / json_path.name).read_text(encoding="utf-8"))
+                self.assertEqual(archived["transcript"][0]["content"], "old json")
+                self.assertEqual(store.get_conversation(conversation.id).transcript[0].content, "app db only")
+                self.assertFalse(any(chat_dir.glob("chat_*.json")))
+            finally:
+                close_workbench_sqlite(store)
 
     def test_second_open_does_not_rewrite_archived_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,10 +149,13 @@ class JsonLinkageMigrationTests(unittest.TestCase):
             )
             json_path = chat_dir / f"{conversation.id}.json"
             json_path.write_text(json.dumps(conversation.model_dump(mode="json"), indent=2), encoding="utf-8")
-            open_application_store(paths)
-            open_application_store(paths)
-            self.assertTrue((chat_dir / "migrated" / json_path.name).is_file())
-            self.assertFalse(json_path.exists())
+            first = open_application_store(paths)
+            second = open_application_store(paths)
+            try:
+                self.assertTrue((chat_dir / "migrated" / json_path.name).is_file())
+                self.assertFalse(json_path.exists())
+            finally:
+                close_workbench_sqlite(first, second)
 
 
 class RunLinkageRestartTests(unittest.TestCase):
@@ -175,6 +185,7 @@ class RunLinkageRestartTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None), getattr(self, "restarted", None))
         self.tmp.cleanup()
 
     def test_restart_follows_run_to_checkpoint_and_files_via_app_records(self) -> None:
@@ -208,6 +219,7 @@ class RunLinkageRestartTests(unittest.TestCase):
         self.assertTrue(LANGGRAPH_PRIVATE_TABLES.issubset(ckpt_tables))
 
         restarted = create_app(data_root=self.root)
+        self.restarted = restarted
         client = TestClient(restarted)
         restored = client.get(f"/v1/agent-runs/{run_id}")
         self.assertEqual(restored.status_code, 200, restored.text)
@@ -253,6 +265,17 @@ class ApplicationStoreIsolationTests(unittest.TestCase):
             paths.application_db = paths.root / "not-application.sqlite"
             with self.assertRaises(ValueError):
                 ApplicationStore(paths)
+
+    def test_store_close_releases_application_db_for_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = WorkbenchPaths(Path(tmp)).ensure()
+            store = open_application_store(paths)
+            db_path = paths.application_db
+            self.assertTrue(db_path.is_file())
+            store.close()
+            store.close()
+            db_path.unlink()
+            self.assertFalse(db_path.exists())
 
 
 if __name__ == "__main__":

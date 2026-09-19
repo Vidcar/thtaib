@@ -147,6 +147,22 @@ Contract generation/freshness, import-boundary checks, shared contract tests, in
 
 When a command is implemented, replace the relevant unavailable statement with its exact working command, prerequisites, working directory, platform, expected effect and verification scope. Add it to CI where appropriate in the same change. Never document a guessed `npm test`, `pytest`, `uv` or Docker command as an existing entry point.
 
+<a id="ci-scope"></a>
 ## CI scope
 
-The [workflow](../.github/workflows/specs.yml) invokes the first two commands on Windows and Linux, with read-only repository permissions and no product credentials. Its job timeout limits the CI check, not an application agent run. Stable status-check names are documented in [repository setup](repository-setup.md). Product gates must be added as their first real implementation is introduced. The backend unittest and desktop type-check/build commands above are local entry points; they are not additional required GitHub status names until a workflow is added for them.
+The [specification-integrity workflow](../.github/workflows/specs.yml) invokes the first two pack commands on Windows and Linux, with read-only repository permissions and no product credentials. Its job timeout limits the CI check, not an application agent run. A green specification-integrity run is not product stage acceptance and is not catalogue `verified` evidence.
+
+The [backend unittest workflow](../.github/workflows/backend.yml) runs the registered backend install and unittest commands on the reviewed tree. The [desktop typecheck/build workflow](../.github/workflows/desktop.yml) runs the registered desktop install, type-check and build commands. Both use read-only repository permissions and no product credentials. CI install steps use the lockfile-enforcing forms `uv sync --frozen` and `pnpm install --frozen-lockfile`; the unittest, type-check and build invocations match the commands above exactly. These jobs are not contract-generation, import-boundary, shared-contract or integration gates.
+
+Stable GitHub status-check names (job `name` values) are:
+
+```text
+spec-integrity (ubuntu-latest)
+spec-integrity (windows-latest)
+backend-unittest (ubuntu-latest)
+backend-unittest (windows-latest)
+desktop-typecheck-build (ubuntu-latest)
+desktop-typecheck-build (windows-latest)
+```
+
+Selecting these as required branch-protection checks is a maintainer action recorded in [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.

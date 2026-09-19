@@ -7,6 +7,47 @@ from pathlib import Path
 import numpy as np
 from gguf import GGUFWriter
 
+from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
+from workbench_backend.state.store import ApplicationStore
+
+
+def close_workbench_sqlite(*objects: object) -> None:
+    """Close application/checkpointer connections before TemporaryDirectory cleanup."""
+    stores: list[ApplicationStore] = []
+    for obj in objects:
+        if obj is None:
+            continue
+        if isinstance(obj, ApplicationStore):
+            stores.append(obj)
+            continue
+        app = getattr(obj, "app", None)
+        if app is not None and getattr(app, "state", None) is not None:
+            obj = app
+        state = getattr(obj, "state", None)
+        if state is None:
+            continue
+        store = getattr(state, "app_store", None)
+        if isinstance(store, ApplicationStore):
+            stores.append(store)
+        for owner_name in ("harness", "chat"):
+            owner = getattr(state, owner_name, None)
+            if owner is None:
+                continue
+            owner_close = getattr(owner, "close", None)
+            if callable(owner_close) and owner_name == "harness":
+                owner_close()
+            owned = getattr(owner, "_app_store", None)
+            if isinstance(owned, ApplicationStore):
+                stores.append(owned)
+    seen: set[int] = set()
+    for store in stores:
+        marker = id(store)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        store.close()
+    close_all_sqlite_checkpointers()
+
 
 def write_tiny_gguf(path: Path, *, name: str = "tiny-test") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
