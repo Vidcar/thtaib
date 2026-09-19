@@ -92,8 +92,8 @@ class SettingsBagTests(unittest.TestCase):
                 self.assertEqual(args[index + 1], expected)
                 self.assertNotEqual(args[index + 1], "--flash-attn")
         bare = startup_cli_args({"flash_attn": True})
-        self.assertEqual(bare[bare.index("--flash-attn") + 1], "on")
-        self.assertNotIn(["--flash-attn"], [bare[i : i + 1] for i in range(len(bare))])
+        self.assertEqual(bare, ["--flash-attn", "on"])
+        self.assertNotEqual(bare, ["--flash-attn"])
 
     def test_valued_startup_enums_audit(self) -> None:
         self.assertEqual(set(STARTUP_ENUMS), {"flash_attn"})
