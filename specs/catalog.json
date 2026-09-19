@@ -373,7 +373,8 @@
       "tests": [
         "apps/backend/tests/test_deployments.py",
         "apps/backend/tests/test_process_ownership.py",
-        "apps/backend/tests/test_runtime.py"
+        "apps/backend/tests/test_runtime.py",
+        "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": []
     },
@@ -387,7 +388,8 @@
       ],
       "tests": [
         "apps/backend/tests/test_adapter.py",
-        "apps/backend/tests/test_effective_setup.py"
+        "apps/backend/tests/test_effective_setup.py",
+        "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": []
     },
@@ -423,7 +425,8 @@
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_continuity.py",
-        "apps/backend/tests/test_chat_deploy_health.py"
+        "apps/backend/tests/test_chat_deploy_health.py",
+        "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": []
     },

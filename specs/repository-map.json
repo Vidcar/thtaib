@@ -139,8 +139,8 @@
     },
     {
       "id": "integration-tests",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/tests_integration",
       "kind": "directory",
       "owner_spec": "specs/verification.md",
       "required_before": "First live runtime/worker implementation"
