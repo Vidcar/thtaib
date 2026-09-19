@@ -1,6 +1,8 @@
-"""Smallest enabled tool set for the embedded harness (AGT-005).
+"""Enabled tool catalogue for the embedded harness (AGT-005).
 
-These are harmless visibility tools. Full workers/sandbox stay OQ-003.
+Visibility tools are application-owned. Filesystem tools are Deep Agents
+built-ins, bound to project storage via FilesystemBackend (STATE-002).
+``execute`` / ``task`` stay out of the enabled catalogue (OQ-003).
 Recorded-tool wrappers replay fixtures; they are not live integrations.
 """
 
@@ -12,7 +14,9 @@ from langchain_core.tools import BaseTool, StructuredTool, tool
 
 from workbench_backend.inference.ids import utc_now
 
-ENABLED_TOOL_NAMES = ("echo", "time_now")
+VISIBILITY_TOOL_NAMES = ("echo", "time_now")
+FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES)
 
 
 @tool("echo")
@@ -51,7 +55,7 @@ def resolve_presented_tools(requested: list[str] | None) -> tuple[list[str], lis
         if name in seen:
             continue
         seen.add(name)
-        if name in ENABLED_TOOLS:
+        if name in ENABLED_TOOL_NAMES:
             presented.append(name)
         else:
             denied.append(name)

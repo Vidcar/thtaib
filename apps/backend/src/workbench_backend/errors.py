@@ -38,6 +38,10 @@ class KnowledgeError(WorkbenchError):
     """Durable knowledge store error. Not a retrieval/RAG product."""
 
 
+class ChatError(WorkbenchError):
+    """Chat surface error. Chat is not a second agent loop."""
+
+
 def workbench_error_handler(_request: Request, exc: WorkbenchError) -> JSONResponse:
     content: dict[str, object] = {"error": exc.message, "code": exc.code}
     content.update(exc.details)

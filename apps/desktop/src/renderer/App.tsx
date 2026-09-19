@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AgentRunPanel } from "./AgentRunPanel";
 import { api } from "./api";
+import { ChatPanel } from "./ChatPanel";
 import { DeploymentsPanel } from "./DeploymentsPanel";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
@@ -25,6 +26,8 @@ function tabLabel(tab: WorkbenchTab): string {
       return "Models";
     case "deployments":
       return "Deployments";
+    case "chat":
+      return "Chat";
     case "agent-run":
       return "Agent run";
     case "lab":
@@ -57,6 +60,8 @@ export function App() {
         return <ModelsPanel />;
       case "deployments":
         return <DeploymentsPanel />;
+      case "chat":
+        return <ChatPanel />;
       case "agent-run":
         return <AgentRunPanel />;
       case "lab":
@@ -70,15 +75,16 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["models", "deployments", "agent-run", "lab", "knowledge"];
+  const tabs: WorkbenchTab[] = ["models", "deployments", "chat", "agent-run", "lab", "knowledge"];
 
   return (
     <main className="shell">
       <p className="eyebrow">Local AI Workbench</p>
       <h1>{productName}</h1>
       <p className="lede">
-        {surfaceLabel(surface)}. Agent-run, Lab and Knowledge are debug panels,
-        not Chat or Builder.
+        {surfaceLabel(surface)}. Chat is debug-quality and calls the embedded
+        harness. Agent-run, Lab and Knowledge remain raw debug panels. Not
+        Builder.
       </p>
       <p className="hint">{backendStatus}</p>
       <nav className="tabs" aria-label="Workbench surfaces">

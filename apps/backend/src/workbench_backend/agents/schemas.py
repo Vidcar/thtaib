@@ -86,6 +86,9 @@ def label_for_tool_mode(mode: ToolMode) -> str:
     return "live-tool"
 
 
+SourceSurface = Literal["agent-run", "chat", "lab"]
+
+
 class AgentStartRequest(BaseModel):
     deployment_id: str
     task: str
@@ -94,6 +97,8 @@ class AgentStartRequest(BaseModel):
     criteria: TaskCriteria | None = None
     budgets: AgentBudgets | None = None
     workspace_id: str | None = None
+    project_path: str | None = None
+    profile_id: str | None = None
     parent_run_id: str | None = None
     tool_mode: ToolMode = ToolMode.live_tool
     recorded_fixtures: list[dict[str, Any]] | None = None
@@ -101,6 +106,7 @@ class AgentStartRequest(BaseModel):
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     knowledge_version_refs: list[str] = Field(default_factory=list)
+    source_surface: SourceSurface = "agent-run"
 
 
 class AgentRun(BaseModel):
@@ -124,7 +130,10 @@ class AgentRun(BaseModel):
     updated_at: str
     finished_at: str | None = None
     workspace_id: str | None = None
+    project_path: str | None = None
+    profile_id: str | None = None
     parent_run_id: str | None = None
+    source_surface: SourceSurface = "agent-run"
     tool_mode: ToolMode = ToolMode.live_tool
     tool_mode_label: str = "live-tool"
     recorded_is_not_live_proof: bool = False

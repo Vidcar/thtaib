@@ -1,6 +1,6 @@
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "models" | "deployments" | "agent-run" | "lab" | "knowledge";
+export type WorkbenchTab = "models" | "deployments" | "chat" | "agent-run" | "lab" | "knowledge";
 
 export interface PathsInfo {
   root: string;
@@ -196,6 +196,35 @@ export interface AgentRun {
   skill_version_refs: string[];
   protected_instruction_version_refs: string[];
   harness: "deepagents";
+  project_path?: string | null;
+  profile_id?: string | null;
+  source_surface?: "agent-run" | "chat" | "lab";
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  at: string;
+  run_id: string | null;
+}
+
+export interface ChatConversation {
+  id: string;
+  deployment_id: string;
+  profile_id: string | null;
+  project_path: string;
+  workspace_id: string | null;
+  transcript: ChatMessage[];
+  current_run_id: string | null;
+  run_ids: string[];
+  history_replaced: boolean;
+  harness: "deepagents";
+  second_agent_loop: false;
+  source_surface: "chat";
+  current_run: AgentRun | null;
+  events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
+  created_at: string;
+  updated_at: string;
 }
 
 export type KnowledgeScope = "user" | "agent" | "project";

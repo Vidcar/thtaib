@@ -110,10 +110,16 @@ class HarnessApiTests(unittest.TestCase):
 
     def test_enabled_tools_are_not_silently_removed(self) -> None:
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
-        self.assertEqual(catalogue, ["echo", "time_now"])
+        self.assertEqual(
+            catalogue,
+            ["echo", "time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+        )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(
+            body["enabled_tools"],
+            ["echo", "time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep"],
+        )
         self.assertEqual(body["presented_tools"], ["echo"])
         self.assertIn("echo", body["model_requests"][0]["available_tools"])
         self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])

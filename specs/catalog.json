@@ -384,10 +384,13 @@
       "document": "specs/modules/agents-workflows.md",
       "implementation_status": "partial",
       "code": [
-        "apps/backend/src/workbench_backend/agents/harness.py"
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/desktop/src/renderer/ChatPanel.tsx"
       ],
       "tests": [
-        "apps/backend/tests/test_harness.py"
+        "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_chat.py"
       ],
       "evidence": []
     },
@@ -472,9 +475,14 @@
     {
       "id": "ENV-001",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/tools.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_chat.py"
+      ],
       "evidence": []
     },
     {
@@ -533,9 +541,15 @@
     {
       "id": "STATE-002",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/backend/src/workbench_backend/chat/store.py",
+        "apps/backend/src/workbench_backend/agents/harness.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_chat.py"
+      ],
       "evidence": []
     },
     {

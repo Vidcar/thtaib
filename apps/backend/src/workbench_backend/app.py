@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from workbench_backend import __version__
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.routes import router as agent_router
+from workbench_backend.chat.routes import router as chat_router
+from workbench_backend.chat.service import ChatService
 from workbench_backend.errors import WorkbenchError, workbench_error_handler
 from workbench_backend.inference.routes import router
 from workbench_backend.inference.service import manager_from_env
@@ -55,10 +57,16 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.harness,
         knowledge_provider=lambda: application.state.knowledge,
     )
+    application.state.chat = ChatService(
+        lambda: application.state.manager,
+        lambda: application.state.harness,
+        lambda: application.state.lab,
+    )
     application.include_router(router)
     application.include_router(agent_router)
     application.include_router(lab_router)
     application.include_router(knowledge_router)
+    application.include_router(chat_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 
     @application.get("/health")
