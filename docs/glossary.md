@@ -31,6 +31,8 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | registry means plugins exist | OQ-008 — skills/plugins discovery UX unresolved |
 | ship voice now | OQ-009 — voice/multimodal stay optional/experimental |
 | CDF fork | out of scope |
+| TooGraph as pixel target / fork | OQ-016 — Builder canvas and chrome UX (inspiration only) |
+| invent Builder chrome | OQ-016 unresolved |
 
 ## Product and layout
 
@@ -93,5 +95,7 @@ These names are locked vocabulary, not selections. The questions stay in [open q
 **Workflow definition import/export (OQ-015)** is interchange of workflow definitions, including LangGraph JSON and later adapters. It is not a second runtime.
 
 **Voice/multimodal optional (OQ-009)** stays experimental. It is not a core prerequisite.
+
+**Builder canvas and chrome UX (OQ-016)** is unresolved look-and-feel: canvas chrome, icon rail, node anatomy, edge presentation, run affordances, config-link versus workflow-link visuals, and profile binding versus per-node overrides. TooGraph is inspiration only — not a pixel target and not a fork.
 
 **CDF fork** is out of scope.
