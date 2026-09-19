@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 from huggingface_hub import hf_hub_download
 
+from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.runtime import LLAMA_CPP_RELEASE_TAG
 
 LINUX_X64_CPU_ASSET = f"llama-{LLAMA_CPP_RELEASE_TAG}-bin-ubuntu-x64.tar.gz"
@@ -34,6 +35,9 @@ LINUX_X64_CPU_URL = (
     "https://github.com/ggml-org/llama.cpp/releases/download/"
     f"{LLAMA_CPP_RELEASE_TAG}/{LINUX_X64_CPU_ASSET}"
 )
+# A release tag fixes the name, not the bytes (assets can be re-uploaded).
+# Digest of the asset as published on 2026-09-19 (16,865,765 bytes).
+LINUX_X64_CPU_SHA256 = "4226ee2f241b38a08f63c93929b1064e425af8209628abfa644d0bb7ed768ce5"
 
 SMOKE_MODEL_REPO = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
 SMOKE_MODEL_FILE = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
@@ -67,7 +71,7 @@ def cache_key() -> str:
 
     return (
         f"real-model-smoke-{platform.system().lower()}-{platform.machine().lower()}-"
-        f"{LLAMA_CPP_RELEASE_TAG}-{SMOKE_MODEL_REVISION[:12]}"
+        f"{LLAMA_CPP_RELEASE_TAG}-{SMOKE_MODEL_REVISION[:12]}-{Path(SMOKE_MODEL_FILE).stem}"
     )
 
 
@@ -147,6 +151,13 @@ def fetch_llama_server(base: Path | None = None) -> Path:
         with archive.open("wb") as handle:
             for chunk in response.iter_bytes():
                 handle.write(chunk)
+    actual = sha256_file(archive)
+    if actual != LINUX_X64_CPU_SHA256:
+        archive.unlink()
+        raise SmokeAssetsUnavailable(
+            f"{LINUX_X64_CPU_ASSET} sha256 mismatch: expected {LINUX_X64_CPU_SHA256}, got {actual}. "
+            "The release asset changed since it was pinned; not extracting it."
+        )
     with tarfile.open(archive) as tar:
         tar.extractall(target, filter="data")
     archive.unlink()

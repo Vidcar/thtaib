@@ -11,7 +11,19 @@ Run explicitly (never picked up by ``-s tests``):
     uv run python -m unittest discover -s tests_integration -t . -p "test_*.py"
 
 Assets are resolved, not downloaded, by the tests. Missing assets skip the
-module unless ``WORKBENCH_REAL_MODEL_SMOKE=required`` (CI), which fails.
+module unless ``WORKBENCH_REAL_MODEL_SMOKE`` is set to a truthy value
+(``required``, ``1``, ``true``, ``yes``, ``on``), which fails instead (CI).
+``0``/``false``/``no``/``off``/``skip`` keep the skip.
+
+Known quirk: the 0.5B model writes ``/large_tool_results/hello.txt`` rather
+than ``/hello.txt`` — it copies the only absolute directory in its prompt,
+from the Deep Agents ``grep`` tool description ("Offloaded large tool
+results live under ... /large_tool_results/"). With the bare
+``FilesystemBackend(root_dir=project)`` that path lands inside the project,
+so the STATE-002 assertion (written file inside the project) holds. If a
+``CompositeBackend`` later routes ``/large_tool_results/`` elsewhere, this
+exact output will no longer create a project file: adjust ``WRITE_TASK``
+(for example, ask for ``/hello.txt`` explicitly) in that change.
 """
 
 from __future__ import annotations
@@ -34,6 +46,8 @@ from tests.support import close_workbench_sqlite, workbench_client
 from tests_integration.assets import SmokeAssets, SmokeAssetsUnavailable, resolve_assets
 
 REQUIRED_ENV = "WORKBENCH_REAL_MODEL_SMOKE"
+REQUIRED_VALUES = frozenset({"required", "1", "true", "yes", "on"})
+SKIP_VALUES = frozenset({"", "0", "false", "no", "off", "skip"})
 SERVER_READY_TIMEOUT = 120.0
 # Transport/wait bound for a tiny CPU model; not a product task budget (AGT-003).
 RUN_TIMEOUT = 240.0
@@ -53,13 +67,29 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _smoke_required() -> bool:
+    value = os.environ.get(REQUIRED_ENV, "").strip().lower()
+    if value in REQUIRED_VALUES:
+        return True
+    if value in SKIP_VALUES:
+        return False
+    raise ValueError(
+        f"{REQUIRED_ENV}={value!r} is not recognised; use one of "
+        f"{sorted(REQUIRED_VALUES)} to require the tier or {sorted(SKIP_VALUES - {''})} to allow a skip."
+    )
+
+
 def _load_assets() -> SmokeAssets:
+    required = _smoke_required()
     try:
         return resolve_assets()
     except SmokeAssetsUnavailable as exc:
-        if os.environ.get(REQUIRED_ENV, "").lower() == "required":
+        if required:
             raise
-        raise unittest.SkipTest(f"real-model smoke assets unavailable: {exc}") from exc
+        raise unittest.SkipTest(
+            f"real-model smoke assets unavailable: {exc} "
+            f"(set {REQUIRED_ENV}=required to fail instead of skipping)"
+        ) from exc
 
 
 class RealLlamaServer:
@@ -81,7 +111,7 @@ class RealLlamaServer:
                 "--port",
                 str(self.port),
                 "-c",
-                "4096",
+                "8192",
                 "--jinja",
             ],
             cwd=str(assets.llama_server.parent),

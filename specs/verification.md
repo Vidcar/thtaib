@@ -65,6 +65,8 @@ The specification-only workflow must not remain the sole required check after th
 
 The [real-model smoke](commands.md#real-model-smoke) runs the product against a real `llama-server` from the pinned llama.cpp release (Linux x64 CPU build) and a real, tiny, revision-pinned instruct GGUF on every pull request. It replaces "scripted model / fake HTTP server" proof with wire-level proof for: connected attach and health, a real tool call that writes into the project, thread continuity on a follow-up turn, and a profile's per-request settings in the outbound request body. It asserts on API responses and recorded run state, not on model prose.
 
+Known quirk, recorded so it is not mistaken for framework behaviour: the tiny model writes `hello.txt` under `/large_tool_results/` (it copies the only absolute directory in its prompt, from the Deep Agents `grep` tool description), which the bare `FilesystemBackend(root_dir=project)` places inside the project; the test asserts only that the recorded written file is inside the project. A later `CompositeBackend` change that routes `/large_tool_results/` elsewhere must adjust the smoke's `WRITE_TASK` in the same change.
+
 It is distinct from **David-PC capability UAT**: the smoke uses a 0.5B CPU model and therefore establishes nothing about reply quality, tool-calling reliability, vision, MTP or GPU/managed (Windows CUDA) behaviour. Capability claims and the managed-inference path still need the preferred capability UAT model on David-PC. A green smoke job is executable plumbing evidence for the listed checks only; it may be cited in an evidence report but does not by itself make a catalogue row `verified`.
 
 ## Build-stage acceptance from revision 0.5
