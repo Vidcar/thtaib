@@ -10,6 +10,14 @@
       "required_before": "First backend implementation"
     },
     {
+      "id": "backend-tests",
+      "state": "bound",
+      "path": "apps/backend/tests",
+      "kind": "directory",
+      "owner_spec": "specs/modules/backend-desktop.md",
+      "required_before": "First backend implementation"
+    },
+    {
       "id": "desktop-source",
       "state": "bound",
       "path": "apps/desktop/src",

@@ -1,51 +1,30 @@
-# Known deviations from the intended design
+# Known deviations
 
-The application repository has been inspected through Issues #1, #3, #12, #15 and #17 (Issue #23 audit). Implementation gaps are recorded as `planned` / `partial` catalogue rows and [open questions](open-questions.md), not as deviations, unless running code is known to contradict intended design.
+Running code known to differ from intended design. Gaps that are simply unbuilt are `planned` or `built` rows in [the catalogue](catalog.json); undecided design is in [open questions](open-questions.md). A deviation keeps its requirement `built` until fixed and evidenced. Closing a deviation records the fix and its regression test; the entry stays for history.
 
-There are **no recorded deviations** at this audit. Issue #27 moved run/chat linkage into `application.sqlite` with a separate `checkpoints.sqlite`. Remaining JSON stores (model-manager bundles/profiles/deployments, Lab cases, knowledge versions) belong to those modules and are not an approved waiver of [STATE-001](modules/state-recovery.md#state-001). Identities, event reconciliation, exactly-once and external-effect remainder stay [OQ-004](open-questions.md#oq-004). That is not a claim that the implementation conforms.
-
-Use this file for observed divergence. Use [open questions](open-questions.md) for unresolved design, not for known bugs hidden as questions. Keep the affected requirements' actual implementation status in [the catalogue](catalog.json).
-
-## Entry format
-
-For each new entry, assign an unused `DEV-NNN` identifier and record:
-
-```text
-Identifier and concise title:
-Affected requirement IDs:
-Observed behaviour and inspected revision:
-Intended behaviour (link, do not duplicate the requirement):
-Risk and affected users/data/environments:
-Owner:
-Disposition: fix / propose design change / approved temporary deviation
-Approval reference (required for a temporary deviation):
-Scope and compensating controls:
-Review or expiry trigger (a date, release or explicit milestone):
-Reproduction and tracking reference:
-Resolution evidence and date:
-```
-
-Temporary approval does not mark the requirement verified. Keep its status `partial` until full compliance is evidenced or the requirement is formally changed. Do not silently extend an expired deviation, remove its test, or rewrite the specification to match it. Record closure with its evidence and retain the entry for history.
+Entry fields: ID and title; affected requirements; observed behaviour and inspected commit; intended behaviour (link); risk; disposition (fix / propose design change / approved temporary deviation with approval reference); tracking reference; resolution.
 
 <a id="dev-001"></a>
-## DEV-001: Diagnostic captures and case export bypassed Knowledge capture policy
+## DEV-001: Diagnostic captures and case export bypassed the knowledge capture policy — closed
 
-**Affected requirement IDs:** AGT-002, STATE-005, LAB-003; related OQ-006.
+**Affected:** AGT-002, STATE-005, LAB-003. **Observed at** [`55e6c50`](https://github.com/Vidcar/thtaib/tree/55e6c50a7c419d28ee6915d6cf98f83c53a595d1): harness middleware persisted raw `model_requests` and HTTP payloads without the knowledge retention/redaction policy; `export_case` returned unchanged payloads behind a `secret_scan_clean` flag based on three literal strings. **Risk:** persisted diagnostics and exports could retain credentials. **Disposition:** fix. **Tracking:** [Issue #64](https://github.com/Vidcar/thtaib/issues/64). **Resolution:** diagnostic copies apply the capture policy before persistence and export sanitises or blocks; regression in `apps/backend/tests/test_privacy_diagnostics.py`. The detector remains pattern-based and incomplete.
 
-**Observed behaviour and inspected revision:** At [`55e6c50a7c419d28ee6915d6cf98f83c53a595d1`](https://github.com/Vidcar/thtaib/tree/55e6c50a7c419d28ee6915d6cf98f83c53a595d1) (filing-time main `ea683db`), `KnowledgeService.capture()` applied retention/redaction/discard, but harness middleware appended raw messages/HTTP payloads to `run.model_requests` and `put_run()` persisted them. `LabService.export_case()` returned the unchanged case with a `secret_scan_clean` flag based on three literal strings and did not sanitize or refuse a dirty payload. Recorded in [Issue #58](https://github.com/Vidcar/thtaib/issues/58) finding 6 / [Issue #64](https://github.com/Vidcar/thtaib/issues/64).
+<a id="dev-002"></a>
+## DEV-002: Startup flag mapping invalid on the pinned llama.cpp; mmproj never passed — closed
 
-**Intended behaviour:** [STATE-005](modules/state-recovery.md#state-005) configurable capture policy; [AGT-002](modules/agents-workflows.md#agt-002) redaction/gaps; [LAB-003](modules/lab-evaluation.md#lab-003) exclude or redact secrets before case export.
+**Affected:** MOD-003, MOD-004, MOD-005. **Observed at** [`d8973bb`](https://github.com/Vidcar/thtaib/tree/d8973bbc19e1909f9c3a5e894beb03aa5264badc) (technical assessment, 2026-09-19): `inference/settings.py` maps `mlock → --mlock` and `no_mmap → --no-mmap`; both flags were removed from llama.cpp before b11045 and replaced by `--load-mode {auto,none,mmap,mlock,mmap+mlock,dio}` (`error: invalid argument: --mlock` confirmed with the pinned Linux binary). `inference/deployments.py` builds the server argv as `[exe, -m, model, *startup]` and never passes a bundle's `mmproj` companion, so vision cannot work through the managed path. **Intended:** startup keys map to valid flags for the pinned runtime ([models behaviour](modules/models.md#behaviour)); companion files are passed to the server (MOD-001, MOD-005). **Risk:** any profile setting `mlock` or `no_mmap` fails to start; vision UAT with the preferred capability model cannot succeed. **Disposition:** fix. **Tracking:** [PR #81](https://github.com/Vidcar/thtaib/pull/81). **Resolution:** fixed at [`0d0c1d3`](https://github.com/Vidcar/thtaib/commit/0d0c1d3) — `load_mode` maps to `--load-mode`, `mlock`/`no_mmap` are retired keys reported as unsupported with a `retired` note, `--mmproj <path>` is passed for bundles with a projector companion, and `/props` is recorded as `server_props`; regressions in `apps/backend/tests/test_settings.py` and `apps/backend/tests/test_deployments.py`. Behaviour recorded in [models](modules/models.md#behaviour) and the [changelog](decisions/changelog.md).
 
-**Risk:** Persisted diagnostics and shareable exports could retain detectable credentials.
+<a id="dev-004"></a>
+## DEV-004: Harness scratch files can land in the user's project — open
 
-**Owner:** Knowledge / Lab / harness persist boundary.
+**Affected:** STATE-002, AGT-001. **Observed at** [`b519320`](https://github.com/Vidcar/thtaib/tree/b519320): `agents/harness.py` binds a bare Deep Agents `FilesystemBackend(root_dir=project, virtual_mode=True)`, so the framework's internal paths (`/large_tool_results/`, `/conversation_history/`) resolve inside the project folder; the real-model smoke has already observed the tiny model writing under `/large_tool_results/` in the project. **Intended:** harness-internal files never land in the project; route internal paths through Deep Agents' `CompositeBackend` (technical owner decision, 2026-09-19, [changelog](decisions/changelog.md); [agents and workflows](modules/agents-workflows.md#behaviour)). **Risk:** conversation-state files masquerade as project files, contradicting history ≠ project. **Disposition:** fix; the smoke tier's write task must be adjusted in the same change. **Resolution:** pending.
 
-**Disposition:** fix (Issue #64). Not an approved temporary deviation.
+<a id="dev-005"></a>
+## DEV-005: Desktop polls run state instead of streaming — open
 
-**Scope and compensating controls:** Synthetic credentials only in tests. Detector remains pattern-based and incomplete.
+**Affected:** API-004, AGT-001. **Observed at** [`b519320`](https://github.com/Vidcar/thtaib/tree/b519320): `ChatPanel.tsx`, `AgentRunPanel.tsx` and `LabPanel.tsx` poll the backend every 750 ms; no SSE or WebSocket path exists. **Intended:** harness progress streams to the desktop and a disconnected client is not evidence a run ended ([backend and desktop](modules/backend-desktop.md#behaviour)); the transport is chosen under [OQ-002](open-questions.md#oq-002). **Risk:** laggy or missed progress; visible state can lag persisted state. **Disposition:** fix once the transport is decided; polling is a stop-gap, not the design. **Resolution:** pending.
 
-**Review or expiry trigger:** Merge of the Issue #64 fix.
+<a id="dev-003"></a>
+## DEV-003: Chat refuses to start without a project folder — open
 
-**Reproduction and tracking reference:** [Issue #64](https://github.com/Vidcar/thtaib/issues/64).
-
-**Resolution evidence and date:** Fixed in the Issue #64 change: diagnostic copies use the Knowledge capture policy before persist; export sanitizes or blocks. Executable regression: `apps/backend/tests/test_privacy_diagnostics.py`. Not catalogue `verified`.
+**Affected:** AGT-001, API-004. **Observed at** [`b9c89d8`](https://github.com/Vidcar/thtaib/tree/b9c89d81ddc84765152b57ae7a84aaaf16e95d5a): `chat/service.py` returns `project_required` (400) when a conversation has no project directory. **Intended:** Chat works without a project folder, with filesystem tools absent and reported as such (product owner decision, 2026-09-19; [agents and workflows](modules/agents-workflows.md#behaviour)). **Risk:** users cannot chat without first choosing a folder; low data risk. **Disposition:** fix in the next Chat change; the harness must build its tool set and Deep Agents backend from the optional project. **Resolution:** pending.

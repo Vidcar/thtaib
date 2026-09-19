@@ -1,22 +1,28 @@
 # Environments and tools
 
-[Specification index](../README.md) · [Status and evidence](../catalog.json)
+[Architecture](../architecture.md) · [Status and evidence](../catalog.json) · [Decisions](../decisions/changelog.md)
 
-## Ownership, scope and source
+## Purpose
 
-Application-managed environments and adapters provide real filesystem, shell, browser and graphical capabilities. LangChain exposes tools to Deep Agents; MCP standardises discovery/invocation. Use the source's LangChain MCP integration and official MCP Python SDK for enabled tools and application-owned servers. Neither MCP nor a working folder supplies isolation. Source: [user control boundaries](../sources/README.md#experience-boundaries), [tool orchestration](../sources/README.md#agents-and-workflows), and [application infrastructure](../sources/README.md#application-infrastructure).
+Give agents real filesystem, shell, browser and graphical capability in declared environments, with the same permissions and approvals on every path an action can take.
 
-## Public contracts and collaboration
+## Boundaries and ownership
 
-Define environment identity/location, access configuration, tool capability requirements and job invocation/result information through the registry. The environment manager provisions workers, maps project storage and tears down resources. Compose manages container services; adapters own jobs within them. Model inference retains the model manager/runtime ownership defined in [models](models.md); the source does not fix its physical placement relative to workers.
+Application-managed environments and adapters provide the capabilities; LangChain exposes tools to Deep Agents; MCP standardises discovery and invocation through the LangChain MCP integration and the official MCP Python SDK. Neither MCP nor a working directory supplies isolation. The environment manager provisions workers, maps project storage and tears down; Compose manages container services; adapters own the jobs inside them. Source: [experience boundaries](../sources/README.md#experience-boundaries), [tool orchestration](../sources/README.md#agents-and-workflows), [infrastructure](../sources/README.md#application-infrastructure).
 
-Windows, WSL, Linux, Docker and remote workers are supported execution choices in the vision, not a claim that every adapter or isolation feature has been implemented on each. Declare and test actual support.
+## Interfaces and contracts
 
-## Lifecycle and failure
+Environment identity and location, access configuration, tool capability requirements and job invocation/result shapes are registry definitions ([registry](registry.md)). Each adapter declares reconnect, resume, restart, cancellation, snapshot support and external side effects. Connect/provision and start-job are different operations; a cancel request and a confirmed cancellation are different facts.
 
-Each adapter declares reconnect, resume, restart, cancellation, snapshot support and external side effects. Connect/provision and start-job are different operations. A cancellation request and confirmed cancellation are different facts. Harness cancel honesty for `cancel_requested` versus confirmed `cancelled` is locked by [Issue #42](https://github.com/Vidcar/thtaib/issues/42); that does not implement worker-adapter interrupt. Resolve precise worker protocols and authority before host shell execution; see the open questions below.
+## Behaviour
 
-## Requirements and acceptance checks
+- **Today.** The enabled catalogue is visibility tools (`echo`, `time_now`) and Deep Agents filesystem tools bound to project storage. No shell, browser, graphical, ComfyUI, MCP-Apps or interpreter path exists. Recorded-tool replay in the Lab attaches no live backend.
+- **Intended.** Filesystem tools target project storage. Shell, browser and graphical tools require a connected worker in a declared environment that explains where it runs, which files it exposes, what it may install and what isolates it.
+- **First worker environment: Windows host shell with approvals, on Deep Agents `permissions=` / `interrupt_on=` and `LocalShellBackend`; WSL and Docker later** (product owner decision, 2026-09-19). Design consequence: commands run on David's machine through `LocalShellBackend`; access rules use `permissions=` and human approval uses `interrupt_on=`, not a parallel application mechanism; the surface shows what is auto-allowed, what paused for approval and what was denied, and records each decision on the run; the host shell provides no isolation and the surface says so. WSL, Linux, Docker and remote workers come later as further declared environments under the same policy model. Where model inference runs relative to workers is not fixed by the source; the model manager keeps ownership wherever it is placed.
+- **Policy.** Autonomy and access are independent. The selected permissions and approval rules are enforced in tools and workers for direct agent tools, workflow adapters, interpreter calls and interactive panels alike; no path gains rights by bypassing the visible Chat.
+- **Recovery.** Adapters record unresolved side effects and never replay work with an unknown outcome. Snapshot support is declared, never assumed.
+
+## Requirements
 
 <a id="env-001"></a>
 ### ENV-001: Execute against the declared real environment
@@ -56,12 +62,14 @@ MCP Apps requires application host support, sandboxed rendering and permission-c
 <a id="env-006"></a>
 ### ENV-006: Keep interpreter orchestration separate from project shell
 
-Treat the source's beta Deep Agents interpreter integration as a separate optional tool-orchestration capability. Each underlying tool call retains permissions, approvals, cancellation and child-run logging. Bulk code execution is not permission to bypass those controls.
+Treat the beta Deep Agents interpreter integration as a separate optional tool-orchestration capability. Each underlying tool call retains permissions, approvals, cancellation and child-run logging. Bulk code execution is not permission to bypass those controls.
 
 **Acceptance:** Run a small tool-composition program with mixed allowed/denied operations and cancellation. Verify individual calls remain attributable and project shell policy is unchanged.
 
-## Unresolved details
+## Status and evidence
 
-[OQ-003](../open-questions.md#oq-003) blocks real worker access until provisioning, isolation, identities and permissions are defined; it is also the tool sandbox-isolation question, and MCP is not isolation. [OQ-004](../open-questions.md#oq-004) covers effect acknowledgement/recovery. Harness cancel request versus confirmed stop is the [Issue #42](https://github.com/Vidcar/thtaib/issues/42) partial; [ENV-003](#env-003) worker-adapter interrupt remains open. [OQ-009](../open-questions.md#oq-009) covers optional interpreter and interactive-host details and whether MCP is the default tool bus or optional.
+Rows ENV-001…006 in [the catalogue](../catalog.json). Only filesystem tools exist; ENV-002…006 are unstarted.
 
-Enabled catalogue includes visibility tools (`echo`, `time_now`) under [AGT-005](agents-workflows.md#agt-005) and Deep Agents filesystem tools bound to project storage ([STATE-002](state-recovery.md#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22)). [Issue #67](https://github.com/Vidcar/thtaib/issues/67) recorded-tool replay matches fixtures by name and canonical arguments and does not attach a live `FilesystemBackend`; fixture-driven write/edit reconstruction stays in the replay workspace ([LAB-003](lab-evaluation.md#locked-milestone-defaults-issue-67-recorded-tool-replay)). That is not a worker-isolation decision and does not reopen this module as a second sandbox owner. ComfyUI, MCP Apps and interpreter orchestration remain unimplemented.
+## Open questions
+
+[OQ-003](../open-questions.md#oq-003) host-shell approval flow, path and command validation, and later environments; [OQ-004](../open-questions.md#oq-004) effect acknowledgement; [OQ-009](../open-questions.md#oq-009) MCP as default bus, interpreter and MCP Apps; [OQ-011](../open-questions.md#oq-011) durable Approvals inbox (the host-shell approval interrupt is the mechanism, not the inbox).

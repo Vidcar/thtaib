@@ -1,9 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "adoption": {
-    "state": "pending",
-    "decision": "specs/decisions/ADR-0001-adopt-specification-pack.md",
-    "approval": null
+    "state": "accepted",
+    "decision": "specs/decisions/ADR-0004-slim-specification-pack.md",
+    "approval": {
+      "reviewer": "David (Vidcar), product owner",
+      "reference": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)",
+      "date": "2026-09-19"
+    }
   },
   "source_archive": {
     "path": "specs/sources/Local_AI_Workbench_Starter_Specification_Revision_0_5.docx",
@@ -13,233 +17,175 @@
     {
       "path": "specs/README.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/architecture.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Architecture maintainers",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/commands.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/contracts.md",
       "kind": "specification",
-      "basis": "pack-proposal",
-      "owner": "Shared-contract boundary",
       "status": "accepted",
-      "approval_reference": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002 and CTT-001/CTT-002 authoring"
+      "approval": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002"
     },
     {
       "path": "specs/decisions/ADR-0001-adopt-specification-pack.md",
       "kind": "decision",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "superseded",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/decisions/ADR-0002-contract-authoring.md",
       "kind": "decision",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
       "status": "accepted",
-      "approval_reference": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — maintainer-filed Slice 1 contracts issue authorises ADR-0002"
+      "approval": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002"
     },
     {
       "path": "specs/decisions/ADR-0003-builder-v1-chrome.md",
       "kind": "decision",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
       "status": "draft",
-      "approval_reference": null
+      "approval": null
+    },
+    {
+      "path": "specs/decisions/ADR-0004-slim-specification-pack.md",
+      "kind": "decision",
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/decisions/README.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+    },
+    {
+      "path": "specs/decisions/changelog.md",
+      "kind": "guide",
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/deviations.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/evidence/README.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
-    },
-    {
-      "path": "specs/governance.md",
-      "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/modules/agents-workflows.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Agent/workflow integration boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/backend-desktop.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Backend/desktop integration boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/environments-tools.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Environment/tool-adapter boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/lab-evaluation.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Lab/evaluation boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/models.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Model-management boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/registry.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Integration-registry boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/modules/state-recovery.md",
       "kind": "specification",
-      "basis": "revision-0.5",
-      "owner": "Persistence/recovery boundary",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/open-questions.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
-    },
-    {
-      "path": "specs/repository-setup.md",
-      "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     },
     {
       "path": "specs/sources/README.md",
       "kind": "source",
-      "basis": "revision-0.5",
-      "owner": "Architecture maintainers",
-      "status": "baseline",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/sources/upstream.md",
       "kind": "reference",
-      "basis": "mixed",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
-    },
-    {
-      "path": "specs/templates/README.md",
-      "kind": "template",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/templates/decision.md",
       "kind": "template",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/templates/evidence.md",
       "kind": "template",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
+    },
+    {
+      "path": "specs/templates/feature.md",
+      "kind": "template",
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/templates/module.md",
       "kind": "template",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
-    },
-    {
-      "path": "specs/templates/task.md",
-      "kind": "template",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "informational",
+      "approval": null
     },
     {
       "path": "specs/verification.md",
       "kind": "guide",
-      "basis": "pack-proposal",
-      "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
     }
   ],
   "requirements": [
     {
       "id": "ARCH-001",
       "document": "specs/architecture.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/app.py",
         "apps/desktop/src/renderer/App.tsx"
@@ -252,7 +198,11 @@
     {
       "id": "ARCH-002",
       "document": "specs/architecture.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/inference/adapter.py"
@@ -266,7 +216,11 @@
     {
       "id": "ARCH-003",
       "document": "specs/architecture.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
@@ -278,12 +232,25 @@
         "apps/backend/tests/test_effective_setup.py",
         "apps/backend/tests/test_lab.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "ARCH-004",
       "document": "specs/architecture.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
         "apps/backend/src/workbench_backend/inference/compatibility.py",
@@ -298,7 +265,10 @@
     {
       "id": "ARCH-005",
       "document": "specs/architecture.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -306,7 +276,11 @@
     {
       "id": "ARCH-006",
       "document": "specs/architecture.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -314,7 +288,11 @@
     {
       "id": "ARCH-007",
       "document": "specs/architecture.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -322,7 +300,10 @@
     {
       "id": "MOD-001",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/bundles.py"
       ],
@@ -330,12 +311,25 @@
         "apps/backend/tests/test_bundles.py",
         "apps/backend/tests/test_deployments.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-002",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/inspect.py"
       ],
@@ -347,7 +341,11 @@
     {
       "id": "MOD-003",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py"
@@ -357,12 +355,25 @@
         "apps/backend/tests/test_runtime.py",
         "apps/backend/tests/test_effective_setup.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-004",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/deployments.py",
         "apps/backend/src/workbench_backend/inference/bundles.py",
@@ -376,12 +387,25 @@
         "apps/backend/tests/test_runtime.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-005",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/adapter.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py"
@@ -391,12 +415,35 @@
         "apps/backend/tests/test_effective_setup.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-006",
       "document": "specs/modules/models.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/inference/compatibility.py",
         "apps/backend/src/workbench_backend/inference/compatibility_routes.py",
@@ -412,7 +459,11 @@
     {
       "id": "AGT-001",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/chat/service.py",
@@ -428,12 +479,35 @@
         "apps/backend/tests/test_chat_deploy_health.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "WF-001",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/definition_compiler.py"
       ],
@@ -445,7 +519,11 @@
     {
       "id": "WF-002",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -453,7 +531,11 @@
     {
       "id": "AGT-002",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/middleware.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
@@ -464,12 +546,26 @@
         "apps/backend/tests/test_effective_setup.py",
         "apps/backend/tests/test_privacy_diagnostics.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "AGT-003",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/schemas.py",
@@ -485,7 +581,11 @@
     {
       "id": "AGT-004",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
@@ -503,7 +603,11 @@
     {
       "id": "AGT-005",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/tools.py"
       ],
@@ -515,7 +619,11 @@
     {
       "id": "AGT-006",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/evidence.py"
       ],
@@ -527,7 +635,10 @@
     {
       "id": "ENV-001",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/tools.py"
@@ -540,7 +651,10 @@
     {
       "id": "ENV-002",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -548,7 +662,10 @@
     {
       "id": "ENV-003",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -556,7 +673,10 @@
     {
       "id": "ENV-004",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -564,7 +684,10 @@
     {
       "id": "ENV-005",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -572,7 +695,10 @@
     {
       "id": "ENV-006",
       "document": "specs/modules/environments-tools.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -580,7 +706,11 @@
     {
       "id": "STATE-001",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/paths.py",
         "apps/backend/src/workbench_backend/state/store.py",
@@ -595,12 +725,26 @@
         "apps/backend/tests/test_paths.py",
         "apps/backend/tests/test_chat_continuity.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "STATE-002",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
@@ -612,12 +756,35 @@
         "apps/backend/tests/test_state.py",
         "apps/backend/tests/test_chat_continuity.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "STATE-003",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/snapshot.py",
@@ -633,7 +800,11 @@
     {
       "id": "STATE-004",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/state/effects.py",
         "apps/backend/src/workbench_backend/state/effect_routes.py",
@@ -651,7 +822,11 @@
     {
       "id": "STATE-005",
       "document": "specs/modules/state-recovery.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/knowledge/service.py",
         "apps/backend/src/workbench_backend/knowledge/store.py",
@@ -669,7 +844,11 @@
     {
       "id": "REG-001",
       "document": "specs/modules/registry.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -677,7 +856,11 @@
     {
       "id": "REG-002",
       "document": "specs/modules/registry.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -685,7 +868,11 @@
     {
       "id": "REG-003",
       "document": "specs/modules/registry.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -693,7 +880,11 @@
     {
       "id": "REG-004",
       "document": "specs/modules/registry.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -701,7 +892,11 @@
     {
       "id": "REG-005",
       "document": "specs/modules/registry.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -709,7 +904,11 @@
     {
       "id": "API-001",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/app.py",
         "apps/backend/src/workbench_backend/local_trust.py",
@@ -725,7 +924,10 @@
     {
       "id": "API-002",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/desktop/src/renderer/App.tsx",
         "apps/desktop/src/renderer/api.ts",
@@ -738,7 +940,11 @@
     {
       "id": "API-003",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/local_trust.py",
         "apps/backend/src/workbench_backend/contracts/auth.py",
@@ -748,12 +954,35 @@
       "tests": [
         "apps/backend/tests/test_local_trust.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "manual",
+          "ref": "specs/evidence/2026-09-19-linux-live-smoke.md",
+          "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
+          "date": "2026-09-19",
+          "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "API-004",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
@@ -775,7 +1004,10 @@
     {
       "id": "API-005",
       "document": "specs/modules/backend-desktop.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -783,7 +1015,10 @@
     {
       "id": "LAB-001",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/engine.py",
         "apps/backend/src/workbench_backend/lab/service.py"
@@ -796,7 +1031,11 @@
     {
       "id": "LAB-002",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/snapshot.py",
@@ -812,7 +1051,11 @@
     {
       "id": "LAB-003",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/export_privacy.py",
@@ -831,7 +1074,11 @@
     {
       "id": "LAB-004",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
         "apps/backend/src/workbench_backend/lab/schemas.py"
@@ -844,7 +1091,10 @@
     {
       "id": "LAB-005",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -852,7 +1102,10 @@
     {
       "id": "LAB-006",
       "document": "specs/modules/lab-evaluation.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []
@@ -860,7 +1113,11 @@
     {
       "id": "CTT-001",
       "document": "specs/contracts.md",
-      "implementation_status": "partial",
+      "status": "built",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [
         "apps/backend/src/workbench_backend/contracts/auth.py",
         "apps/backend/src/workbench_backend/contracts/lifecycle.py",
@@ -876,7 +1133,11 @@
     {
       "id": "CTT-002",
       "document": "specs/contracts.md",
-      "implementation_status": "planned",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
       "code": [],
       "tests": [],
       "evidence": []

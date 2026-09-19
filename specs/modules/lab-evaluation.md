@@ -1,74 +1,29 @@
-# Lab and evaluation integration
+# Lab and evaluation
 
-[Specification index](../README.md) · [Status and evidence](../catalog.json)
+[Architecture](../architecture.md) · [Status and evidence](../catalog.json) · [Decisions](../decisions/changelog.md)
 
-## Ownership, scope and source
+## Purpose
 
-llama-bench measures engine performance. Inspect AI supplies task-evaluation building blocks. The application Lab owns two product features that must not merge: [Model Lab](../../docs/glossary.md#model-lab) (hardware-local trait/capability tests) and [Task cases and replay](../../docs/glossary.md#task-cases-and-replay) (capture, restore, rerun). Cases, starting-state restoration, evidence and comparisons share records with Chat/Builder. Source: [revision 0.5, pages 4 and 6](../sources/README.md#application-infrastructure) and [build checks](../sources/README.md#build-order). [Issue #54](https://github.com/Vidcar/thtaib/issues/54) records the Model Lab catalogue and UX below; it is not a revision 0.5 extraction and does not close [OQ-007](../open-questions.md#oq-007) or [OQ-014](../open-questions.md#oq-014).
+Two separate features share this module. **Model Lab** presents data and charts that answer hardware-local questions about a model on David's machine (speed, context behaviour, tool calling, vision) so he can understand its behaviour; it is read-only towards the rest of the product. **Task cases and replay** saves a real run as a case, restores its starting inputs and reruns it with recorded or live tools so evidence can be compared. They must not merge.
 
-## Public contracts and collaboration
+## Boundaries and ownership
 
-A captured case links initial project snapshot, task, profiles, dependency versions, selected memory/skills, tool fixtures and acceptance checks. A case result links applied settings, deviations, artifacts and executable/model-review outcomes. Exact dataset/scorer adapters are not selected here.
+llama-bench measures engine performance. Inspect AI supplies task-evaluation building blocks. The Lab owns cases, trait runs, starting-state restoration, evidence and comparison, and calls the same model manager, profiles and Deep Agents harness as normal work; it never adds an evaluation agent loop. Source: [Revision 0.5, pages 4 and 6](../sources/README.md#application-infrastructure) and [build checks](../sources/README.md#build-order).
 
-A Model Lab trait run links a selected bundle, deployment and profile, one or more catalogue trait ids, applied settings, runner identity (or unavailable), measurements or failures, and resource observations. It is not a captured case. Exact runner and wire schemas are not selected here.
+## Interfaces and contracts
 
-The Lab calls the same model/profile paths as normal work. Task cases also call the shared agent harness. Both consume the shared [effective setup contract](../architecture.md#effective-setup-contract); neither keeps a hidden Lab profile or treats stored ids as applied bags. The Lab does not add an evaluation-specific agent loop. Restoring an input state does not guarantee an identical model output. A trait run does not restore a task workspace. Capture / restore / rerun remains Task cases and replay, not Model Lab.
+Routes under `/v1/lab/`: `workspaces` (create, list, get, files), `cases/capture`, `cases/{id}` (get, `export`, `restore`, `rerun`), `snapshots/{id}`, `results`, `engine-measurements`. A **case** links starting snapshot, task, profile and deployment ids, dependency versions, knowledge version refs, tool fixtures and acceptance checks. A **case result** links applied settings, deviations, artifacts and executable versus model-review outcomes. A **trait run** links bundle, deployment, profile, trait ids, applied settings, runner identity (or `unavailable`), measurements or failures and resource observations. Exact runner and scorer adapters are unselected.
 
-## Lifecycle and failure
+## Behaviour
 
-Capture a case from a real run, restore its initial inputs into an appropriate workspace, execute it in recorded-tool or live-tool mode, and preserve outcome/deviations. Missing snapshots, external dependencies or permissions must be reported rather than silently replaced with convenient inputs.
+**Task cases.** Capture from a real run reuses the run's `starting` snapshot; a run without one reports `starting_snapshot_unavailable` rather than presenting current files as inputs. Restore goes to a new workspace and a linked branch run ([state and recovery](state-recovery.md)). Rerun is labelled `recorded-tool` or `live-tool`. Recorded mode attaches no live filesystem backend; fixtures match by tool name and canonical arguments, and a missing, exhausted or mismatched fixture fails the run with a recorded deviation. Matched write fixtures apply only inside the replay workspace. Live-tool mode uses `FilesystemBackend` bound to project storage and stays labelled `live-tool`. Missing snapshots, external dependencies or permissions are reported, never replaced with convenient inputs. Export sanitises or blocks detectable secrets in task text, tool fixtures and included files using the knowledge redaction detector; filename exclusions alone are not sufficient; `secret_scan_clean` is true only when nothing was detected; stored local cases and snapshots are not rewritten by export. Restoring inputs never promises identical model output.
 
-A Model Lab trait run selects a managed bundle/deployment/profile and one or more catalogue traits, executes the matching local runners on David's machine, and preserves interpretable evidence. Missing runners, runtime or weights must be reported unavailable rather than replaced with invented scores. Trait runs do not capture, restore or replay a task workspace.
+**Engine measurements.** llama-bench from the managed runtime when present; otherwise `unavailable`. Scores are never invented.
 
-<a id="locked-milestone-defaults-issue-15-partial-oq-005"></a>
-## Locked milestone defaults (Issue #15; partial OQ-005)
+<a id="trait-catalogue"></a>
+**Model Lab trait catalogue.** A growing list of hardware-local questions, one family per issue, each keeping applied settings, measurements or failures, resource use and unavailable-versus-failed. Starting families: speed/throughput and prefill/decode at named context sizes (llama-bench); MTP cost; quantisation impact across recorded quants; concurrent conversations; memory/needle at long context; tool calling on the [MOD-005](models.md#mod-005) path; vision with the official mmproj in the same bundle. A trait run selects a bundle, deployment and profile; it never restores a task workspace. Capability traits use the [preferred capability UAT model](../../docs/glossary.md#preferred-capability-uat-model); tiny models are smoke only. Testing informs the user's choices and is never a prerequisite for using a model ([ARCH-004](../architecture.md#arch-004)). **Model Lab never writes back into shared profiles and has no one-click apply** (product owner decision, 2026-09-19): it presents measurements, failures and charts; any profile change is made by the user in the Models surface.
 
-These defaults are authorised by [Issue #15](https://github.com/Vidcar/thtaib/issues/15). They do not close [OQ-005](../open-questions.md#oq-005) or [OQ-014](../open-questions.md#oq-014).
-
-- **Snapshot:** application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary. Capture fails if live tools or harness runs are still writing. `cancel_requested` is still live — do not treat a cancel request as a quiescent boundary. Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Git commits are not snapshots.
-- **Restore / branch:** restore into a new workspace directory and a linked branch run. Never overwrite the parent workspace or the original attempt.
-- **Include:** allowlisted project files, task, profile and deployment ids, dependency versions, memory/skill/protected-instruction version refs from the [STATE-005 store](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006), tool fixtures and acceptance checks. Knowledge version ids use the same reference pattern as profile and deployment ids. This does not select RAG.
-- **Exclude:** secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
-- **Environment:** no full environment restore this milestone; record exclusions.
-- **Engine:** llama-bench via the managed runtime when present; otherwise report unavailable. Do not invent scores. This stub is not the Model Lab catalogue or surface ([LAB-005](#lab-005)/[006](#lab-006)).
-- **Task evaluation:** Inspect AI building blocks plus the existing Deep Agents harness / [MOD-005](models.md#mod-005). Same model, profile and harness paths. No second evaluation agent loop.
-- **Surface:** minimal Lab API and an optional thin Lab panel. Not Chat or Builder polish. That panel is Task cases debug, not the Model Lab surface ([LAB-006](#lab-006)).
-- **Modes:** recorded-tool and live-tool are labelled. A recorded result is not proof of a current live integration.
-
-<a id="locked-milestone-defaults-issue-66-restore-integrity"></a>
-## Locked milestone defaults (Issue #66; restore integrity / partial OQ-005)
-
-These defaults are authorised by [Issue #66](https://github.com/Vidcar/thtaib/issues/66). They tighten Lab restore honesty for [LAB-002](#lab-002) / [STATE-003](state-recovery.md#state-003). They do **not** close [OQ-005](../open-questions.md#oq-005). They are not a catalogue `verified` claim.
-
-- **Missing or corrupted snapshot data fails.** A kept manifest with a removed tree is not restorable. A post-capture missing expected file or hash/size mismatch is not a successful restore. Unexpected tree files fail.
-- **Empty is explicit.** An intentionally empty captured tree (empty `included_files`, tree directory present) may restore to an empty workspace. A missing tree is not treated as empty.
-- **No silent workspace.** Restore stages into a new directory, verifies content against the manifest, and registers a restored workspace only after validation. Failed staging is discarded. The parent workspace is unchanged.
-- **Not claimed by this lock:** environment restore or identical model output. Starting-snapshot capture timing is locked separately by [Issue #65](#locked-milestone-defaults-issue-65-starting-snapshot).
-
-<a id="locked-milestone-defaults-issue-65-starting-snapshot"></a>
-## Locked milestone defaults (Issue #65; starting snapshot)
-
-These defaults are authorised by [Issue #65](https://github.com/Vidcar/thtaib/issues/65). They refine the [Issue #15](#locked-milestone-defaults-issue-15-partial-oq-005) snapshot owner for [LAB-002](#lab-002). They do not close [OQ-005](../open-questions.md#oq-005) and do not add a second snapshot system.
-
-- **Starting snapshot:** bind an application-owned directory snapshot to the run **before** project mutation, using the existing snapshot module (`snapshots\`, same exclusions and quiescent rule).
-- **Case capture:** saving a completed run as a case **reuses** that starting snapshot. It does not recapture the post-task workspace and label it as original inputs.
-- **Kinds remain distinct:** `starting` (pre-mutation inputs), `checkpoint` (later mid-run; not implemented here), and `final` (capture-time workspace when no run is referenced).
-- **Legacy / missing:** a run without a readable starting snapshot yields an explicit unavailable/degraded outcome (`starting_snapshot_unavailable`). Current files are not claimed as the original inputs.
-- **Parent isolation:** later parent edits do not alter the saved starting snapshot. Restore/rerun still writes a new workspace and does not overwrite the parent.
-
-<a id="locked-milestone-defaults-issue-67-recorded-tool-replay"></a>
-## Locked milestone defaults (Issue #67; recorded-tool replay)
-
-These defaults are authorised by [Issue #67](https://github.com/Vidcar/thtaib/issues/67) (tracking [#58](https://github.com/Vidcar/thtaib/issues/58) finding 5). They refine [LAB-003](#lab-003) recorded-tool honesty. They do **not** close [OQ-005](../open-questions.md#oq-005) and they are not Model Lab.
-
-- **Modes stay labelled:** recorded-tool versus live-tool. A recorded result is not proof of a current live integration.
-- **No live filesystem backend in recorded mode:** recorded-tool does not attach Deep Agents `FilesystemBackend`. Claimed tools (visibility and filesystem) are replayed from fixtures, or the run fails as unsupported/mismatched replay. Mixed live+recorded per tool is not this slice.
-- **Invocation identity:** a fixture matches the first unused capture whose tool **name** and **canonical arguments** are equal. Canonical arguments are JSON-stable (sorted keys; `None` omitted; path-like values compared after POSIX normalisation that strips a leading `/`). Capture order is consumption order among matches. Two calls to the same tool with different arguments cannot consume each other's fixtures.
-- **Mismatch / missing / exhausted:** structured replay failure (`recorded_fixture_missing`, `recorded_fixture_exhausted`, `recorded_fixture_arg_mismatch`). The harness run is `failed` and Lab records an explicit deviation. This is not live-equivalent success.
-- **Reconstruction:** matched `write_file` / `edit_file` fixtures may apply recorded bytes only under the replay workspace (`project_path` / restored case workspace). Never the parent workspace. This is fixture application, not a live tool invocation, and is labelled as such.
-- **Live-tool:** unchanged. Live mode still uses `FilesystemBackend` bound to project storage and remains labelled `live-tool`.
-
-## Requirements and acceptance checks
+## Requirements
 
 <a id="lab-001"></a>
 ### LAB-001: Separate engine measurements from task evaluation
@@ -87,11 +42,9 @@ Save the initial project snapshot, task, profiles, dependency versions, memory/s
 <a id="lab-003"></a>
 ### LAB-003: Distinguish recorded-tool and live-tool evaluation
 
-Keep recorded-tool tests separate from live-tool tests. Exclude secrets from reusable cases. Do not promise identical model outputs or label a recorded response as proof of a current live integration.
+Keep recorded-tool tests separate from live-tool tests. Exclude or redact secrets from reusable cases before export, using the same detector as context captures. Do not promise identical model outputs or label a recorded response as proof of a current live integration.
 
 **Acceptance:** Run both modes, inspect their labels and fixtures, and verify a secret-bearing value is excluded or safely redacted before case export.
-
-Shareable export ([Issue #64](https://github.com/Vidcar/thtaib/issues/64)) uses the same Knowledge capture detector as context captures. Detectable unsafe content in task text, tool fixtures, or an ordinarily named included file is sanitized in the returned payload or the export is **blocked**. Filename exclusions are not sufficient. `secret_scan_clean` must not be true beside unchanged unsafe output. The detector is incomplete; a clean scan is not proof that no secret is present. Stored local cases/snapshots are not rewritten by export.
 
 <a id="lab-004"></a>
 ### LAB-004: Preserve interpretable evidence
@@ -100,64 +53,24 @@ Expose answers, failures, resource use, artifacts and checks rather than scores 
 
 **Acceptance:** Compare two case runs with a changed setting; inspect actual configuration and evidence for each outcome, including one failing executable check.
 
-<a id="locked-high-level-defaults-issue-54-model-lab"></a>
-## Locked high-level defaults (Issue #54; Model Lab ≠ Task cases)
-
-These defaults are authorised by [Issue #54](https://github.com/Vidcar/thtaib/issues/54). They do not close [OQ-007](../open-questions.md#oq-007) or [OQ-014](../open-questions.md#oq-014). They do not implement runners, add a second evaluation loop, or merge Model Lab with Task cases (Milestone #7).
-
-- **Feature:** hardware-local model trait / capability testing on David's machine. Not save-a-job-and-replay.
-- **Catalogue:** extensible. Illustrative families are in [the trait catalogue](#model-lab-trait-catalogue). Adding a family is a focused Model Lab Issue, not a Task cases Issue.
-- **Engine traits:** llama-bench via the managed runtime when present (the [Issue #15](https://github.com/Vidcar/thtaib/issues/15) stub). Report unavailable; do not invent scores.
-- **Capability traits:** local probes against the same managed bundle, deployment and profile path. Not Inspect case replay, not a second agent loop, and not Chat.
-- **Surface:** Model Lab UX is trait selection, run and evidence. The optional thin Lab panel from Issue #15 remains the Task cases debug path.
-- **Use:** testing informs choices; it is not a prerequisite for ordinary model use ([ARCH-004](../architecture.md#arch-004), [LAB-001](#lab-001)).
-- **Handoff:** results may later inform profiles and Chat without merging features ([ARCH-003](../architecture.md#arch-003)). That write-back contract is not specified here.
-- **Build order:** this spec may parallel Chat docs. Model Lab implementation does not jump Chat build order.
-
-<a id="model-lab-trait-catalogue"></a>
-## Model Lab trait catalogue
-
-The catalogue is a growing list of hardware-local questions, not a closed benchmark suite and not a task-case library. Families below are illustrative. A missing runner is `unavailable`; invented scores are forbidden.
-
-| Family | What it asks on this machine | Typical runner kind | Explicitly not |
-| --- | --- | --- | --- |
-| Speed / throughput | Tokens/sec and latency for the selected bundle and settings | llama-bench (engine) | A Chat job replay |
-| Prefill / decode at context lengths | Prefill versus decode at named context sizes | llama-bench / engine | A restored workspace |
-| MTP | Multi-token prediction cost or behaviour on this host | Engine or capability probe | A captured task case |
-| Quantisation impact | Same prompt and settings across recorded quants | Compare trait runs | Task-case compare / export ([OQ-014](../open-questions.md#oq-014)) |
-| Concurrent conversations | Several parallel chats versus one | Capability / load probe | Harness case restore |
-| Memory / needle | Retrieve a planted fact at long context | Capability probe | An Inspect scorer product |
-| Tool calling | The model emits a usable tool call | Capability probe on the [MOD-005](models.md#mod-005) path | Recorded-tool case replay |
-| Vision | Image in, honest result or unsupported | Capability probe; official mmproj in the same bundle | Chat polish or voice ([OQ-009](../open-questions.md#oq-009)) |
-
-<a id="model-lab-catalogue-growth"></a>
-### Catalogue growth path
-
-1. Name the family in this catalogue with its runner kind and the evidence it must keep (applied settings, measurements or failures, resource use, unavailable-versus-failed).
-2. File one focused Issue under Model Lab Milestone #6. One trait family per Issue is fine.
-3. Implement the runner against the shared model-manager path. Report unavailable when the runtime, weights or companion files are missing. Never invent scores. Unverified remains distinguishable from incompatible ([ARCH-004](../architecture.md#arch-004), [MOD-006](models.md#mod-006)).
-4. Do not attach the family to Task cases Milestone #7. Do not reuse capture / restore / rerun as the runner.
-
-Capability UAT for reply, tool-calling, MTP or vision-related traits uses the [preferred capability UAT model](../../docs/glossary.md#preferred-capability-uat-model) when those traits are claimed. Tiny models remain smoke-only.
-
 <a id="lab-005"></a>
 ### LAB-005: Publish an extensible hardware-local trait catalogue
 
-Keep an application-owned catalogue of hardware-local model traits that can be measured on David's machine. The illustrative families in [the trait catalogue](#model-lab-trait-catalogue) are the starting set; the catalogue can grow by the [growth path](#model-lab-catalogue-growth). llama-bench covers engine-performance traits when present. Capability traits (tool calling, vision, needle, concurrency) are not llama-bench stubs and are not Inspect task-case replay. A missing runner reports unavailable. Do not invent scores. Lab testing is not a prerequisite for ordinary model use.
+Keep an application-owned catalogue of hardware-local model traits that can be measured on David's machine, starting from the families in the [trait catalogue](#trait-catalogue) and growing one family per issue. llama-bench covers engine-performance traits when present. Capability traits are not llama-bench stubs and not Inspect task-case replay. A missing runner reports unavailable; scores are never invented.
 
-**Acceptance:** Inspect the catalogue and show the illustrative families, the growth path for a new family, and that a missing runner is reported as unavailable. Show that a trait run is not a captured task case and is not filed under Task cases Milestone #7.
+**Acceptance:** Inspect the catalogue and show the starting families, the growth path for a new family, and that a missing runner is reported as unavailable. Show that a trait run is not a captured task case and is not filed under the Task cases Milestone.
 
 <a id="lab-006"></a>
 ### LAB-006: Model Lab UX is trait runs, not case replay
 
-The Model Lab surface lets David select a model bundle, running deployment and profile, choose one or more catalogue traits, run them locally, and inspect interpretable evidence (measurements, failures, applied settings, resource use, unavailable reasons). It is not capture, restore or rerun of a real agent job. Recorded-tool versus live-tool is a Task cases mode, not the Model Lab primary path. Results may later inform profiles and Chat without merging features. The existing thin Lab panel remains the Task cases debug surface. Model Lab implementation does not jump Chat build order.
+The Model Lab surface lets David select a bundle, running deployment and profile, choose one or more traits, run them locally and inspect interpretable evidence as data and charts (measurements, failures, applied settings, resource use, unavailable reasons). It has no capture, restore or rerun control and no write-back or one-click apply into shared profiles. The thin Lab panel remains the Task cases debug surface.
 
-**Acceptance:** Walk the Model Lab surface: start a trait run, see applied settings and evidence, and confirm there is no case-capture / restore / replay control on that path. Contrast with the Task cases path ([LAB-002](#lab-002)…[004](#lab-004)).
+**Acceptance:** Walk the Model Lab surface: start a trait run, see applied settings and evidence, and confirm there is no case-capture / restore / replay control and no profile write-back or apply control on that path. Contrast with the Task cases path ([LAB-002](#lab-002)…[004](#lab-004)).
 
-## Unresolved details
+## Status and evidence
 
-[OQ-005](../open-questions.md#oq-005) covers restorable starting states; [OQ-010](../open-questions.md#oq-010) covers remaining product gates beyond the registered backend/desktop commands. Optional beta grading support is tracked separately under [OQ-009](../open-questions.md#oq-009). [OQ-012](../open-questions.md#oq-012) covers run observability outside Lab. [OQ-014](../open-questions.md#oq-014) covers **task-case** evaluation UX beyond Inspect (datasets, scorers, compare-runs, export) — not the Model Lab surface in [LAB-006](#lab-006). Debug-quality Chat lands with Issue #22; Builder is not shipped. Lab sharing with those surfaces stays intended, not a finished-product claim.
+Rows LAB-001…006 in [the catalogue](../catalog.json). llama-bench has never run against a real binary; Model Lab runners do not exist.
 
-Exact Model Lab runner adapters, wire contracts and how trait evidence writes back into shared profiles remain unspecified. That profile write-back is a later handoff, not permission to merge Model Lab with Task cases.
+## Open questions
 
-**Product feature split:** [Model Lab](../../docs/glossary.md#model-lab) ([LAB-005](#lab-005)/[006](#lab-006)) and [Task cases and replay](../../docs/glossary.md#task-cases-and-replay) ([LAB-002](#lab-002)…[004](#lab-004)) are separate delivery features. This module may describe both. [LAB-001](#lab-001) is the engine-versus-task measurement split; it is not permission to merge those features. See the [delivery feature map](../../docs/delivery-feature-map.md).
+[OQ-005](../open-questions.md#oq-005) snapshot policy remainder; [OQ-009](../open-questions.md#oq-009) optional grading; [OQ-012](../open-questions.md#oq-012) observability outside Lab; [OQ-014](../open-questions.md#oq-014) task-case evaluation UX beyond Inspect.
