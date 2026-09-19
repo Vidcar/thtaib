@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
+from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.replay import FixtureBank
 from workbench_backend.agents.schemas import (
@@ -40,7 +40,7 @@ from workbench_backend.state.checkpointer import (
 from workbench_backend.state.schemas import RelatedFile
 from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
-    enabled_catalogue,
+    enabled_for_project,
     resolve_presented_tools,
     tools_for_names,
 )
@@ -147,19 +147,6 @@ class HarnessService:
                 code="no_endpoint",
                 status_code=409,
             )
-        presented, denied = resolve_presented_tools(request.presented_tools)
-        if denied:
-            raise HarnessError(
-                f"Tools are not in the enabled catalogue: {', '.join(denied)}",
-                code="tool_denied",
-                status_code=400,
-            )
-        if not presented:
-            raise HarnessError(
-                "At least one enabled tool must remain presented (AGT-005).",
-                code="tools_required",
-                status_code=400,
-            )
         if request.tool_mode is ToolMode.recorded_tool and not request.recorded_fixtures:
             raise HarnessError(
                 "recorded-tool mode requires fixtures; it is not a live integration.",
@@ -182,6 +169,29 @@ class HarnessService:
             stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
             if stored is not None:
                 project_path = _resolved_project_path(stored.path)
+        presented, denied, filesystem_blocked = resolve_presented_tools(
+            request.presented_tools,
+            project_bound=project_path is not None,
+        )
+        if denied:
+            raise HarnessError(
+                f"Tools are not in the enabled catalogue: {', '.join(denied)}",
+                code="tool_denied",
+                status_code=400,
+            )
+        if filesystem_blocked:
+            raise HarnessError(
+                "Filesystem tools require a bound project folder.",
+                code="filesystem_requires_project",
+                status_code=400,
+                details={"tools": filesystem_blocked},
+            )
+        if not presented:
+            raise HarnessError(
+                "At least one enabled tool must remain presented (AGT-005).",
+                code="tools_required",
+                status_code=400,
+            )
         if request.workspace_id:
             others = self.active_workspace_run_ids(request.workspace_id)
             if others:
@@ -198,7 +208,7 @@ class HarnessService:
             status=AgentRunStatus.queued,
             deployment_id=deployment.id,
             task=request.task,
-            enabled_tools=enabled_catalogue(),
+            enabled_tools=enabled_for_project(project_path is not None),
             presented_tools=presented,
             denied_tools=[],
             system_prompt=setup.system_prompt,
@@ -303,7 +313,7 @@ class HarnessService:
                 else None
             )
             agent_kwargs: dict[str, Any] = {}
-            backend = _project_backend(run)
+            backend = build_run_backend(run, self.manager.paths)
             if backend is not None:
                 agent_kwargs["backend"] = backend
             agent = create_deep_agent(
@@ -568,22 +578,6 @@ def _resolved_project_path(project_path: str | None) -> str | None:
     return str(path)
 
 
-def _project_backend(run: AgentRun) -> FilesystemBackend | None:
-    """Bind live filesystem tools to project storage (STATE-002).
-
-    Recorded-tool mode never attaches ``FilesystemBackend``. Replay is fixture
-    driven (LAB-003 / Issue #67). Deep Agents may still use its default
-    in-memory ``StateBackend`` for internal offload; that is not project disk
-    and recorded tool calls are intercepted before the live handler.
-    """
-
-    if run.tool_mode is ToolMode.recorded_tool:
-        return None
-    if not run.project_path:
-        return None
-    return FilesystemBackend(root_dir=run.project_path, virtual_mode=True)
-
-
 def _invoke_config(run: AgentRun) -> dict[str, Any]:
     """Thread id is required so LangGraph can write checkpoints.sqlite."""
 
@@ -611,6 +605,8 @@ def _files_from_tool_invocations(run: AgentRun) -> list[RelatedFile]:
         args = invocation.get("args") if isinstance(invocation.get("args"), dict) else {}
         relative = args.get("file_path") or args.get("path")
         if not isinstance(relative, str) or not relative.strip():
+            continue
+        if is_reserved_framework_path(relative):
             continue
         resolved = (root / relative.lstrip("/")).resolve()
         files.append(RelatedFile(path=str(resolved), kind="written_file"))

@@ -466,6 +466,8 @@
       ],
       "code": [
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/tools.py",
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/deploy_health.py",
@@ -474,6 +476,7 @@
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_harness_backend.py",
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_chat_continuity.py",
         "apps/backend/tests/test_chat_deploy_health.py",
@@ -609,10 +612,13 @@
         "uat"
       ],
       "code": [
-        "apps/backend/src/workbench_backend/agents/tools.py"
+        "apps/backend/src/workbench_backend/agents/tools.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/middleware.py"
       ],
       "tests": [
-        "apps/backend/tests/test_harness.py"
+        "apps/backend/tests/test_harness.py",
+        "apps/backend/tests/test_chat.py"
       ],
       "evidence": []
     },
@@ -749,12 +755,15 @@
         "apps/backend/src/workbench_backend/chat/service.py",
         "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/store.py",
-        "apps/backend/src/workbench_backend/agents/harness.py"
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/harness_backend.py"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",
+        "apps/backend/tests/test_harness_backend.py",
         "apps/backend/tests/test_state.py",
-        "apps/backend/tests/test_chat_continuity.py"
+        "apps/backend/tests/test_chat_continuity.py",
+        "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": [
         {
@@ -986,11 +995,14 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/routes.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/harness_backend.py",
         "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/deploy_health.py",
         "apps/backend/src/workbench_backend/inference/connection_errors.py",
         "apps/backend/src/workbench_backend/lab/routes.py",
-        "apps/backend/src/workbench_backend/knowledge/routes.py"
+        "apps/backend/src/workbench_backend/knowledge/routes.py",
+        "apps/desktop/src/renderer/ChatPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",

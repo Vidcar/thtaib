@@ -12,7 +12,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from workbench_backend.agents import harness as harness_mod
+from workbench_backend.agents import harness_backend as harness_backend_mod
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.replay import (
     FixtureBank,
@@ -203,13 +203,13 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
     def _spy_filesystem_backend(self) -> Any:
         constructions = self.fs_constructions
-        real = harness_mod.FilesystemBackend
+        real = harness_backend_mod.FilesystemBackend
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             constructions.append((args, kwargs))
             return real(*args, **kwargs)
 
-        return patch.object(harness_mod, "FilesystemBackend", side_effect=wrapper)
+        return patch.object(harness_backend_mod, "FilesystemBackend", side_effect=wrapper)
 
     def test_recorded_write_file_does_not_use_live_filesystem_backend(self) -> None:
         self._install_script(write_then_reply("/replay.md", "fixture-bytes"))
@@ -334,8 +334,17 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertEqual(body["tool_mode"], "live-tool")
         self.assertEqual(body["tool_mode_label"], "live-tool")
         self.assertFalse(body["recorded_is_not_live_proof"])
-        self.assertEqual(len(self.fs_constructions), 1)
+        self.assertEqual(len(self.fs_constructions), 3)
+        roots = [
+            Path(kwargs.get("root_dir") or (args[0] if args else "")).resolve()
+            for args, kwargs in self.fs_constructions
+        ]
+        self.assertIn(self.project.resolve(), roots)
+        self.assertTrue(any(path.name == "large_tool_results" for path in roots))
+        self.assertTrue(any(path.name == "conversation_history" for path in roots))
         self.assertEqual((self.project / "live.md").read_text(encoding="utf-8"), "live-bytes")
+        self.assertFalse((self.project / "large_tool_results").exists())
+        self.assertFalse((self.project / "conversation_history").exists())
 
 
 class RecordedToolLabTests(unittest.TestCase):
@@ -400,13 +409,13 @@ class RecordedToolLabTests(unittest.TestCase):
         )
         parent_before = (Path(workspace["path"]) / "notes.md").read_text(encoding="utf-8")
         constructions: list[object] = []
-        real = harness_mod.FilesystemBackend
+        real = harness_backend_mod.FilesystemBackend
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             constructions.append((args, kwargs))
             return real(*args, **kwargs)
 
-        with patch.object(harness_mod, "FilesystemBackend", side_effect=wrapper):
+        with patch.object(harness_backend_mod, "FilesystemBackend", side_effect=wrapper):
             recorded = wait_for_lab_result(
                 self.client,
                 self.client.post(

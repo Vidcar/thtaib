@@ -15,15 +15,10 @@ module unless ``WORKBENCH_REAL_MODEL_SMOKE`` is set to a truthy value
 (``required``, ``1``, ``true``, ``yes``, ``on``), which fails instead (CI).
 ``0``/``false``/``no``/``off``/``skip`` keep the skip.
 
-Known quirk: the 0.5B model writes ``/large_tool_results/hello.txt`` rather
-than ``/hello.txt`` — it copies the only absolute directory in its prompt,
-from the Deep Agents ``grep`` tool description ("Offloaded large tool
-results live under ... /large_tool_results/"). With the bare
-``FilesystemBackend(root_dir=project)`` that path lands inside the project,
-so the STATE-002 assertion (written file inside the project) holds. If a
-``CompositeBackend`` later routes ``/large_tool_results/`` elsewhere, this
-exact output will no longer create a project file: adjust ``WRITE_TASK``
-(for example, ask for ``/hello.txt`` explicitly) in that change.
+The write task asks for exactly ``/hello.txt`` and presents only
+``write_file`` so the tiny model is not steered by the Deep Agents ``grep``
+description that mentions ``/large_tool_results/``. Assertions require that
+file in the project and no reserved harness directories there.
 """
 
 from __future__ import annotations
@@ -52,8 +47,12 @@ SERVER_READY_TIMEOUT = 120.0
 # Transport/wait bound for a tiny CPU model; not a product task budget (AGT-003).
 RUN_TIMEOUT = 240.0
 FILE_CONTENT = "hello from qwen"
-WRITE_TASK = f"Create a file named hello.txt containing exactly: {FILE_CONTENT}"
+WRITE_TASK = (
+    "Call write_file once. Set file_path to exactly /hello.txt "
+    f"(do not use /large_tool_results/). Content must be exactly: {FILE_CONTENT}"
+)
 FOLLOW_UP_TASK = "Reply with only the name of the file you created."
+PROJECTLESS_TASK = "Reply with the single word PONG."
 PROFILE_TEMPERATURE = 0.1
 PROFILE_TOP_K = 20
 PROFILE_MIN_P = 0.05
@@ -227,8 +226,11 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["id"]
 
-    def _start_chat(self, conversation_id: str, task: str) -> dict[str, Any]:
-        response = self.client.post(f"/v1/chat/conversations/{conversation_id}/start", json={"task": task})
+    def _start_chat(self, conversation_id: str, task: str, **extra: Any) -> dict[str, Any]:
+        response = self.client.post(
+            f"/v1/chat/conversations/{conversation_id}/start",
+            json={"task": task, **extra},
+        )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
@@ -266,7 +268,7 @@ class RealModelSmokeTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         conversation = created.json()
 
-        self._start_chat(conversation["id"], WRITE_TASK)
+        self._start_chat(conversation["id"], WRITE_TASK, presented_tools=["write_file"])
         first = wait_for_chat(self.client, conversation["id"])
         run = first["current_run"]
         self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")
@@ -283,11 +285,13 @@ class RealModelSmokeTests(unittest.TestCase):
         written = [item for item in run["related_files"] if item["kind"] == "written_file"]
         self.assertTrue(written, f"no written_file recorded; related_files={run['related_files']}")
         written_path = Path(written[0]["path"]).resolve()
-        self.assertTrue(written_path.is_relative_to(self.project.resolve()), written_path)
+        self.assertEqual(written_path, (self.project / "hello.txt").resolve())
         self.assertTrue(written_path.is_file(), f"{written_path} was not created on disk")
         on_disk = written_path.read_text(encoding="utf-8")
         self.assertIn(str(write_calls[0]["args"].get("content", "")).strip(), on_disk)
         self.assertTrue(on_disk.strip())
+        self.assertFalse((self.project / "large_tool_results").exists())
+        self.assertFalse((self.project / "conversation_history").exists())
 
         body = self._first_http_body(run)
         tool_names = {tool["function"]["name"] for tool in body.get("tools", [])}
@@ -365,6 +369,30 @@ class RealModelSmokeTests(unittest.TestCase):
         capture = run["model_requests"][0]
         self.assertEqual(capture["selected_profile_id"], profile_id)
         self.assertAlmostEqual(capture["applied_per_request"]["temperature"], PROFILE_TEMPERATURE)
+        self.assertIn("assistant_message", [event["kind"] for event in run["events"]])
+
+    def test_chat_without_project_completes_non_file_turn(self) -> None:
+        deployment = self._attach()
+        profile_id = self._profile({"temperature": 0.0, "seed": 7, "max_tokens": 64})
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": deployment["id"], "profile_id": profile_id},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation = created.json()
+        self.assertIsNone(conversation["project_path"])
+        self.assertFalse(conversation["filesystem_tools_available"])
+        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now"])
+
+        self._start_chat(conversation["id"], PROJECTLESS_TASK, presented_tools=["echo"])
+        body = wait_for_chat(self.client, conversation["id"])
+        run = body["current_run"]
+        self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(run["presented_tools"], ["echo"])
+        self.assertNotIn("write_file", run["presented_tools"])
+        self.assertFalse(any(self.project.rglob("large_tool_results")))
+        self.assertFalse(any(self.project.rglob("conversation_history")))
         self.assertIn("assistant_message", [event["kind"] for event in run["events"]])
 
 

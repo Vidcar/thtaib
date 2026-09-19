@@ -138,13 +138,16 @@ class HarnessApiTests(unittest.TestCase):
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(
-            body["enabled_tools"],
-            ["echo", "time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep"],
-        )
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertIn("echo", body["model_requests"][0]["available_tools"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now"])
         self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])
+        project = self.root / "agt-005-project"
+        project.mkdir()
+        bound = self._start(presented_tools=["echo"], project_path=str(project))
+        bound_body = wait_for_run(self.client, bound["id"])
+        self.assertEqual(bound_body["enabled_tools"], catalogue)
+        self.assertEqual(bound_body["presented_tools"], ["echo"])
         denied = self.client.post(
             "/v1/agent-runs",
             json={
@@ -155,6 +158,16 @@ class HarnessApiTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 400)
         self.assertEqual(denied.json()["code"], "tool_denied")
+        blocked = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "nope",
+                "presented_tools": ["write_file"],
+            },
+        )
+        self.assertEqual(blocked.status_code, 400)
+        self.assertEqual(blocked.json()["code"], "filesystem_requires_project")
         self.assertEqual(self.client.get("/v1/agent-tools").json()["enabled"], catalogue)
 
     def test_completion_evidence_is_not_judgement(self) -> None:

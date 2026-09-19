@@ -19,7 +19,7 @@ export function ChatPanel() {
   const [profileId, setProfileId] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
   const [projectPath, setProjectPath] = useState("");
-  const [task, setTask] = useState("Edit a real file in the selected project workspace.");
+  const [task, setTask] = useState("Ask a question or complete a task. File tools need a project path.");
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
@@ -87,7 +87,8 @@ export function ChatPanel() {
         Agents harness. Selected profile per-request settings and selected knowledge versions are
         resolved before the run (selected ≠ loaded ≠ applied). Transcript is displayed history, not
         harness context and not the working project. New conversation allocates a new thread;
-        project files and permitted durable knowledge stay. History edits are display-only. A
+        project files and permitted durable knowledge stay. A project folder is optional; file
+        tools are unavailable until one is bound. History edits are display-only. A
         model/profile change applies to the next run on the same thread. Live assistant completion
         requires a healthy managed/connected llama.cpp — harness model_requests / thread reuse prove
         continuity only. This is not Builder polish.
@@ -95,7 +96,14 @@ export function ChatPanel() {
 
       <div className="card">
         <h3>Enabled tools</h3>
-        <p>{enabledTools.length ? enabledTools.join(", ") : "none"}</p>
+        <p>
+          {(conversation?.enabled_tools ?? enabledTools).length
+            ? (conversation?.enabled_tools ?? enabledTools).join(", ")
+            : "none"}
+        </p>
+        {conversation && conversation.filesystem_tools_available === false ? (
+          <p className="hint">File tools are unavailable until a project folder is bound.</p>
+        ) : null}
       </div>
 
       <form
@@ -153,7 +161,7 @@ export function ChatPanel() {
                   setDeploymentId(next.deployment_id);
                   setProfileId(next.profile_id ?? "");
                   setWorkspaceId(next.workspace_id ?? "");
-                  setProjectPath(next.project_path);
+                  setProjectPath(next.project_path ?? "");
                   setSelectedKnowledgeIds([
                     ...(next.memory_version_refs ?? []),
                     ...(next.skill_version_refs ?? []),
@@ -304,7 +312,8 @@ export function ChatPanel() {
           </h3>
           <p>
             harness: {conversation.harness} · second loop: {String(conversation.second_agent_loop)} ·
-            project: {conversation.project_path}
+            project: {conversation.project_path ?? "(none)"} · file tools:{" "}
+            {conversation.filesystem_tools_available ? "available" : "unavailable"}
           </p>
           <p>
             conversation: {conversation.id} · thread: {conversation.thread_id ?? "unassigned"} ·
@@ -362,7 +371,10 @@ export function ChatPanel() {
           </pre>
         </div>
       ) : (
-        <p className="hint">No Chat conversation yet. Bind a deployment and project path, then Start.</p>
+        <p className="hint">
+          No Chat conversation yet. Bind a deployment, then Start. A project path is optional; file
+          tools need one.
+        </p>
       )}
       {message ? <p className="status">{message}</p> : null}
     </section>

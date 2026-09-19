@@ -191,6 +191,8 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertTrue(paths.checkpoints_db.is_file())
         self.assertNotEqual(paths.application_db, paths.checkpoints_db)
         self.assertFalse((paths.state / "chat" / "edited.md").exists())
+        self.assertFalse((self.project / "large_tool_results").exists())
+        self.assertFalse((self.project / "conversation_history").exists())
 
     def test_transcript_is_not_the_working_project(self) -> None:
         conversation = self._create()
@@ -248,13 +250,134 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual((Path(workspace["path"]) / "from-lab.md").read_text(encoding="utf-8"), "lab-seed")
         self.assertEqual(started["current_run"]["workspace_id"], workspace["id"])
 
-    def test_missing_project_path_is_rejected(self) -> None:
-        response = self.client.post(
+    def test_chat_without_project_uses_visibility_tools(self) -> None:
+        self.scripted = ScriptedChatModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "echo", "args": {"text": "no-project"}, "id": "call_echo"}],
+                ),
+                AIMessage(content="echoed without a project folder."),
+            ]
+        )
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return self.scripted
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id, "profile_id": self.profile_id},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation = created.json()
+        self.assertIsNone(conversation["project_path"])
+        self.assertFalse(conversation["filesystem_tools_available"])
+        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now"])
+        started = self._start(conversation["id"], task="Echo no-project.")
+        self.assertFalse(started["filesystem_tools_available"])
+        self.assertEqual(started["enabled_tools"], ["echo", "time_now"])
+        run = started["current_run"]
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(run["presented_tools"], ["echo", "time_now"])
+        self.assertIsNone(run["project_path"])
+        body = wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
+        names = [item["name"] for item in body["current_run"]["tool_invocations"]]
+        self.assertIn("echo", names)
+        self.assertFalse(any(self.project.rglob("large_tool_results")))
+        surprise = [path for path in self.root.rglob("*") if path.is_file() and "harness" not in path.parts]
+        written_outside_data = [
+            path
+            for path in surprise
+            if path.is_relative_to(self.project)
+        ]
+        self.assertEqual(written_outside_data, [self.project / "keep.md"])
+
+    def test_filesystem_tools_without_project_are_rejected(self) -> None:
+        created = self.client.post(
             "/v1/chat/conversations",
             json={"deployment_id": self.deployment_id},
         )
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["code"], "project_required")
+        self.assertEqual(created.status_code, 200, created.text)
+        response = self.client.post(
+            f"/v1/chat/conversations/{created.json()['id']}/start",
+            json={"task": "Write a file.", "presented_tools": ["write_file"]},
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["code"], "filesystem_requires_project")
+        self.assertIn("write_file", response.json()["tools"])
+
+    def test_projectless_filesystem_tool_call_fails_clearly(self) -> None:
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        self._start(created.json()["id"], task="Write edited.md even though there is no project.")
+        body = wait_for_chat(self.client, created.json()["id"])
+        self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
+        self.assertFalse((self.project / "edited.md").exists())
+        results = [event["detail"].get("content", "") for event in body["events"] if event["kind"] == "tool_result"]
+        self.assertTrue(any("require a bound project" in str(item).lower() for item in results), results)
+
+    def test_harness_scratch_stays_out_of_the_project(self) -> None:
+        self.scripted = ScriptedChatModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_file",
+                            "args": {
+                                "file_path": "/large_tool_results/hello.txt",
+                                "content": "offload",
+                            },
+                            "id": "call_offload",
+                        }
+                    ],
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_file",
+                            "args": {"file_path": "/hello.txt", "content": "project-hello"},
+                            "id": "call_project",
+                        }
+                    ],
+                ),
+                AIMessage(content="Wrote both paths."),
+            ]
+        )
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return self.scripted
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        conversation = self._create()
+        self._start(conversation["id"], task="Write hello.txt and an offload file.")
+        body = wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
+        self.assertEqual((self.project / "hello.txt").read_text(encoding="utf-8"), "project-hello")
+        self.assertFalse((self.project / "large_tool_results").exists())
+        self.assertFalse((self.project / "conversation_history").exists())
+        written = [item for item in body["current_run"]["related_files"] if item["kind"] == "written_file"]
+        self.assertTrue(any(Path(item["path"]).name == "hello.txt" for item in written))
+        self.assertFalse(any("large_tool_results" in item["path"] for item in written))
+        scratch_hits = list((self.root / "state" / "harness").rglob("hello.txt"))
+        self.assertTrue(scratch_hits)
+        self.assertEqual(scratch_hits[0].read_text(encoding="utf-8"), "offload")
 
     def test_unknown_profile_is_rejected(self) -> None:
         response = self.client.post(

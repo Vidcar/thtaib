@@ -303,7 +303,7 @@ export interface ChatConversation {
   id: string;
   deployment_id: string;
   profile_id: string | null;
-  project_path: string;
+  project_path: string | null;
   workspace_id: string | null;
   thread_id: string | null;
   transcript: ChatMessage[];
@@ -320,6 +320,8 @@ export interface ChatConversation {
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;
   deploy_health?: ChatDeployHealth | null;
+  filesystem_tools_available?: boolean;
+  enabled_tools?: string[];
   created_at: string;
   updated_at: string;
 }

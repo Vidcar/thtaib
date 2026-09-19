@@ -88,7 +88,7 @@ class ChatConversation(BaseModel):
     id: str
     deployment_id: str
     profile_id: str | None = None
-    project_path: str
+    project_path: str | None = None
     workspace_id: str | None = None
     thread_id: str | None = None
     transcript: list[ChatMessage] = Field(default_factory=list)
@@ -110,8 +110,11 @@ class ChatConversationView(ChatConversation):
     events: list[dict[str, Any]] = Field(default_factory=list)
     continuity: ChatContinuity | None = None
     deploy_health: ChatDeployHealth | None = None
+    filesystem_tools_available: bool = False
+    enabled_tools: list[str] = Field(default_factory=list)
     note: str = (
         "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
         "iteration. Follow-ups resume conversation.thread_id. Transcript is "
-        "displayed history, not the working project and not harness context."
+        "displayed history, not the working project and not harness context. "
+        "A project folder is optional; filesystem tools are unavailable without one."
     )
