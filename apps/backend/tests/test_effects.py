@@ -223,7 +223,9 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
         self.assertEqual(snapshot["rollback_promise"], "none")
         self.assertEqual(snapshot["external_effect_rollback"], "not_supported")
-        self.assertIn(effect["id"], snapshot["unresolved_side_effects"])
+        self.assertEqual(snapshot["kind"], "starting")
+        self.assertEqual(case["input_origin"], "starting_snapshot")
+        self.assertNotIn(effect["id"], snapshot["unresolved_side_effects"])
 
         restored = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
         self.assertEqual(restored.status_code, 200, restored.text)

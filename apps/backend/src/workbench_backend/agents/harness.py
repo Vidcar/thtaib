@@ -57,6 +57,8 @@ from workbench_backend.knowledge.schemas import (
     KnowledgeVersion,
 )
 from workbench_backend.knowledge.service import KnowledgeService
+from workbench_backend.lab.snapshot import capture_project_snapshot
+from workbench_backend.lab.store import LabStore
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the Local AI Workbench embedded harness. Use enabled tools when "
@@ -171,6 +173,20 @@ class HarnessService:
             default_system_prompt=DEFAULT_SYSTEM_PROMPT,
         )
         project_path = _resolved_project_path(request.project_path)
+        if project_path is None and request.workspace_id:
+            stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
+            if stored is not None:
+                project_path = _resolved_project_path(stored.path)
+        if request.workspace_id:
+            others = self.active_workspace_run_ids(request.workspace_id)
+            if others:
+                raise HarnessError(
+                    "Starting snapshot requires a quiescent workspace; live runs still writing: "
+                    f"{', '.join(others)}",
+                    code="not_quiescent",
+                    status_code=409,
+                )
+        starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
         now = utc_now()
         run = AgentRun(
             id=new_id("agent"),
@@ -201,6 +217,7 @@ class HarnessService:
             thread_id=request.thread_id or None,
             related_files=_initial_related_files(project_path),
             effective_setup=setup,
+            starting_snapshot_id=starting_snapshot_id,
         )
         # Agent-run / Lab own one thread per run. Chat follow-ups pass the
         # conversation thread so LangGraph resumes the same checkpointer state.
@@ -464,6 +481,43 @@ class HarnessService:
             run.model_requests = sanitized.model_requests
             self.store.put_run(run.model_copy(deep=True))
         return sanitized.model_copy(deep=True)
+
+    def _capture_starting_snapshot(
+        self,
+        request: AgentStartRequest,
+        project_path: str | None,
+    ) -> str | None:
+        """Bind a starting snapshot before the worker can mutate project files."""
+
+        workspace_id = request.workspace_id
+        allowlist: list[str] | None = None
+        root: Path | None = None
+        if request.workspace_id:
+            stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
+            if stored is not None:
+                root = Path(stored.path)
+                allowlist = stored.allowlist
+                workspace_id = stored.id
+        if root is None and project_path:
+            root = Path(project_path)
+            workspace_id = workspace_id or "unbound"
+        if root is None or workspace_id is None:
+            return None
+        try:
+            manifest = capture_project_snapshot(
+                self.manager.paths.ensure(),
+                workspace_id=workspace_id,
+                project_root=root,
+                kind="starting",
+                allowlist=allowlist,
+            )
+        except OSError as exc:
+            raise HarnessError(
+                f"Starting snapshot could not be captured: {exc}",
+                code="starting_snapshot_failed",
+                status_code=409,
+            ) from exc
+        return manifest.id
 
 
 def _resolved_project_path(project_path: str | None) -> str | None:

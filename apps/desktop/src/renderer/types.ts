@@ -114,6 +114,8 @@ export interface LabWorkspace {
 export interface LabCase {
   id: string;
   snapshot_id: string;
+  snapshot_kind?: "starting" | "checkpoint" | "final";
+  input_origin?: "starting_snapshot" | "capture_time_workspace";
   source_run_id: string | null;
   source_workspace_id: string;
   task: string;
@@ -138,6 +140,8 @@ export interface LabRestore {
   parent_unchanged: boolean;
   branch: { kind: string; parent_workspace_id: string; child_workspace_id: string };
   deviations: string[];
+  snapshot_kind?: "starting" | "checkpoint" | "final";
+  input_origin?: "starting_snapshot" | "capture_time_workspace";
 }
 
 export interface LabResult {
@@ -247,6 +251,7 @@ export interface AgentRun {
   thread_id?: string | null;
   checkpoint_ids?: string[];
   related_files?: Array<{ path: string; kind: "project_root" | "written_file" | "artifact" }>;
+  starting_snapshot_id?: string | null;
 }
 
 export interface ChatMessage {

@@ -788,7 +788,9 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/lab/service.py",
-        "apps/backend/src/workbench_backend/lab/snapshot.py"
+        "apps/backend/src/workbench_backend/lab/snapshot.py",
+        "apps/backend/src/workbench_backend/lab/schemas.py",
+        "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
         "apps/backend/tests/test_lab.py",
