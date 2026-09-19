@@ -21,10 +21,11 @@ Inspect any existing repository first. The supported scaffold is now:
 - Python **3.12.x** via **uv**; `apps/backend/pyproject.toml` and `apps/backend/uv.lock`; import path `workbench_backend` under `apps/backend/src/`.
 - Node **≥22 <25** (develop on 24); **pnpm**; `apps/desktop/package.json` and `apps/desktop/pnpm-lock.yaml`.
 - Desktop stack: Electron + Vite + React + TypeScript + React Flow, pinned in the desktop lockfile.
+- Shared-contract OpenAPI→TS generator: pinned **openapi-typescript 7.13.0** in the desktop lockfile ([ADR-0002](decisions/ADR-0002-contract-authoring.md) / [Issue #41](https://github.com/Vidcar/thtaib/issues/41)). This does not close this question.
 - Windows packaging: desktop-owned **electron-builder** (NSIS). The package script is registered; an installer is not required for this milestone.
 - Docker: stub `infra/docker-compose.yml` only; no product services.
 
-Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manifest`, `python-lockfile`, `desktop-dependency-manifest`, `desktop-lockfile`, `runtime-manifest`, `compatibility-records`. Working commands are in [commands.md](commands.md). Terms are in [the glossary](../docs/glossary.md).
+Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manifest`, `python-lockfile`, `desktop-dependency-manifest`, `desktop-lockfile`, `runtime-manifest`, `compatibility-records`, plus the Slice 1 shared-contract bindings (`shared-python-contracts`, `generated-json-schemas`, `openapi-export`, `generated-desktop-client`, `contract-generator`, `contract-tests`). Working commands are in [commands.md](commands.md). Terms are in [the glossary](../docs/glossary.md).
 
 **Evidence needed:** a clean setup and minimal backend/desktop build on the claimed platform (David-PC). Do not infer this from the specification checker's Python version.
 
@@ -169,7 +170,7 @@ Voice and multimodal product surfaces stay optional and experimental ([ARCH-007]
 
 **Owner:** Boundary implementer; architecture maintainers approve stage evidence. **Blocks:** declaring the relevant implementation or build stage verified. Hosting-plan required-check enablement does **not** block remaining product work and is not an open David action.
 
-Remaining choices: contract-generation freshness, import-boundary checks, shared contract tests, integration-test locations, live-tool versus recorded fixtures as product gates, platform/environment manifests, and David-PC UAT environments. Define repeatable starting inputs and evidence retention without storing secrets or model weights in this pack. Do not invent those missing gates as silent defaults. Do not invent merge-blocking required checks on this private free-plan repository.
+Remaining choices: import-boundary checks, integration-test locations, live-tool versus recorded fixtures as product gates, platform/environment manifests, and David-PC UAT environments. Shared-contract generation/freshness is registered as **advisory CI** on [Issue #41](https://github.com/Vidcar/thtaib/issues/41); it is not catalogue `verified` and not a required check. Define repeatable starting inputs and evidence retention without storing secrets or model weights in this pack. Do not invent those missing gates as silent defaults. Do not invent merge-blocking required checks on this private free-plan repository.
 
 **Evidence needed:** registered commands executed against actual code, negative/failure cases, and traceable results at a concrete revision. A green specification-integrity workflow is not stage acceptance. A green backend-unittest or desktop-typecheck-build job is not stage acceptance either. Advisory CI is not merge enforcement.
 

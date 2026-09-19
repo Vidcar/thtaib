@@ -130,6 +130,28 @@ pnpm run dev
 
 Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Debug-quality Chat calls the embedded harness (compose, deployment/profile bind, project workspace path, Start/Cancel, streamed events). Optional Agent-run, Lab and Knowledge debug panels remain. This is not Chat/Builder polish and does not close [OQ-016](open-questions.md#oq-016) or [OQ-014](open-questions.md#oq-014).
 
+<a id="generate-shared-contracts"></a>
+## Generate shared OpenAPI and TypeScript contracts
+
+**Working directory:** `apps/backend`. **Platform:** Windows (supported target); also runs on Linux/macOS. **Prerequisites:** backend `uv sync` and desktop `pnpm install` (pinned `openapi-typescript` lives in the desktop lockfile).
+
+```text
+uv run python ../../scripts/generate_shared_contracts.py
+```
+
+Exports JSON Schema and OpenAPI from the canonical Pydantic shared-contract models, then runs pinned `openapi-typescript` 7.13.0 via `node` and the installed `bin/cli.js` (not a bare `pnpm` argv — Windows `CreateProcess` does not resolve `pnpm.cmd`). Generated files must not be hand-edited. This does not publish product `/openapi.json` and does not implement Electron trust or harness cancel behaviour.
+
+<a id="check-shared-contract-freshness"></a>
+## Check shared-contract freshness
+
+**Working directory:** `apps/backend`. **Platform:** Windows (supported target); also runs on Linux/macOS. **Prerequisites:** the generate-command prerequisites.
+
+```text
+uv run python ../../scripts/generate_shared_contracts.py --check
+```
+
+Regenerates artifacts into a temporary tree and fails if any generated output is changed, removed, or newly produced relative to the committed files. A clean worktree must pass. This is the CTT-001 freshness gate, not catalogue `verified` evidence.
+
 <a id="desktop-package"></a>
 ## Package a Windows installer
 
@@ -143,7 +165,7 @@ Runs the desktop build, then electron-builder with the NSIS target. An installer
 
 ## Commands not established yet
 
-Contract generation/freshness, import-boundary checks, shared contract tests, integration tests, Docker product services and migrations are not available. Resolve the relevant [open questions](open-questions.md) and bind actual files in [repository-map.json](repository-map.json).
+Import-boundary checks, integration tests, Docker product services and migrations are not available. Shared-contract generation/freshness and the Slice 1 contract unit tests are registered above and run through backend unittest plus the freshness workflow. Resolve the remaining [open questions](open-questions.md) and bind actual files in [repository-map.json](repository-map.json).
 
 When a command is implemented, replace the relevant unavailable statement with its exact working command, prerequisites, working directory, platform, expected effect and verification scope. Add it to CI where appropriate in the same change. Never document a guessed `npm test`, `pytest`, `uv` or Docker command as an existing entry point.
 
@@ -152,7 +174,7 @@ When a command is implemented, replace the relevant unavailable statement with i
 
 The [specification-integrity workflow](../.github/workflows/specs.yml) invokes the first two pack commands on Windows and Linux, with read-only repository permissions and no product credentials. Its job timeout limits the CI check, not an application agent run. A green specification-integrity run is not product stage acceptance and is not catalogue `verified` evidence.
 
-The [backend unittest workflow](../.github/workflows/backend.yml) runs the registered backend install and unittest commands on the reviewed tree. The [desktop typecheck/build workflow](../.github/workflows/desktop.yml) runs the registered desktop install, type-check and build commands. Both use read-only repository permissions and no product credentials. CI install steps use the lockfile-enforcing forms `uv sync --frozen` and `pnpm install --frozen-lockfile`; the unittest, type-check and build invocations match the commands above exactly. These jobs are not contract-generation, import-boundary, shared-contract or integration gates.
+The [backend unittest workflow](../.github/workflows/backend.yml) runs the registered backend install and unittest commands on the reviewed tree. The [desktop typecheck/build workflow](../.github/workflows/desktop.yml) runs the registered desktop install, type-check and build commands. The [shared-contract freshness workflow](../.github/workflows/contracts.yml) runs the registered generate `--check` command. These use read-only repository permissions and no product credentials. CI install steps use the lockfile-enforcing forms `uv sync --frozen` and `pnpm install --frozen-lockfile`; the unittest, type-check, build and freshness invocations match the commands above exactly. Backend and desktop jobs are not the freshness gate; the freshness job is not an import-boundary or integration gate.
 
 Stable GitHub status-check names (job `name` values) are:
 
@@ -163,6 +185,8 @@ backend-unittest (ubuntu-latest)
 backend-unittest (windows-latest)
 desktop-typecheck-build (ubuntu-latest)
 desktop-typecheck-build (windows-latest)
+shared-contract-freshness (ubuntu-latest)
+shared-contract-freshness (windows-latest)
 ```
 
 These jobs run as **advisory CI only**. Merges are **not** blocked by required checks. Selecting them as required branch-protection checks is optional Pro/public-only and is **not** open human work; see [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.

@@ -19,32 +19,32 @@
     },
     {
       "id": "shared-python-contracts",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend/contracts",
       "kind": "directory",
       "owner_spec": "specs/contracts.md",
       "required_before": "First shared data or API contract"
     },
     {
       "id": "generated-json-schemas",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/contracts/jsonschema",
       "kind": "directory",
       "owner_spec": "specs/contracts.md",
       "required_before": "First generated schema consumer"
     },
     {
       "id": "openapi-export",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/contracts/openapi.json",
       "kind": "file",
       "owner_spec": "specs/contracts.md",
       "required_before": "First generated HTTP client"
     },
     {
       "id": "generated-desktop-client",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/desktop/src/generated/shared-contracts",
       "kind": "directory",
       "owner_spec": "specs/contracts.md",
       "required_before": "First typed desktop/backend connection"
@@ -59,8 +59,8 @@
     },
     {
       "id": "contract-generator",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "scripts/generate_shared_contracts.py",
       "kind": "file",
       "owner_spec": "specs/contracts.md",
       "required_before": "First generated consumer artifact"
@@ -131,8 +131,8 @@
     },
     {
       "id": "contract-tests",
-      "state": "unbound",
-      "path": null,
+      "state": "bound",
+      "path": "apps/backend/tests/contracts",
       "kind": "directory",
       "owner_spec": "specs/contracts.md",
       "required_before": "First shared contract implementation"

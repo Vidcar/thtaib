@@ -4,15 +4,15 @@
 
 ## Status and boundary
 
-Revision 0.5 selects Pydantic plus JSON Schema for typed definitions and identifies the owned record families. It does **not** define final fields, routes, event envelopes or a client generator. This document proposes the authoring/maintenance convention discussed with the user; approve it through [ADR-0002](decisions/ADR-0002-contract-authoring.md).
+Revision 0.5 selects Pydantic plus JSON Schema for typed definitions and identifies the owned record families. [ADR-0002](decisions/ADR-0002-contract-authoring.md) is **accepted**: canonical Pydantic definitions generate JSON Schema and OpenAPI, and pinned OpenAPI→TS generation produces committed desktop consumer types.
 
 The semantic records are specified in their owning modules: models/profiles/deployments/compatibility in [models](modules/models.md); resolved agent/workflow setup in [agents and workflows](modules/agents-workflows.md); definitions in [registry](modules/registry.md); run/checkpoint/snapshot/knowledge/artifact references in [state](modules/state-recovery.md); jobs/approvals/events in [backend](modules/backend-desktop.md); environments/tool invocation in [tools](modules/environments-tools.md); and captured cases/results in [Lab](modules/lab-evaluation.md).
 
 ## Authoritative paths
 
-Actual locations for Python contracts, schema exports, OpenAPI, generated client/types, event definitions, migrations and generators are deliberately `unbound` in [the repository map](repository-map.json). Bind existing locations before creating replacements. A linked module describes semantics, not a substitute handwritten JSON schema.
+Bound locations for the Slice 1 shared-contract path are in [the repository map](repository-map.json): Python source, OpenAPI export, JSON Schema, generated desktop types, generator script and contract tests. Event/stream contracts, the remaining product HTTP route table, and import-boundary checks stay unbound until their `required_before` trigger. A linked module describes semantics, not a substitute handwritten JSON schema.
 
-Upstream documentation pointers: [Pydantic schema generation and FastAPI client generation](sources/upstream.md#contract-generation). Those references support the mechanism; the choice to use it here is the proposal.
+Upstream documentation pointers: [Pydantic schema generation and FastAPI client generation](sources/upstream.md#contract-generation). The selected TypeScript generator is pinned **openapi-typescript 7.13.0** in the desktop lockfile.
 
 ## Requirements and acceptance checks
 
@@ -32,6 +32,6 @@ For a shared boundary, define identity/version, ownership, required/optional val
 
 ## Generation maintenance
 
-Generate from pinned tools using a registered command. Mark generated outputs and retain the generator input/configuration. Do not hand-edit generated clients or patch an exported schema to disagree with its source. A freshness check must cover changed, removed and newly generated files, not merely compare tracked diffs while ignoring untracked output.
+Generate from pinned tools using the registered commands in [commands](commands.md). Mark generated outputs and retain the generator input/configuration. Do not hand-edit generated clients or patch an exported schema to disagree with its source. The freshness check covers changed, removed and newly generated files, not merely tracked diffs that ignore untracked output.
 
-No generator or generated schema is shipped in this pack, so no generated-contract freshness gate is claimed to exist. Module-local Pydantic models exist for inference, harness, Lab and knowledge; they are not the generated shared-contract path and do not satisfy [CTT-001](#ctt-001). Before the first shared API/registry contract is merged, create its actual source and generator, register paths/commands, and add that gate. Resolve [OQ-001](open-questions.md#oq-001), [OQ-002](open-questions.md#oq-002), [OQ-004](open-questions.md#oq-004), [OQ-008](open-questions.md#oq-008) and remaining [OQ-010](open-questions.md#oq-010) gates as applicable.
+The landed Slice 1 generator input is `create_shared_contract_app` in `apps/backend/src/workbench_backend/contracts`. It exports the shared session-trust header envelope (`X-Workbench-Local-Token`) and run/cancel lifecycle vocabulary (`cancel_requested`, `cancelled`, and the related queued/running/completed/failed names). It is not mounted on the product FastAPI app; product `/openapi.json` stays unpublished. Module-local Pydantic models for inference, harness, Lab and knowledge remain local and are not this generated path. [OQ-002](open-questions.md#oq-002), [OQ-004](open-questions.md#oq-004), [OQ-008](open-questions.md#oq-008) and remaining [OQ-010](open-questions.md#oq-010) gates stay open except for the registered advisory freshness job.

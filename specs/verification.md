@@ -50,7 +50,7 @@ Introduce each gate with its first affected implementation, not after the projec
 
 | First implementation | Gate to add and register |
 | --- | --- |
-| Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files |
+| Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files. Slice 1 freshness is registered as advisory CI ([commands](commands.md#check-shared-contract-freshness)); remaining fixture/compatibility gates stay open. |
 | Concrete module/package layout | Import/dependency boundary checks for the agreed direction |
 | Model/runtime integration | Real managed deployment, companion-file resolution and requested/applied-setting evidence |
 | Tool/worker execution | Permission, cancellation, denied-access and real filesystem/process checks |

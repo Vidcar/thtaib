@@ -42,6 +42,8 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | CDF fork | out of scope |
 | TooGraph as pixel target / fork | OQ-016 — TooGraph inspiration only (ADR-0003); original layout |
 | invent Builder chrome | OQ-016 v1 chrome locked (ADR-0003); implementation remainder |
+| custom desktop auth header | `X-Workbench-Local-Token` (ADR-0002 / Issue #40 default) |
+| cancel means requested | `cancel_requested` is still live; `cancelled` is confirmed stop |
 | Builder shipped | unfinished Builder surface (OQ-016 remainder) |
 | canvas config edge | node badge/popover for config (WF-001 unchanged) |
 | hidden per-node profile | inherit workflow profile; explicit override only (ARCH-003 unchanged) |
@@ -166,5 +168,9 @@ These names are locked vocabulary, not selections. The questions stay in [open q
 **Voice/multimodal optional (OQ-009)** stays experimental. It is not a core prerequisite.
 
 **Builder canvas and chrome UX (OQ-016)** is partially decided for **v1 chrome** in [ADR-0003](../specs/decisions/ADR-0003-builder-v1-chrome.md): TooGraph-inspired cues with an original layout; grid, zoom, minimap, multi-select; icon rail and searchable node library; expanded nodes with an inline prompt editor; Run/Stop, canvas highlight and a run inspector; colour+label workflow edges with config via node badge/popover (not a canvas config edge); inherit workflow profile/deployment with explicit per-node override only. The remainder is the unfinished Builder surface — not a shipped claim. [OQ-004](../specs/open-questions.md#oq-004) and [OQ-011](../specs/open-questions.md#oq-011) stay open. [WF-001](../specs/modules/agents-workflows.md#wf-001) and [ARCH-003](../specs/architecture.md#arch-003) behaviour are unchanged. TooGraph is inspiration only — not a pixel target and not a fork.
+
+**`X-Workbench-Local-Token`** is the locked desktop↔backend local-trust header name. Issue #40 implements Electron injection and the LocalAppData secret; ADR-0002 only defines the shared type/envelope.
+
+**`cancel_requested` / `cancelled`** are shared run-lifecycle names. `cancel_requested` is still live (not quiescent). `cancelled` is confirmed stop. Issue #42 owns harness honesty; ADR-0002 only defines the shared names.
 
 **CDF fork** is out of scope.

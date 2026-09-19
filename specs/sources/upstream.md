@@ -55,6 +55,8 @@ The following official references were consulted on 18 September 2026 for the pr
 - [Pydantic JSON Schema generation](https://docs.pydantic.dev/latest/concepts/json_schema/).
 - [FastAPI client/SDK generation from OpenAPI](https://fastapi.tiangolo.com/advanced/generate-clients/).
 
+The selected OpenAPI→TS generator for [ADR-0002](../decisions/ADR-0002-contract-authoring.md) is [openapi-typescript 7.13.0](https://github.com/openapi-ts/openapi-typescript/releases/tag/openapi-typescript%407.13.0), pinned in `apps/desktop/package.json`. A moving npm `latest` tag is not the pin.
+
 ## Additional governance references
 
 Official references consulted on 18 September 2026:
