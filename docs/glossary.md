@@ -69,6 +69,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | unverified means incompatible | Unverified ≠ incompatible |
 | silently retry unknown tool | Unknown-effect safety (STATE-004) |
 | snapshot undoes the email | No external-effect rollback promise |
+| hold a shippable PR for polish | Ship when AC met (file leftovers) |
+| leftover when AC failed | AC-fail (changes-requested / UAT:fail) |
+| silent technical debt | Deferred follow-up Issue (`Deferred: #N`) |
+| forever backlog Milestone | Feature Milestone or Optional extras |
 | put it on the board | Set Project Status **and** attach a Milestone |
 | milestone with a deadline | Delivery Milestone (no due date) |
 | sprint / velocity | Out of scope (not how Issues are tracked) |
@@ -189,6 +193,12 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Tracking Issue** is an epic/checklist. It stays open until the whole proof is done. Focused Issues link to it **and** share its Milestone.
 
 “Put it on the board” means set Project Status **and** attach a Milestone. Spec does both when opening a Ready Issue. Builder, Reviewer, UAT and Release do not invent parallel boards. Informal “out of scope this milestone” in product copy is not a GitHub Milestone and is not a deadline.
+
+**Ship when AC met** means the Issue acceptance criteria are met and the tip is shippable: Reviewer approve / UAT:pass / Orchestrator merge. Do not hold the PR for polish, adjacent debt, or out-of-scope finds.
+
+**Leftover vs AC-fail.** A leftover is non-blocking debt, a bug, a nit, or an out-of-scope find on a shippable tip. AC not met is changes-requested or UAT:fail — not a leftover.
+
+**Deferred follow-up Issue** is a focused Issue for each leftover, acknowledged on the PR as `Deferred: #N`, under the correct feature Milestone (or **Optional extras** for true maybe-someday). Never silent technical debt. Do not invent a vague forever “backlog” Milestone. Out-of-scope product discoveries become a follow-up Issue or a Translator Confirmed brief — do not expand the current PR. Reviewer/UAT note leftovers on the PR; Spec (or Builder with Spec check) opens the follow-up with Status+Milestone; Orchestrator ensures nothing is lost and does not block merge on acknowledged non-blocking debt.
 
 ## Later-decision phrases (still open)
 
