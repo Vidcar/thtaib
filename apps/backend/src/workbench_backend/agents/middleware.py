@@ -90,12 +90,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return self._replay_tool_call(request)
 
     def _reject_projectless_privileged_tool(self, request: ToolCallRequest) -> ToolMessage | None:
-        """File and host-shell tools without a project must not invent a cwd."""
+        """File and host-shell tools need a project; execute must also be presented."""
 
         name, _args, call_id = _tool_call_parts(request)
-        if self.run.project_path:
-            return None
-        if name in FILESYSTEM_TOOL_NAMES:
+        if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
             return ToolMessage(
                 content=(
                     "Filesystem tools require a bound project folder. "
@@ -105,11 +103,21 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 tool_call_id=call_id,
                 status="error",
             )
-        if name in SHELL_TOOL_NAMES:
+        if name in SHELL_TOOL_NAMES and not self.run.project_path:
             return ToolMessage(
                 content=(
                     "The host shell requires a bound project folder as cwd. "
                     "This run has no project; the command was not executed."
+                ),
+                name=name,
+                tool_call_id=call_id,
+                status="error",
+            )
+        if name in SHELL_TOOL_NAMES and name not in self.run.presented_tools:
+            return ToolMessage(
+                content=(
+                    "The host shell is not presented on this run. "
+                    "The command was not executed."
                 ),
                 name=name,
                 tool_call_id=call_id,

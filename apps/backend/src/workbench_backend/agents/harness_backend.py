@@ -1,8 +1,10 @@
 """Deep Agents filesystem / host-shell backend for one harness run (STATE-002).
 
 Live runs attach ``CompositeBackend`` so framework internals stay out of the
-user's project. A bound project uses ``LocalShellBackend`` as the default
-(Windows host shell with approvals). Recorded-tool mode attaches nothing
+user's project. A bound project uses ``LocalShellBackend`` as the default only
+when ``execute`` is presented (Windows host shell with approvals). Otherwise
+the default is ``FilesystemBackend`` so Deep Agents does not put a live
+``execute`` tool on the node. Recorded-tool mode attaches nothing
 (LAB-003 / Issue #67).
 """
 
@@ -52,7 +54,9 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
 
     Default backend is the bound project (virtual ``/``) when one exists,
     otherwise ``StateBackend`` so a file write cannot land in a surprise
-    directory. Reserved prefixes always route to product-data scratch.
+    directory. The project default is ``LocalShellBackend`` only when
+    ``execute`` is presented; otherwise ``FilesystemBackend``. Reserved
+    prefixes always route to product-data scratch.
     """
 
     if run.tool_mode is ToolMode.recorded_tool:
@@ -67,7 +71,7 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
         "/conversation_history/": FilesystemBackend(root_dir=history, virtual_mode=True),
     }
     default: BackendProtocol
-    if run.project_path:
+    if host_shell_requested(run):
         # Host shell cwd is the user-chosen project. inherit_env so PATH and
         # the Windows host environment are the real machine, not an empty env.
         # virtual_mode does not restrict execute() (LocalShellBackend docs).
@@ -76,6 +80,22 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
             virtual_mode=True,
             inherit_env=True,
         )
+    elif run.project_path:
+        default = FilesystemBackend(root_dir=run.project_path, virtual_mode=True)
     else:
         default = StateBackend()
     return CompositeBackend(default=default, routes=routes, artifacts_root="/")
+
+
+def host_shell_requested(run: AgentRun) -> bool:
+    """True when this run may attach LocalShellBackend and interrupt_on.
+
+    Deep Agents registers ``execute`` on any sandbox default. The host shell
+    is therefore attached only when the user-visible catalogue presents it.
+    """
+
+    if run.tool_mode is ToolMode.recorded_tool:
+        return False
+    if not run.project_path:
+        return False
+    return "execute" in run.presented_tools

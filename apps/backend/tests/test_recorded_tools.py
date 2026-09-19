@@ -347,17 +347,13 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertEqual(body["tool_mode"], "live-tool")
         self.assertEqual(body["tool_mode_label"], "live-tool")
         self.assertFalse(body["recorded_is_not_live_proof"])
-        self.assertEqual(len(self.shell_constructions), 1)
-        self.assertEqual(len(self.fs_constructions), 2)
-        shell_roots = [
-            Path(kwargs.get("root_dir") or (args[0] if args else "")).resolve()
-            for args, kwargs in self.shell_constructions
-        ]
-        self.assertEqual(shell_roots, [self.project.resolve()])
+        self.assertEqual(self.shell_constructions, [])
+        self.assertEqual(len(self.fs_constructions), 3)
         roots = [
             Path(kwargs.get("root_dir") or (args[0] if args else "")).resolve()
             for args, kwargs in self.fs_constructions
         ]
+        self.assertIn(self.project.resolve(), roots)
         self.assertTrue(any(path.name == "large_tool_results" for path in roots))
         self.assertTrue(any(path.name == "conversation_history" for path in roots))
         self.assertEqual((self.project / "live.md").read_text(encoding="utf-8"), "live-bytes")

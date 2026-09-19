@@ -26,7 +26,10 @@ from typing import Any
 from deepagents import FilesystemPermission
 from langchain.agents.middleware import ToolCallRequest
 
-from workbench_backend.agents.harness_backend import RESERVED_FRAMEWORK_PREFIXES
+from workbench_backend.agents.harness_backend import (
+    RESERVED_FRAMEWORK_PREFIXES,
+    host_shell_requested,
+)
 from workbench_backend.agents.schemas import (
     AgentRun,
     InterruptDecision,
@@ -122,11 +125,9 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 
 
 def interrupt_on_for_run(run: AgentRun) -> dict[str, bool | dict[str, Any]] | None:
-    """HITL config for ``execute`` when the host shell is presented."""
+    """HITL config for ``execute`` whenever LocalShellBackend is attached."""
 
-    if run.tool_mode is ToolMode.recorded_tool:
-        return None
-    if "execute" not in run.presented_tools:
+    if not host_shell_requested(run):
         return None
     return {
         "execute": {

@@ -256,7 +256,9 @@ class HarnessService:
             effective_setup=setup,
             starting_snapshot_id=starting_snapshot_id,
             host_shell=HostShellFacts(
-                available=project_path is not None,
+                available=project_path is not None
+                and "execute" in presented
+                and request.tool_mode is not ToolMode.recorded_tool,
                 cwd=project_path,
                 inherit_env=True,
             ),

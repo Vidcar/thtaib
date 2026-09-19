@@ -12,10 +12,12 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.host_shell import (
     PERMISSION_DENY_PATHS,
     execute_requires_approval,
     filesystem_permissions_for_run,
+    interrupt_on_for_run,
     is_dangerous_shell_command,
     pending_interrupt_from_raw,
     reject_decisions_for,
@@ -123,6 +125,12 @@ class HostShellPolicyTests(unittest.TestCase):
         recorded_run.tool_mode = ToolMode.recorded_tool
         self.assertIsNone(filesystem_permissions_for_run(recorded_run))
         self.assertIsNone(filesystem_permissions_for_run(_run(project_path=None)))
+        echo_only = _run(project_path="/tmp/project", presented=["echo"])
+        self.assertFalse(host_shell_requested(echo_only))
+        self.assertIsNone(interrupt_on_for_run(echo_only))
+        presented = _run(project_path="/tmp/project", presented=["execute"])
+        self.assertTrue(host_shell_requested(presented))
+        self.assertIsNotNone(interrupt_on_for_run(presented))
 
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(
@@ -214,6 +222,24 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 400, blocked.text)
         self.assertEqual(blocked.json()["code"], "shell_requires_project")
         self.assertEqual(blocked.json()["tools"], ["execute"])
+
+    def test_unpresented_execute_does_not_run_without_hitl(self) -> None:
+        """Reviewer scenario: project + echo-only must not run a scripted touch."""
+
+        marker = self.project / "bypass-no-hitl.txt"
+        self._install(execute_then_reply("touch bypass-no-hitl.txt"))
+        started = self._start(presented_tools=["echo"])
+        self.assertFalse(started["host_shell"]["available"])
+        body = wait_for_run(self.client, started["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertIsNone(body["pending_interrupt"])
+        self.assertFalse(marker.exists())
+        kinds = [event["kind"] for event in body["events"]]
+        self.assertNotIn("interrupt", kinds)
+        results = [event for event in body["events"] if event["kind"] == "tool_result"]
+        self.assertTrue(results)
+        content = str(results[0]["detail"].get("content") or "").lower()
+        self.assertTrue("not presented" in content or "not executed" in content or "error" in content)
 
     def test_safe_execute_does_not_interrupt(self) -> None:
         self._install(execute_then_reply("echo host-shell-ok"))
