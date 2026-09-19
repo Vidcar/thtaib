@@ -348,7 +348,13 @@
       ],
       "code": [
         "apps/backend/src/workbench_backend/inference/settings.py",
-        "apps/backend/src/workbench_backend/agents/effective_setup.py"
+        "apps/backend/src/workbench_backend/inference/service.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
+        "apps/desktop/src/renderer/settingsNotes.tsx",
+        "apps/desktop/src/renderer/DeploymentsPanel.tsx",
+        "apps/desktop/src/renderer/ModelsPanel.tsx",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_settings.py",
@@ -378,6 +384,7 @@
         "apps/backend/src/workbench_backend/inference/deployments.py",
         "apps/backend/src/workbench_backend/inference/bundles.py",
         "apps/backend/src/workbench_backend/inference/process.py",
+        "apps/backend/src/workbench_backend/inference/process_logs.py",
         "apps/backend/src/workbench_backend/inference/runtime.py",
         "apps/backend/src/workbench_backend/inference/hardware.py"
       ],
@@ -385,6 +392,7 @@
         "apps/backend/tests/test_deployments.py",
         "apps/backend/tests/test_process_ownership.py",
         "apps/backend/tests/test_runtime.py",
+        "apps/backend/tests/test_process_logs.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
       "evidence": [

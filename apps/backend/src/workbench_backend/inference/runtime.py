@@ -42,14 +42,19 @@ WINDOWS_CUDART_URL = (
     f"{LLAMA_CPP_RELEASE_TAG}/{WINDOWS_CUDART_ASSET}"
 )
 
+# Digests are the GitHub release-asset ``digest`` values for tag b11045
+# (ggml-org/llama.cpp, 2026-09-19). David-PC UAT recorded the same hashes
+# after a 292 s re-download of identical files.
 PINNED_WINDOWS_CUDA = {
     "release_tag": LLAMA_CPP_RELEASE_TAG,
     "platform": "win-x64",
     "flavor": "cuda-13.4",
     "asset_name": WINDOWS_CUDA_ASSET,
     "source_url": WINDOWS_CUDA_URL,
+    "sha256": "7fd21d8f63784a5519b0ab27cfd98b8c928f8b975c3e948f0a55a791b2c3efa1",
     "companion_asset_name": WINDOWS_CUDART_ASSET,
     "companion_source_url": WINDOWS_CUDART_URL,
+    "companion_sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
     "executable_name": "llama-server.exe",
 }
 
@@ -69,6 +74,10 @@ PIN_WHILE_RUNNING_MESSAGE = (
 
 
 class RuntimeInstaller:
+    """HTTP fetcher for pinned release archives. Tests may subclass this."""
+
+    verify_release_digest = True
+
     def download(self, url: str, dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with httpx.stream("GET", url, follow_redirects=True, timeout=600.0) as response:
@@ -200,17 +209,34 @@ class RuntimeService:
             return self._fail_pin(install_dir, spec, NVIDIA_ABSENT_MESSAGE, "failed")
         archive = self.paths.runtimes / spec["asset_name"]
         companion = self.paths.runtimes / spec["companion_asset_name"]
+        previous = self._reusable_ready_manifest(spec)
         try:
-            self.installer.download(spec["source_url"], archive)
-            self.installer.download(spec["companion_source_url"], companion)
-            digest = sha256_file(archive)
-            companion_digest = sha256_file(companion)
-            if install_dir.exists():
-                shutil.rmtree(install_dir)
-            install_dir.mkdir(parents=True, exist_ok=True)
-            _extract_zip(archive, install_dir)
-            _extract_zip(companion, install_dir)
+            digest = self._ensure_archive(
+                spec["source_url"],
+                archive,
+                expected=spec.get("sha256") or (previous.sha256 if previous else None),
+            )
+            companion_digest = self._ensure_archive(
+                spec["companion_source_url"],
+                companion,
+                expected=spec.get("companion_sha256")
+                or (previous.companion_sha256 if previous else None),
+            )
             executable = _find_executable(install_dir, spec["executable_name"])
+            reuse_install = (
+                previous is not None
+                and previous.sha256 == digest
+                and previous.companion_sha256 == companion_digest
+                and executable is not None
+                and Path(previous.executable).is_file()
+            )
+            if not reuse_install:
+                if install_dir.exists():
+                    shutil.rmtree(install_dir)
+                install_dir.mkdir(parents=True, exist_ok=True)
+                _extract_zip(archive, install_dir)
+                _extract_zip(companion, install_dir)
+                executable = _find_executable(install_dir, spec["executable_name"])
             if executable is None:
                 raise ManagerError(
                     "Windows llama-server.exe was not found in the pinned CUDA archive",
@@ -241,6 +267,41 @@ class RuntimeService:
                 "interrupted" if "interrupt" in str(exc).lower() else "failed"
             )
             return self._fail_pin(install_dir, spec, str(exc), status)
+
+    def _reusable_ready_manifest(self, spec: dict[str, str]) -> RuntimeManifest | None:
+        current = self.current()
+        if (
+            current is None
+            or current.status != "ready"
+            or current.release_tag != spec["release_tag"]
+            or current.asset_name != spec["asset_name"]
+            or current.companion_asset_name != spec.get("companion_asset_name")
+        ):
+            return None
+        return current
+
+    def _ensure_archive(self, url: str, dest: Path, expected: str | None) -> str:
+        """Return the on-disk digest, downloading only when it does not match ``expected``."""
+
+        if dest.is_file() and expected:
+            digest = sha256_file(dest)
+            if digest == expected:
+                return digest
+        self.installer.download(url, dest)
+        digest = sha256_file(dest)
+        if (
+            expected
+            and getattr(self.installer, "verify_release_digest", True)
+            and digest != expected
+        ):
+            dest.unlink(missing_ok=True)
+            raise ManagerError(
+                f"Pinned runtime archive digest mismatch for {dest.name}: "
+                f"expected {expected}, got {digest}",
+                code="runtime_digest_mismatch",
+                status_code=500,
+            )
+        return digest
 
     def _fail_pin(
         self,

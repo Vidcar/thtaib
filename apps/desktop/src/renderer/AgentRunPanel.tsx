@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { EffectiveSetupNotes } from "./settingsNotes";
 import { isAgentRunLive, type AgentRun, type Deployment } from "./types";
 
 export function AgentRunPanel() {
@@ -126,6 +127,11 @@ export function AgentRunPanel() {
           <p>presented tools: {run.presented_tools.join(", ")}</p>
           {run.error ? <p className="status">{run.error}</p> : null}
           <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
+          <EffectiveSetupNotes
+            unsupportedStartup={run.effective_setup?.unsupported?.startup}
+            retiredStartup={run.effective_setup?.retired?.startup}
+            startupMismatches={run.effective_setup?.startup_mismatches}
+          />
           <pre className="json">{JSON.stringify(run.effective_setup ?? null, null, 2)}</pre>
           <h3>Captured model request</h3>
           <pre className="json">{JSON.stringify(run.model_requests, null, 2)}</pre>

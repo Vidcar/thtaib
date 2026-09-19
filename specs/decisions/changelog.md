@@ -4,6 +4,15 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-19 — Managed inference start-path polish
+
+Authority: David-PC UAT observations 1, 2 and 5 ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); [issue #83](https://github.com/Vidcar/thtaib/issues/83) for desktop display. Requirements: MOD-003, MOD-004.
+
+- Managed `llama-server` stdout/stderr are captured under the product data-root `logs\` directory (`llama-server-<deployment-id>.log`), not discarded to `DEVNULL`. Files rotate at 8 MiB with three backups; the directory is capped at 256 MiB.
+- `POST /v1/runtime/pin` skips re-download when an on-disk archive SHA-256 matches the expected digest (official b11045 GitHub release-asset digest, or the last ready manifest for the same release and asset). A matching ready install is not extracted again.
+- `wait_for_owned_health` waits up to 30 seconds (`60 × 0.5 s`) for a warm load. A cold 14 GB load may still return `unhealthy` on create-with-`auto_start`; the client keeps polling `GET /health`. The HTTP handler does not block for a multi-minute cold load.
+- Desktop Deployments, Models (saved profiles and preview), Chat and Agent-run surfaces list startup `unsupported` keys and `retired` notes. `GET`/`list` profiles re-resolve stored requested bags so pre-correction `mlock`/`no_mmap` records show the notes without a re-save.
+
 ## 2026-09-19 — PR #85: Chat without a project; CompositeBackend scratch isolation
 
 Authority: [PR #85](https://github.com/Vidcar/thtaib/pull/85); David, product owner (Chat without a project folder, Project chat 2026-09-19); technical owner decision (harness-internal files stay out of the project, 2026-09-19). Closes [DEV-003](../deviations.md#dev-003) and [DEV-004](../deviations.md#dev-004). Requirements: AGT-001, AGT-005, STATE-002, API-004.

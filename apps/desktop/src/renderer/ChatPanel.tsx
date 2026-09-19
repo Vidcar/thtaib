@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { EffectiveSetupNotes, SettingsNotes } from "./settingsNotes";
 import {
   isAgentRunLive,
   type ChatConversation,
@@ -78,6 +79,7 @@ export function ChatPanel() {
   }
 
   const runBusy = conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false;
+  const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
 
   return (
     <section className="panel">
@@ -197,10 +199,19 @@ export function ChatPanel() {
             {profiles.map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.display_name}
+                {profile.bags.startup.unsupported.length || profile.bags.startup.retired.length
+                  ? " · has unsupported/retired startup"
+                  : ""}
               </option>
             ))}
           </select>
         </label>
+        {selectedProfile ? (
+          <SettingsNotes
+            unsupported={selectedProfile.bags.startup.unsupported}
+            retired={selectedProfile.bags.startup.retired}
+          />
+        ) : null}
         <label>
           Lab workspace (optional)
           <select
@@ -356,6 +367,11 @@ export function ChatPanel() {
             )}
           </pre>
           <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
+          <EffectiveSetupNotes
+            unsupportedStartup={conversation.current_run?.effective_setup?.unsupported?.startup}
+            retiredStartup={conversation.current_run?.effective_setup?.retired?.startup}
+            startupMismatches={conversation.current_run?.effective_setup?.startup_mismatches}
+          />
           <pre className="json">
             {JSON.stringify(conversation.current_run?.effective_setup ?? null, null, 2)}
           </pre>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api, DEFAULT_GPU_STARTUP } from "./api";
+import { SettingsNotes } from "./settingsNotes";
 import type { Deployment, ModelBundle, RuntimeManifest } from "./types";
 
 export function DeploymentsPanel() {
@@ -135,6 +136,10 @@ export function DeploymentsPanel() {
               <span className="badge">{deployment.status}</span>
               <p>endpoint: {deployment.endpoint ?? "none"}</p>
               <p>applied startup: {JSON.stringify(deployment.applied_startup)}</p>
+              <SettingsNotes
+                unsupported={deployment.settings?.startup.unsupported}
+                retired={deployment.settings?.startup.retired}
+              />
               <p>
                 health: {deployment.health ? String(deployment.health.healthy) : "n/a"} · resources:{" "}
                 {deployment.resource_usage?.available

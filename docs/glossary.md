@@ -42,7 +42,7 @@ Locked names for issues, pull requests and user-facing copy. Behaviour lives in 
 
 **`X-Workbench-Local-Token`** — the desktop↔backend header. Electron main injects it; the renderer never holds the secret at `state\desktop_backend_shared_secret`. CORS is not authorisation.
 
-**Product data** — `%LOCALAPPDATA%\LocalAIWorkbench\` (Linux `~/.local/share/LocalAIWorkbench/`): models, runtimes, state, cases, snapshots, workspaces, knowledge, `application.sqlite`, `checkpoints.sqlite`. Never the repository, never `.scratch/`.
+**Product data** — `%LOCALAPPDATA%\LocalAIWorkbench\` (Linux `~/.local/share/LocalAIWorkbench/`): models, runtimes, state, cases, snapshots, workspaces, knowledge, logs, `application.sqlite`, `checkpoints.sqlite`. Never the repository, never `.scratch/`.
 
 ## Verification
 

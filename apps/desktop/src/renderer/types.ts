@@ -13,6 +13,7 @@ export interface PathsInfo {
   snapshots: string;
   workspaces: string;
   knowledge: string;
+  logs: string;
   application_db: string;
   checkpoints_db: string;
   windows_layout: string;

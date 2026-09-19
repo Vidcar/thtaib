@@ -12,8 +12,10 @@ from pathlib import Path
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.process import argv_for_host
+from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.runtime import (
     NVIDIA_ABSENT_MESSAGE,
+    PINNED_WINDOWS_CUDA,
     WINDOWS_CUDA_ASSET,
     WINDOWS_CUDART_ASSET,
     RuntimeInstaller,
@@ -32,6 +34,8 @@ from test_app import FakeHF
 
 
 class FakeCudaInstaller(RuntimeInstaller):
+    verify_release_digest = False
+
     def __init__(self) -> None:
         self.urls: list[str] = []
 
@@ -137,6 +141,63 @@ class RuntimePinTests(unittest.TestCase):
         self.assertTrue((Path(manifest.install_dir) / "cudart64_134.dll").is_file())
         self.assertTrue((self.paths.runtimes / WINDOWS_CUDA_ASSET).is_file())
         self.assertTrue((self.paths.runtimes / WINDOWS_CUDART_ASSET).is_file())
+        self.assertEqual(len(installer.urls), 2)
+
+    def test_cuda_pin_skips_download_when_archives_match_expected_digest(self) -> None:
+        installer = FakeCudaInstaller()
+        manager = self._manager(installer=installer, nvidia_present=lambda: True)
+        first = manager.pin_runtime()
+        self.assertEqual(first.status, "ready")
+        self.assertEqual(len(installer.urls), 2)
+        archive = self.paths.runtimes / WINDOWS_CUDA_ASSET
+        companion = self.paths.runtimes / WINDOWS_CUDART_ASSET
+        original = {
+            "sha256": PINNED_WINDOWS_CUDA["sha256"],
+            "companion_sha256": PINNED_WINDOWS_CUDA["companion_sha256"],
+        }
+        PINNED_WINDOWS_CUDA["sha256"] = sha256_file(archive)
+        PINNED_WINDOWS_CUDA["companion_sha256"] = sha256_file(companion)
+        marker = Path(first.install_dir) / "keep-me.txt"
+        marker.write_text("reuse", encoding="utf-8")
+        try:
+            installer.urls.clear()
+            second = manager.pin_runtime()
+        finally:
+            PINNED_WINDOWS_CUDA.update(original)
+        self.assertEqual(second.status, "ready")
+        self.assertEqual(installer.urls, [])
+        self.assertEqual(second.sha256, first.sha256)
+        self.assertEqual(second.companion_sha256, first.companion_sha256)
+        self.assertTrue(marker.is_file())
+
+    def test_cuda_pin_redownloads_when_on_disk_digest_does_not_match(self) -> None:
+        installer = FakeCudaInstaller()
+        manager = self._manager(installer=installer, nvidia_present=lambda: True)
+        first = manager.pin_runtime()
+        self.assertEqual(first.status, "ready")
+        archive = self.paths.runtimes / WINDOWS_CUDA_ASSET
+        archive.write_bytes(archive.read_bytes() + b"corrupt")
+        installer.urls.clear()
+        original = {
+            "sha256": PINNED_WINDOWS_CUDA["sha256"],
+            "companion_sha256": PINNED_WINDOWS_CUDA["companion_sha256"],
+        }
+        PINNED_WINDOWS_CUDA["sha256"] = first.sha256 or "not-the-corrupt-digest"
+        PINNED_WINDOWS_CUDA["companion_sha256"] = first.companion_sha256 or ""
+        try:
+            again = manager.pin_runtime()
+        finally:
+            PINNED_WINDOWS_CUDA.update(original)
+        self.assertEqual(again.status, "ready")
+        self.assertTrue(any(WINDOWS_CUDA_ASSET in url for url in installer.urls))
+
+    def test_cuda_pin_rejects_download_that_does_not_match_official_digest(self) -> None:
+        installer = FakeCudaInstaller()
+        installer.verify_release_digest = True
+        manager = self._manager(installer=installer, nvidia_present=lambda: True)
+        manifest = manager.pin_runtime()
+        self.assertEqual(manifest.status, "failed")
+        self.assertIn("digest mismatch", (manifest.error or "").lower())
 
     def test_local_pin_copies_full_runtime_directory(self) -> None:
         source = self.root / "cuda-tree"

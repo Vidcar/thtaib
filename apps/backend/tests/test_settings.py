@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from workbench_backend.inference.schemas import ProfileWriteRequest
+from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.schemas import ProfileWriteRequest, RunProfile, SettingsBag, SettingsBags
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.settings import (
     DEFAULT_GPU_PROFILE,
@@ -146,6 +147,33 @@ class SettingsBagTests(unittest.TestCase):
         self.assertNotIn("--no-mmap", args)
         self.assertEqual(args[args.index("--load-mode") + 1], "mlock")
         self.assertEqual(resolve_bags(startup={"ctx_size": 8}).startup.retired, [])
+
+    def test_get_profile_reresolves_retired_startup_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = ModelManager(WorkbenchPaths(Path(tmp)))
+            now = utc_now()
+            stale = RunProfile(
+                id="profile_stale_mlock",
+                display_name="pre-correction",
+                bags=SettingsBags(
+                    startup=SettingsBag(
+                        requested={"mlock": True, "ctx_size": 4096},
+                        applied={"mlock": True, "ctx_size": 4096},
+                        unsupported=[],
+                        retired=[],
+                    )
+                ),
+                created_at=now,
+                updated_at=now,
+            )
+            manager.store.put_profile(stale)
+            loaded = manager.get_profile(stale.id)
+            self.assertIn("mlock", loaded.bags.startup.unsupported)
+            self.assertEqual([note.key for note in loaded.bags.startup.retired], ["mlock"])
+            self.assertIn("load_mode", loaded.bags.startup.retired[0].reason)
+            self.assertNotIn("mlock", loaded.bags.startup.applied)
+            listed = manager.list_profiles()
+            self.assertEqual(listed[0].bags.startup.unsupported, loaded.bags.startup.unsupported)
 
     def test_stream_is_not_a_per_request_key(self) -> None:
         self.assertNotIn("stream", PER_REQUEST_KEYS)
