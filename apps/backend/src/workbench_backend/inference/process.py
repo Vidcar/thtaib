@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -13,13 +15,40 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import HealthReport, ResourceUsage
 
 
+def argv_for_host(argv: list[str]) -> list[str]:
+    """On Windows, prefix ``sys.executable`` for shebang/python test fixtures.
+
+    Hosted Windows cannot exec a ``#!`` script. Real ``llama-server.exe`` is
+    unchanged. Linux/macOS keep the existing direct-exec path.
+    """
+    if not argv or os.name != "nt":
+        return list(argv)
+    path = Path(argv[0])
+    if not _python_fixture(path):
+        return list(argv)
+    return [sys.executable, *argv]
+
+
+def _python_fixture(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if path.suffix.lower() == ".py":
+        return True
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(64)
+    except OSError:
+        return False
+    return head.startswith(b"#!") and b"python" in head.lower()
+
+
 class ProcessSupervisor:
     def __init__(self) -> None:
         self._children: dict[int, subprocess.Popen[bytes]] = {}
 
     def start(self, argv: list[str], *, cwd: Path | None = None) -> int:
         process = subprocess.Popen(  # noqa: S603 - argv is built from managed records
-            argv,
+            argv_for_host(argv),
             cwd=str(cwd) if cwd else None,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

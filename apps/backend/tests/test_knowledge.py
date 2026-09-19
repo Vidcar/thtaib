@@ -20,6 +20,7 @@ from workbench_backend.knowledge.schemas import KnowledgeConfig
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
+from tests.support import close_workbench_sqlite
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -52,6 +53,7 @@ class KnowledgeApiTests(unittest.TestCase):
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def _create(
@@ -314,6 +316,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def test_knowledge_version_ids_are_referenceable_from_lab_and_harness(self) -> None:

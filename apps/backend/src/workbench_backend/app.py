@@ -6,6 +6,8 @@ model and does not close OQ-002.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -25,12 +27,27 @@ from workbench_backend.knowledge.routes import router as knowledge_router
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
+from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.effect_routes import router as effect_router
 from workbench_backend.state.effects import EffectService
 from workbench_backend.state.migrate import open_application_store
 
 PRODUCT_NAME = "Local AI Workbench"
 SURFACE = "managed-inference"
+
+
+@asynccontextmanager
+async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    yield
+    harness = getattr(application.state, "harness", None)
+    if harness is not None:
+        closer = getattr(harness, "close", None)
+        if callable(closer):
+            closer()
+    store = getattr(application.state, "app_store", None)
+    if store is not None:
+        store.close()
+    close_all_sqlite_checkpointers()
 
 
 def create_app(*, data_root: Path | None = None) -> FastAPI:
@@ -40,6 +57,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_app_lifespan,
     )
     application.add_middleware(
         CORSMiddleware,

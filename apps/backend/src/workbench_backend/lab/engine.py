@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.process import argv_for_host
 from workbench_backend.inference.schemas import Deployment
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.lab.schemas import EngineMeasurement
@@ -115,7 +116,7 @@ def measure_engine(
             created_at=created,
         )
 
-    command = [str(bench), "-m", str(model_path), "-p", "16", "-n", "8"]
+    command = argv_for_host([str(bench), "-m", str(model_path), "-p", "16", "-n", "8"])
     try:
         completed = subprocess.run(  # noqa: S603 - argv is managed runtime + recorded model path
             command,

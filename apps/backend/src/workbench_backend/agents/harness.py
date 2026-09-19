@@ -71,6 +71,7 @@ class HarnessService:
         self._app_store = app_store
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
+        self._threads: dict[str, threading.Thread] = {}
         self._lock = threading.Lock()
 
     @property
@@ -181,8 +182,21 @@ class HarnessService:
             self._cancels[run.id] = cancel
         self._persist(run)
         thread = threading.Thread(target=self._execute, args=(run.id,), daemon=True)
+        with self._lock:
+            self._threads[run.id] = thread
         thread.start()
         return run.model_copy(deep=True)
+
+    def close(self, *, timeout: float = 15.0) -> None:
+        """Join worker threads so SQLite files can be closed on Windows."""
+        with self._lock:
+            for cancel in self._cancels.values():
+                cancel.set()
+            threads = list(self._threads.values())
+        for thread in threads:
+            thread.join(timeout=timeout)
+        with self._lock:
+            self._threads.clear()
 
     def cancel(self, run_id: str) -> AgentRun:
         with self._lock:

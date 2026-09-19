@@ -19,7 +19,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import write_tiny_gguf
+from tests.support import close_workbench_sqlite, write_tiny_gguf
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -80,6 +80,7 @@ class LabApiTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def _workspace(self, files: dict[str, str] | None = None) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
+from tests.support import close_workbench_sqlite
 
 FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
 
@@ -101,6 +102,7 @@ class ChatHarnessTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def _create(self, **extra: Any) -> dict[str, Any]:
@@ -291,6 +293,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 
     def test_agent_run_write_file_targets_project_path(self) -> None:
