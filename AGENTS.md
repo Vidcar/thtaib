@@ -21,6 +21,8 @@ Inspect existing code first. The Windows-first scaffold lives under `apps/backen
 
 `unassessed` is not a claim that a feature is missing. `baseline` or `accepted` is not a claim that a feature works.
 
+Throwaway UAT and temp files belong only under `.scratch/` at the repository root (the entire tree is gitignored). Use `.scratch/uat/` for UAT workroots and `.scratch/logs/` for capture files. Do not create `uat-workroot*` or other UAT droppings at the repository root. Durable product and managed-inference data stays under `%LOCALAPPDATA%\LocalAIWorkbench\`, never in `.scratch/`.
+
 ## Before implementing
 
 State the task outcome, relevant requirement IDs, files/boundaries affected, acceptance checks and unresolved dependencies. For a substantial or interrupted task use the [task template](specs/templates/task.md); small fixes may use the pull-request description instead.

@@ -37,3 +37,12 @@ out/
 *.bin
 models/
 data/
+
+# Local scratch (UAT / temp) — never commit
+.scratch/
+# Legacy UAT droppings (safety net)
+/uat-workroot*/
+/uat-fixtures/
+/uat-*.txt
+/uat-backend-*.txt
+apps/backend/uat_*.py
