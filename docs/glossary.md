@@ -26,7 +26,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | last write wins | Optimistic concurrency / explicit conflict |
 | close OQ-006 | Partial OQ-006 defaults only (store; not RAG / cross-surface sharing) |
 | Chat memory UI | Out of scope |
-| Chat shipped / Chat tab done | AGT-001 Chat surface remains open (Issue #22) |
+| Chat shipped / Chat tab done | Debug-quality Chat (Issue #22); not polish |
 | Agent-run is Chat | Agent-run debug panel is not Chat |
 | CUDA 13.4 / GPU default / valued flash_attn landed | partial OQ-007 landed on #21; remainder open |
 | bare --flash-attn is the mapping | valued `--flash-attn on` / `off` / `auto` only (#21) |
@@ -75,7 +75,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **UAT workroot** is a throwaway directory under `.scratch/uat/…`. Agents and UAT must not create `uat-workroot*` at the repository root.
 
-**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces, knowledge). Durable product, managed-inference, Lab case/snapshot and durable-knowledge state is never the repository root and never `.scratch/`.
+**Product data** is `%LOCALAPPDATA%\LocalAIWorkbench\` (models, runtimes, state, cases, snapshots, workspaces, knowledge). Chat transcripts live under `state\chat\` and are not the working project. Durable product, managed-inference, Lab case/snapshot and durable-knowledge state is never the repository root and never `.scratch/`.
 
 **Durable knowledge versioning (STATE-005)** is the application-owned, versioned store of user / agent / project memories, skills and protected instructions under `%LOCALAPPDATA%\LocalAIWorkbench\knowledge\`. It is not a RAG product, not a checkpointer table, and not git.
 
@@ -97,9 +97,11 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
 
-**Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. It is not Chat and not Builder. A thin desktop Agent-run debug panel may call that API.
+**Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. Debug-quality Chat calls this harness directly. It is not a second application-written agent loop and not Builder. A thin desktop Agent-run debug panel may still call that API.
 
-**AGT-001 Chat surface remains open (Issue #22)** is the debug-quality Chat tab that must call this same harness. Agent-run is not that surface. Do not claim Chat shipped until #22 lands.
+**Debug-quality Chat** is the Chat tab that binds a deployment/profile and project workspace path, starts/cancels one harness task, and streams harness events. Transcript / conversation history is displayed history under `state\chat\`, not the working project (STATE-002). Deep Agents filesystem tools target project storage. This is not Chat polish and not Builder.
+
+**Debug-quality Chat (Issue #22)** is the Chat tab that calls the embedded harness. Agent-run is not that surface. Do not call it finished Chat polish.
 
 **Partial OQ-007 landed on #21; remainder open** means Windows CUDA 13.4 pin, default GPU profile and valued `flash_attn` mapping landed with [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24). Full compatibility evidence, capability claims and complete setting-mapping verification stay [OQ-007](../specs/open-questions.md#oq-007).
 

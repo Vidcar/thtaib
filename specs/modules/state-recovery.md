@@ -20,7 +20,7 @@ Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an applicatio
 
 Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
 
-Application records on main are JSON files under `%LOCALAPPDATA%\LocalAIWorkbench\state\` and sibling product directories. The dual application/checkpoint SQLite pair is not implemented; that remains [STATE-001](#state-001) and [OQ-004](../open-questions.md#oq-004), not an approved waiver. Deep Agents file tools that target project storage for Chat remain [STATE-002](#state-002) and are in flight on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Current harness tools are visibility-only (`echo`, `time_now`).
+Application records on main are JSON files under `%LOCALAPPDATA%\LocalAIWorkbench\state\` and sibling product directories. The dual application/checkpoint SQLite pair is not implemented; that remains [STATE-001](#state-001) and [OQ-004](../open-questions.md#oq-004), not an approved waiver. Deep Agents file tools that target project storage for Chat land with [STATE-002](#state-002) / [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Enabled catalogue includes visibility tools (`echo`, `time_now`) and filesystem tools (`ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`). Transcripts stay under `state\chat\` and are not the working project.
 
 ## Requirements and acceptance checks
 

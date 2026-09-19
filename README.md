@@ -58,7 +58,7 @@ Durable product and managed-inference data stays under `%LOCALAPPDATA%\LocalAIWo
 
 ## What exists and what does not
 
-Present today: the model manager, the embedded Deep Agents harness, Lab capture/restore/rerun, and durable knowledge versioning. The desktop exposes Models and Deployments controls. Optional Agent-run, Lab and Knowledge debug panels are fine; they are not Chat or Builder. Chat and Builder are not shipped.
+Present today: the model manager, the embedded Deep Agents harness, debug-quality Chat, Lab capture/restore/rerun, and durable knowledge versioning. The desktop exposes Models, Deployments and Chat. Optional Agent-run, Lab and Knowledge debug panels remain for raw debug. Chat is not finished polish. Builder is not shipped.
 
 ## Specification pack
 

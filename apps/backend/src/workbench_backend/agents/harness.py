@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
@@ -117,6 +119,9 @@ class HarnessService:
                 status_code=400,
             )
         refs = self._resolve_knowledge_refs(request)
+        if request.profile_id:
+            self.manager.get_profile(request.profile_id)
+        project_path = _resolved_project_path(request.project_path)
         now = utc_now()
         run = AgentRun(
             id=new_id("agent"),
@@ -132,7 +137,10 @@ class HarnessService:
             created_at=now,
             updated_at=now,
             workspace_id=request.workspace_id,
+            project_path=project_path,
+            profile_id=request.profile_id,
             parent_run_id=request.parent_run_id,
+            source_surface=request.source_surface,
             tool_mode=request.tool_mode,
             tool_mode_label=label_for_tool_mode(request.tool_mode),
             recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
@@ -180,12 +188,17 @@ class HarnessService:
         try:
             model = self._model_factory(run, http_sink)
             fixtures = run.recorded_fixtures if run.tool_mode is ToolMode.recorded_tool else None
+            agent_kwargs: dict[str, Any] = {}
+            backend = _project_backend(run)
+            if backend is not None:
+                agent_kwargs["backend"] = backend
             agent = create_deep_agent(
                 model=model,
                 tools=tools_for_names(run.presented_tools, recorded_fixtures=fixtures),
                 system_prompt=run.system_prompt,
                 middleware=[WorkbenchHarnessMiddleware(run, http_sink)],
                 name="workbench-embedded-harness",
+                **agent_kwargs,
             )
             config = _invoke_config(run)
             for chunk in agent.stream(
@@ -295,6 +308,27 @@ class HarnessService:
             protected_instruction_version_refs=request.protected_instruction_version_refs,
             knowledge_version_refs=request.knowledge_version_refs,
         )
+
+
+def _resolved_project_path(project_path: str | None) -> str | None:
+    if not project_path:
+        return None
+    path = Path(project_path).expanduser().resolve()
+    if not path.is_dir():
+        raise HarnessError(
+            "project_path is not a directory. Filesystem tools target project storage.",
+            code="project_missing",
+            status_code=400,
+        )
+    return str(path)
+
+
+def _project_backend(run: AgentRun) -> FilesystemBackend | None:
+    """Bind Deep Agents file tools to project storage (STATE-002)."""
+
+    if not run.project_path:
+        return None
+    return FilesystemBackend(root_dir=run.project_path, virtual_mode=True)
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

@@ -1,5 +1,7 @@
 import type {
   AgentRun,
+  ChatConversation,
+  ChatMessage,
   ContextCapture,
   Deployment,
   EngineMeasurement,
@@ -110,6 +112,40 @@ export const api = {
     }),
   agentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
+  createChatConversation: (payload: {
+    deployment_id: string;
+    profile_id?: string;
+    project_path?: string;
+    workspace_id?: string;
+  }) =>
+    request<ChatConversation>("/v1/chat/conversations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  chatConversations: () => request<ChatConversation[]>("/v1/chat/conversations"),
+  chatConversation: (id: string) => request<ChatConversation>(`/v1/chat/conversations/${id}`),
+  startChat: (
+    id: string,
+    payload: {
+      task: string;
+      presented_tools?: string[];
+      deployment_id?: string;
+      profile_id?: string;
+      project_path?: string;
+      workspace_id?: string;
+    },
+  ) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/start`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelChat: (id: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, { method: "POST" }),
+  replaceChatTranscript: (id: string, messages: ChatMessage[]) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/transcript`, {
+      method: "PUT",
+      body: JSON.stringify({ messages }),
+    }),
   createWorkspace: (display_name: string, files: Record<string, string>) =>
     request<LabWorkspace>("/v1/lab/workspaces", {
       method: "POST",

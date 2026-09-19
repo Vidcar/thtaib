@@ -6,7 +6,7 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 
 Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
 
-Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. The [AGT-001](modules/agents-workflows.md#agt-001) Chat surface is **in flight on [Issue #22](https://github.com/Vidcar/thtaib/issues/22)** — Agent-run is not Chat.
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22) — Agent-run is not Chat, and this is not finished Chat polish.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
