@@ -42,4 +42,4 @@ Every current requirement has one unique ID and one catalogue entry. Do not renu
 
 ## Additional working references
 
-Use [verification](verification.md), [repository setup](repository-setup.md), [decisions](decisions/README.md), [source provenance](sources/README.md), [upstream links](sources/upstream.md) and [templates](templates/README.md). Nothing in this pack claims that application tests or product source paths already exist.
+Use [verification](verification.md), [repository setup](repository-setup.md), [decisions](decisions/README.md), [source provenance](sources/README.md), [upstream links](sources/upstream.md), [templates](templates/README.md) and [the glossary](../docs/glossary.md). Bound application paths and registered commands exist where the catalogue and [commands](commands.md) say they do; that is not a `verified` product claim and is not a second copy of [AGENTS.md](../AGENTS.md).

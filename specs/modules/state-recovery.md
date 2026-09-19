@@ -20,6 +20,8 @@ Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an applicatio
 
 Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
 
+Application records on main are JSON files under `%LOCALAPPDATA%\LocalAIWorkbench\state\` and sibling product directories. The dual application/checkpoint SQLite pair is not implemented; that remains [STATE-001](#state-001) and [OQ-004](../open-questions.md#oq-004), not an approved waiver. Deep Agents file tools that target project storage for Chat remain [STATE-002](#state-002) and are in flight on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). Current harness tools are visibility-only (`echo`, `time_now`).
+
 ## Requirements and acceptance checks
 
 <a id="state-001"></a>
@@ -74,4 +76,4 @@ These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation and [OQ-005](../open-questions.md#oq-005) for remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.
+Resolve [OQ-004](../open-questions.md#oq-004) for identities/state transitions/effect reconciliation and [OQ-005](../open-questions.md#oq-005) for remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. External-effect rollback stays [STATE-004](#state-004). No exactly-once guarantee, snapshot implementation or migration library is selected by revision 0.5.

@@ -6,6 +6,8 @@ All entries are initially **open**. Owners below are responsibility roles, not a
 
 Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
 
+Issue #23 audited this list against revision 0.5 and implemented main work. [OQ-007](#oq-007) CUDA pin / default GPU profile / valued `flash_attn` mapping **landed as a partial** on [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24); the remainder stays open. The [AGT-001](modules/agents-workflows.md#agt-001) Chat surface is **in flight on [Issue #22](https://github.com/Vidcar/thtaib/issues/22)** — Agent-run is not Chat.
+
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
 
@@ -69,7 +71,7 @@ Issue #15 locked these defaults for LAB-001…004 and STATE-003. They are record
 - Application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary (fail if live tools are still writing).
 - Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Not git-commit-as-snapshot.
 - Restore into a new workspace directory; linked branch run; never overwrite the parent.
-- Include allowlisted project files, task, profile/deployment ids, dependency versions, memory/skill version refs, tool fixtures and acceptance checks.
+- Include allowlisted project files, task, profile/deployment ids, dependency versions, memory/skill/protected-instruction version refs, tool fixtures and acceptance checks.
 - Exclude secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
 - No full environment restore this milestone; record exclusions.
 
@@ -113,7 +115,7 @@ Implemented now, without closing this question:
 
 Multi-model routing and hybrid local GGUF / remote OpenAI-compatible deployments are [OQ-013](#oq-013). The model manager remains the owner; do not add a second inference engine.
 
-**Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch exercised through the same recorded path on David-PC.
+**Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch exercised through the same recorded path on David-PC. CUDA/GPU/`flash_attn` product UAT remains [Issue #21](https://github.com/Vidcar/thtaib/issues/21) on David-PC; this pack audit is not that evidence.
 
 <a id="oq-008"></a>
 ## OQ-008: Registry schemas, compatibility and extension loading
@@ -144,9 +146,11 @@ Voice and multimodal product surfaces stay optional and experimental ([ARCH-007]
 <a id="oq-010"></a>
 ## OQ-010: Product verification commands and test environments
 
+**Status:** specification-integrity commands and some product commands are registered in [commands](commands.md). Backend unittest and desktop type-check/build exist as local entry points. They are not catalogue `verified` evidence and are not additional required GitHub status names until a workflow is added. This does not close the question.
+
 **Owner:** Boundary implementer; architecture maintainers approve stage evidence. **Blocks:** declaring the relevant implementation or build stage verified.
 
-Choose actual unit/contract/integration test locations and commands, platform/environment manifests, live-tool versus recorded fixtures, generated-contract freshness and import-boundary checks. Define repeatable starting inputs and evidence retention without storing secrets or model weights in this pack. No application test framework is supplied or presumed here.
+Remaining choices: contract-generation freshness, import-boundary checks, shared contract tests, integration-test locations, live-tool versus recorded fixtures as product gates, platform/environment manifests, and David-PC UAT environments. Define repeatable starting inputs and evidence retention without storing secrets or model weights in this pack. Do not invent those missing gates as silent defaults.
 
 **Evidence needed:** registered commands executed against actual code, negative/failure cases, and traceable results at a concrete revision. A green specification-integrity workflow is not stage acceptance.
 

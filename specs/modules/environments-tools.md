@@ -63,3 +63,5 @@ Treat the source's beta Deep Agents interpreter integration as a separate option
 ## Unresolved details
 
 [OQ-003](../open-questions.md#oq-003) blocks real worker access until provisioning, isolation, identities and permissions are defined; it is also the tool sandbox-isolation question, and MCP is not isolation. [OQ-004](../open-questions.md#oq-004) covers effect acknowledgement/recovery. [OQ-009](../open-questions.md#oq-009) covers optional interpreter and interactive-host details and whether MCP is the default tool bus or optional.
+
+Current harness tools are visibility-only (`echo`, `time_now`) under [AGT-005](agents-workflows.md#agt-005). Deep Agents filesystem tools that target project storage for Chat are [STATE-002](state-recovery.md#state-002) and are in flight on [Issue #22](https://github.com/Vidcar/thtaib/issues/22). That is not a worker-isolation decision and does not reopen this module as a second sandbox owner. ComfyUI, MCP Apps and interpreter orchestration remain unimplemented.

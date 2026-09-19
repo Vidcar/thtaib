@@ -26,6 +26,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | last write wins | Optimistic concurrency / explicit conflict |
 | close OQ-006 | Partial OQ-006 defaults only (store; not RAG / cross-surface sharing) |
 | Chat memory UI | Out of scope |
+| Chat shipped / Chat tab done | AGT-001 Chat surface remains open (Issue #22) |
+| Agent-run is Chat | Agent-run debug panel is not Chat |
+| CUDA 13.4 / GPU default / valued flash_attn landed | partial OQ-007 landed on #21; remainder open |
+| bare --flash-attn is the mapping | valued `--flash-attn on` / `off` / `auto` only (#21) |
 | MCP is the bus | open — default tool bus vs optional (OQ-009 / OQ-003) |
 | Approvals = LangGraph interrupt | OQ-011 — durable product Approvals inbox ≠ framework interrupt |
 | LangSmith for observability | OQ-012 — run observability outside Lab (local; LangSmith not home) |
@@ -94,6 +98,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Managed inference (MOD-001…004)** is backend-owned bundle import, GGUF inspect, settings bags, and deployment lifecycle. The desktop exposes Models and Deployments controls only.
 
 **Embedded harness (AGT-001)** is the backend start / observe / cancel API that runs one Deep Agents task. It is not Chat and not Builder. A thin desktop Agent-run debug panel may call that API.
+
+**AGT-001 Chat surface remains open (Issue #22)** is the debug-quality Chat tab that must call this same harness. Agent-run is not that surface. Do not claim Chat shipped until #22 lands.
+
+**Partial OQ-007 landed on #21; remainder open** means Windows CUDA 13.4 pin, default GPU profile and valued `flash_attn` mapping landed with [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24). Full compatibility evidence, capability claims and complete setting-mapping verification stay [OQ-007](../specs/open-questions.md#oq-007).
 
 **MOD-005 adapter** is the narrow LangChain ChatOpenAI client aimed at a model-manager deployment OpenAI-compatible endpoint. The adapter starts no inference process.
 

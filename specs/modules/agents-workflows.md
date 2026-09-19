@@ -77,3 +77,7 @@ Attach executable checks, expected artifacts and review criteria where a task ha
 ## Unresolved details
 
 Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG and cross-surface sharing; Issue #17 locked only the [STATE-005 store defaults](state-recovery.md#locked-milestone-defaults-issue-17-partial-oq-006) that [AGT-004](#agt-004) consumes. [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox. [OQ-015](../open-questions.md#oq-015) covers workflow import/export. [OQ-016](../open-questions.md#oq-016) covers Builder canvas and chrome UX. Evaluate optional middleware under [OQ-009](../open-questions.md#oq-009). Exact constructor arguments, graph APIs and middleware defaults are version-specific and are not prescribed here.
+
+The [AGT-001](#agt-001) Chat surface required by its acceptance check is **not** shipped. Issue #12 delivered the embedded harness and an Agent-run debug panel. [Issue #22](https://github.com/Vidcar/thtaib/issues/22) owns the minimal Chat tab. Agent-run is not Chat.
+
+[WF-001](#wf-001) and [WF-002](#wf-002) stay unimplemented until Builder exists; look-and-feel remains [OQ-016](../open-questions.md#oq-016). Do not treat the Agent-run panel as Builder.
