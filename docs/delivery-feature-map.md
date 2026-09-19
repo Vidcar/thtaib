@@ -106,10 +106,10 @@ Honest map only. Module requirements are `partial` or `planned` in [the catalogu
 
 ### Agent Chat
 
-- **Modules:** [AGT-001](../specs/modules/agents-workflows.md#agt-001), [AGT-002](../specs/modules/agents-workflows.md#agt-002), [AGT-004](../specs/modules/agents-workflows.md#agt-004); [STATE-001](../specs/modules/state-recovery.md#state-001)/[002](../specs/modules/state-recovery.md#state-002); [API-001](../specs/modules/backend-desktop.md#api-001)/[004](../specs/modules/backend-desktop.md#api-004); [ARCH-003](../specs/architecture.md#arch-003); [MOD-005](../specs/modules/models.md#mod-005).
+- **Modules:** [AGT-001](../specs/modules/agents-workflows.md#agt-001), [AGT-002](../specs/modules/agents-workflows.md#agt-002), [AGT-004](../specs/modules/agents-workflows.md#agt-004); [STATE-001](../specs/modules/state-recovery.md#state-001)/[002](../specs/modules/state-recovery.md#state-002); [API-001](../specs/modules/backend-desktop.md#api-001)/[004](../specs/modules/backend-desktop.md#api-004); [ARCH-003](../specs/architecture.md#arch-003); [MOD-005](../specs/modules/models.md#mod-005). High-level continuity + UX beyond debug: [Issue #52](https://github.com/Vidcar/thtaib/issues/52) section in [agents and workflows](../specs/modules/agents-workflows.md#high-level-agent-chat-continuity-issue-52) (conversation ↔ execution thread ↔ run; continue vs fresh; history-edit / model-switch effects; what reaches the harness). Persistence intersection: [state and recovery](../specs/modules/state-recovery.md#high-level-agent-chat-continuity-issue-52). That spec does not close [OQ-004](../specs/open-questions.md#oq-004) and is not an implementation.
 - **ADRs:** [ADR-0002](../specs/decisions/ADR-0002-contract-authoring.md) (`X-Workbench-Local-Token`).
 - **OQs:** [OQ-002](../specs/open-questions.md#oq-002) partial (#40); [OQ-004](../specs/open-questions.md#oq-004) partial (#27 / #31 / #42); [OQ-006](../specs/open-questions.md#oq-006) store-only (#17).
-- **Issues:** closed [#12](https://github.com/Vidcar/thtaib/issues/12), [#22](https://github.com/Vidcar/thtaib/issues/22), [#27](https://github.com/Vidcar/thtaib/issues/27), [#40](https://github.com/Vidcar/thtaib/issues/40), [#41](https://github.com/Vidcar/thtaib/issues/41), [#42](https://github.com/Vidcar/thtaib/issues/42). Open tracker [#37](https://github.com/Vidcar/thtaib/issues/37) areas 1–2 (continuity; effective setup). Debug-quality Chat is not polish.
+- **Issues:** closed [#12](https://github.com/Vidcar/thtaib/issues/12), [#22](https://github.com/Vidcar/thtaib/issues/22), [#27](https://github.com/Vidcar/thtaib/issues/27), [#40](https://github.com/Vidcar/thtaib/issues/40), [#41](https://github.com/Vidcar/thtaib/issues/41), [#42](https://github.com/Vidcar/thtaib/issues/42). High-level continuity / UX spec [#52](https://github.com/Vidcar/thtaib/issues/52). Open tracker [#37](https://github.com/Vidcar/thtaib/issues/37) areas 1–2 (continuity impl; effective setup). Continuity implementation is [#56](https://github.com/Vidcar/thtaib/issues/56). Debug-quality Chat is not polish.
 
 ### Project tools and workers
 
@@ -175,7 +175,7 @@ Write these as focused docs/ADR/OQ resolutions **before** treating the matching 
 | Gap | Feature home | Why it is a gap |
 | --- | --- | --- |
 | Model Lab UX / trait catalogue | Model Lab | No surface, runner list, or evidence shape for hardware-local traits (speed, context, MTP, quant, concurrent chats, needle, tools, vision). [LAB-001](../specs/modules/lab-evaluation.md#lab-001) only splits engine measurements from task evaluation. |
-| Agent Chat UX | Agent Chat | [#22](https://github.com/Vidcar/thtaib/issues/22) is debug-quality. Continuity (conversation ↔ thread ↔ run) and history-edit / model-switch effects are [#37](https://github.com/Vidcar/thtaib/issues/37) area 1, not a Chat polish spec. |
+| Agent Chat UX | Agent Chat | High-level continuity + UX beyond debug is specified on [#52](https://github.com/Vidcar/thtaib/issues/52) ([agents and workflows](../specs/modules/agents-workflows.md#high-level-agent-chat-continuity-issue-52)). [#22](https://github.com/Vidcar/thtaib/issues/22) remains debug-quality. Continuity implementation is [#37](https://github.com/Vidcar/thtaib/issues/37) area 1 / [#56](https://github.com/Vidcar/thtaib/issues/56). This is not Chat polish and not effective setup ([#53](https://github.com/Vidcar/thtaib/issues/53)). |
 | Tools / workers surface | Project tools and workers | Enabled catalogue is visibility + filesystem tools. No product surface for authorising command/browser/graphical workers. [OQ-003](../specs/open-questions.md#oq-003) still blocks real workers. |
 | Builder beyond chrome ADR | Builder | [ADR-0003](../specs/decisions/ADR-0003-builder-v1-chrome.md) is presentation. Canvas, node library, run-inspector wiring, and product UAT need an implementation Issue with matching spec — not a chrome-only claim. |
 | Access / connectors | Access, environments and connectors | No UX for approvals, environment policy, or guided add-tool/connectors. [OQ-011](../specs/open-questions.md#oq-011) and [OQ-003](../specs/open-questions.md#oq-003) are unresolved. |
@@ -205,9 +205,9 @@ Per-feature reminders, not the ordered next work — that is [Next path](#next-p
 
 ### Agent Chat (Milestone #4)
 
-- Continuity: conversation ↔ execution-thread ↔ run ([#37](https://github.com/Vidcar/thtaib/issues/37) area 1).
-- Effective setup: profile and knowledge actually reach the harness ([#37](https://github.com/Vidcar/thtaib/issues/37) area 2).
-- Agent Chat UX beyond debug-quality [#22](https://github.com/Vidcar/thtaib/issues/22) — after the two slices above, not instead of them.
+- Continuity implementation: conversation ↔ execution-thread ↔ run against the [#52](https://github.com/Vidcar/thtaib/issues/52) high-level mapping ([#37](https://github.com/Vidcar/thtaib/issues/37) area 1 / [#56](https://github.com/Vidcar/thtaib/issues/56)).
+- Effective setup: profile and knowledge actually reach the harness ([#37](https://github.com/Vidcar/thtaib/issues/37) area 2 / [#53](https://github.com/Vidcar/thtaib/issues/53) spec). Do not merge with this continuity spec.
+- Agent Chat UX beyond debug-quality [#22](https://github.com/Vidcar/thtaib/issues/22) — high-level IA is on [#52](https://github.com/Vidcar/thtaib/issues/52); polish still follows the two implementation slices above, not instead of them.
 - Event reconnection remainder ([OQ-002](../specs/open-questions.md#oq-002)) as its own slice when continuity needs it.
 
 ### Project tools and workers (Milestone #5)
