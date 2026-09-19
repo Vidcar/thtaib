@@ -4,9 +4,9 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
-## 2026-09-19 — Chat without a project; CompositeBackend scratch isolation
+## 2026-09-19 — PR #85: Chat without a project; CompositeBackend scratch isolation
 
-Authority: David, product owner (Chat without a project folder, Project chat 2026-09-19); technical owner decision (harness-internal files stay out of the project, 2026-09-19). Closes [DEV-003](../deviations.md#dev-003) and [DEV-004](../deviations.md#dev-004). Requirements: AGT-001, AGT-005, STATE-002, API-004.
+Authority: [PR #85](https://github.com/Vidcar/thtaib/pull/85); David, product owner (Chat without a project folder, Project chat 2026-09-19); technical owner decision (harness-internal files stay out of the project, 2026-09-19). Closes [DEV-003](../deviations.md#dev-003) and [DEV-004](../deviations.md#dev-004). Requirements: AGT-001, AGT-005, STATE-002, API-004.
 
 - Chat create/start accept a missing project. The run's enabled list is visibility tools only (`echo`, `time_now`); `GET /v1/agent-tools` still returns the full catalogue. The Chat view reports `filesystem_tools_available` and conversation-scoped `enabled_tools`. Requesting a filesystem tool without a project is `filesystem_requires_project` (400). Desktop Start works with an empty path and does not invent a project.
 - Live harness runs attach Deep Agents 0.7.15 `CompositeBackend(default=project or StateBackend, routes={"/large_tool_results/": …, "/conversation_history/": …}, artifacts_root="/")`. Internals persist under `{data_root}/state/harness/{thread_id}/`. Project file tools keep the `/` virtual root (not the live-docs `/workspace/` remount). Recorded-tool mode still attaches no live backend.
