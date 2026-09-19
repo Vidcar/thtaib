@@ -72,4 +72,5 @@ The [specification index](specs/README.md) is the behavioural home. To check pac
 | Specification index | [specs/README.md](specs/README.md) |
 | Commands | [specs/commands.md](specs/commands.md) |
 | Glossary | [docs/glossary.md](docs/glossary.md) |
+| Delivery feature map | [docs/delivery-feature-map.md](docs/delivery-feature-map.md) |
 | Open questions | [specs/open-questions.md](specs/open-questions.md) |

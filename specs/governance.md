@@ -26,7 +26,7 @@ No blanket rule requires a meaningless documentation edit for every code change.
 
 ## Project Status and delivery Milestones
 
-**Project Status** is agent pipeline state only. **Milestone** names the plain-English delivery the Issue belongs to. They are not interchangeable. Spec sets the Milestone and Project Status=Ready when opening a Ready Issue. Builder, Reviewer, UAT and Release keep Status accurate as the Issue moves; they do not invent parallel boards, due dates, sprints or a second Status column. One Milestone per delivery; close it when that delivery’s Issues are done. A Tracking Issue stays open until the whole proof is done; focused Issues link to it and share the Milestone. Locked terms and rejected phrases are in [the glossary](../docs/glossary.md#issue-tracking).
+**Project Status** is agent pipeline state only. **Milestone** names the plain-English delivery the Issue belongs to. They are not interchangeable. Spec sets the Milestone and Project Status=Ready when opening a Ready Issue. Builder, Reviewer, UAT and Release keep Status accurate as the Issue moves; they do not invent parallel boards, due dates, sprints or a second Status column. One Milestone per delivery; close it when that delivery’s Issues are done. A Tracking Issue stays open until the whole proof is done; focused Issues link to it and share the Milestone. Feature delivery homes are Milestones #3–#12; the four-layer plan is the [delivery feature map](../docs/delivery-feature-map.md). Locked terms and rejected phrases are in [the glossary](../docs/glossary.md#issue-tracking).
 
 ## Keep evidence from going stale
 

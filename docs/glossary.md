@@ -73,6 +73,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | milestone with a deadline | Delivery Milestone (no due date) |
 | sprint / velocity | Out of scope (not how Issues are tracked) |
 | cryptic Milestone title | Plain-English delivery name |
+| Soft “I can…” as Milestone title | Feature name as title; done-when in description |
+| Lab = try-before-commit / job replay | Model Lab vs Task cases and replay |
+| Model Lab is task replay | Model Lab ≠ Task cases and replay |
+| One Milestone per OQ | Feature Milestones only |
 
 ## Product and layout
 
@@ -118,7 +122,13 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **Partial OQ-006 defaults only (store; not RAG / cross-surface sharing)** means Issue #17 locked the STATE-005 store. Retrieval/RAG and whether knowledge is shared across Chat, Lab and Builder stay open.
 
-**Lab reuse** is capture → restore → rerun against the shared Deep Agents harness. It is not a Lab agent and not a second evaluation loop.
+<a id="model-lab"></a>
+**Model Lab** is hardware-local **model trait / capability testing** on David’s machine. Illustrative kinds: speed/throughput; prefill/decode at context lengths; MTP; quantisation impact; concurrent conversations; memory/needle; tool calling; vision — the catalogue can grow. It is **not** save-a-job-and-replay. Separate delivery feature from Task cases and replay ([LAB-001](../specs/modules/lab-evaluation.md#lab-001) separation). See the [delivery feature map](delivery-feature-map.md).
+
+<a id="task-cases-and-replay"></a>
+**Task cases and replay** is save a real run as a case, restore starting inputs, rerun recorded-tool vs live-tool, and compare evidence ([LAB-002](../specs/modules/lab-evaluation.md#lab-002)…[004](../specs/modules/lab-evaluation.md#lab-004) style). Separate delivery feature from Model Lab. Pack module [lab-evaluation](../specs/modules/lab-evaluation.md) may document both; product Milestones must not blur them.
+
+**Lab reuse** is the Task cases and replay path: capture → restore → rerun against the shared Deep Agents harness. It is not Model Lab, not a Lab agent, and not a second evaluation loop.
 
 **Application directory snapshot** is the Issue #15 snapshot: an application-owned copy of allowlisted project files at a quiescent boundary, stored under `cases\` and `snapshots\`. It is not a git commit.
 
@@ -171,6 +181,10 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Project Status** is the GitHub Project field for **agent pipeline state only**: Backlog, Ready, In progress, Review, UAT, Done. Keep it accurate when the Issue moves. It is not a delivery label and not a second board.
 
 **Milestone** is which plain-English **delivery** the Issue belongs to — what David is getting. Optional short description; **no due date**. It is not a second Status board, not a sprint, and not a velocity target. One Milestone per delivery; close it when that delivery’s Issues are done. Do not keep a forever-open “everything” Milestone. Title it so David can scan the delivery (for example “End-to-end gaps — Slice 1: desktop trust, contracts, cancel honesty”), not a cryptic code. Put a technical hint in the Issue title if needed.
+
+**Feature name as title; done-when in description** means the ten feature Milestones (#3–#12) keep their GitHub titles. Soft “I can…” slogans are not Milestone titles. Done-when text lives on the Milestone description. The four-layer plan is the [delivery feature map](delivery-feature-map.md).
+
+**Feature Milestones only** means product delivery uses those ten feature homes, not one Milestone per open question. Process Milestones (standing rules, this map, a Slice bundle) stay process — they are not a second feature list.
 
 **Tracking Issue** is an epic/checklist. It stays open until the whole proof is done. Focused Issues link to it **and** share its Milestone.
 
