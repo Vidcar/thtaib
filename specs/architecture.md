@@ -85,4 +85,4 @@ Background consolidation, beta rubric/interpreter integrations, MCP Apps and voi
 
 Use [models](modules/models.md), [agents and workflows](modules/agents-workflows.md), [environments and tools](modules/environments-tools.md), [state and recovery](modules/state-recovery.md), [registry](modules/registry.md), [backend and desktop](modules/backend-desktop.md), and [Lab integration](modules/lab-evaluation.md).
 
-Exact technical choices still to be made are in [open questions](open-questions.md). Implementation status and evidence belong only in [the catalogue](catalog.json); this document describes intended architecture.
+Exact technical choices still to be made are in [open questions](open-questions.md). Builder canvas chrome and per-node override presentation remain [OQ-016](open-questions.md#oq-016); [ARCH-003](#arch-003) still prefers shared profiles and does not select that chrome. Implementation status and evidence belong only in [the catalogue](catalog.json); this document describes intended architecture.

@@ -4,7 +4,7 @@ These are deliberately unresolved. They are not permission for an agent to choos
 
 All entries are initially **open**. Owners below are responsibility roles, not assertions that particular accounts have been assigned. Resolve an entry by retaining its ID, recording the approved ADR/specification change and linking the evidence; do not delete its history.
 
-Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
+Later-decision product topics are recorded here so they stay visible and unresolved: amend [OQ-003](#oq-003), [OQ-006](#oq-006), [OQ-008](#oq-008) and [OQ-009](#oq-009); add [OQ-011](#oq-011) through [OQ-015](#oq-015). Builder canvas and chrome UX is [OQ-016](#oq-016). Recording a topic is not a selection, a silent default, or an ADR. Real choices later use [the decision template](templates/decision.md) and maintainer approval.
 
 <a id="oq-001"></a>
 ## OQ-001: Repository layout, versions and reproducible setup
@@ -53,7 +53,7 @@ This is the isolation question. Tool/worker sandbox isolation — what a disposa
 
 Define identities, parent/child linkage, thread/checkpoint namespaces, event ordering/reconnection, state transitions and actual stop reasons. Map framework limits and interrupts to the pinned versions. Define acknowledgement/reconciliation for external effects and when retry, reconnect, resume, restart or human intervention is safe. Do not claim an exactly-once transaction across databases, files and services.
 
-A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Those questions do not reopen this run-state contract.
+A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is not that inbox. Run observability outside Lab is [OQ-012](#oq-012). Builder canvas run affordances (Run/stop; active step on the canvas versus a run inspector) are [OQ-016](#oq-016). Those questions do not reopen this run-state contract.
 
 **Evidence needed:** cancellation and crash tests before/after an external effect and checkpoint boundary, plus continuation beyond a measured upstream limit without duplicates.
 
@@ -132,7 +132,7 @@ Choose actual unit/contract/integration test locations and commands, platform/en
 
 **Owner:** Backend/desktop and agent/workflow boundaries jointly; backend maintains the shared contract. **Blocks:** presenting a durable product Approvals inbox, or treating a framework interrupt as that inbox.
 
-Human-in-the-loop approvals that survive reconnect, restart and a closed editor remain unresolved as a product surface. LangGraph interrupts and Deep Agents intervention hooks are framework mechanisms; they are not the Approvals inbox. [OQ-004](#oq-004) covers run-state, interrupt mapping and when human intervention is safe; it does not select inbox persistence, notification, or desktop presentation. [REG-004](modules/registry.md#reg-004) still requires one run hierarchy and that approvals cannot be bypassed; it does not design the inbox.
+Human-in-the-loop approvals that survive reconnect, restart and a closed editor remain unresolved as a product surface. LangGraph interrupts and Deep Agents intervention hooks are framework mechanisms; they are not the Approvals inbox. [OQ-004](#oq-004) covers run-state, interrupt mapping and when human intervention is safe; it does not select inbox persistence, notification, or desktop presentation. [REG-004](modules/registry.md#reg-004) still requires one run hierarchy and that approvals cannot be bypassed; it does not design the inbox. Builder canvas chrome is [OQ-016](#oq-016); it is not this inbox.
 
 **Evidence needed:** an approval that remains visible and actionable after client disconnect and backend restart, distinguished from a transient framework interrupt, with denied bypass through agent, workflow and panel paths.
 
@@ -171,3 +171,26 @@ Datasets, scorers, compare-runs presentation and export beyond the Lab's Inspect
 Import and export of workflow definitions — including LangGraph JSON and any later adapters — remain unresolved. This is a definition interchange question, not a second runtime: LangGraph remains the outer-workflow owner and React Flow remains the definition editor. [OQ-008](#oq-008) covers registry schemas, version compatibility and discovery; it does not select an interchange format. Do not treat an imported graph as executable authority without backend validation.
 
 **Evidence needed:** a round-trip or rejected import against a registered definition, with configuration links still excluded from execution sequencing ([WF-001](modules/agents-workflows.md#wf-001)).
+
+<a id="oq-016"></a>
+## OQ-016: Builder canvas and chrome UX
+
+**Owner:** Desktop and agents/workflows boundaries jointly. **Blocks:** shipping Builder as a finished product surface.
+
+Builder look-and-feel and canvas chrome remain unresolved. Recording this question is not a selection, a silent default, or an ADR. Do not invent chrome so implementation can proceed as if finished, and do not treat a missing mockup as a reason to leave the question unrecorded.
+
+The following are unknowns. None is selected:
+
+1. Canvas chrome — grid, zoom, minimap, selection and multi-select.
+2. Left icon rail information architecture and node-library search.
+3. Node anatomy — title, ports, compact versus expanded presentation, and where prompt and model live.
+4. Edge presentation — colour or label by kind. This is presentation only; it is not a second type system.
+5. Run affordances — Run and stop controls, and whether an active step is shown on the canvas, in a run inspector, or both. Run-state semantics stay [OQ-004](#oq-004). A durable Approvals inbox stays [OQ-011](#oq-011).
+6. Visual distinction between configuration links and workflow links. [WF-001](modules/agents-workflows.md#wf-001) already locks the behaviour: configuration links must not become executable workflow steps. How that distinction looks on the canvas is unresolved.
+7. Profile and deployment binding versus per-node overrides. [ARCH-003](architecture.md#arch-003) already prefers shared profiles across Models, Lab, Chat and Builder. Do not silently default every slider on every node, and do not invent a hidden per-node profile.
+
+TooGraph-ish cues — an icon rail, a searchable node library, compact nodes, coloured or labelled edges, a minimap — are **inspiration only**. TooGraph is not a pixel target and not a fork. Do not copy CDF/TooGraph, and do not treat a visual mock as a working integration.
+
+React Flow remains the definition editor; the visual graph is not executable authority ([API-002](modules/backend-desktop.md#api-002)). The locked stack is not reopened.
+
+**Evidence needed:** a maintainer-approved chrome decision, recorded as an ADR and matching specification, before Builder is presented as a finished product surface. A TooGraph screenshot, mockup resemblance, or unpublished preference is not that evidence.
