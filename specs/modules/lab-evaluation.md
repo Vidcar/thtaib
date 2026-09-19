@@ -10,7 +10,7 @@ llama-bench measures engine performance. Inspect AI supplies task-evaluation bui
 
 A captured case links initial project snapshot, task, profiles, dependency versions, selected memory/skills, tool fixtures and acceptance checks. A case result links applied settings, deviations, artifacts and executable/model-review outcomes. Exact dataset/scorer adapters are not selected here.
 
-The Lab calls the same agent harness and model/profile paths as normal work. It does not add an evaluation-specific agent loop. Restoring an input state does not guarantee an identical model output.
+The Lab calls the same agent harness and model/profile paths as normal work. It consumes the shared [effective setup contract](../architecture.md#effective-setup-contract); it does not keep a hidden Lab profile or treat stored ids as applied bags. It does not add an evaluation-specific agent loop. Restoring an input state does not guarantee an identical model output. This is Task cases and replay, not Model Lab.
 
 ## Lifecycle and failure
 

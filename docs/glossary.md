@@ -53,6 +53,9 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | Builder shipped | unfinished Builder surface (OQ-016 remainder) |
 | canvas config edge | node badge/popover for config (WF-001 unchanged) |
 | hidden per-node profile | inherit workflow profile; explicit override only (ARCH-003 unchanged) |
+| selected profile is applied | selected ≠ loaded ≠ applied (effective setup) |
+| shared profile name means same settings | ARCH-003 — compare applied bags, not the name |
+| add RAG to make a profile work | durable knowledge version refs (STATE-005); not RAG |
 | Chat agent / Builder agent graph | embedded harness + MOD-005 (not Chat or Builder) |
 | complete real agent work | harness + MOD-005 against managed inference |
 | second agent loop | Deep Agents owns the loop; application owns config/lifecycle |
@@ -186,6 +189,13 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Model bundle** is the canonical recorded manifest (quant, shards, companions, HF repo+revision, hashes, paths). It is not “the model in Chat”.
 
 **Running deployment** is a live managed llama-server process or a connected OpenAI-compatible endpoint. A saved profile is not a running deployment.
+
+<a id="effective-setup"></a>
+**Effective setup** is the shared [ARCH-003](../specs/architecture.md#arch-003) contract: resolve settings, knowledge/skill refs, tools and policy **before** a run; the harness and inspector show the same facts; startup, per-request and agent bags stay separate; **selected ≠ loaded ≠ applied**. Chat, Lab and Builder consume it. It is not a RAG product and not an apply-for-real implementation claim ([Issue #53](https://github.com/Vidcar/thtaib/issues/53) documents it; [Issue #37](https://github.com/Vidcar/thtaib/issues/37) area 2 still tracks proving it).
+
+**Selected ≠ loaded ≠ applied** means a named profile or knowledge version (selected) is not the resident process or backend content (loaded) and not the values that reached the request (applied). Recording an id is selected only.
+
+**Startup / per-request / agent bags** are the three [MOD-003](../specs/modules/models.md#mod-003) settings groups. Startup applies when a deployment starts or attaches; selecting a profile does not rewrite an already-running server's startup.
 
 **Connected endpoint** attaches an existing service with `scope=connected`. The workbench does not start, stop, or kill that external process.
 

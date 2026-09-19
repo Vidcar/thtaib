@@ -51,6 +51,8 @@ Use llama.cpp for supported inference, Deep Agents for each agent loop, LangGrap
 
 Models, Lab, Chat and Builder share configurations, runs and artifacts. A surface must not substitute its own hidden profile or report equivalence solely from a shared profile name.
 
+The shared high-level contract is [effective setup](#effective-setup-contract). Selecting a profile or knowledge version is not proof it was loaded or applied.
+
 **Acceptance:** Carry a profile between the relevant surfaces and compare the recorded applied settings, deployment and environment, including visible differences.
 
 <a id="arch-004"></a>
@@ -85,6 +87,105 @@ Background consolidation, beta rubric/interpreter integrations, MCP Apps and voi
 
 Use [models](modules/models.md), [agents and workflows](modules/agents-workflows.md), [environments and tools](modules/environments-tools.md), [state and recovery](modules/state-recovery.md), [registry](modules/registry.md), [backend and desktop](modules/backend-desktop.md), and [Lab integration](modules/lab-evaluation.md).
 
-Exact technical choices still to be made are in [open questions](open-questions.md). Builder v1 chrome is recorded in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the [OQ-016](open-questions.md#oq-016) remainder is the unfinished Builder surface, not a reopen of that chrome. [ARCH-003](#arch-003) still prefers shared profiles; v1 chrome does not change that behaviour. Implementation status and evidence belong only in [the catalogue](catalog.json); this document describes intended architecture.
+Exact technical choices still to be made are in [open questions](open-questions.md). Builder v1 chrome is recorded in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md); the [OQ-016](open-questions.md#oq-016) remainder is the unfinished Builder surface, not a reopen of that chrome. [ARCH-003](#arch-003) still prefers shared profiles; the shared rule is the [effective setup contract](#effective-setup-contract). v1 chrome does not change that behaviour. Implementation status and evidence belong only in [the catalogue](catalog.json); this document describes intended architecture.
 
-On main after Issue #23's inspection: one backend and one desktop scaffold, managed inference, the embedded harness, Lab reuse, durable knowledge, and the Issue #21 Windows CUDA 13.4 pin / default GPU profile / valued `flash_attn` mapping. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22); it is not finished Chat polish and not Builder. Those CUDA defaults do not close [OQ-007](open-questions.md#oq-007). The dual application/checkpointer SQLite pair and app-owned run→checkpoint-id linkage land with [Issue #27](https://github.com/Vidcar/thtaib/issues/27) as a partial [OQ-004](open-questions.md#oq-004). [Issue #31](https://github.com/Vidcar/thtaib/issues/31) lands [MOD-006](modules/models.md#mod-006) provenance-capable records (still not closing OQ-007) and [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety (still not closing OQ-004 identities, event-order or exactly-once). [Issue #35](https://github.com/Vidcar/thtaib/issues/35) lands the [WF-001](modules/agents-workflows.md#wf-001) backend definition compiler (configuration links resolve setup only; they are not executable steps). That is not a Builder-shipped claim and does not reopen [ARCH-003](#arch-003). [WF-002](modules/agents-workflows.md#wf-002) stays deferred. [Issue #41](https://github.com/Vidcar/thtaib/issues/41) / [ADR-0002](decisions/ADR-0002-contract-authoring.md) lands the generated `X-Workbench-Local-Token` envelope. [Issue #40](https://github.com/Vidcar/thtaib/issues/40) implements the partial [OQ-002](open-questions.md#oq-002) same-machine shared-secret + loopback bind (Electron main injects that header). That is not remote-backend support and does not close event reconnection. [Issue #42](https://github.com/Vidcar/thtaib/issues/42) lands harness cancel honesty (`cancel_requested` vs confirmed `cancelled`; no false quiescence) as a further [OQ-004](open-questions.md#oq-004) partial; it does not close identities, event-order or exactly-once.
+On main after Issue #23's inspection: one backend and one desktop scaffold, managed inference, the embedded harness, Lab reuse, durable knowledge, and the Issue #21 Windows CUDA 13.4 pin / default GPU profile / valued `flash_attn` mapping. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with [Issue #22](https://github.com/Vidcar/thtaib/issues/22); it is not finished Chat polish and not Builder. Those CUDA defaults do not close [OQ-007](open-questions.md#oq-007). The dual application/checkpointer SQLite pair and app-owned run→checkpoint-id linkage land with [Issue #27](https://github.com/Vidcar/thtaib/issues/27) as a partial [OQ-004](open-questions.md#oq-004). [Issue #31](https://github.com/Vidcar/thtaib/issues/31) lands [MOD-006](modules/models.md#mod-006) provenance-capable records (still not closing OQ-007) and [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety (still not closing OQ-004 identities, event-order or exactly-once). [Issue #35](https://github.com/Vidcar/thtaib/issues/35) lands the [WF-001](modules/agents-workflows.md#wf-001) backend definition compiler (configuration links resolve setup only; they are not executable steps). That is not a Builder-shipped claim and does not reopen [ARCH-003](#arch-003). [WF-002](modules/agents-workflows.md#wf-002) stays deferred. [Issue #41](https://github.com/Vidcar/thtaib/issues/41) / [ADR-0002](decisions/ADR-0002-contract-authoring.md) lands the generated `X-Workbench-Local-Token` envelope. [Issue #40](https://github.com/Vidcar/thtaib/issues/40) implements the partial [OQ-002](open-questions.md#oq-002) same-machine shared-secret + loopback bind (Electron main injects that header). That is not remote-backend support and does not close event reconnection. [Issue #42](https://github.com/Vidcar/thtaib/issues/42) lands harness cancel honesty (`cancel_requested` vs confirmed `cancelled`; no false quiescence) as a further [OQ-004](open-questions.md#oq-004) partial; it does not close identities, event-order or exactly-once. [Issue #53](https://github.com/Vidcar/thtaib/issues/53) records the high-level [effective setup contract](#effective-setup-contract) under [ARCH-003](#arch-003). That is a specification, not an apply-for-real implementation or catalogue `verified` claim.
+
+<a id="effective-setup-contract"></a>
+## Effective setup contract (Issue #53)
+
+This is the shared high-level contract for [ARCH-003](#arch-003). Chat, Lab and Builder consume the same resolved setup. Agent-run is not a second contract. This section does not author a wire schema, close [OQ-006](open-questions.md#oq-006) or [OQ-007](open-questions.md#oq-007), or select retrieval/RAG.
+
+Detailed homes stay where they are. This contract stitches them; it does not copy their rules.
+
+| Concern | Authoritative home |
+| --- | --- |
+| Three settings bags; requested versus applied; unsupported / overridden / unverified | [MOD-003](modules/models.md#mod-003) |
+| Selected profile is not a running deployment; applied startup lives on the deployment | [MOD-004](modules/models.md#mod-004) |
+| Adapter sends the applied per-request bag; it does not start inference | [MOD-005](modules/models.md#mod-005) |
+| Configuration links resolve one Deep Agents setup; they are not executable steps | [WF-001](modules/agents-workflows.md#wf-001) |
+| Capture the actual model request after middleware | [AGT-002](modules/agents-workflows.md#agt-002) |
+| Durable knowledge versus active context; protected-instruction write policy | [AGT-004](modules/agents-workflows.md#agt-004) |
+| Run records persist profile, deployment, agent setup and applied settings | [STATE-001](modules/state-recovery.md#state-001) |
+| Versioned knowledge / skill / protected-instruction refs | [STATE-005](modules/state-recovery.md#state-005) |
+| Repeat validation immediately before execution | [REG-002](modules/registry.md#reg-002) |
+| Expose effective controls, applied values and actual limits | [REG-005](modules/registry.md#reg-005) |
+
+<a id="resolve-before-run"></a>
+### Resolve before run
+
+The backend resolves one effective setup **before** the harness starts work. A stored graph, Chat start, Lab restore/rerun or later Builder run uses that same resolve step. Editing a definition is not a substitute for run-start validation: deployment, environment, access or configuration may have changed.
+
+The resolved setup includes the bound deployment, the three settings bags, enabled tools and policy, and the selected memory / skill / protected-instruction versions. Configuration connections supply those facts ([WF-001](modules/agents-workflows.md#wf-001)); they do not become workflow steps.
+
+Unknown, missing or incompatible refs fail closed. Do not start with a silent default profile, a different deployment, or empty knowledge because a label looked familiar.
+
+<a id="startup-per-request-agent-bags"></a>
+### Startup, per-request and agent bags
+
+Keep the three bags separate ([MOD-003](modules/models.md#mod-003)):
+
+- **Startup** — process-lifetime llama-server / connected-endpoint settings. Applied only when a deployment is started or attached. Selecting a profile on an already-running server does not rewrite that process's loaded startup.
+- **Per-request** — generation settings for this model call (sampling, stop, token limits, and other request-scoped controls the adapter may forward).
+- **Agent** — harness setup for this run (instructions, presented tools, iteration/budget fields the application owns).
+
+A value in the wrong bag is unsupported there, not silently moved. Runtime-specific supported controls stay representable. Compatibility provenance ([MOD-006](modules/models.md#mod-006)) is not a fourth bag.
+
+<a id="selected-loaded-applied"></a>
+### Selected ≠ loaded ≠ applied
+
+These are three inspectable facts. A shared profile **name** is none of them.
+
+| Fact | Meaning |
+| --- | --- |
+| **Selected** | The user or surface named a profile, deployment, knowledge version, tool set or policy. IDs and refs are selected facts. |
+| **Loaded** | What is actually resident: the running deployment process (its applied startup), knowledge/skill content in the configured backends, and constructed tools. |
+| **Applied** | What reached the model request or harness after defaults, explicit overrides, unsupported-key drop and runtime-required overrides. |
+
+Recording `profile_id` or a knowledge version id is selected only. Inspecting a live process or the outbound request is how loaded and applied are proven. [MOD-004](modules/models.md#mod-004): a saved profile is not a running deployment.
+
+<a id="harness-inspector-agree"></a>
+### Harness and inspector agree
+
+The harness consumes the resolved setup. The inspector, run record and [AGT-002](modules/agents-workflows.md#agt-002) capture show the **same** selected, loaded and applied facts. An inspector must not invent applied values from a selected name.
+
+Show unsupported, overridden and unverified values, plus startup mismatch (selected profile startup ≠ loaded deployment startup). Report genuine capture gaps and redaction. After compaction, the capture still names the versions and bags that were actually used.
+
+Builder, when added, consumes this contract. Inherit the workflow profile/deployment; an explicit per-node override is visible and is not a hidden surface profile ([ADR-0003](decisions/ADR-0003-builder-v1-chrome.md)).
+
+<a id="effective-setup-precedence"></a>
+### Precedence
+
+High-level order inside each bag. Exact key lists stay in [MOD-003](modules/models.md#mod-003); this is not a second schema.
+
+1. Known defaults for that bag.
+2. Selected profile / definition values for that bag.
+3. Explicit run or surface overrides.
+4. Runtime-required overrides (for example an allocated listen port), recorded as overridden.
+5. Requested keys that are not known for that bag stay unsupported and are not applied.
+
+Per-node Builder overrides replace the inherited profile for that node only when explicit. User-override provenance in a compatibility record ([MOD-006](modules/models.md#mod-006)) remains a separate inspectable list; it is not a silent rewrite of applied bags.
+
+<a id="effective-setup-knowledge"></a>
+### Knowledge and skill refs are not RAG
+
+Selected [STATE-005](modules/state-recovery.md#state-005) version ids must be loaded through the configured memory/skill backends before the run. Referencing an id, listing it on a capture, or proving the id exists is not loaded content.
+
+This contract does not select retrieval, an index, or cross-surface sharing. Those remain [OQ-006](open-questions.md#oq-006). Protected-instruction and write-policy rules in [AGT-004](modules/agents-workflows.md#agt-004) still apply. Do not add a retrieval product to satisfy effective setup.
+
+<a id="effective-setup-gaps"></a>
+### Honest gaps
+
+This section is intended behaviour. Catalogue rows for [ARCH-003](#arch-003), [MOD-003](modules/models.md#mod-003) and [REG-005](modules/registry.md#reg-005) stay `partial` or `planned`. Issue #53 does not implement apply-for-real and is not catalogue `verified`.
+
+On the inspected path ([Issue #37](https://github.com/Vidcar/thtaib/issues/37) area 2): the harness validates and records `profile_id` and knowledge version refs; the model adapter reads the **deployment** per-request bag; knowledge refs are existence-checked without loading their content into Deep Agents memory/skill configuration. Selected is not yet loaded or applied. Reproduce against the implementation tip before treating that observation as current.
+
+Still open, and not closed by this contract:
+
+- Complete setting-mapping verification and capability claims — [OQ-007](open-questions.md#oq-007).
+- Retrieval/RAG and whether knowledge is shared across surfaces — [OQ-006](open-questions.md#oq-006).
+- Application registry as integration authority — [REG-001](modules/registry.md#reg-001)…[005](modules/registry.md#reg-005) planned; [OQ-008](open-questions.md#oq-008).
+- Conversation ↔ thread ↔ run continuity — [Issue #37](https://github.com/Vidcar/thtaib/issues/37) area 1 / [Issue #52](https://github.com/Vidcar/thtaib/issues/52), not this contract.
+- Exact generated wire types for the resolved setup — [contracts](contracts.md); module-local Pydantic is not a second semantic home.
+
+Apply-for-real implementation stays a later Agent Chat slice under [Issue #37](https://github.com/Vidcar/thtaib/issues/37). Conversation continuity and Model Lab trait catalogue are sibling specs, not this document.

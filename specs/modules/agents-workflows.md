@@ -8,7 +8,7 @@ Deep Agents owns each agent's model/tool loop and active context. LangGraph owns
 
 ## Public contracts and collaboration
 
-Consume a resolved agent setup, model adapter, enabled tool/file backends, selected memory/skill versions and task criteria. Emit events into the backend's run hierarchy and link checkpoints through [state and recovery](state-recovery.md). Builder supplies typed step inputs/outputs; Chat invokes the same harness without requiring an outer workflow.
+Consume a resolved agent setup, model adapter, enabled tool/file backends, selected memory/skill versions and task criteria. The resolved setup is the shared [effective setup contract](../architecture.md#effective-setup-contract): resolve it before the harness runs; the harness and inspector must show the same selected, loaded and applied facts. Emit events into the backend's run hierarchy and link checkpoints through [state and recovery](state-recovery.md). Builder supplies typed step inputs/outputs; Chat invokes the same harness without requiring an outer workflow.
 
 Memory content/versioning is application-owned; consumption and active-context management are harness responsibilities. Retrieved documents are neither durable project memory nor model training. Retrieval/index storage selection remains open.
 
@@ -32,6 +32,8 @@ Configuration connections supply model profile, tools, skills, memory, environme
 
 **Acceptance:** Compile a mixed configuration/workflow definition and show that configuration links do not become executable workflow steps.
 
+Those configuration links contribute to the one resolved [effective setup](../architecture.md#effective-setup-contract). They still are not executable steps.
+
 <a id="wf-002"></a>
 ### WF-002: Make delegation and cycle ownership explicit
 
@@ -46,6 +48,8 @@ Instrument the final model-adapter boundary after context middleware. Link actua
 
 **Acceptance:** Capture a request after compaction and compare it with what the adapter sends, accounting explicitly for redaction and any capture gap.
 
+The capture must agree with the [effective setup](../architecture.md#effective-setup-contract) the harness used. Listing a selected profile or knowledge id is not proof it was loaded or applied.
+
 <a id="agt-003"></a>
 ### AGT-003: Leave task budgets unset by default
 
@@ -59,6 +63,8 @@ Do not impose arbitrary task-level time, token, model/tool-call, reasoning-effor
 Use application-versioned user, agent and project memory/skills through configured backends. Automatic writes require explicit scope policy, provenance and concurrent-write handling; protected instructions must not be overwritten. Fresh conversations retain selected project files and durable knowledge without inheriting the previous active context. Background consolidation is a visible job under the same policy, not training.
 
 **Acceptance:** Start a fresh conversation against retained files/knowledge, edit and revert a memory version, and exercise a denied or conflicting write. Verify protected instructions are unchanged.
+
+Selected knowledge version refs must be loaded through the configured backends before the run ([effective setup](../architecture.md#effective-setup-contract)). Referencing an id is not loading. This is not a retrieval/RAG product ([OQ-006](../open-questions.md#oq-006)).
 
 <a id="agt-005"></a>
 ### AGT-005: Do not silently remove enabled tools
