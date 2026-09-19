@@ -25,7 +25,7 @@ from workbench_backend.inference.schemas import LocalImportRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import write_tiny_gguf
+from tests.support import write_tiny_gguf
 
 
 class ProvenanceSeparationTests(unittest.TestCase):
