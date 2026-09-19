@@ -19,6 +19,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
+from tests import scripted_model
 from tests.scripted_model import ScriptedChatModel
 from tests.support import close_workbench_sqlite, workbench_client, write_tiny_gguf
 
@@ -320,6 +321,7 @@ class LabApiTests(unittest.TestCase):
     def test_capture_fails_while_cancel_requested(self) -> None:
         workspace = self._workspace()
         hold = threading.Event()
+        scripted_model.GENERATE_HOLD = hold
         ScriptedChatModel.generate_hold = hold
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
@@ -353,6 +355,7 @@ class LabApiTests(unittest.TestCase):
             self.assertEqual(blocked.json()["code"], "not_quiescent")
         finally:
             hold.set()
+            scripted_model.GENERATE_HOLD = None
             ScriptedChatModel.generate_hold = None
         wait_for_run(self.client, started["id"])
 

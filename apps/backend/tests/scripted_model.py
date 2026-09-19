@@ -12,6 +12,9 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import PrivateAttr
 
+# Module-level hold survives LangChain/Pydantic copies of the model instance.
+GENERATE_HOLD: threading.Event | None = None
+
 
 class ScriptedChatModel(BaseChatModel):
     """Returns a fixed sequence of AI messages, including optional tool calls."""
@@ -52,7 +55,7 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def _next_message(self) -> AIMessage:
-        hold = ScriptedChatModel.generate_hold or self._hold
+        hold = GENERATE_HOLD or ScriptedChatModel.generate_hold or self._hold
         if hold is not None:
             hold.wait(timeout=30)
         if self._delay_s:

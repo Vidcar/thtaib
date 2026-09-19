@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -13,9 +12,11 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
+from workbench_backend.state.effects import CANCEL_REQUESTED_RECOVERY_NOTE
 from workbench_backend.lab.schemas import RestoreResult, SnapshotManifest
 from workbench_backend.paths import WorkbenchPaths
 
@@ -239,60 +240,40 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         self.assertEqual(after["replay_count"], 0)
 
     def test_recover_during_cancel_requested_does_not_replay(self) -> None:
-        hold = threading.Event()
-        ScriptedChatModel.generate_hold = hold
-        held = ScriptedChatModel(echo_then_reply(), hold=hold)
-
-        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return held
-
-        self.app.state.harness = HarnessService(
-            lambda: self.manager,
-            model_factory=factory,
-            app_store=self.app.state.app_store,
+        now = utc_now()
+        run = AgentRun(
+            id="agent_cancel_requested_recover",
+            status=AgentRunStatus.cancel_requested,
+            deployment_id=self.deployment_id,
+            task="held for recover",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
         )
-        started = self.client.post(
-            "/v1/agent-runs",
-            json={
-                "deployment_id": self.deployment_id,
-                "task": "Echo the text harness-ok using the echo tool.",
-                "presented_tools": ["echo"],
-            },
+        self.app.state.app_store.put_run(run)
+        effect = self.client.post(
+            "/v1/effects",
+            json={"operation": "notify-external", "run_id": run.id},
         )
-        self.assertEqual(started.status_code, 200, started.text)
-        run_id = started.json()["id"]
-        try:
-            deadline = time.time() + 10
-            status = started.json()["status"]
-            while time.time() < deadline and status != "running":
-                status = self.client.get(f"/v1/agent-runs/{run_id}").json()["status"]
-                time.sleep(0.05)
-            self.assertEqual(status, "running")
-            effect = self.client.post(
-                "/v1/effects",
-                json={"operation": "notify-external", "run_id": run_id},
-            ).json()
-            requested = self.client.post(f"/v1/agent-runs/{run_id}/cancel")
-            self.assertEqual(requested.json()["status"], "cancel_requested")
-            still = self.client.get(f"/v1/agent-runs/{run_id}").json()
-            self.assertEqual(still["status"], "cancel_requested")
-            recovered = self.client.post(
-                f"/v1/effects/{effect['id']}/recover",
-                json={"action": "reconnect"},
-            )
-            self.assertEqual(recovered.status_code, 200, recovered.text)
-            report = recovered.json()
-            self.assertFalse(report["replayed"])
-            self.assertTrue(report["uncertainty"])
-            self.assertEqual(report["effect"]["outcome"], "unknown")
-            self.assertEqual(report["effect"]["replay_count"], 0)
-            self.assertIn("not be silently repeated", report["note"])
-            self.assertIn("cancel_requested", report["note"])
-            self.assertIn("not a confirmed stop", report["note"])
-        finally:
-            hold.set()
-            ScriptedChatModel.generate_hold = None
-        wait_for_run(self.client, run_id)
+        self.assertEqual(effect.status_code, 200, effect.text)
+        recovered = self.client.post(
+            f"/v1/effects/{effect.json()['id']}/recover",
+            json={"action": "reconnect"},
+        )
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        report = recovered.json()
+        self.assertFalse(report["replayed"])
+        self.assertTrue(report["uncertainty"])
+        self.assertEqual(report["effect"]["outcome"], "unknown")
+        self.assertEqual(report["effect"]["replay_count"], 0)
+        self.assertEqual(report["rollback_promise"], "none")
+        self.assertEqual(report["note"], CANCEL_REQUESTED_RECOVERY_NOTE)
+        self.assertIn("cancel_requested", report["note"])
+        self.assertIn("not a confirmed stop", report["note"])
+        stored = self.app.state.app_store.get_run(run.id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.status, AgentRunStatus.cancel_requested)
 
 
 if __name__ == "__main__":
