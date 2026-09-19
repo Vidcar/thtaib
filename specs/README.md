@@ -7,6 +7,7 @@ Start with [AGENTS.md](../AGENTS.md), [architecture](architecture.md) and [gover
 | Concern | Authoritative behavioural home |
 | --- | --- |
 | Whole-system ownership and boundaries | [Architecture](architecture.md) |
+| Effective setup across Chat / Lab / Builder | [Architecture — effective setup](architecture.md#effective-setup-contract) ([ARCH-003](architecture.md#arch-003)) |
 | Bundles, compatibility, profiles, inference deployments | [Models](modules/models.md) |
 | Harness, outer workflows, delegation, context, budgets | [Agents and workflows](modules/agents-workflows.md) |
 | Worker access, tool execution, MCP, ComfyUI and panels | [Environments and tools](modules/environments-tools.md) |

@@ -53,6 +53,8 @@ Separate server-startup, per-request inference and agent settings. Preserve expl
 
 **Acceptance:** Exercise a startup setting, request setting and agent setting; compare requested and applied values across surfaces, including a deliberately unsupported value.
 
+Surfaces share these bags through the [effective setup contract](../architecture.md#effective-setup-contract). This requirement remains the home for bag fidelity. Selecting a profile does not rewrite an already-loaded deployment's startup bag. Selected ≠ loaded ≠ applied.
+
 <a id="mod-004"></a>
 ### MOD-004: Track real deployments
 
@@ -60,12 +62,16 @@ A running deployment identifies the live process or connected service, endpoint,
 
 **Acceptance:** Start a managed deployment, observe health and applied configuration, then stop it. Separately connect to an existing endpoint and demonstrate that its management scope is accurately reported.
 
+A selected profile is not a loaded deployment. Compare [selected ≠ loaded ≠ applied](../architecture.md#selected-loaded-applied).
+
 <a id="mod-005"></a>
 ### MOD-005: Keep the model adapter narrow and faithful
 
 Supply Deep Agents with a LangChain model adapter for the deployment's OpenAI-compatible chat endpoint. Preserve supported tool calls, multimodal input and runtime-specific parameters. The adapter neither loads weights nor starts another inference engine. llama.cpp owns tokenisation, template rendering and actual context capacity. Compatibility profiles configure supported reasoning controls and actual context limits; context compaction must not silently change the user's chosen generation settings.
 
 **Acceptance:** Trace a supported tool call and multimodal request through the adapter. Verify that unsupported features are surfaced, that the adapter launches no inference process, and that compaction preserves the chosen generation settings.
+
+The adapter must send the **applied** per-request bag from the resolved setup, not a selected profile name. See [effective setup](../architecture.md#effective-setup-contract).
 
 <a id="mod-006"></a>
 ### MOD-006: Separate evidence from recommendations
@@ -88,4 +94,4 @@ These defaults are authorised by [Issue #31](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers remaining compatibility evidence, startup/request settings and external lifecycle control. Issue #31 lands provenance-capable records and the unverified≠incompatible distinction without closing that question. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager and Issue #21 lands the Windows CUDA pin and default GPU profile without claiming `verified` or closing OQ-007.
+[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers remaining compatibility evidence, startup/request settings and external lifecycle control. Issue #31 lands provenance-capable records and the unverified≠incompatible distinction without closing that question. [Issue #53](https://github.com/Vidcar/thtaib/issues/53) records the shared [effective setup](../architecture.md#effective-setup-contract) for the three bags and selected ≠ loaded ≠ applied; it does not close this question or claim complete setting-mapping verification. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager and Issue #21 lands the Windows CUDA pin and default GPU profile without claiming `verified` or closing OQ-007.

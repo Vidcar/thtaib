@@ -6,7 +6,7 @@
 
 Revision 0.5 selects Pydantic plus JSON Schema for typed definitions and identifies the owned record families. [ADR-0002](decisions/ADR-0002-contract-authoring.md) is **accepted**: canonical Pydantic definitions generate JSON Schema and OpenAPI, and pinned OpenAPI→TS generation produces committed desktop consumer types.
 
-The semantic records are specified in their owning modules: models/profiles/deployments/compatibility in [models](modules/models.md); resolved agent/workflow setup in [agents and workflows](modules/agents-workflows.md); definitions in [registry](modules/registry.md); run/checkpoint/snapshot/knowledge/artifact references in [state](modules/state-recovery.md); jobs/approvals/events in [backend](modules/backend-desktop.md); environments/tool invocation in [tools](modules/environments-tools.md); and captured cases/results in [Lab](modules/lab-evaluation.md).
+The semantic records are specified in their owning modules: models/profiles/deployments/compatibility in [models](modules/models.md); resolved agent/workflow setup in [agents and workflows](modules/agents-workflows.md); definitions in [registry](modules/registry.md); run/checkpoint/snapshot/knowledge/artifact references in [state](modules/state-recovery.md); jobs/approvals/events in [backend](modules/backend-desktop.md); environments/tool invocation in [tools](modules/environments-tools.md); and captured cases/results in [Lab](modules/lab-evaluation.md). The shared selected ≠ loaded ≠ applied rule for that resolved setup is the [effective setup contract](architecture.md#effective-setup-contract) under [ARCH-003](architecture.md#arch-003). This file does not author a second bag schema.
 
 ## Authoritative paths
 

@@ -31,6 +31,8 @@ Use separate application/checkpoint databases. Files hold models, projects, vers
 
 **Acceptance:** Follow a persisted run to its actual checkpoint and related files after restart. Verify that application records do not require direct mutation of the checkpointer's private tables.
 
+Persisted profile, deployment, agent-setup and applied-setting fields are the durable copy of the [effective setup](../architecture.md#effective-setup-contract). A stored selected id is not by itself a loaded or applied claim.
+
 <a id="state-002"></a>
 ### STATE-002: Do not confuse history with the working project
 
@@ -107,7 +109,7 @@ These defaults are authorised by [Issue #17](https://github.com/Vidcar/thtaib/is
 - **Automatic agent writes:** only when an explicit scope policy allows them. Every write carries provenance (actor, and run id if any).
 - **Context captures:** local config for retention duration and redaction mode. Default: retain with secrets redacted (`redact_secrets`). Configurable to retain plaintext or discard.
 - **Surfaces:** backend API (`/v1/knowledge/`) and an optional thin debug panel. No Chat or Builder UI.
-- **Lab/harness:** knowledge version ids are referenceable from cases and harness setup, using the same pattern as profile and deployment refs.
+- **Lab/harness:** knowledge version ids are referenceable from cases and harness setup, using the same pattern as profile and deployment refs. Those ids are **selected** facts. Loading their content into the configured backends is required by the [effective setup contract](../architecture.md#effective-setup-contract). Validating that an id exists is not applied knowledge. This is not a retrieval/RAG product.
 
 ## Unresolved details
 
