@@ -29,6 +29,24 @@ def _message_text(message: BaseMessage) -> str:
     return str(content)
 
 
+def set_generate_hold(hold: threading.Event | None) -> None:
+    """Install or clear the generate hold used by LangChain copies."""
+
+    global GENERATE_HOLD
+    GENERATE_HOLD = hold
+    ScriptedChatModel.generate_hold = hold
+
+
+def _resolve_generate_hold(instance_hold: threading.Event | None) -> threading.Event | None:
+    """Prefer a hold that is still blocking; ignore leftover already-set events."""
+
+    candidates = (GENERATE_HOLD, ScriptedChatModel.generate_hold, instance_hold)
+    unset = next((item for item in candidates if item is not None and not item.is_set()), None)
+    if unset is not None:
+        return unset
+    return next((item for item in candidates if item is not None), None)
+
+
 class ScriptedChatModel(BaseChatModel):
     """Returns a fixed sequence of AI messages, including optional tool calls."""
 
@@ -68,7 +86,7 @@ class ScriptedChatModel(BaseChatModel):
         return self
 
     def _next_message(self) -> AIMessage:
-        hold = GENERATE_HOLD or ScriptedChatModel.generate_hold or self._hold
+        hold = _resolve_generate_hold(self._hold)
         if hold is not None:
             hold.wait(timeout=30)
         if self._delay_s:

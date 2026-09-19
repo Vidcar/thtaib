@@ -19,8 +19,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests import scripted_model
-from tests.scripted_model import ScriptedChatModel
+from tests.scripted_model import ScriptedChatModel, set_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
 
 
@@ -195,8 +194,9 @@ class HarnessApiTests(unittest.TestCase):
 
     def test_cancel_request_is_not_immediately_confirmed(self) -> None:
         hold = threading.Event()
-        scripted_model.GENERATE_HOLD = hold
-        ScriptedChatModel.generate_hold = hold
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
         held = ScriptedChatModel(echo_then_reply(), hold=hold)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -223,8 +223,6 @@ class HarnessApiTests(unittest.TestCase):
             self.assertEqual(observed.json()["status"], "cancel_requested")
         finally:
             hold.set()
-            scripted_model.GENERATE_HOLD = None
-            ScriptedChatModel.generate_hold = None
         confirmed = wait_for_run(self.client, started["id"])
         self.assertEqual(confirmed["status"], "cancelled")
         self.assertEqual(confirmed["stop_reason"], "cancelled")

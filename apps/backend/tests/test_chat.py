@@ -19,8 +19,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests import scripted_model
-from tests.scripted_model import ScriptedChatModel
+from tests.scripted_model import ScriptedChatModel, set_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
 
 FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
@@ -291,8 +290,11 @@ class ChatHarnessTests(unittest.TestCase):
 
     def test_start_rejected_while_cancel_requested(self) -> None:
         hold = threading.Event()
-        scripted_model.GENERATE_HOLD = hold
-        ScriptedChatModel.generate_hold = hold
+        previous = self.app.state.harness
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        self.addCleanup(previous.close)
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return ScriptedChatModel(write_then_reply(), hold=hold)
@@ -328,8 +330,6 @@ class ChatHarnessTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in listed], [first_run_id])
         finally:
             hold.set()
-            scripted_model.GENERATE_HOLD = None
-            ScriptedChatModel.generate_hold = None
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "cancelled")
         self.assertEqual(body["current_run"]["id"], first_run_id)
