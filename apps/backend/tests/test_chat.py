@@ -19,7 +19,7 @@ from workbench_backend.app import create_app
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests.scripted_model import ScriptedChatModel, set_generate_hold
+from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
 
 FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
@@ -311,6 +311,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(started["current_run_id"], first_run_id)
         try:
             wait_for_status(self.client, first_run_id, "running")
+            wait_for_generate_hold()
             cancelled = self.client.post(f"/v1/chat/conversations/{conversation['id']}/cancel")
             self.assertEqual(cancelled.status_code, 200, cancelled.text)
             self.assertEqual(cancelled.json()["current_run"]["status"], "cancel_requested")

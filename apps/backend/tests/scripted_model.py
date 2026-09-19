@@ -14,6 +14,8 @@ from pydantic import PrivateAttr
 
 # Module-level hold survives LangChain/Pydantic copies of the model instance.
 GENERATE_HOLD: threading.Event | None = None
+# Set when _next_message begins waiting on the installed hold.
+GENERATE_HOLD_ENTERED: threading.Event | None = None
 # Flattened model-bound prompts. Survives LangChain copies of the instance.
 RECEIVED_PROMPTS: list[str] = []
 
@@ -32,9 +34,20 @@ def _message_text(message: BaseMessage) -> str:
 def set_generate_hold(hold: threading.Event | None) -> None:
     """Install or clear the generate hold used by LangChain copies."""
 
-    global GENERATE_HOLD
+    global GENERATE_HOLD, GENERATE_HOLD_ENTERED
     GENERATE_HOLD = hold
     ScriptedChatModel.generate_hold = hold
+    GENERATE_HOLD_ENTERED = threading.Event() if hold is not None else None
+
+
+def wait_for_generate_hold(*, timeout: float = 10.0) -> None:
+    """Block until the scripted model is waiting on the installed generate hold."""
+
+    entered = GENERATE_HOLD_ENTERED
+    if entered is None:
+        raise RuntimeError("set_generate_hold() must be installed before waiting")
+    if not entered.wait(timeout=timeout):
+        raise TimeoutError("scripted model did not enter generate hold")
 
 
 def _resolve_generate_hold(instance_hold: threading.Event | None) -> threading.Event | None:
@@ -88,6 +101,9 @@ class ScriptedChatModel(BaseChatModel):
     def _next_message(self) -> AIMessage:
         hold = _resolve_generate_hold(self._hold)
         if hold is not None:
+            entered = GENERATE_HOLD_ENTERED
+            if entered is not None:
+                entered.set()
             hold.wait(timeout=30)
         if self._delay_s:
             time.sleep(self._delay_s)

@@ -147,7 +147,8 @@ class ModelManager:
 
     def pin_runtime(self, request: PinRuntimeRequest | None = None) -> RuntimeManifest:
         request = request or PinRuntimeRequest()
-        running = self.runtime.running_managed_deployments()
+        self.deployments.reconcile()
+        running = self.deployments.live_owned()
         if running:
             if not request.stop_first:
                 raise ManagerError(
@@ -158,11 +159,11 @@ class ModelManager:
                     status_code=409,
                 )
             for deployment in running:
-                pid = deployment.pid
                 self.deployments.stop(deployment.id)
-                if pid is not None:
-                    self.deployments.processes.wait_until_gone(pid)
         return self.runtime.pin(request)
+
+    def reconcile_deployments(self) -> list[Deployment]:
+        return self.deployments.reconcile()
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
         return self.deployments.create_managed(request)

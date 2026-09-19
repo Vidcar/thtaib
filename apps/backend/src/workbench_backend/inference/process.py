@@ -1,4 +1,9 @@
-"""Managed-process helpers. Connected endpoints never use this supervisor."""
+"""Managed-process helpers. Connected endpoints never use this supervisor.
+
+Issue #62: destructive actions require a persisted process identity
+(pid + create_time + executable). A healthy HTTP endpoint alone is not
+ownership. Stale or reused PIDs are refused before terminate/kill.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +12,21 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import psutil
 
+from workbench_backend.errors import ManagerError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.schemas import HealthReport, ResourceUsage
+from workbench_backend.inference.schemas import HealthReport, ProcessIdentity, ResourceUsage
+
+IdentityVerdict = Literal["match", "mismatch", "gone"]
+
+CREATE_TIME_TOLERANCE_SECONDS = 0.05
+
+PROCESS_IDENTITY_MISMATCH = "process_identity_mismatch"
+PROCESS_IDENTITY_UNPROVEN = "process_identity_unproven"
 
 
 def argv_for_host(argv: list[str]) -> list[str]:
@@ -42,28 +56,157 @@ def _python_fixture(path: Path) -> bool:
     return head.startswith(b"#!") and b"python" in head.lower()
 
 
+def normalize_executable(path: str) -> str:
+    if not path:
+        return ""
+    try:
+        return os.path.normcase(str(Path(path).resolve()))
+    except OSError:
+        return os.path.normcase(os.path.normpath(path))
+
+
+def identities_match(expected: ProcessIdentity, observed: ProcessIdentity) -> bool:
+    if expected.pid != observed.pid:
+        return False
+    if abs(expected.create_time - observed.create_time) > CREATE_TIME_TOLERANCE_SECONDS:
+        return False
+    return normalize_executable(expected.executable) == normalize_executable(observed.executable)
+
+
+def classify_identity(
+    identity: ProcessIdentity,
+    *,
+    inspector: ProcessInspector | None = None,
+) -> IdentityVerdict:
+    current = (inspector or PsutilInspector()).identity_of(identity.pid)
+    if current is None:
+        return "gone"
+    if identities_match(identity, current):
+        return "match"
+    return "mismatch"
+
+
+class ProcessInspector:
+    """Read-only process identity. Tests inject fixtures; never kill here."""
+
+    def identity_of(self, pid: int) -> ProcessIdentity | None:
+        raise NotImplementedError
+
+    def listen_ports(self, pid: int) -> list[int] | None:
+        """Listening TCP ports for pid and children.
+
+        Returns ``None`` when connections cannot be inspected (do not guess).
+        """
+        raise NotImplementedError
+
+
+class PsutilInspector(ProcessInspector):
+    def identity_of(self, pid: int) -> ProcessIdentity | None:
+        try:
+            process = psutil.Process(pid)
+            if not process.is_running():
+                return None
+            try:
+                executable = process.exe() or ""
+            except (psutil.AccessDenied, psutil.ZombieProcess):
+                executable = ""
+            return ProcessIdentity(
+                pid=int(pid),
+                create_time=float(process.create_time()),
+                executable=normalize_executable(executable),
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return None
+
+    def listen_ports(self, pid: int) -> list[int] | None:
+        try:
+            process = psutil.Process(pid)
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            return []
+        except psutil.AccessDenied:
+            return None
+        targets = [process]
+        try:
+            targets.extend(process.children(recursive=True))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+        ports: set[int] = set()
+        denied = False
+        for item in targets:
+            try:
+                for conn in item.net_connections(kind="inet"):
+                    if conn.status == psutil.CONN_LISTEN and conn.laddr:
+                        ports.add(int(conn.laddr.port))
+            except psutil.AccessDenied:
+                denied = True
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+        if denied and not ports:
+            return None
+        return sorted(ports)
+
+
 class ProcessSupervisor:
-    def __init__(self) -> None:
+    def __init__(self, *, inspector: ProcessInspector | None = None) -> None:
+        self.inspector = inspector or PsutilInspector()
         self._children: dict[int, subprocess.Popen[bytes]] = {}
 
-    def start(self, argv: list[str], *, cwd: Path | None = None) -> int:
+    def start(self, argv: list[str], *, cwd: Path | None = None) -> ProcessIdentity:
         process = subprocess.Popen(  # noqa: S603 - argv is built from managed records
             argv_for_host(argv),
             cwd=str(cwd) if cwd else None,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._children[int(process.pid)] = process
-        return int(process.pid)
+        pid = int(process.pid)
+        self._children[pid] = process
+        identity = self.inspector.identity_of(pid)
+        if identity is None:
+            return ProcessIdentity(pid=pid, create_time=0.0, executable="")
+        return identity
 
-    def stop(self, pid: int, *, timeout: float = 5.0) -> None:
-        """Terminate the managed process tree and wait until it is gone.
+    def classify(self, identity: ProcessIdentity) -> IdentityVerdict:
+        return classify_identity(identity, inspector=self.inspector)
+
+    def launched_still_running(self, pid: int) -> bool:
+        """True only for a child this supervisor launched that has not exited."""
+        child = self._children.get(int(pid))
+        if child is None:
+            return False
+        return child.poll() is None
+
+    def owns_listen(self, identity: ProcessIdentity, port: int) -> bool | None:
+        if self.classify(identity) != "match":
+            return False
+        ports = self.inspector.listen_ports(identity.pid)
+        if ports is None:
+            return None
+        return int(port) in ports
+
+    def stop(self, identity: ProcessIdentity, *, timeout: float = 5.0) -> None:
+        """Terminate only the process that still matches ``identity``.
 
         Callers that replace ``runtimes/local-pin`` (``stop_first`` pin) must
         not copy until this returns. On Windows a still-living child or an
         open cwd/exe handle makes ``shutil.rmtree`` fail with WinError 32.
         """
-        child = self._children.pop(pid, None)
+        verdict = self.classify(identity)
+        if verdict == "mismatch":
+            raise ManagerError(
+                "Refusing to terminate a process that does not match the owned "
+                "pid, executable, or creation identity.",
+                code=PROCESS_IDENTITY_MISMATCH,
+                status_code=409,
+            )
+        if verdict == "gone":
+            child = self._children.pop(identity.pid, None)
+            if child is not None:
+                try:
+                    child.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    pass
+            return
+        child = self._children.pop(identity.pid, None)
         if child is not None and child.poll() is None:
             child.terminate()
             try:
@@ -74,18 +217,16 @@ class ProcessSupervisor:
                     child.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass
-        self._stop_process_tree(pid, timeout=timeout)
-        self.wait_until_gone(pid, timeout=timeout)
+        self._stop_process_tree(identity.pid, timeout=timeout)
+        self.wait_until_gone(identity.pid, timeout=timeout)
+        if self.classify(identity) == "match":
+            self._stop_process_tree(identity.pid, timeout=timeout, force=True)
+            self.wait_until_gone(identity.pid, timeout=timeout)
 
     def wait_until_gone(self, pid: int, *, timeout: float = 5.0) -> None:
+        """Poll until the PID is gone. Does not terminate; callers must have verified identity."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if not self.is_running(pid):
-                return
-            time.sleep(0.05)
-        if self.is_running(pid):
-            self._stop_process_tree(pid, timeout=timeout, force=True)
-        while time.monotonic() < deadline + timeout:
             if not self.is_running(pid):
                 return
             time.sleep(0.05)
@@ -93,10 +234,7 @@ class ProcessSupervisor:
     def is_running(self, pid: int | None) -> bool:
         if pid is None:
             return False
-        try:
-            return psutil.pid_exists(pid) and psutil.Process(pid).is_running()
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            return False
+        return self.inspector.identity_of(int(pid)) is not None
 
     def _stop_process_tree(self, pid: int, *, timeout: float, force: bool = False) -> None:
         try:
@@ -127,10 +265,10 @@ class ProcessSupervisor:
                 continue
         psutil.wait_procs(alive, timeout=timeout)
 
-    def resource_usage(self, pid: int | None) -> ResourceUsage:
-        if not self.is_running(pid):
-            return ResourceUsage(available=False, reason="process is not running")
-        process = psutil.Process(pid)
+    def resource_usage(self, identity: ProcessIdentity | None) -> ResourceUsage:
+        if identity is None or self.classify(identity) != "match":
+            return ResourceUsage(available=False, reason="owned process is not running")
+        process = psutil.Process(identity.pid)
         memory = process.memory_info()
         return ResourceUsage(
             available=True,
@@ -192,6 +330,49 @@ def wait_for_health(probe: HttpProbe, endpoint: str, *, attempts: int = 20, dela
         time.sleep(delay)
         report = probe.health(endpoint)
     return report
+
+
+def wait_for_owned_health(
+    probe: HttpProbe,
+    endpoint: str,
+    supervisor: ProcessSupervisor,
+    identity: ProcessIdentity,
+    *,
+    port: int | None = None,
+    attempts: int = 20,
+    delay: float = 0.1,
+) -> tuple[IdentityVerdict, HealthReport, bool | None]:
+    """Probe health only while the launched process still matches identity.
+
+    Returns ``(verdict, report, owns_listen)``. ``owns_listen`` is ``None``
+    when sockets cannot be inspected or no port was supplied.
+
+    A healthy endpoint with ``owns_listen is None`` is not ownership. Keep
+    waiting until listen is proven, denied, the process exits, or timeout.
+    """
+    report = probe.health(endpoint)
+    owns: bool | None = None
+    for _ in range(attempts):
+        verdict = supervisor.classify(identity)
+        if verdict != "match":
+            return verdict, report, False
+        if not supervisor.launched_still_running(identity.pid):
+            return "gone", report, False
+        if port is not None:
+            owns = supervisor.owns_listen(identity, port)
+        if report.healthy:
+            if owns is True:
+                return "match", report, True
+            if owns is False:
+                return "match", report, False
+        time.sleep(delay)
+        report = probe.health(endpoint)
+    verdict = supervisor.classify(identity)
+    if verdict != "match" or not supervisor.launched_still_running(identity.pid):
+        return "gone" if verdict == "match" else verdict, report, False
+    if port is not None:
+        owns = supervisor.owns_listen(identity, port)
+    return verdict, report, owns
 
 
 def _health_urls(endpoint: str) -> list[str]:

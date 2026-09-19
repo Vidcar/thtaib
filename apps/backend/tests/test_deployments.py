@@ -93,6 +93,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIsNotNone(deployment.endpoint)
         self.assertIn("port", deployment.applied_startup)
         self.assertIsNotNone(deployment.resource_usage)
+        self.assertIsNotNone(deployment.process_identity)
+        self.assertEqual(deployment.pid, deployment.process_identity.pid)
         refreshed = self.manager.deployment_health(deployment.id)
         self.assertTrue(refreshed.health and refreshed.health.healthy)
         stopped = self.manager.stop_deployment(deployment.id)

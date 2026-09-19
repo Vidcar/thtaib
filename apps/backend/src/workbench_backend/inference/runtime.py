@@ -19,6 +19,7 @@ import httpx
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hardware import NvidiaPresent, nvidia_gpu_present
 from workbench_backend.inference.hashes import sha256_file
+from workbench_backend.inference.process import classify_identity
 from workbench_backend.inference.schemas import (
     Deployment,
     DeploymentStatus,
@@ -117,11 +118,18 @@ class RuntimeService:
             DeploymentStatus.running,
             DeploymentStatus.unhealthy,
         }
-        return [
-            deployment
-            for deployment in self.store.list_deployments()
-            if deployment.scope == ManagementScope.managed and deployment.status in blocking
-        ]
+        live: list[Deployment] = []
+        for deployment in self.store.list_deployments():
+            if deployment.scope != ManagementScope.managed or deployment.status not in blocking:
+                continue
+            identity = deployment.process_identity
+            if identity is None:
+                if deployment.status == DeploymentStatus.starting:
+                    live.append(deployment)
+                continue
+            if classify_identity(identity) == "match":
+                live.append(deployment)
+        return live
 
     def pin(self, request: PinRuntimeRequest | None = None) -> RuntimeManifest:
         request = request or PinRuntimeRequest()
