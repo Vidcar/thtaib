@@ -19,7 +19,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from tests.scripted_model import ScriptedChatModel, set_generate_hold
+from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
 
 
@@ -210,6 +210,7 @@ class HarnessApiTests(unittest.TestCase):
         started = self._start()
         try:
             wait_for_status(self.client, started["id"], "running")
+            wait_for_generate_hold()
             requested = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
             self.assertEqual(requested.status_code, 200, requested.text)
             body = requested.json()
