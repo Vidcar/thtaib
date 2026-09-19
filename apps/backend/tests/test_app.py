@@ -55,12 +55,15 @@ class HealthEndpointTests(unittest.TestCase):
     def test_openapi_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = create_app(data_root=Path(tmp))
-            client = TestClient(app)
+            anonymous = TestClient(app)
+            authorized = workbench_client(app)
             try:
-                self.assertEqual(client.get("/openapi.json").status_code, 404)
-                self.assertEqual(client.get("/docs").status_code, 404)
+                self.assertEqual(anonymous.get("/openapi.json").status_code, 401)
+                self.assertEqual(anonymous.get("/docs").status_code, 401)
+                self.assertEqual(authorized.get("/openapi.json").status_code, 404)
+                self.assertEqual(authorized.get("/docs").status_code, 404)
             finally:
-                close_workbench_sqlite(app, client)
+                close_workbench_sqlite(app, anonymous, authorized)
 
 
 class ModelManagerApiTests(unittest.TestCase):
