@@ -73,7 +73,7 @@ Creates `.venv` and installs the locked dependencies from `uv.lock`, including t
 uv run python -m workbench_backend
 ```
 
-Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the managed-inference identity. Model-manager routes are under `/v1`. Harness routes are `POST /v1/agent-runs`, `GET /v1/agent-runs/{id}`, `POST /v1/agent-runs/{id}/cancel`, and `GET /v1/agent-tools`. OpenAPI/docs routes are disabled.
+Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTTP for smoke. It does not close [OQ-002](open-questions.md#oq-002). `GET /health` returns the managed-inference identity. Model-manager routes are under `/v1`. Harness routes are `POST /v1/agent-runs`, `GET /v1/agent-runs/{id}`, `POST /v1/agent-runs/{id}/cancel`, and `GET /v1/agent-tools`. Lab routes are under `/v1/lab/` (workspaces, `cases/capture`, restore, rerun, engine-measurements). OpenAPI/docs routes are disabled.
 
 <a id="backend-test"></a>
 ## Test the backend
@@ -84,7 +84,7 @@ Starts the FastAPI process on `127.0.0.1:8000`. This is provisional loopback HTT
 uv run python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, plus harness/adapter tests for AGT-001/002/005/006 and MOD-005. These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
+Runs the backend unittest modules, including model-manager API tests for bundles, GGUF inspect, settings bags and deployments, harness/adapter tests for AGT-001/002/005/006 and MOD-005, and Lab capture/restore/rerun plus engine-unavailable checks for LAB-001…004 and STATE-003. These are executable unit checks, not David-PC UAT and not catalogue `verified` evidence.
 
 <a id="desktop-install"></a>
 ## Install the desktop
@@ -128,7 +128,7 @@ Type-checks, then Vite-builds the renderer and Electron main/preload into `dist/
 pnpm run dev
 ```
 
-Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat, Lab and Builder are not present. An optional Agent-run debug panel may call the harness API.
+Starts Vite as a development bundler and launches Electron. Vite's URL is not a product HTTP surface. Chat and Builder are not present. Optional Agent-run and thin Lab debug panels may call the harness and Lab APIs. This is not Chat/Builder polish and does not close [OQ-016](open-questions.md#oq-016) or [OQ-014](open-questions.md#oq-014).
 
 <a id="desktop-package"></a>
 ## Package a Windows installer

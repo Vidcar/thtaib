@@ -1,9 +1,10 @@
 """Portable Local AI Workbench data-root resolution.
 
 On Windows the layout is ``%LOCALAPPDATA%\\LocalAIWorkbench\\`` with
-``models\\``, ``runtimes\\`` and ``state\\``. Other platforms use the same
-directory names under a portable data root so tests and smoke can run
-without claiming a second product mode.
+``models\\``, ``runtimes\\``, ``state\\``, ``cases\\``, ``snapshots\\``
+and ``workspaces\\``. Other platforms use the same directory names under a
+portable data root so tests and smoke can run without claiming a second
+product mode.
 """
 
 from __future__ import annotations
@@ -47,9 +48,20 @@ class WorkbenchPaths:
         self.models = self.root / "models"
         self.runtimes = self.root / "runtimes"
         self.state = self.root / "state"
+        self.cases = self.root / "cases"
+        self.snapshots = self.root / "snapshots"
+        self.workspaces = self.root / "workspaces"
 
     def ensure(self) -> "WorkbenchPaths":
-        for path in (self.root, self.models, self.runtimes, self.state):
+        for path in (
+            self.root,
+            self.models,
+            self.runtimes,
+            self.state,
+            self.cases,
+            self.snapshots,
+            self.workspaces,
+        ):
             path.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -59,5 +71,10 @@ class WorkbenchPaths:
             "models": str(self.models),
             "runtimes": str(self.runtimes),
             "state": str(self.state),
-            "windows_layout": r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state}",
+            "cases": str(self.cases),
+            "snapshots": str(self.snapshots),
+            "workspaces": str(self.workspaces),
+            "windows_layout": (
+                r"%LOCALAPPDATA%\LocalAIWorkbench\{models,runtimes,state,cases,snapshots,workspaces}"
+            ),
         }

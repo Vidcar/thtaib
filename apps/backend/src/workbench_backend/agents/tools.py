@@ -1,11 +1,14 @@
 """Smallest enabled tool set for the embedded harness (AGT-005).
 
 These are harmless visibility tools. Full workers/sandbox stay OQ-003.
+Recorded-tool wrappers replay fixtures; they are not live integrations.
 """
 
 from __future__ import annotations
 
-from langchain_core.tools import BaseTool, tool
+from typing import Any
+
+from langchain_core.tools import BaseTool, StructuredTool, tool
 
 from workbench_backend.inference.ids import utc_now
 
@@ -55,8 +58,51 @@ def resolve_presented_tools(requested: list[str] | None) -> tuple[list[str], lis
     return presented, denied
 
 
-def tools_for_names(names: list[str]) -> list[BaseTool]:
-    return [ENABLED_TOOLS[name] for name in names if name in ENABLED_TOOLS]
+def tools_for_names(
+    names: list[str],
+    *,
+    recorded_fixtures: list[dict[str, Any]] | None = None,
+) -> list[BaseTool]:
+    selected = [name for name in names if name in ENABLED_TOOLS]
+    if not recorded_fixtures:
+        return [ENABLED_TOOLS[name] for name in selected]
+    bank = _FixtureBank(recorded_fixtures)
+    return [_recorded_wrapper(name, bank) for name in selected]
+
+
+class _FixtureBank:
+    def __init__(self, fixtures: list[dict[str, Any]]) -> None:
+        self._remaining = [dict(item) for item in fixtures]
+
+    def take(self, name: str) -> str:
+        for index, item in enumerate(self._remaining):
+            if str(item.get("name")) == name:
+                self._remaining.pop(index)
+                result = item.get("result")
+                return result if isinstance(result, str) else str(result)
+        return (
+            f"[recorded-tool] no fixture for {name}. "
+            "This is not a live tool call and is not proof of a current live integration."
+        )
+
+
+def _recorded_wrapper(name: str, bank: _FixtureBank) -> BaseTool:
+    original = ENABLED_TOOLS[name]
+
+    def replay(**_kwargs: Any) -> str:
+        return bank.take(name)
+
+    replay.__name__ = f"recorded_{name}"
+    replay.__doc__ = (
+        f"{original.description} Recorded-tool fixture replay; "
+        "not a live integration and not proof of live behaviour."
+    )
+    return StructuredTool.from_function(
+        func=replay,
+        name=name,
+        description=replay.__doc__,
+        args_schema=original.args_schema,
+    )
 
 
 def tool_name(tool_obj: object) -> str | None:

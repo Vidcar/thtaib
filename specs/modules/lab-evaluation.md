@@ -16,6 +16,21 @@ The Lab calls the same agent harness and model/profile paths as normal work. It 
 
 Capture a case from a real run, restore its initial inputs into an appropriate workspace, execute it in recorded-tool or live-tool mode, and preserve outcome/deviations. Missing snapshots, external dependencies or permissions must be reported rather than silently replaced with convenient inputs.
 
+<a id="locked-milestone-defaults-issue-15-partial-oq-005"></a>
+## Locked milestone defaults (Issue #15; partial OQ-005)
+
+These defaults are authorised by [Issue #15](https://github.com/Vidcar/thtaib/issues/15). They do not close [OQ-005](../open-questions.md#oq-005) or [OQ-014](../open-questions.md#oq-014).
+
+- **Snapshot:** application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary. Capture fails if live tools or harness runs are still writing. Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Git commits are not snapshots.
+- **Restore / branch:** restore into a new workspace directory and a linked branch run. Never overwrite the parent workspace or the original attempt.
+- **Include:** allowlisted project files, task, profile and deployment ids, dependency versions, memory/skill version refs, tool fixtures and acceptance checks.
+- **Exclude:** secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
+- **Environment:** no full environment restore this milestone; record exclusions.
+- **Engine:** llama-bench via the managed runtime when present; otherwise report unavailable. Do not invent scores.
+- **Task evaluation:** Inspect AI building blocks plus the existing Deep Agents harness / [MOD-005](models.md#mod-005). Same model, profile and harness paths. No second evaluation agent loop.
+- **Surface:** minimal Lab API and an optional thin Lab panel. Not Chat or Builder polish.
+- **Modes:** recorded-tool and live-tool are labelled. A recorded result is not proof of a current live integration.
+
 ## Requirements and acceptance checks
 
 <a id="lab-001"></a>

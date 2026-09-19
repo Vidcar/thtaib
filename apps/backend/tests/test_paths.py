@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from workbench_backend.paths import PRODUCT_DATA_DIR, resolve_data_root
+from workbench_backend.paths import PRODUCT_DATA_DIR, WorkbenchPaths, resolve_data_root
 
 
 class PathResolutionTests(unittest.TestCase):
@@ -29,6 +29,16 @@ class PathResolutionTests(unittest.TestCase):
             platform="linux",
         )
         self.assertEqual(root, Path("/var/data") / PRODUCT_DATA_DIR)
+
+    def test_layout_includes_cases_and_snapshots(self) -> None:
+        paths = WorkbenchPaths(Path("/tmp/workbench-layout-test"))
+        public = paths.as_public_dict()
+        self.assertEqual(paths.cases, paths.root / "cases")
+        self.assertEqual(paths.snapshots, paths.root / "snapshots")
+        self.assertEqual(public["cases"], str(paths.cases))
+        self.assertEqual(public["snapshots"], str(paths.snapshots))
+        self.assertIn("cases", public["windows_layout"])
+        self.assertIn("snapshots", public["windows_layout"])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ from workbench_backend.agents.schemas import (
     AgentRunStatus,
     AgentStartRequest,
     TaskCriteria,
+    ToolMode,
+    label_for_tool_mode,
 )
 from workbench_backend.agents.tools import (
     enabled_catalogue,
@@ -72,6 +74,17 @@ class HarnessService:
                 raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
             return run.model_copy(deep=True)
 
+    def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
+        """Runs still writing or executing against a workspace (quiescent check)."""
+
+        with self._lock:
+            return [
+                run.id
+                for run in self._runs.values()
+                if run.workspace_id == workspace_id
+                and run.status in {AgentRunStatus.queued, AgentRunStatus.running}
+            ]
+
     def start(self, request: AgentStartRequest) -> AgentRun:
         deployment = self.manager.get_deployment(request.deployment_id)
         if not deployment.endpoint:
@@ -93,6 +106,12 @@ class HarnessService:
                 code="tools_required",
                 status_code=400,
             )
+        if request.tool_mode is ToolMode.recorded_tool and not request.recorded_fixtures:
+            raise HarnessError(
+                "recorded-tool mode requires fixtures; it is not a live integration.",
+                code="recorded_fixtures_required",
+                status_code=400,
+            )
         now = utc_now()
         run = AgentRun(
             id=new_id("agent"),
@@ -107,6 +126,12 @@ class HarnessService:
             budgets=request.budgets,
             created_at=now,
             updated_at=now,
+            workspace_id=request.workspace_id,
+            parent_run_id=request.parent_run_id,
+            tool_mode=request.tool_mode,
+            tool_mode_label=label_for_tool_mode(request.tool_mode),
+            recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
+            recorded_fixtures=list(request.recorded_fixtures or []),
         )
         cancel = threading.Event()
         with self._lock:
@@ -145,9 +170,10 @@ class HarnessService:
         http_sink: list[dict[str, Any]] = []
         try:
             model = self._model_factory(run, http_sink)
+            fixtures = run.recorded_fixtures if run.tool_mode is ToolMode.recorded_tool else None
             agent = create_deep_agent(
                 model=model,
-                tools=tools_for_names(run.presented_tools),
+                tools=tools_for_names(run.presented_tools, recorded_fixtures=fixtures),
                 system_prompt=run.system_prompt,
                 middleware=[WorkbenchHarnessMiddleware(run, http_sink)],
                 name="workbench-embedded-harness",

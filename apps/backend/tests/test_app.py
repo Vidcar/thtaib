@@ -77,6 +77,8 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertEqual(body["models"], str(self.paths.models))
         self.assertEqual(body["runtimes"], str(self.paths.runtimes))
         self.assertEqual(body["state"], str(self.paths.state))
+        self.assertEqual(body["cases"], str(self.paths.cases))
+        self.assertEqual(body["snapshots"], str(self.paths.snapshots))
         self.assertIn("LocalAIWorkbench", body["windows_layout"])
 
     def test_local_import_and_inspect_via_api(self) -> None:
