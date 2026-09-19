@@ -14,7 +14,7 @@ Start with [AGENTS.md](../AGENTS.md), [architecture](architecture.md) and [gover
 | Run/checkpoint links, project files, memory and snapshots | [State and recovery](modules/state-recovery.md) |
 | Definitions, connections, capabilities and integration consumers | [Registry](modules/registry.md) |
 | Backend coordination and desktop communication | [Backend and desktop](modules/backend-desktop.md) |
-| Repeatable tasks, engine measurements and evaluation evidence | [Lab integration](modules/lab-evaluation.md) |
+| Model Lab traits and Task cases (separate features) | [Lab integration](modules/lab-evaluation.md) |
 | Shared contract authoring and compatibility conventions | [Contracts](contracts.md) |
 
 ## Single homes for changing information

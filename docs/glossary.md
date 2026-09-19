@@ -89,6 +89,8 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | Soft “I can…” as Milestone title | Feature name as title; done-when in description |
 | Lab = try-before-commit / job replay | Model Lab vs Task cases and replay |
 | Model Lab is task replay | Model Lab ≠ Task cases and replay |
+| llama-bench stub is the whole Lab | Model Lab trait catalogue (grows beyond llama-bench) |
+| Inspect is Model Lab UX | OQ-014 is task-case UX; Model Lab is LAB-006 |
 | One Milestone per OQ | Feature Milestones only |
 
 ## Product and layout
@@ -136,12 +138,18 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Partial OQ-006 defaults only (store; not RAG / cross-surface sharing)** means Issue #17 locked the STATE-005 store. Retrieval/RAG and whether knowledge is shared across Chat, Lab and Builder stay open.
 
 <a id="model-lab"></a>
-**Model Lab** is hardware-local **model trait / capability testing** on David’s machine. Illustrative kinds: speed/throughput; prefill/decode at context lengths; MTP; quantisation impact; concurrent conversations; memory/needle; tool calling; vision — the catalogue can grow. It is **not** save-a-job-and-replay. Separate delivery feature from Task cases and replay ([LAB-001](../specs/modules/lab-evaluation.md#lab-001) separation). See the [delivery feature map](delivery-feature-map.md).
+**Model Lab** is hardware-local **model trait / capability testing** on David’s machine. Illustrative kinds: speed/throughput; prefill/decode at context lengths; MTP; quantisation impact; concurrent conversations; memory/needle; tool calling; vision — the catalogue can grow ([LAB-005](../specs/modules/lab-evaluation.md#lab-005)). The surface is trait selection, run and evidence ([LAB-006](../specs/modules/lab-evaluation.md#lab-006)). It is **not** save-a-job-and-replay. Separate delivery feature from Task cases and replay ([LAB-001](../specs/modules/lab-evaluation.md#lab-001) measurement split; [LAB-002](../specs/modules/lab-evaluation.md#lab-002)…[004](../specs/modules/lab-evaluation.md#lab-004) stay Task cases). See the [delivery feature map](delivery-feature-map.md#model-lab) and the [trait catalogue](../specs/modules/lab-evaluation.md#model-lab-trait-catalogue).
+
+<a id="trait-catalogue"></a>
+**Trait catalogue** is the extensible Model Lab list of hardware-local questions. Adding a family follows the [growth path](../specs/modules/lab-evaluation.md#model-lab-catalogue-growth). It is not a task-case library and not a closed benchmark suite.
+
+<a id="model-lab-surface"></a>
+**Model Lab surface** is trait selection, local run and interpretable evidence. It is not the Issue #15 thin Lab panel (that panel is Task cases capture → restore → rerun).
 
 <a id="task-cases-and-replay"></a>
 **Task cases and replay** is save a real run as a case, restore starting inputs, rerun recorded-tool vs live-tool, and compare evidence ([LAB-002](../specs/modules/lab-evaluation.md#lab-002)…[004](../specs/modules/lab-evaluation.md#lab-004) style). Separate delivery feature from Model Lab. Pack module [lab-evaluation](../specs/modules/lab-evaluation.md) may document both; product Milestones must not blur them.
 
-**Lab reuse** is the Task cases and replay path: capture → restore → rerun against the shared Deep Agents harness. It is not Model Lab, not a Lab agent, and not a second evaluation loop.
+**Lab reuse** is the Task cases and replay path: capture → restore → rerun against the shared Deep Agents harness. It is not Model Lab, not the Model Lab surface, not a Lab agent, and not a second evaluation loop.
 
 **Application directory snapshot** is the Issue #15 snapshot: an application-owned copy of allowlisted project files at a quiescent boundary, stored under `cases\` and `snapshots\`. It is not a git commit.
 
@@ -203,6 +211,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 
 **PATH llama** is an unsupported fallback. UAT claims use a managed runtime pinned under `runtimes\` with a runtime-manifest.
 
+<a id="preferred-capability-uat-model"></a>
 **Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS)** is Hugging Face repo `unsloth/Qwen3.8-27B-GGUF`, file `Qwen3.8-27B-UD-IQ4_XS.gguf` (~14.3 GB). Download it once with `huggingface_hub`, revision-pinned, under `%LOCALAPPDATA%\LocalAIWorkbench\models\`, and register it as a Model bundle ([MOD-001](../specs/modules/models.md#mod-001)). Tiny ~0.5B models are for fast smoke and process tests only — not for reply, tool-calling, or other capability acceptance. This is the preferred capability UAT model, not the only model forever, and it is not required for every fast smoke.
 
 **Reuse managed Model bundle (reference/link; no scratch copy)** means capability UAT points at the registered bundle or its local path. Do not copy the GGUF into `.scratch/uat/` or any other workroot.

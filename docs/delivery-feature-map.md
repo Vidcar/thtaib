@@ -120,10 +120,10 @@ Honest map only. Module requirements are `partial` or `planned` in [the catalogu
 
 ### Model Lab
 
-- **Modules:** [LAB-001](../specs/modules/lab-evaluation.md#lab-001) separates engine measurements (llama-bench) from task evaluation. [MOD-003](../specs/modules/models.md#mod-003)/[006](../specs/modules/models.md#mod-006) and [ARCH-004](../specs/architecture.md#arch-004) cover applied settings and unverified≠incompatible. [OQ-007](../specs/open-questions.md#oq-007) remainder is compatibility evidence, not a Lab UX.
-- **ADRs:** none.
+- **Modules:** [LAB-005](../specs/modules/lab-evaluation.md#lab-005) is the extensible hardware-local [trait catalogue](../specs/modules/lab-evaluation.md#model-lab-trait-catalogue); [LAB-006](../specs/modules/lab-evaluation.md#lab-006) is the Model Lab surface (trait runs, not case replay). [LAB-001](../specs/modules/lab-evaluation.md#lab-001) still separates engine measurements (llama-bench) from task evaluation — that split is not permission to merge this feature with Task cases. [MOD-003](../specs/modules/models.md#mod-003)/[006](../specs/modules/models.md#mod-006) and [ARCH-004](../specs/architecture.md#arch-004) cover applied settings and unverified≠incompatible. [OQ-007](../specs/open-questions.md#oq-007) remainder is compatibility evidence, not this UX.
+- **ADRs:** none. High-level defaults are in [Lab integration](../specs/modules/lab-evaluation.md#locked-high-level-defaults-issue-54-model-lab).
 - **OQs:** [OQ-007](../specs/open-questions.md#oq-007) remainder; [OQ-014](../specs/open-questions.md#oq-014) is evaluation UX for **task** cases, not this feature.
-- **Issues:** no Issue specifies a hardware-local trait catalogue or Model Lab surface. Do not treat [#15](https://github.com/Vidcar/thtaib/issues/15) Lab reuse as Model Lab.
+- **Issues:** [#54](https://github.com/Vidcar/thtaib/issues/54) specifies the catalogue and UX. Do not treat [#15](https://github.com/Vidcar/thtaib/issues/15) Lab reuse as Model Lab. Runners stay `planned`.
 
 ### Task cases and replay
 
@@ -174,7 +174,7 @@ Write these as focused docs/ADR/OQ resolutions **before** treating the matching 
 
 | Gap | Feature home | Why it is a gap |
 | --- | --- | --- |
-| Model Lab UX / trait catalogue | Model Lab | No surface, runner list, or evidence shape for hardware-local traits (speed, context, MTP, quant, concurrent chats, needle, tools, vision). [LAB-001](../specs/modules/lab-evaluation.md#lab-001) only splits engine measurements from task evaluation. |
+| Model Lab runners on David-PC | Model Lab | [#54](https://github.com/Vidcar/thtaib/issues/54) specified the [catalogue and UX](../specs/modules/lab-evaluation.md#model-lab-trait-catalogue). Hardware-local runners (one family per Issue) are not implemented. [LAB-005](../specs/modules/lab-evaluation.md#lab-005)/[006](../specs/modules/lab-evaluation.md#lab-006) stay `planned`. |
 | Agent Chat UX | Agent Chat | High-level continuity + UX beyond debug is specified on [#52](https://github.com/Vidcar/thtaib/issues/52) ([agents and workflows](../specs/modules/agents-workflows.md#high-level-agent-chat-continuity-issue-52)). [#22](https://github.com/Vidcar/thtaib/issues/22) remains debug-quality. Continuity implementation is [#37](https://github.com/Vidcar/thtaib/issues/37) area 1 / [#56](https://github.com/Vidcar/thtaib/issues/56). This is not Chat polish and not effective setup ([#53](https://github.com/Vidcar/thtaib/issues/53)). |
 | Tools / workers surface | Project tools and workers | Enabled catalogue is visibility + filesystem tools. No product surface for authorising command/browser/graphical workers. [OQ-003](../specs/open-questions.md#oq-003) still blocks real workers. |
 | Builder beyond chrome ADR | Builder | [ADR-0003](../specs/decisions/ADR-0003-builder-v1-chrome.md) is presentation. Canvas, node library, run-inspector wiring, and product UAT need an implementation Issue with matching spec — not a chrome-only claim. |
@@ -219,7 +219,7 @@ Per-feature reminders, not the ordered next work — that is [Next path](#next-p
 
 ### Model Lab (Milestone #6)
 
-- Model Lab UX / trait catalogue spec (required before runners).
+- Catalogue and UX spec: [#54](https://github.com/Vidcar/thtaib/issues/54) / [LAB-005](../specs/modules/lab-evaluation.md#lab-005)/[006](../specs/modules/lab-evaluation.md#lab-006). Required before runners; growth path is in the spec.
 - Hardware-local trait slices on David-PC (catalogue can grow; one trait family per Issue is fine).
 - Results informing profiles / Chat — handoff only; do not merge with Task cases.
 
