@@ -31,7 +31,7 @@ Runs [the checker regression tests](../tests/specs/test_check_specs.py), includi
 python scripts/check_specs.py --require-adopted
 ```
 
-This is expected to fail on an unadopted pack. After [repository setup](repository-setup.md), it checks that adoption metadata and an active non-placeholder CODEOWNERS file exist. It cannot authenticate the stated human reviewer or inspect server-side branch protections. Reviewer identity still needs maintainer confirmation. Required branch-protection checks are unavailable on this private free-plan repository and are **not** an open ask; see [repository setup](repository-setup.md).
+This is expected to fail on an unadopted pack. After [repository setup](repository-setup.md), it checks that adoption metadata and an active non-placeholder CODEOWNERS file exist. It cannot authenticate the stated human reviewer or inspect server-side branch protections. Reviewer identity still needs maintainer confirmation. Public `main` has required status checks (strict tip); names are in [CI scope](#ci-scope). Green required CI is not catalogue `verified`. See [repository setup](repository-setup.md).
 
 <a id="requirement-hash"></a>
 ## Obtain the digest for a verified requirement
@@ -179,14 +179,14 @@ The [backend unittest workflow](../.github/workflows/backend.yml) runs the regis
 Stable GitHub status-check names (job `name` values) are:
 
 ```text
-spec-integrity (ubuntu-latest)
-spec-integrity (windows-latest)
 backend-unittest (ubuntu-latest)
 backend-unittest (windows-latest)
 desktop-typecheck-build (ubuntu-latest)
 desktop-typecheck-build (windows-latest)
 shared-contract-freshness (ubuntu-latest)
 shared-contract-freshness (windows-latest)
+spec-integrity (ubuntu-latest)
+spec-integrity (windows-latest)
 ```
 
-These jobs run as **advisory CI only**. Merges are **not** blocked by required checks. Selecting them as required branch-protection checks is optional Pro/public-only and is **not** open human work; see [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.
+These eight status-check names are **required** on public `main` (classic branch protection, strict tip). Merges need them green on the pull-request tip. Agents keep tip-gating (`behind_by` 0 plus green required checks on that tip). Green required CI is **not** catalogue `verified` and **not** build-stage product acceptance. There is **no Pro ask** — Pro is unnecessary on a public repository. See [repository setup](repository-setup.md). The remaining unavailable commands above are still not CI gates.

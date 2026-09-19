@@ -50,7 +50,7 @@ Introduce each gate with its first affected implementation, not after the projec
 
 | First implementation | Gate to add and register |
 | --- | --- |
-| Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files. Slice 1 freshness is registered as advisory CI ([commands](commands.md#check-shared-contract-freshness)); remaining fixture/compatibility gates stay open. |
+| Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files. Slice 1 freshness is registered as a required check on public `main` ([commands](commands.md#check-shared-contract-freshness)); it is not catalogue `verified`. Remaining fixture/compatibility gates stay open. |
 | Concrete module/package layout | Import/dependency boundary checks for the agreed direction |
 | Model/runtime integration | Real managed deployment, companion-file resolution and requested/applied-setting evidence |
 | Tool/worker execution | Permission, cancellation, denied-access and real filesystem/process checks |
@@ -58,7 +58,7 @@ Introduce each gate with its first affected implementation, not after the projec
 | Snapshots/branching | Consistent capture, isolated restore and parent-preservation checks |
 | Live Lab cases | Restored starting inputs and recorded-tool versus live-tool distinction |
 
-The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest and desktop type-check/build now have registered CI jobs ([commands CI scope](commands.md#ci-scope)); that does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
+The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest, desktop type-check/build, shared-contract freshness and specification-integrity now have registered required checks on public `main` ([commands CI scope](commands.md#ci-scope)); that does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
 
 ## Build-stage acceptance from revision 0.5
 

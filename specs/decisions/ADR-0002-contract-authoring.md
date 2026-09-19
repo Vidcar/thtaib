@@ -36,4 +36,4 @@ Generated outputs are not manually edited. Generation must be deterministic unde
 
 ## Evidence and approval
 
-Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Implementation is **partial**: generation, committed artifacts and an advisory freshness job exist. Catalogue `verified` is not claimed. Cancellation/recovery behaviour and desktop trust enforcement remain sibling issues.
+Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Implementation is **partial**: generation, committed artifacts and a freshness job exist (required on public `main`; not catalogue `verified`). Catalogue `verified` is not claimed. Cancellation/recovery behaviour and desktop trust enforcement remain sibling issues.

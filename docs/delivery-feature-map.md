@@ -68,7 +68,7 @@ Shipped/closed work already attaches toward features. **Do not rewrite closed Is
 | [#31](https://github.com/Vidcar/thtaib/issues/31) MOD-006 provenance + STATE-004 | Managed models; Project tools (unknown-effect safety) |
 | [#32](https://github.com/Vidcar/thtaib/issues/32) advisory product CI | Process / verification |
 | [#35](https://github.com/Vidcar/thtaib/issues/35) WF-001 definition compiler | Builder (definition≠runtime compile; not canvas) |
-| [#36](https://github.com/Vidcar/thtaib/issues/36) OQ-010 advisory-CI honesty | Process |
+| [#36](https://github.com/Vidcar/thtaib/issues/36) OQ-010 advisory-CI honesty | Process (hosting/required-check stance superseded by [#76](https://github.com/Vidcar/thtaib/issues/76); do not rewrite #36 AC) |
 | [#40](https://github.com/Vidcar/thtaib/issues/40)–[#42](https://github.com/Vidcar/thtaib/issues/42) Slice 1 trust, contracts, cancel honesty | Agent Chat; Project tools (trust-before-workers) |
 | [#44](https://github.com/Vidcar/thtaib/issues/44) Status vs Milestone standing rule | Process |
 
