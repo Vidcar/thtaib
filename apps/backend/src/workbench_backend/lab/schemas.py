@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from workbench_backend.agents.schemas import AgentBudgets, TaskCriteria, ToolMode
+from workbench_backend.knowledge.redaction import DETECTOR_LIMITATIONS
 from workbench_backend.knowledge.schemas import KnowledgeBinding
 
 
@@ -197,4 +198,11 @@ class CaseExport(BaseModel):
     case: LabCase
     snapshot: SnapshotManifest
     secret_scan_clean: bool
-    note: str = "Export excludes secrets, weights, scratch, venv, node_modules and env credentials."
+    export_status: Literal["clean", "sanitized"] = "clean"
+    sanitized_fields: list[str] = Field(default_factory=list)
+    exported_files: dict[str, str] = Field(default_factory=dict)
+    detector_limitations: str = DETECTOR_LIMITATIONS
+    note: str = (
+        "Shareable export sanitizes or blocks detectable unsafe content. "
+        "Filename exclusions are not sufficient. Detector is incomplete."
+    )

@@ -50,6 +50,8 @@ Instrument the final model-adapter boundary after context middleware. Link actua
 
 The capture must agree with the [effective setup](../architecture.md#effective-setup-contract) the harness used. Listing a selected profile or knowledge id is not proof it was loaded or applied.
 
+Diagnostic copies use the [STATE-005](state-recovery.md#state-005) Knowledge capture policy ([Issue #64](https://github.com/Vidcar/thtaib/issues/64)): retain / `redact_secrets` / discard and optional retention expiry apply to persisted `model_requests` (including HTTP payloads) before store. Conversation transcripts, checkpoints and operational event history are not discarded by that setting. The detector is pattern-based and incomplete.
+
 <a id="agt-003"></a>
 ### AGT-003: Leave task budgets unset by default
 

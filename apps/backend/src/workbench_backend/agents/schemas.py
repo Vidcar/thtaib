@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
-from workbench_backend.knowledge.schemas import KnowledgeBinding
+from workbench_backend.knowledge.schemas import KnowledgeBinding, RedactionMode
 from workbench_backend.state.schemas import RelatedFile
 
 # Harness run records use the shared #41 lifecycle vocabulary. Do not keep a
@@ -76,6 +76,14 @@ class ModelRequestCapture(BaseModel):
     selected_profile_id: str | None = None
     applied_per_request: dict[str, Any] = Field(default_factory=dict)
     startup_mismatches: list[dict[str, Any]] = Field(default_factory=list)
+    redaction_mode: RedactionMode = "redact_secrets"
+    retention_seconds: int | None = None
+    expires_at: str | None = None
+    retained: bool = True
+    redacted: bool = False
+    discarded: bool = False
+    expired: bool = False
+    redacted_fields: list[str] = Field(default_factory=list)
 
 
 class ToolMode(str, Enum):

@@ -47,7 +47,15 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.schemas import KnowledgeRefs, KnowledgeVersion
+from workbench_backend.knowledge.diagnostics import (
+    apply_run_diagnostic_policy,
+    capture_settings_for_paths,
+)
+from workbench_backend.knowledge.schemas import (
+    ContextCaptureSettings,
+    KnowledgeRefs,
+    KnowledgeVersion,
+)
 from workbench_backend.knowledge.service import KnowledgeService
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -94,19 +102,19 @@ class HarnessService:
         with self._lock:
             for run in self._runs.values():
                 stored[run.id] = run.model_copy(deep=True)
-        return list(stored.values())
+        return [self._expose_run(item) for item in stored.values()]
 
     def get_run(self, run_id: str) -> AgentRun:
         with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
-                return run.model_copy(deep=True)
+                return self._expose_run(run)
         stored = self.store.get_run(run_id)
         if stored is None:
             raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
         with self._lock:
             self._runs.setdefault(run_id, stored)
-        return stored.model_copy(deep=True)
+        return self._expose_run(stored)
 
     def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
         """Runs still writing or executing against a workspace (quiescent check).
@@ -276,7 +284,13 @@ class HarnessService:
                 model=model,
                 tools=tools_for_names(run.presented_tools, recorded_fixtures=fixtures),
                 system_prompt=run.system_prompt,
-                middleware=[WorkbenchHarnessMiddleware(run, http_sink)],
+                middleware=[
+                    WorkbenchHarnessMiddleware(
+                        run,
+                        http_sink,
+                        settings_provider=self._capture_settings,
+                    )
+                ],
                 name="workbench-embedded-harness",
                 checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
                 **agent_kwargs,
@@ -435,7 +449,21 @@ class HarnessService:
         run.related_files = unique
 
     def _persist(self, run: AgentRun) -> None:
+        sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
+        run.model_requests = sanitized.model_requests
         self.store.put_run(run.model_copy(deep=True))
+
+    def _capture_settings(self) -> ContextCaptureSettings:
+        if self._knowledge_provider is not None:
+            return self._knowledge_provider().get_config().context_captures
+        return capture_settings_for_paths(self.manager.paths)
+
+    def _expose_run(self, run: AgentRun) -> AgentRun:
+        sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
+        if sanitized.model_requests != run.model_requests:
+            run.model_requests = sanitized.model_requests
+            self.store.put_run(run.model_copy(deep=True))
+        return sanitized.model_copy(deep=True)
 
 
 def _resolved_project_path(project_path: str | None) -> str | None:
