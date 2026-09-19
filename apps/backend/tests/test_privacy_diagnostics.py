@@ -27,7 +27,7 @@ from workbench_backend.knowledge.redaction import DETECTOR_LIMITATIONS, REDACTIO
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.paths import WorkbenchPaths
 
-from tests.scripted_model import ScriptedChatModel
+from tests.scripted_model import ScriptedChatModel, set_capture_sink
 from tests.support import close_workbench_sqlite, workbench_client
 
 # Synthetic fixtures only — never real secrets.
@@ -136,7 +136,9 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         self.app.state.manager = self.manager
 
         def factory(_run: AgentRun, sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            sink.append({"body": {"messages": [{"content": SYNTH_ASSIGNMENT}]}})
+            # Append during generate so #57 per-call HTTP observation sees this
+            # payload on the call that produced it (not a stale factory preload).
+            set_capture_sink(sink, {"body": {"messages": [{"content": SYNTH_ASSIGNMENT}]}})
             return ScriptedChatModel(echo_secret_then_reply())
 
         self.app.state.harness = HarnessService(
@@ -155,6 +157,7 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        set_capture_sink(None)
         close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
 

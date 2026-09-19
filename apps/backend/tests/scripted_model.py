@@ -18,10 +18,25 @@ GENERATE_HOLD: threading.Event | None = None
 GENERATE_HOLD_ENTERED: threading.Event | None = None
 # Flattened model-bound prompts. Survives LangChain copies of the instance.
 RECEIVED_PROMPTS: list[str] = []
+# Optional HTTP-capture sink. Appended during _generate so Issue #57
+# per-call observation sees the payload for this model call.
+CAPTURE_SINK: list[dict[str, Any]] | None = None
+CAPTURE_PAYLOAD: dict[str, Any] | None = None
 
 
 def reset_received_prompts() -> None:
     RECEIVED_PROMPTS.clear()
+
+
+def set_capture_sink(
+    sink: list[dict[str, Any]] | None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Install or clear the generate-time HTTP capture used by LangChain copies."""
+
+    global CAPTURE_SINK, CAPTURE_PAYLOAD
+    CAPTURE_SINK = sink
+    CAPTURE_PAYLOAD = payload
 
 
 def _message_text(message: BaseMessage) -> str:
@@ -121,6 +136,8 @@ class ScriptedChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         RECEIVED_PROMPTS.append("\n".join(_message_text(item) for item in messages))
+        if CAPTURE_SINK is not None and CAPTURE_PAYLOAD is not None:
+            CAPTURE_SINK.append(dict(CAPTURE_PAYLOAD))
         message = self._next_message()
         return ChatResult(generations=[ChatGeneration(message=message)])
 
