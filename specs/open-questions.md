@@ -224,7 +224,7 @@ Whether and how the workbench routes among models, and how managed local GGUF de
 
 **Owner:** Lab/evaluation boundary. **Blocks:** a product evaluation UX beyond Inspect AI building blocks.
 
-Datasets, scorers, compare-runs presentation and export beyond the Lab's Inspect-backed cases remain unresolved. [Lab integration](modules/lab-evaluation.md) already owns cases, restoration and evidence; it does not select dataset/scorer adapters or a comparison/export product. Do not add a second evaluation engine or treat Inspect as a complete Lab UX.
+Datasets, scorers, compare-runs presentation and export beyond the Lab's Inspect-backed cases remain unresolved. [Lab integration](modules/lab-evaluation.md) already owns cases, restoration and evidence; it does not select dataset/scorer adapters or a comparison/export product. Do not add a second evaluation engine or treat Inspect as a complete Lab UX. The Model Lab surface is [LAB-006](modules/lab-evaluation.md#lab-006) (trait runs, not case replay); this question is **task-case** UX, not Model Lab.
 
 **Evidence needed:** a documented compare or export path that preserves applied configuration and distinguishes executable checks from model judgement, with adapters named only after a reviewed decision.
 

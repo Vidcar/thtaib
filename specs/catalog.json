@@ -788,6 +788,22 @@
       "evidence": []
     },
     {
+      "id": "LAB-005",
+      "document": "specs/modules/lab-evaluation.md",
+      "implementation_status": "planned",
+      "code": [],
+      "tests": [],
+      "evidence": []
+    },
+    {
+      "id": "LAB-006",
+      "document": "specs/modules/lab-evaluation.md",
+      "implementation_status": "planned",
+      "code": [],
+      "tests": [],
+      "evidence": []
+    },
+    {
       "id": "CTT-001",
       "document": "specs/contracts.md",
       "implementation_status": "partial",
