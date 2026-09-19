@@ -311,7 +311,17 @@
         "apps/backend/tests/test_bundles.py",
         "apps/backend/tests/test_deployments.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-002",
@@ -345,7 +355,17 @@
         "apps/backend/tests/test_runtime.py",
         "apps/backend/tests/test_effective_setup.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-004",
@@ -367,7 +387,17 @@
         "apps/backend/tests/test_runtime.py",
         "apps/backend/tests_integration/test_real_model_smoke.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "MOD-005",
@@ -392,6 +422,15 @@
           "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
           "date": "2026-09-19",
           "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
           "result": "passed",
           "requirement_sha256": null
         }
@@ -449,6 +488,15 @@
           "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
           "result": "passed",
           "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
         }
       ]
     },
@@ -498,7 +546,17 @@
         "apps/backend/tests/test_effective_setup.py",
         "apps/backend/tests/test_privacy_diagnostics.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "AGT-003",
@@ -707,6 +765,15 @@
           "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
           "result": "passed",
           "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
         }
       ]
     },
@@ -894,6 +961,15 @@
           "commit": "d8973bbc19e1909f9c3a5e894beb03aa5264badc",
           "date": "2026-09-19",
           "environment": "Ubuntu cloud VM, 4 vCPU, no GPU; llama.cpp b11045 CPU llama-server; Qwen2.5-0.5B-Instruct q4_k_m; connected deployment",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-19-david-pc-managed-inference.md",
+          "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
+          "date": "2026-09-19",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
           "result": "passed",
           "requirement_sha256": null
         }
