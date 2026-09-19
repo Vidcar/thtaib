@@ -101,8 +101,8 @@ Honest map only. Module requirements are `partial` or `planned` in [the catalogu
 
 - **Modules:** [models](../specs/modules/models.md) [MOD-001](../specs/modules/models.md#mod-001)…[006](../specs/modules/models.md#mod-006); [ARCH-004](../specs/architecture.md#arch-004).
 - **ADRs:** none model-specific. [ADR-0002](../specs/decisions/ADR-0002-contract-authoring.md) supplies the shared-contract envelope used by deployments.
-- **OQs:** [OQ-007](../specs/open-questions.md#oq-007) partial (#3 / #21 / #31); [OQ-013](../specs/open-questions.md#oq-013) open (routing / hybrid).
-- **Issues:** closed [#3](https://github.com/Vidcar/thtaib/issues/3), [#21](https://github.com/Vidcar/thtaib/issues/21), [#31](https://github.com/Vidcar/thtaib/issues/31). David-PC UAT of the CUDA/GPU path remains on those Issues’ original local-machine tags.
+- **OQs:** [OQ-007](../specs/open-questions.md#oq-007) partial (#3 / #21 / #31 / #62); [OQ-013](../specs/open-questions.md#oq-013) open (routing / hybrid).
+- **Issues:** closed [#3](https://github.com/Vidcar/thtaib/issues/3), [#21](https://github.com/Vidcar/thtaib/issues/21), [#31](https://github.com/Vidcar/thtaib/issues/31). Open [#62](https://github.com/Vidcar/thtaib/issues/62) (managed ownership; tracking [#58](https://github.com/Vidcar/thtaib/issues/58) finding 2). Do not rewrite closed #21 AC. David-PC UAT of the CUDA/GPU path remains on those Issues’ original local-machine tags; #62 live start/stop UAT is also local-machine-required.
 
 ### Agent Chat
 

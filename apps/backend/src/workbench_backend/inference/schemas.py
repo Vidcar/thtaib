@@ -152,6 +152,14 @@ class HealthReport(BaseModel):
     resource_usage: ResourceUsage | None = None
 
 
+class ProcessIdentity(BaseModel):
+    """Owned managed-process identity. PID alone is not sufficient."""
+
+    pid: int
+    create_time: float
+    executable: str
+
+
 class RuntimeManifest(BaseModel):
     schema_version: int = 1
     product: str = "Local AI Workbench"
@@ -211,6 +219,7 @@ class Deployment(BaseModel):
     applied_startup: dict[str, Any] = Field(default_factory=dict)
     settings: SettingsBags = Field(default_factory=SettingsBags)
     pid: int | None = None
+    process_identity: ProcessIdentity | None = None
     health: HealthReport | None = None
     resource_usage: ResourceUsage | None = None
     error: str | None = None

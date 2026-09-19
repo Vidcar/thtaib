@@ -15,6 +15,7 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | make it run a model / wire llama | Managed inference (MOD-001…004) |
 | the model in Chat | Model bundle / running deployment |
 | kill the remote server | Connected endpoint — no destructive lifecycle |
+| healthy endpoint means we own it | Health ≠ ownership; verify process identity |
 | compatibility means supported | Unverified ≠ incompatible |
 | PATH llama | Unsupported fallback; managed runtime is the supported path |
 | use 0.5B for agent UAT | Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS) |
@@ -187,6 +188,8 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Debug-quality Chat (Issue #22)** is the Chat tab that calls the embedded harness. Agent-run is not that surface. Do not call it finished Chat polish.
 
 **Partial OQ-007 landed on #21; remainder open** means Windows CUDA 13.4 pin, default GPU profile and valued `flash_attn` mapping landed with [Issue #21](https://github.com/Vidcar/thtaib/issues/21) / [PR #24](https://github.com/Vidcar/thtaib/pull/24). Full compatibility evidence, capability claims and complete setting-mapping verification stay [OQ-007](../specs/open-questions.md#oq-007).
+
+**Partial OQ-007 managed ownership on #62** means a managed live deployment stores process identity (pid + create_time + executable). Duplicate starts are serialized and idempotent for a verified-owned process. A healthy endpoint alone is not ownership. Stale/reused PID identity is refused before termination. Connected endpoints stay non-destructive. This is not catalogue `verified` and not David-PC UAT.
 
 **Partial OQ-007 provenance records on #31** means versioned compatibility records keep publisher guidance, tested adjustments and user overrides separate. `tested` is a record status, not catalogue `verified`. Unverified ≠ incompatible.
 

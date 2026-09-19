@@ -364,11 +364,13 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/inference/deployments.py",
+        "apps/backend/src/workbench_backend/inference/process.py",
         "apps/backend/src/workbench_backend/inference/runtime.py",
         "apps/backend/src/workbench_backend/inference/hardware.py"
       ],
       "tests": [
         "apps/backend/tests/test_deployments.py",
+        "apps/backend/tests/test_process_ownership.py",
         "apps/backend/tests/test_runtime.py"
       ],
       "evidence": []
