@@ -413,9 +413,13 @@
     {
       "id": "WF-001",
       "document": "specs/modules/agents-workflows.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/agents/definition_compiler.py"
+      ],
+      "tests": [
+        "apps/backend/tests/test_definition_compiler.py"
+      ],
       "evidence": []
     },
     {

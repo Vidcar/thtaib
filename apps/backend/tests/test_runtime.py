@@ -59,7 +59,7 @@ class TrackingCudaInstaller(FakeCudaInstaller):
 
 class RuntimePinTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=os.name == "nt")
         self.root = Path(self.tmp.name)
         self.paths = WorkbenchPaths(self.root).ensure()
         self.gguf = write_tiny_gguf(self.root / "incoming" / "tiny.gguf")
@@ -68,12 +68,18 @@ class RuntimePinTests(unittest.TestCase):
     def tearDown(self) -> None:
         manager = getattr(self, "_active_manager", None)
         if manager is not None:
+            pids: list[int] = []
             for deployment in list(manager.list_deployments()):
-                if deployment.scope.value == "managed" and deployment.pid:
-                    try:
-                        manager.stop_deployment(deployment.id)
-                    except ManagerError:
-                        pass
+                if deployment.scope.value != "managed":
+                    continue
+                if deployment.pid:
+                    pids.append(deployment.pid)
+                try:
+                    manager.stop_deployment(deployment.id)
+                except ManagerError:
+                    pass
+            for pid in pids:
+                manager.deployments.processes.wait_until_gone(pid, timeout=5.0)
         self.tmp.cleanup()
 
     def _manager(
@@ -205,7 +211,11 @@ class RuntimePinTests(unittest.TestCase):
         pinned = manager.pin_runtime(
             PinRuntimeRequest(local_executable=str(replacement), stop_first=True)
         )
-        self.assertEqual(pinned.status, "ready")
+        self.assertEqual(
+            pinned.status,
+            "ready",
+            pinned.error or "stop_first pin did not record an error",
+        )
         self.assertTrue((Path(pinned.install_dir) / "extra.dll").is_file())
         stopped = manager.get_deployment(deployment.id)
         self.assertEqual(stopped.status.value, "stopped")
