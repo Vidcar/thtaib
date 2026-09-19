@@ -48,4 +48,4 @@ Expose answers, failures, resource use, artifacts and checks rather than scores 
 
 ## Unresolved details
 
-[OQ-005](../open-questions.md#oq-005) covers restorable starting states; [OQ-010](../open-questions.md#oq-010) covers fixtures, reproducible environment manifests and acceptance commands. Optional beta grading support is tracked separately under [OQ-009](../open-questions.md#oq-009).
+[OQ-005](../open-questions.md#oq-005) covers restorable starting states; [OQ-010](../open-questions.md#oq-010) covers fixtures, reproducible environment manifests and acceptance commands. Optional beta grading support is tracked separately under [OQ-009](../open-questions.md#oq-009). [OQ-012](../open-questions.md#oq-012) covers run observability outside Lab. [OQ-014](../open-questions.md#oq-014) covers evaluation UX beyond Inspect.

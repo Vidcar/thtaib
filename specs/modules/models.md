@@ -62,4 +62,4 @@ Compatibility profiles are versioned and include requirements, supported capabil
 
 ## Unresolved details
 
-[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers compatibility evidence, startup/request settings and external lifecycle control. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager without claiming `verified` or closing OQ-007.
+[OQ-001](../open-questions.md#oq-001) covers pinned dependencies and code locations; [OQ-007](../open-questions.md#oq-007) covers compatibility evidence, startup/request settings and external lifecycle control. [OQ-013](../open-questions.md#oq-013) covers multi-model routing and hybrid local/remote deployments; the model manager owns them and no second inference engine is implied. Do not invent universal runtime flags or model capability guarantees while these are unresolved. Requirement wording for MOD-001…004 is unchanged; Issue #3 implements the manager without claiming `verified` or closing OQ-007.
