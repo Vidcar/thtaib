@@ -6,9 +6,9 @@ The plan for delivering Local AI Workbench, feature by feature, in the order Dav
 
 Decided 2026-09-19: return to the Revision 0.5 build order and prove managed inference before more features.
 
-1. **Managed inference proof on David-PC** — fix the runtime flag mapping and `mmproj` ([DEV-002](../specs/deviations.md#dev-002)); pin → download → start → health → one Chat turn with the preferred capability UAT model on David's machine; record the first `verified` rows (MOD-004, MOD-005, AGT-001).
-2. **Real-model CI smoke tier** — Linux CPU llama-server with a tiny GGUF on every pull request, so tool calling, continuity and applied settings are proven against a real server instead of a script.
-3. **Project storage hardening and streaming** — keep harness scratch out of the project folder; stream run events instead of polling; Chat without a project folder ([DEV-003](../specs/deviations.md#dev-003)); fix the profile `system_prompt` override.
+1. **Managed inference proof on David-PC** — done on 2026-09-19 for pin → download → start → health → Chat turn → continuity → stop with the preferred capability UAT model ([evidence](../specs/evidence/2026-09-19-david-pc-managed-inference.md)); the runtime flag and `mmproj` fixes landed in PR #81. Remaining for the first `verified` rows: the clauses each acceptance line still lacks (companion files, an unsupported value, the connected half of MOD-004, project-less Chat) and the official mmproj for vision.
+2. **Real-model CI smoke tier** — landed in PR #82; runs on every pull request. Remaining: make `real-model-smoke` a required check (maintainer action) and start recording its runs as `ci-smoke` evidence rows.
+3. **Project storage hardening and streaming** — keep harness scratch out of the project folder ([DEV-004](../specs/deviations.md#dev-004)); stream run events instead of polling ([DEV-005](../specs/deviations.md#dev-005)); Chat without a project folder ([DEV-003](../specs/deviations.md#dev-003)); fix the profile `system_prompt` override; capture `llama-server` logs instead of discarding them.
 4. **First worker environment** — Windows host shell with approvals on Deep Agents `permissions=`, `interrupt_on=` and `LocalShellBackend` ([OQ-003](../specs/open-questions.md#oq-003)).
 5. **Retrieval research** — what LangChain's supported retrieval components deliver with little custom code; then specify under [OQ-006](../specs/open-questions.md#oq-006).
 6. **Model Lab runners** (llama-bench and a tool-calling probe) on David-PC, then **Builder**.

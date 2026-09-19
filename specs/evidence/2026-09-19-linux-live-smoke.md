@@ -12,19 +12,19 @@ Ubuntu cloud VM, 4 vCPU, no GPU; Python 3.12.3, uv 0.12.17; llama.cpp release **
 
 ## What ran
 
-| Step | Live / mocked | Result |
-| --- | --- | --- |
-| `GET /health` | live | 200 |
-| `GET /v1/bundles` without header; with wrong header; with correct header | live | 401; 403; 200 `[]` (API-003) |
-| `POST /v1/deployments/connected` pointing at the running llama-server; health probe | live | attached with `scope=connected`; healthy |
-| `POST /v1/chat/conversations` (project `/tmp/uatproj`); `…/start` with "create hello.txt" | live model, live filesystem tools | run `completed` in ~6 s; model emitted `write_file`; `/tmp/uatproj/hello.txt` = "hello from qwen"; captured request body carried 8 tools and the full system prompt; 6 checkpoint ids linked; `thread_id` recorded (AGT-001, STATE-002) |
-| Second turn on the same conversation: "reply with the file name you created" | live | same `thread_id`; outbound request contained 6 messages including the earlier `assistant(tool_calls)` and `tool` result; answer "hello.txt" (STATE-001 continuity at the wire) |
-| Profile `{temperature: 0.1, top_k: 20, min_p: 0.05, max_tokens: 64, bogus_setting: 1}` bound; third turn | live | wire body carried `temperature`, `top_k`, `min_p`, `max_completion_tokens`; `bogus_setting` reported in `unsupported.per_request`; `ctx_size` and `flash_attn` listed as startup mismatches (loaded startup null on a connected deployment); answer "PONG" (MOD-005, ARCH-003 applied settings) |
-| `llama-server --mlock`, `--no-mmap` with b11045 | live binary | `error: invalid argument` for both; `--load-mode mlock` accepted; bare `--flash-attn` rejected (recorded as [DEV-002](../deviations.md#dev-002)) |
-| `POST /v1/runtime/pin` on Linux | live | HTTP 200 with `status: failed`, "NVIDIA GPU was not detected" (honest Windows-only path) |
+| Step or command | Working directory | Live / mocked / recorded | Result |
+| --- | --- | --- | --- |
+| `GET /health` | HTTP client | live | 200 |
+| `GET /v1/bundles` without header; with wrong header; with correct header | HTTP client | live | 401; 403; 200 `[]` (API-003) |
+| `POST /v1/deployments/connected` pointing at the running llama-server; health probe | HTTP client | live | attached with `scope=connected`; healthy |
+| `POST /v1/chat/conversations` (project `/tmp/uatproj`); `…/start` with "create hello.txt" | HTTP client | live model, live filesystem tools | run `completed` in ~6 s; model emitted `write_file`; `/tmp/uatproj/hello.txt` = "hello from qwen"; captured request body carried 8 tools and the full system prompt; 6 checkpoint ids linked; `thread_id` recorded (AGT-001 project-bound half only, STATE-002) |
+| Second turn on the same conversation: "reply with the file name you created" | HTTP client | live | same `thread_id`; outbound request contained 6 messages including the earlier `assistant(tool_calls)` and `tool` result; answer "hello.txt" (STATE-001 continuity at the wire) |
+| Profile `{temperature: 0.1, top_k: 20, min_p: 0.05, max_tokens: 64, bogus_setting: 1}` bound; third turn | HTTP client | live | wire body carried `temperature`, `top_k`, `min_p`, `max_completion_tokens`; `bogus_setting` reported in `unsupported.per_request`; `ctx_size` and `flash_attn` listed as startup mismatches (loaded startup null on a connected deployment); answer "PONG" (MOD-005 settings clause, ARCH-003 applied settings) |
+| `llama-server --mlock`, `--no-mmap` with b11045 | shell | live binary | `error: invalid argument` for both; `--load-mode mlock` accepted; bare `--flash-attn` rejected (recorded as [DEV-002](../deviations.md#dev-002), since fixed) |
+| `POST /v1/runtime/pin` on Linux | HTTP client | live | HTTP 200 with `status: failed`, "NVIDIA GPU was not detected" (honest Windows-only path) |
 
 Also run on the same tree, not live evidence: 181 backend unit tests passed in 24 s (all model calls scripted or against the fake server); desktop type-check and build passed; shared-contract freshness passed; spec checker passed (28 documents, 50 requirements, 0 verified).
 
 ## Conclusion
 
-Seen working live, plumbing only: backend token trust (401/403/200), Chat → Deep Agents harness → real tool call → file in the project, follow-up turn resuming the same LangGraph thread with prior tool messages on the wire, and a saved profile's per-request settings reaching the model with unsupported keys and startup mismatches reported. All results are executable observations at the HTTP boundary, not model judgements. Not covered: managed CUDA start on Windows, GPU detection, Hugging Face import, Lab capture/restore, knowledge store, Electron pairing, any capability claim. Requirements stay `built`; the first `verified` rows need the CI smoke tier or David-PC UAT.
+Seen working live, plumbing only: backend token trust (401/403/200), Chat → Deep Agents harness → real tool call → file in the project (with a project bound; project-less Chat, now required by AGT-001, was not exercised and is [DEV-003](../deviations.md#dev-003)), follow-up turn resuming the same LangGraph thread with prior tool messages on the wire, and a saved profile's per-request settings reaching the model with unsupported keys and startup mismatches reported. All results are executable observations at the HTTP boundary, not model judgements. Not covered: managed CUDA start on Windows, GPU detection, Hugging Face import, Lab capture/restore, knowledge store, Electron pairing, any capability claim. Requirements stay `built`; the first `verified` rows need the CI smoke tier or David-PC UAT.

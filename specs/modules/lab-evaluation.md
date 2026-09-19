@@ -16,7 +16,7 @@ Routes under `/v1/lab/`: `workspaces` (create, list, get, files), `cases/capture
 
 ## Behaviour
 
-**Task cases.** Capture from a real run reuses the run's `starting` snapshot; a run without one reports `starting_snapshot_unavailable` rather than presenting current files as inputs. Restore goes to a new workspace and a linked branch run ([state and recovery](state-recovery.md)). Rerun is labelled `recorded-tool` or `live-tool`. Recorded mode attaches no live filesystem backend; fixtures match by tool name and canonical arguments, and a missing, exhausted or mismatched fixture fails the run with a recorded deviation. Matched write fixtures apply only inside the replay workspace. Export sanitises or blocks detectable secrets using the knowledge redaction detector; `secret_scan_clean` is true only when nothing was detected. Restoring inputs never promises identical model output.
+**Task cases.** Capture from a real run reuses the run's `starting` snapshot; a run without one reports `starting_snapshot_unavailable` rather than presenting current files as inputs. Restore goes to a new workspace and a linked branch run ([state and recovery](state-recovery.md)). Rerun is labelled `recorded-tool` or `live-tool`. Recorded mode attaches no live filesystem backend; fixtures match by tool name and canonical arguments, and a missing, exhausted or mismatched fixture fails the run with a recorded deviation. Matched write fixtures apply only inside the replay workspace. Live-tool mode uses `FilesystemBackend` bound to project storage and stays labelled `live-tool`. Missing snapshots, external dependencies or permissions are reported, never replaced with convenient inputs. Export sanitises or blocks detectable secrets in task text, tool fixtures and included files using the knowledge redaction detector; filename exclusions alone are not sufficient; `secret_scan_clean` is true only when nothing was detected; stored local cases and snapshots are not rewritten by export. Restoring inputs never promises identical model output.
 
 **Engine measurements.** llama-bench from the managed runtime when present; otherwise `unavailable`. Scores are never invented.
 
@@ -58,7 +58,7 @@ Expose answers, failures, resource use, artifacts and checks rather than scores 
 
 Keep an application-owned catalogue of hardware-local model traits that can be measured on David's machine, starting from the families in the [trait catalogue](#trait-catalogue) and growing one family per issue. llama-bench covers engine-performance traits when present. Capability traits are not llama-bench stubs and not Inspect task-case replay. A missing runner reports unavailable; scores are never invented.
 
-**Acceptance:** Inspect the catalogue and show the starting families, the growth path for a new family, and that a missing runner is reported as unavailable. Show that a trait run is not a captured task case.
+**Acceptance:** Inspect the catalogue and show the starting families, the growth path for a new family, and that a missing runner is reported as unavailable. Show that a trait run is not a captured task case and is not filed under the Task cases Milestone.
 
 <a id="lab-006"></a>
 ### LAB-006: Model Lab UX is trait runs, not case replay

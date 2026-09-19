@@ -9,7 +9,7 @@ Run pack commands from the repository root (Python 3.11+; on Windows `py -3` if 
 | `python scripts/check_specs.py` | root | Validate links, IDs, catalogue, pointers, source hash, evidence shape. |
 | `python -m unittest discover -s tests/specs -p "test_*.py"` | root | Test the checker itself. |
 | `python scripts/check_specs.py --requirement-hash MOD-001` | root | Print the digest to put in a `verified` evidence row. |
-| `python scripts/check_specs.py --base-ref <full sha>` | root | Reject requirement IDs deleted since the base commit (CI sets `SPEC_BASE_REF`). |
+| `python scripts/check_specs.py --base-ref <full sha>` | root | Reject requirement IDs deleted since the base commit (CI sets `SPEC_BASE_REF`). Needs the full 40-character SHA; `main` or `origin/main` is rejected. |
 
 ## Backend
 
@@ -20,6 +20,14 @@ Run pack commands from the repository root (Python 3.11+; on Windows `py -3` if 
 | `uv run python -m unittest discover -s tests -p "test_*.py"` | `apps/backend` | Backend unit tests (fakes and scripted models; not live evidence). |
 | `uv run python ../../scripts/generate_shared_contracts.py` | `apps/backend` | Regenerate OpenAPI, JSON Schema and desktop types. |
 | `uv run python ../../scripts/generate_shared_contracts.py --check` | `apps/backend` | Fail if generated contracts are stale. |
+
+<a id="real-model-smoke"></a>
+## Real-model smoke tier
+
+| Command | Working directory | Purpose |
+| --- | --- | --- |
+| `uv run python -m tests_integration.assets` | `apps/backend` | Download the Linux x64 CPU build of the pinned llama.cpp release (sha256-verified) and the tiny smoke GGUF (`Qwen/Qwen2.5-0.5B-Instruct-GGUF` `q4_k_m`, pinned revision) into `.scratch/real-model-smoke/`; no-op when present. `--show` prints paths; `--cache-key` prints the CI cache key. Other platforms set `WORKBENCH_SMOKE_LLAMA_SERVER` and `WORKBENCH_SMOKE_MODEL_PATH`. |
+| `uv run python -m unittest discover -s tests_integration -t . -p "test_*.py"` | `apps/backend` | Start a real `llama-server` and drive the product API: connected attach and health, a Chat turn with a real `write_file`, thread continuity on a follow-up, per-request settings on the wire. About 10–15 s with assets present. Skips without assets unless `WORKBENCH_REAL_MODEL_SMOKE=required` (set in CI). Plumbing only — never capability evidence ([verification](verification.md#evidence-tiers)). |
 
 ## Desktop
 
@@ -33,12 +41,12 @@ Run pack commands from the repository root (Python 3.11+; on Windows `py -3` if 
 
 ## Not yet available
 
-Real-model CI smoke tier, import-boundary check, integration tests, product Docker services, application migrations. Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
+Import-boundary check; integration tiers beyond the real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; application migrations. Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
 
 <a id="ci"></a>
 ## CI
 
-Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`) and contract freshness (`contracts.yml`) on Ubuntu and Windows with read-only permissions and no secrets. These eight status checks are required on `main` with strict tip:
+Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`), contract freshness (`contracts.yml`) and the real-model smoke tier (`real-model-smoke.yml`, Ubuntu only, assets restored from `actions/cache` under the pin-derived key) with read-only permissions, no secrets and no Hugging Face token. These eight status checks are required on `main` with strict tip:
 
 ```text
 backend-unittest (ubuntu-latest)
@@ -51,4 +59,4 @@ spec-integrity (ubuntu-latest)
 spec-integrity (windows-latest)
 ```
 
-Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).
+A ninth check, `real-model-smoke (ubuntu-latest)`, runs on every pull request and is intended to join the required set; adding it to branch protection is a maintainer action, and until it is listed above it is not a merge gate. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).

@@ -12,14 +12,14 @@ Design choices not yet made. Recording a question is not permission to choose si
 
 **Status:** partially decided (same-machine shared secret and loopback bind, Issue #40). **Owner:** backend/desktop boundary. **Blocks:** any event streaming or reconnection claim; treating a remote backend as supported.
 
-Open: the event transport (SSE or WebSocket) and reconnection contract to replace polling; remaining origin/IPC checks; whether remote backend access is ever supported. **Evidence needed:** reconnect behaviour under a dropped client and a real Electron ↔ backend pairing on David-PC.
+Open: the event transport (SSE or WebSocket) and reconnection contract that replaces polling ([DEV-005](deviations.md#dev-005)); remaining origin/IPC checks; whether remote backend access is ever supported. An API bound locally must not be assumed secure solely because it is local. **Evidence needed:** reconnect behaviour under a dropped client and a real Electron ↔ backend pairing on David-PC.
 
 <a id="oq-003"></a>
 ## OQ-003: Worker protocol, isolation and access policy
 
 **Status:** partially decided — the first environment is the **Windows host shell with approvals**, built on Deep Agents `permissions=` / `interrupt_on=` and `LocalShellBackend`; WSL and Docker later (product owner decision, 2026-09-19, [changelog](decisions/changelog.md#2026-09-19--product-owner-decisions-project-chat)). **Owner:** environment/tool boundary. **Blocks:** browser or graphical execution; WSL, Docker or remote workers; sensitive mounts and installation rights beyond the approved host-shell policy.
 
-Open: the approval flow for host-shell commands (what is auto-allowed, what interrupts, how a decision is recorded); command and path validation; what the host shell exposes versus what later environments isolate; cancellation and teardown truth; worker identity for later remote environments. MCP is discovery and invocation, not isolation. **Evidence needed:** a real task through the host shell with an approval granted and one denied, plus an attempt to exceed the approved boundary, on David-PC.
+Open: the approval flow for host-shell commands (what is auto-allowed, what interrupts, how a decision is recorded); command and path validation; executable and network access and credential delivery; what the host shell exposes versus what later environments isolate; cancellation and teardown truth; worker identity for later remote environments. MCP is discovery and invocation, not isolation. **Evidence needed:** a real task through the host shell with an approval granted and one denied, plus an attempt to exceed the approved boundary, on David-PC; test explicitly authorised host access separately from isolated execution when later environments arrive.
 
 <a id="oq-004"></a>
 ## OQ-004: Run state, events, continuation and uncertain effects
@@ -33,7 +33,7 @@ Open: identity formats and parent/child semantics beyond conversation → thread
 
 **Status:** partially decided (directory snapshot #15; starting snapshot #65; restore integrity #66). **Owner:** persistence/environment boundary. **Blocks:** snapshot policy beyond the recorded defaults.
 
-Open: retention; concurrent-writer handling beyond "fail if live"; environment-snapshot adapters; the boundary between project files and an environment snapshot. **Evidence needed:** capture at a controlled boundary, restore into a separate workspace, exclusions visible, parent unchanged, on David-PC.
+Open: retention; concurrent-writer handling beyond "fail if live"; environment-snapshot adapters; the boundary between project files and an environment snapshot. Do not assume checkpoints or git commits capture untracked files, dependencies, services or remote effects. **Evidence needed:** capture at a controlled boundary, restore into a separate workspace, exclusions visible, parent unchanged, on David-PC.
 
 <a id="oq-006"></a>
 ## OQ-006: Memory, skills, retrieval and sensitive context
@@ -45,9 +45,9 @@ Next step: research the pinned LangChain retrieval components (document loaders,
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details
 
-**Status:** partially decided (CUDA pin and default profile #21; provenance records #31; deployment ownership #62). **Owner:** model-management boundary. **Blocks:** declaring any model capability or runtime control supported.
+**Status:** partially decided (CUDA pin and default profile #21; provenance records #31; deployment ownership #62; `load_mode`, `--mmproj` and `server_props` #81). **Owner:** model-management boundary. **Blocks:** declaring any model capability or runtime control supported.
 
-Open: complete startup and per-request setting mapping against the pinned llama.cpp (see [DEV-002](deviations.md#dev-002)); companion-file (`mmproj`) resolution; using `llama-server` `/props` for reported capabilities; cache reuse and interrupted downloads; lifecycle authority over external endpoints. **Evidence needed:** managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch, all on David-PC.
+Open: turning recorded `server_props` and tested adjustments into compatibility records and capability claims; the remaining startup and per-request controls (reasoning format, chat-template kwargs, thinking controls) against the pinned llama.cpp; cache reuse and interrupted downloads (pin currently re-downloads unconditionally); lifecycle authority over external endpoints. **Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch, all on David-PC (managed start without companions was seen live on 2026-09-19).
 
 <a id="oq-008"></a>
 ## OQ-008: Registry schemas, compatibility and extension loading
@@ -66,9 +66,9 @@ Open: rubric and interpreter middleware (beta upstream), background consolidatio
 <a id="oq-010"></a>
 ## OQ-010: Product verification commands and test environments
 
-**Status:** partially decided (required CI checks on public `main`, Issue #76; two-tier evidence model, 2026-09-19). **Owner:** boundary implementer. **Blocks:** calling a build stage verified.
+**Status:** partially decided (required CI checks on public `main`, Issue #76; two-tier evidence model, 2026-09-19; real-model smoke tier bound and registered, PR #82). **Owner:** boundary implementer. **Blocks:** calling a build stage verified.
 
-Open: import-boundary check; integration-test location and the real-model CI smoke tier; live-tool versus recorded fixtures as gates; David-PC UAT procedure and evidence retention. **Evidence needed:** registered commands run against real code at a recorded commit, including failure cases.
+Open: import-boundary check; integration tiers beyond the bound real-model smoke (managed Windows CUDA deployment, workers, MCP); live-tool versus recorded fixtures as gates; David-PC UAT procedure and evidence retention; making `real-model-smoke` a required check (maintainer action). **Evidence needed:** registered commands run against real code at a recorded commit, including failure cases.
 
 <a id="oq-011"></a>
 ## OQ-011: Durable product Approvals inbox
@@ -94,12 +94,12 @@ The model manager stays the owner and llama.cpp the local engine; no second infe
 <a id="oq-014"></a>
 ## OQ-014: Evaluation UX beyond Inspect
 
-**Status:** open. **Owner:** Lab boundary. **Blocks:** a task-case evaluation UX (datasets, scorers, compare-runs, export) beyond Inspect building blocks. Model Lab ([LAB-006](modules/lab-evaluation.md#lab-006)) is a separate feature.
+**Status:** open. **Owner:** Lab boundary. **Blocks:** a task-case evaluation UX (datasets, scorers, compare-runs, export) beyond Inspect building blocks. Model Lab ([LAB-006](modules/lab-evaluation.md#lab-006)) is a separate feature. No second evaluation engine; Inspect is not assumed to be the whole Lab UX. **Evidence needed:** a documented compare or export path that preserves applied configuration and distinguishes executable checks from model judgement, with adapters named only after a reviewed decision.
 
 <a id="oq-015"></a>
 ## OQ-015: Workflow definition import and export
 
-**Status:** open. **Owner:** agent/workflow and registry boundaries. **Blocks:** shipping import/export. Interchange only; LangGraph remains the runtime and an imported graph is not executable authority without backend validation ([WF-001](modules/agents-workflows.md#wf-001)).
+**Status:** open. **Owner:** agent/workflow and registry boundaries. **Blocks:** shipping import/export. Interchange only; LangGraph remains the runtime and an imported graph is not executable authority without backend validation ([WF-001](modules/agents-workflows.md#wf-001)). **Evidence needed:** a round-trip or rejected import against a registered definition with configuration links still excluded from execution sequencing.
 
 <a id="oq-016"></a>
 ## OQ-016: Builder canvas and chrome UX
@@ -111,6 +111,6 @@ Open: the React Flow canvas, node library, run-inspector wiring and UAT. The vis
 <a id="oq-017"></a>
 ## OQ-017: One persistence strategy for application records
 
-**Status:** open; recommendation recorded. **Owner:** persistence boundary. **Blocks:** any new durable record family; any record-schema change that would need a migration.
+**Status:** open; recommendation recorded (technical owner, 2026-09-19, [changelog](decisions/changelog.md)). **Owner:** persistence boundary. **Blocks:** choosing the storage engine for a new durable record family; moving an existing family between JSON and SQLite; introducing a migration mechanism. It does not block additive fields on existing records (for example `server_props` on deployments).
 
 Today runs, chat and the effects ledger live in `application.sqlite`, while bundles, profiles, deployments, import jobs, compatibility overrides, knowledge versions and Lab cases are JSON files under `state\` written by full atomic replace, with no file locking and no schema migration path. Two patterns mean two sets of failure modes and no place to put a migration. **Recommendation:** SQLite for all application records (one `application.sqlite`, versioned schema with an explicit migration step), files only for weights, workspaces, snapshots, artifacts and knowledge content bodies. This is a persistence-strategy change and needs an ADR; the migration is not part of the pack slimming. **Evidence needed:** a migration from the existing JSON stores that preserves every record and is reversible until cutover.
