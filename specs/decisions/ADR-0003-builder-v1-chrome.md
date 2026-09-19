@@ -1,6 +1,6 @@
 # ADR-0003: Lock Builder v1 canvas chrome
 
-**Decision status and approval:** see [the catalogue](../catalog.json). Initially a recorded proposal. Do not treat catalogue `draft` as Builder shipped.
+**Status:** draft; see [the catalogue](../catalog.json). Builder is not implemented.
 
 ## Context and current requirement
 
@@ -52,15 +52,8 @@ Unresolved risk: a later implementation may ship a mock that resembles this chro
 
 ## Verification
 
-This change is documentation. Required checks are pack integrity:
-
-```text
-python scripts/check_specs.py
-python -m unittest discover -s tests/specs -p "test_*.py"
-```
-
-Builder canvas implementation, React Flow product UAT, and catalogue `verified` claims are out of scope. They belong to a later implementation Issue. A screenshot or TooGraph resemblance is not that evidence.
+This record is documentation; pack integrity checks apply. Builder canvas implementation and product UAT belong to a later implementation issue. A screenshot or TooGraph resemblance is not that evidence.
 
 ## Review and supersession
 
-No prior ADR is superseded. Record the real reviewer, review reference and date in [the catalogue](../catalog.json) when maintainers accept this decision. Do not copy a fake approval into this file. Matching specification edits for [OQ-016](../open-questions.md#oq-016) travel in the same change.
+No prior ADR is superseded. Record the real reviewer, reference and date in [the catalogue](../catalog.json) when the product owner accepts this decision.

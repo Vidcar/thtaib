@@ -1,13 +1,12 @@
 # Architecture Decision Records
 
-Current status and adoption approval live in [the catalogue](../catalog.json). These files explain rationale and scope; they are not a second copy of the current architecture.
+Status and approval of each record live in [the catalogue](../catalog.json). Records explain rationale and scope; current behaviour lives in [architecture](../architecture.md) and the module specifications. Smaller dated decisions are in the [changelog](changelog.md).
 
-| Record | Purpose |
-| --- | --- |
-| [ADR-0001](ADR-0001-adopt-specification-pack.md) | Proposed adoption of the specification/maintenance process |
-| [ADR-0002](ADR-0002-contract-authoring.md) | Accepted canonical Pydantic/OpenAPI→TS authoring (Issue #41) |
-| [ADR-0003](ADR-0003-builder-v1-chrome.md) | Builder v1 canvas chrome locks (OQ-016 partial; surface not shipped) |
+| Record | Status | Purpose |
+| --- | --- | --- |
+| [ADR-0001](ADR-0001-adopt-specification-pack.md) | superseded | Original proposal to adopt the specification pack |
+| [ADR-0002](ADR-0002-contract-authoring.md) | accepted | Canonical Pydantic → OpenAPI → TypeScript contract authoring (Issue #41) |
+| [ADR-0003](ADR-0003-builder-v1-chrome.md) | draft | Builder v1 canvas chrome locks (Issue #29); Builder is not shipped |
+| [ADR-0004](ADR-0004-slim-specification-pack.md) | accepted | Slim the pack and adopt it (product owner, 2026-09-19) |
 
-Use the [decision template](../templates/decision.md) for the next unused identifier. Do not renumber existing records. A replacement decision identifies the record it supersedes, updates affected specifications in the same reviewed change, and records the real human approval reference. Keep superseded decisions readable for history.
-
-Do not manufacture historical decisions. Revision 0.5 is the evidence for its existing stack selections; this pack does not invent a prior ADR approval trail for them.
+Write a new record from the [decision template](../templates/decision.md) with the next unused number. Never renumber. A replacement record names what it supersedes and updates the affected specifications in the same change. Revision 0.5 is the evidence for the original stack selections; do not invent an approval trail for them.

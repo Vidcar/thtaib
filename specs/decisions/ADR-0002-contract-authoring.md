@@ -14,7 +14,7 @@ The landed Slice 1 path is:
 
 - Canonical Pydantic source: `apps/backend/src/workbench_backend/contracts`.
 - Generator input is a dedicated FastAPI **schema app** built from those models (`create_shared_contract_app`). It is not a second backend and is not mounted on the product HTTP app.
-- Product `/openapi.json` / `/docs` stay unpublished. That does not close [OQ-002](../open-questions.md#oq-002).
+- Product `/openapi.json` / `/docs` stay unpublished ([OQ-002](../open-questions.md#oq-002) covers the remaining trust questions).
 - OpenAPI export and JSON Schema are committed under `apps/backend/contracts/`.
 - Desktop consumer types are generated with pinned **openapi-typescript 7.13.0** (`apps/desktop/package.json` / `pnpm-lock.yaml`) into `apps/desktop/src/generated/shared-contracts/`.
 - Generation and freshness commands are registered in [commands](../commands.md). The freshness check fails on changed, removed, or newly generated files versus the committed tree.
@@ -36,4 +36,4 @@ Generated outputs are not manually edited. Generation must be deterministic unde
 
 ## Evidence and approval
 
-Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Implementation is **partial**: generation, committed artifacts and a freshness job exist (required on public `main`; not catalogue `verified`). Catalogue `verified` is not claimed. Cancellation/recovery behaviour and desktop trust enforcement remain sibling issues.
+Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Generation, committed artifacts and the freshness job exist and are a required check on `main`; the CTT-001 row in the catalogue records the current status.
