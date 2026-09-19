@@ -28,6 +28,7 @@ CORE_FILES = (
     "scripts/check_specs.py", "tests/specs/test_check_specs.py",
     ".github/CODEOWNERS.example", ".github/workflows/specs.yml",
     ".github/workflows/backend.yml", ".github/workflows/desktop.yml",
+    ".github/workflows/contracts.yml",
 )
 ID_PATTERN = r"[A-Z]{2,8}-\d{3}"
 ID_RE = re.compile(rf"\b({ID_PATTERN})\b")

@@ -14,7 +14,7 @@ Start with [AGENTS.md](../AGENTS.md), [architecture](architecture.md) and [gover
 | Definitions, connections, capabilities and integration consumers | [Registry](modules/registry.md) |
 | Backend coordination and desktop communication | [Backend and desktop](modules/backend-desktop.md) |
 | Repeatable tasks, engine measurements and evaluation evidence | [Lab integration](modules/lab-evaluation.md) |
-| Shared contract authoring and compatibility conventions | [Contracts — initially proposed](contracts.md) |
+| Shared contract authoring and compatibility conventions | [Contracts](contracts.md) |
 
 ## Single homes for changing information
 

@@ -16,7 +16,8 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "build": "pnpm run typecheck && vite build",
-    "package": "pnpm run build && electron-builder --win nsis"
+    "package": "pnpm run build && electron-builder --win nsis",
+    "generate:shared-contracts": "openapi-typescript ../backend/contracts/openapi.json -o src/generated/shared-contracts/openapi.d.ts --root-types"
   },
   "dependencies": {
     "@xyflow/react": "12.11.6",
@@ -30,6 +31,7 @@
     "@vitejs/plugin-react": "6.1.1",
     "electron": "44.4.3",
     "electron-builder": "26.15.3",
+    "openapi-typescript": "7.13.0",
     "typescript": "5.9.3",
     "vite": "8.3.0",
     "vite-plugin-electron": "1.1.2"

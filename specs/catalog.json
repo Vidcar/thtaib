@@ -39,8 +39,8 @@
       "kind": "specification",
       "basis": "pack-proposal",
       "owner": "Shared-contract boundary",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval_reference": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002 and CTT-001/CTT-002 authoring"
     },
     {
       "path": "specs/decisions/ADR-0001-adopt-specification-pack.md",
@@ -55,8 +55,8 @@
       "kind": "decision",
       "basis": "pack-proposal",
       "owner": "Architecture maintainers",
-      "status": "draft",
-      "approval_reference": null
+      "status": "accepted",
+      "approval_reference": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — maintainer-filed Slice 1 contracts issue authorises ADR-0002"
     },
     {
       "path": "specs/decisions/ADR-0003-builder-v1-chrome.md",
@@ -772,9 +772,17 @@
     {
       "id": "CTT-001",
       "document": "specs/contracts.md",
-      "implementation_status": "planned",
-      "code": [],
-      "tests": [],
+      "implementation_status": "partial",
+      "code": [
+        "apps/backend/src/workbench_backend/contracts/auth.py",
+        "apps/backend/src/workbench_backend/contracts/lifecycle.py",
+        "apps/backend/src/workbench_backend/contracts/schema_app.py",
+        "apps/backend/src/workbench_backend/contracts/cli.py",
+        "scripts/generate_shared_contracts.py"
+      ],
+      "tests": [
+        "apps/backend/tests/contracts/test_shared_contracts.py"
+      ],
       "evidence": []
     },
     {

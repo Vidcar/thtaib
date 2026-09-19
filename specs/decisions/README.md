@@ -5,7 +5,7 @@ Current status and adoption approval live in [the catalogue](../catalog.json). T
 | Record | Purpose |
 | --- | --- |
 | [ADR-0001](ADR-0001-adopt-specification-pack.md) | Proposed adoption of the specification/maintenance process |
-| [ADR-0002](ADR-0002-contract-authoring.md) | Proposed canonical Pydantic/schema/OpenAPI contract authoring |
+| [ADR-0002](ADR-0002-contract-authoring.md) | Accepted canonical Pydantic/OpenAPI→TS authoring (Issue #41) |
 | [ADR-0003](ADR-0003-builder-v1-chrome.md) | Builder v1 canvas chrome locks (OQ-016 partial; surface not shipped) |
 
 Use the [decision template](../templates/decision.md) for the next unused identifier. Do not renumber existing records. A replacement decision identifies the record it supersedes, updates affected specifications in the same reviewed change, and records the real human approval reference. Keep superseded decisions readable for history.
