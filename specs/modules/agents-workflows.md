@@ -76,4 +76,4 @@ Attach executable checks, expected artifacts and review criteria where a task ha
 
 ## Unresolved details
 
-Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics and [OQ-006](../open-questions.md#oq-006) for knowledge policy/storage. Evaluate optional middleware under [OQ-009](../open-questions.md#oq-009). Exact constructor arguments, graph APIs and middleware defaults are version-specific and are not prescribed here.
+Resolve [OQ-004](../open-questions.md#oq-004) for state/continuation semantics and [OQ-006](../open-questions.md#oq-006) for knowledge policy/storage and RAG surface-versus-shared ([AGT-004](#agt-004)). [OQ-011](../open-questions.md#oq-011) covers the durable product Approvals inbox. [OQ-015](../open-questions.md#oq-015) covers workflow import/export. Evaluate optional middleware under [OQ-009](../open-questions.md#oq-009). Exact constructor arguments, graph APIs and middleware defaults are version-specific and are not prescribed here.

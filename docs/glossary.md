@@ -14,6 +14,17 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 | kill the remote server | Connected endpoint — no destructive lifecycle |
 | compatibility means supported | Unverified ≠ incompatible |
 | PATH llama | Unsupported fallback; managed runtime is the supported path |
+| add RAG | OQ-006 unresolved (surface vs shared) |
+| MCP is the bus | open — default tool bus vs optional (OQ-009 / OQ-003) |
+| Approvals = LangGraph interrupt | OQ-011 — durable product Approvals inbox ≠ framework interrupt |
+| LangSmith for observability | OQ-012 — run observability outside Lab (local; LangSmith not home) |
+| just wire remote OpenAI | OQ-013 — multi-model / hybrid routing (model manager owns) |
+| Inspect is the whole Lab UX | OQ-014 — evaluation UX beyond Inspect |
+| import a workflow runtime | OQ-015 — definition import/export (not multi-runtime) |
+| second isolation question | OQ-003 — worker sandbox isolation |
+| registry means plugins exist | OQ-008 — skills/plugins discovery UX unresolved |
+| ship voice now | OQ-009 — voice/multimodal stay optional/experimental |
+| CDF fork | out of scope |
 
 ## Product and layout
 
@@ -44,3 +55,25 @@ Use these locked terms in issues, pull requests, and user-facing copy.
 **Unverified ≠ incompatible.** A missing compatibility claim is not a known incompatibility and is not a supported-capability claim.
 
 **PATH llama** is an unsupported fallback. UAT claims use a managed runtime pinned under `runtimes\` with a runtime-manifest.
+
+## Later-decision phrases (still open)
+
+These names are locked vocabulary, not selections. The questions stay in [open questions](../specs/open-questions.md).
+
+**OQ-006 unresolved (surface vs shared)** is whether retrieval/RAG and durable knowledge are shared across Chat, Lab and Builder or remain surface-local. It is not permission to “add RAG”.
+
+**Default tool bus vs optional (OQ-009 / OQ-003)** is whether MCP is the default tool bus or an optional integration. MCP is not isolation; sandbox isolation stays [OQ-003](../specs/open-questions.md#oq-003).
+
+**Durable product Approvals inbox (OQ-011)** is a product HITL surface. A LangGraph interrupt is not that inbox.
+
+**Run observability outside Lab (OQ-012)** is local traces, token/cost and parent/child attribution outside Lab cases. LangSmith is not the product home.
+
+**Multi-model / hybrid routing (OQ-013)** is routing among models and combining local GGUF with remote OpenAI-compatible endpoints. The model manager owns it; there is no second inference engine.
+
+**Evaluation UX beyond Inspect (OQ-014)** is datasets, scorers, compare-runs and export beyond Inspect building blocks.
+
+**Workflow definition import/export (OQ-015)** is interchange of workflow definitions, including LangGraph JSON and later adapters. It is not a second runtime.
+
+**Voice/multimodal optional (OQ-009)** stays experimental. It is not a core prerequisite.
+
+**CDF fork** is out of scope.
