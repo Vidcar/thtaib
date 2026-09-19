@@ -28,7 +28,7 @@ Locked names for issues, pull requests and user-facing copy. Behaviour lives in 
 
 **Application directory snapshot** — an application-owned copy of allowlisted project files at a quiescent boundary under `cases\` and `snapshots\`. Not a git commit.
 
-**Durable knowledge** — versioned user, agent and project memories, skills and protected instructions under `knowledge\` (STATE-005). **Protected instruction** — a knowledge kind that rejects agent-origin writes. **Knowledge conflict** — the explicit failure when `base_version` does not match. Durable knowledge is not retrieval; retrieval through LangChain components is a pending decision ([OQ-006](../specs/open-questions.md#oq-006)).
+**Durable knowledge** — versioned user, agent and project memories, skills and protected instructions under `knowledge\` (STATE-005). **Protected instruction** — a knowledge kind that rejects agent-origin writes. **Knowledge conflict** — the explicit failure when `base_version` does not match. **Retrieval / RAG** — query-time search over a derived LangChain index (STATE-006); not the durable store and not training. Deep Agents `memory=` / `skills=` are always-load / progressive disclosure, not retrieval. Remainder under [OQ-006](../specs/open-questions.md#oq-006).
 
 <a id="model-lab"></a>
 **Model Lab** — hardware-local model trait and capability testing on David's machine, presented as data and charts to understand model behaviour. It never writes back into profiles and has no apply button. Separate delivery from Task cases.

@@ -926,6 +926,18 @@
       "evidence": []
     },
     {
+      "id": "STATE-006",
+      "document": "specs/modules/state-recovery.md",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
+      "code": [],
+      "tests": [],
+      "evidence": []
+    },
+    {
       "id": "REG-001",
       "document": "specs/modules/registry.md",
       "status": "planned",

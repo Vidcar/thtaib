@@ -12,6 +12,16 @@ Authority: live run on David-PC against `8887f9f` ([PR #89](https://github.com/V
 - Catalogue `uat` rows attached on those IDs; statuses stay `built` (partial acceptance coverage; Electron and the durable inbox were not exercised).
 - No CI run URL — this was host UAT, not `ci-smoke`.
 
+## 2026-09-19 — OQ-006 retrieval research: include RAG in v1
+
+Authority: David, product owner (Retrieval/RAG is in the first usable version if LangChain's supported retrieval components deliver it with little custom code, Project chat 2026-09-19); technical research against the pinned stack on 2026-09-19. Requirements: STATE-006 (`planned`); AGT-002 capture field already exists; STATE-005 remains the durable owner. Narrows [OQ-006](../open-questions.md#oq-006). No ADR: no new execution owner, no persistent vector store, no second inference stack.
+
+- The product-owner "if" is satisfied. v1 RAG is **agentic retrieve-and-offload**, not 2-step prompt stuffing and not a workbench-written retriever.
+- Upstream (consulted 2026-09-19, pins `deepagents==0.7.15`, `langchain==1.4.2`, `langchain-core==1.6.3`, `langchain-openai==1.6.2`, llama.cpp b11045): [Deep Agents RAG](https://docs.langchain.com/oss/python/deepagents/rag), [LangChain retrieval](https://docs.langchain.com/oss/python/langchain/retrieval), [knowledge-base / semantic search](https://docs.langchain.com/oss/python/langchain/knowledge-base), [`InMemoryVectorStore`](https://reference.langchain.com/python/langchain-core/vectorstores/in_memory/InMemoryVectorStore/), [`OpenAIEmbeddings` compatible `base_url`](https://reference.langchain.com/python/langchain-openai/embeddings/base/OpenAIEmbeddings/), [Deep Agents memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) (always-load / progressive disclosure — not RAG), [llama-server `/v1/embeddings`](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+- Application glue is a derived per-run `InMemoryVectorStore` from selected knowledge versions, one `@tool` that `similarity_search`es and `upload_files` to `/retrieved/` on the existing `CompositeBackend`, plus fail-closed embedding-deployment resolve and AGT-002 `retrieved_material`. Add locked `langchain-text-splitters`. Do not persist Chroma/FAISS as a knowledge owner; do not use hosted or HuggingFace embeddings; do not use the chat GGUF as an embedder.
+- Left out of v1: `task()` chunk-analyst subagents, beta `RubricMiddleware`, whole-project indexing, automatic writes of retrieved text into STATE-005, a durable index shared across surfaces.
+- Implementation is a later PR. Live proof needs a dedicated embedding GGUF served by llama-server (`--embedding`, pooling ≠ `none`).
+
 ## 2026-09-19 — Host shell attaches only when execute is presented
 
 Authority: independent review of [PR #89](https://github.com/Vidcar/thtaib/pull/89) (F1). Requirements: ENV-001, ENV-002, ARCH-005.
