@@ -43,7 +43,18 @@ These defaults are authorised by [Issue #66](https://github.com/Vidcar/thtaib/is
 - **Missing or corrupted snapshot data fails.** A kept manifest with a removed tree is not restorable. A post-capture missing expected file or hash/size mismatch is not a successful restore. Unexpected tree files fail.
 - **Empty is explicit.** An intentionally empty captured tree (empty `included_files`, tree directory present) may restore to an empty workspace. A missing tree is not treated as empty.
 - **No silent workspace.** Restore stages into a new directory, verifies content against the manifest, and registers a restored workspace only after validation. Failed staging is discarded. The parent workspace is unchanged.
-- **Not claimed:** starting-snapshot capture timing ([Issue #65](https://github.com/Vidcar/thtaib/issues/65)), environment restore, or identical model output.
+- **Not claimed by this lock:** environment restore or identical model output. Starting-snapshot capture timing is locked separately by [Issue #65](#locked-milestone-defaults-issue-65-starting-snapshot).
+
+<a id="locked-milestone-defaults-issue-65-starting-snapshot"></a>
+## Locked milestone defaults (Issue #65; starting snapshot)
+
+These defaults are authorised by [Issue #65](https://github.com/Vidcar/thtaib/issues/65). They refine the [Issue #15](#locked-milestone-defaults-issue-15-partial-oq-005) snapshot owner for [LAB-002](#lab-002). They do not close [OQ-005](../open-questions.md#oq-005) and do not add a second snapshot system.
+
+- **Starting snapshot:** bind an application-owned directory snapshot to the run **before** project mutation, using the existing snapshot module (`snapshots\`, same exclusions and quiescent rule).
+- **Case capture:** saving a completed run as a case **reuses** that starting snapshot. It does not recapture the post-task workspace and label it as original inputs.
+- **Kinds remain distinct:** `starting` (pre-mutation inputs), `checkpoint` (later mid-run; not implemented here), and `final` (capture-time workspace when no run is referenced).
+- **Legacy / missing:** a run without a readable starting snapshot yields an explicit unavailable/degraded outcome (`starting_snapshot_unavailable`). Current files are not claimed as the original inputs.
+- **Parent isolation:** later parent edits do not alter the saved starting snapshot. Restore/rerun still writes a new workspace and does not overwrite the parent.
 
 ## Requirements and acceptance checks
 

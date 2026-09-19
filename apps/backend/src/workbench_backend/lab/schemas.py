@@ -48,10 +48,15 @@ class SnapshotExclusion(BaseModel):
     reason: str
 
 
+SnapshotKind = Literal["starting", "checkpoint", "final"]
+InputOrigin = Literal["starting_snapshot", "capture_time_workspace"]
+
+
 class SnapshotManifest(BaseModel):
     id: str
     workspace_id: str
     captured_at: str
+    kind: SnapshotKind = "final"
     mechanism: Literal["application_directory_snapshot"] = "application_directory_snapshot"
     not_git_commit: Literal[True] = True
     included_files: list[SnapshotFile] = Field(default_factory=list)
@@ -83,6 +88,8 @@ class CaptureRequest(BaseModel):
 class LabCase(BaseModel):
     id: str
     snapshot_id: str
+    snapshot_kind: SnapshotKind = "final"
+    input_origin: InputOrigin = "capture_time_workspace"
     source_run_id: str | None = None
     source_workspace_id: str
     task: str
@@ -117,6 +124,8 @@ class RestoreResult(BaseModel):
     branch: dict[str, str]
     deviations: list[str] = Field(default_factory=list)
     snapshot_id: str
+    snapshot_kind: SnapshotKind = "final"
+    input_origin: InputOrigin = "capture_time_workspace"
     external_effects_rolled_back: Literal[False] = False
     rollback_promise: Literal["none"] = "none"
     unresolved_side_effects: list[str] = Field(default_factory=list)

@@ -102,11 +102,11 @@ A durable product Approvals inbox is [OQ-011](#oq-011); a framework interrupt is
 <a id="oq-005"></a>
 ## OQ-005: Consistent project snapshots and restoration
 
-**Status:** partially constrained by [Issue #15](https://github.com/Vidcar/thtaib/issues/15) for Lab reuse and [Issue #66](https://github.com/Vidcar/thtaib/issues/66) for restore integrity. The question stays open.
+**Status:** partially constrained by [Issue #15](https://github.com/Vidcar/thtaib/issues/15) for Lab reuse, [Issue #65](https://github.com/Vidcar/thtaib/issues/65) for starting-snapshot bind/reuse, and [Issue #66](https://github.com/Vidcar/thtaib/issues/66) for restore integrity. The question stays open.
 
 **Owner:** Persistence/environment boundary. **Blocks:** remaining snapshot policy beyond the locked defaults — retention, concurrent-writer details beyond “fail if live tools are writing”, environment-snapshot adapters, and any mechanism other than the application-owned directory snapshot.
 
-Issue #15 locked these defaults for LAB-001…004 and STATE-003. They are recorded in [Lab integration](modules/lab-evaluation.md#locked-milestone-defaults-issue-15-partial-oq-005) and [state and recovery](modules/state-recovery.md). Do not invent a different snapshot mechanism:
+Issue #15 locked these defaults for LAB-001…004 and STATE-003. [Issue #65](https://github.com/Vidcar/thtaib/issues/65) further locks starting-snapshot bind/reuse on that same owner ([Lab starting snapshot](modules/lab-evaluation.md#locked-milestone-defaults-issue-65-starting-snapshot)). They are recorded in [Lab integration](modules/lab-evaluation.md#locked-milestone-defaults-issue-15-partial-oq-005) and [state and recovery](modules/state-recovery.md). Do not invent a different snapshot mechanism:
 
 - Application-owned directory snapshot of the allowlisted project workspace at a quiescent capture boundary (fail if live tools are still writing; `cancel_requested` is still live).
 - Store under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`. Not git-commit-as-snapshot.
@@ -114,6 +114,7 @@ Issue #15 locked these defaults for LAB-001…004 and STATE-003. They are record
 - Include allowlisted project files, task, profile/deployment ids, dependency versions, memory/skill/protected-instruction version refs, tool fixtures and acceptance checks.
 - Exclude secrets, weights/GGUF, `.scratch`, `.venv`, `node_modules` and env credentials.
 - No full environment restore this milestone; record exclusions.
+- Starting snapshot is bound before project mutation and reused when a run is saved as a case. Starting, later checkpoint and final snapshots stay distinct. A legacy run without a starting snapshot is unavailable/degraded — current files are not original inputs.
 
 [Issue #66](https://github.com/Vidcar/thtaib/issues/66) additionally locked restore integrity for that directory snapshot. Recorded in [Lab integration](modules/lab-evaluation.md#locked-milestone-defaults-issue-66-restore-integrity) and [state and recovery](modules/state-recovery.md#locked-milestone-defaults-issue-66-restore-integrity):
 

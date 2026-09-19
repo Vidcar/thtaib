@@ -205,8 +205,12 @@ class LabApiTests(unittest.TestCase):
         snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
         self.assertEqual(snapshot["mechanism"], "application_directory_snapshot")
         self.assertTrue(snapshot["not_git_commit"])
+        self.assertEqual(snapshot["kind"], "starting")
         self.assertEqual(snapshot["rollback_promise"], "none")
         self.assertEqual(snapshot["external_effect_rollback"], "not_supported")
+        self.assertEqual(case["snapshot_kind"], "starting")
+        self.assertEqual(case["input_origin"], "starting_snapshot")
+        self.assertEqual(run["starting_snapshot_id"], case["snapshot_id"])
         self.assertTrue((self.paths.snapshots / case["snapshot_id"] / "tree" / "notes.md").is_file())
 
         changed = self.client.put(
@@ -524,6 +528,136 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(child_files, {})
         parent_files = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
         self.assertEqual(parent_files, {})
+
+    def test_mutating_task_case_restore_yields_starting_inputs_not_mutated_files(self) -> None:
+        original = "BUG: off-by-one in adder\n"
+        mutated = "FIXED: adder handles the boundary\n"
+        later_parent = "parent edited after the completed run\n"
+        workspace = self._workspace({"notes.md": original, "src/hello.py": "print('hi')\n"})
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return ScriptedChatModel(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "write_file",
+                                "args": {"file_path": "/notes.md", "content": mutated},
+                                "id": "call_write_notes",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="Wrote the fixed notes."),
+                ]
+            )
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            app_store=self.app.state.app_store,
+        )
+        self.app.state.lab._harness_provider = lambda: self.app.state.harness
+
+        started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "Fix the adder bug in notes.md",
+                "workspace_id": workspace["id"],
+                "project_path": workspace["path"],
+                "presented_tools": ["write_file"],
+            },
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        run = wait_for_run(self.client, started.json()["id"])
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertTrue(run["starting_snapshot_id"])
+        parent_after_run = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after_run["notes.md"], mutated)
+
+        captured = self.client.post(
+            "/v1/lab/cases/capture",
+            json={"workspace_id": workspace["id"], "run_id": run["id"]},
+        )
+        self.assertEqual(captured.status_code, 200, captured.text)
+        case = captured.json()
+        self.assertEqual(case["snapshot_id"], run["starting_snapshot_id"])
+        self.assertEqual(case["snapshot_kind"], "starting")
+        self.assertEqual(case["input_origin"], "starting_snapshot")
+        snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
+        self.assertEqual(snapshot["kind"], "starting")
+        tree_notes = (self.paths.snapshots / case["snapshot_id"] / "tree" / "notes.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(tree_notes, original)
+        self.assertNotEqual(tree_notes, mutated)
+
+        changed = self.client.put(
+            f"/v1/lab/workspaces/{workspace['id']}/files",
+            json={"files": {"notes.md": later_parent}},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        parent_after_edit = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after_edit["notes.md"], later_parent)
+        still_original = (self.paths.snapshots / case["snapshot_id"] / "tree" / "notes.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(still_original, original)
+
+        restored = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(restored.status_code, 200, restored.text)
+        restore = restored.json()
+        self.assertTrue(restore["parent_unchanged"])
+        self.assertEqual(restore["snapshot_kind"], "starting")
+        self.assertEqual(restore["input_origin"], "starting_snapshot")
+        self.assertNotEqual(restore["workspace"]["id"], workspace["id"])
+        child_files = self.client.get(
+            f"/v1/lab/workspaces/{restore['workspace']['id']}/files"
+        ).json()["files"]
+        self.assertEqual(child_files["notes.md"], original)
+        self.assertNotEqual(child_files["notes.md"], mutated)
+        parent_after_restore = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after_restore["notes.md"], later_parent)
+
+        rerun = self.client.post(
+            f"/v1/lab/cases/{case['id']}/rerun",
+            json={"tool_mode": "live-tool", "workspace_id": restore["workspace"]["id"]},
+        )
+        self.assertEqual(rerun.status_code, 200, rerun.text)
+        result = wait_for_lab_result(self.client, rerun.json()["id"])
+        self.assertTrue(result["parent_workspace_unchanged"])
+        parent_final = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_final["notes.md"], later_parent)
+
+    def test_legacy_run_without_starting_snapshot_is_unavailable(self) -> None:
+        workspace = self._workspace()
+        now = utc_now()
+        run = AgentRun(
+            id="agent_legacy_no_starting_snapshot",
+            status=AgentRunStatus.completed,
+            deployment_id=self.deployment_id,
+            task="legacy completed run",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+            workspace_id=workspace["id"],
+            starting_snapshot_id=None,
+        )
+        self.app.state.harness.store.put_run(run)
+        blocked = self.client.post(
+            "/v1/lab/cases/capture",
+            json={"workspace_id": workspace["id"], "run_id": run.id},
+        )
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        body = blocked.json()
+        self.assertEqual(body["code"], "starting_snapshot_unavailable")
+        self.assertTrue(body["degraded"])
+        self.assertEqual(body["original_inputs"], "unavailable")
+        self.assertIn("unavailable", body["error"].lower())
+        self.assertNotIn("original inputs captured", body["error"].lower())
+        self.assertFalse(self.client.get("/v1/lab/cases").json())
 
     def test_rerun_rejects_parent_workspace(self) -> None:
         workspace = self._workspace()

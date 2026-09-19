@@ -160,3 +160,4 @@ class AgentRun(BaseModel):
     checkpoint_ids: list[str] = Field(default_factory=list)
     related_files: list[RelatedFile] = Field(default_factory=list)
     effective_setup: EffectiveSetup | None = None
+    starting_snapshot_id: str | None = None

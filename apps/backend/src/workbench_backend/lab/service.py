@@ -40,10 +40,10 @@ from workbench_backend.lab.schemas import (
 )
 from workbench_backend.lab.snapshot import (
     ENVIRONMENT_EXCLUSIONS,
+    capture_project_snapshot,
     project_fingerprints,
     read_text_files,
     restore_snapshot_tree,
-    write_snapshot_tree,
     write_text_files,
 )
 from workbench_backend.lab.store import LabStore
@@ -163,26 +163,25 @@ class LabService:
                 status_code=400,
             )
 
-        snapshot_id = new_id("snap")
-        tree_path = self.paths.snapshots / snapshot_id / "tree"
-        included, exclusions = write_snapshot_tree(
-            Path(workspace.path),
-            tree_path,
-            allowlist=request.allowlist or workspace.allowlist,
-        )
         unresolved = self.effects.unresolved_ids_for_run(run.id if run else None)
-        manifest = SnapshotManifest(
-            id=snapshot_id,
-            workspace_id=workspace.id,
-            captured_at=utc_now(),
-            included_files=included,
-            exclusions=exclusions,
-            environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
-            unresolved_side_effects=unresolved,
-            allowlist=request.allowlist or workspace.allowlist,
-            tree_path=str(tree_path),
-        )
-        self._write_manifest(manifest)
+        if run is not None:
+            manifest = self._starting_snapshot_for_run(run, workspace)
+            snapshot_kind = manifest.kind
+            input_origin = "starting_snapshot"
+            exclusions = manifest.exclusions
+        else:
+            manifest = capture_project_snapshot(
+                self.paths,
+                workspace_id=workspace.id,
+                project_root=Path(workspace.path),
+                kind="final",
+                allowlist=request.allowlist or workspace.allowlist,
+                unresolved_side_effects=unresolved,
+            )
+            snapshot_kind = manifest.kind
+            input_origin = "capture_time_workspace"
+            exclusions = manifest.exclusions
+        snapshot_id = manifest.id
 
         profile_id = request.profile_id
         if profile_id is None and deployment_id:
@@ -196,6 +195,8 @@ class LabService:
         case = LabCase(
             id=new_id("case"),
             snapshot_id=snapshot_id,
+            snapshot_kind=snapshot_kind,
+            input_origin=input_origin,
             source_run_id=run.id if run else None,
             source_workspace_id=workspace.id,
             task=task,
@@ -272,13 +273,18 @@ class LabService:
         self.store.put_workspace(child)
         parent_after = project_fingerprints(Path(parent.path))
         parent_unchanged = parent_before == parent_after
+        unresolved = list(case.unresolved_side_effects)
         deviations = [
             "Restored into a new workspace directory; the parent was not overwritten.",
             "Full environment restore is not this milestone; exclusions are recorded.",
             "Restored inputs do not guarantee an identical model output.",
             "Snapshot restore does not roll back external effects or restore a whole environment.",
         ]
-        if snapshot.unresolved_side_effects:
+        if case.input_origin == "starting_snapshot":
+            deviations.append(
+                "Restored files are the source run's starting snapshot, not later parent edits."
+            )
+        if unresolved:
             deviations.append(
                 "Unresolved side effects were preserved; they were not replayed or rolled back."
             )
@@ -297,7 +303,9 @@ class LabService:
             },
             deviations=deviations,
             snapshot_id=snapshot.id,
-            unresolved_side_effects=list(snapshot.unresolved_side_effects),
+            snapshot_kind=snapshot.kind,
+            input_origin=case.input_origin,
+            unresolved_side_effects=unresolved,
         )
 
     def rerun(self, case_id: str, request: RerunRequest) -> LabResult:
@@ -419,10 +427,54 @@ class LabService:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _write_manifest(self, manifest: SnapshotManifest) -> None:
-        path = self.paths.snapshots / manifest.id / "manifest.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    def _starting_snapshot_for_run(self, run: AgentRun, workspace: LabWorkspace) -> SnapshotManifest:
+        if not run.starting_snapshot_id:
+            raise LabError(
+                "This run has no starting snapshot. Original inputs are unavailable; "
+                "current workspace files are not the source run's original inputs.",
+                code="starting_snapshot_unavailable",
+                status_code=409,
+                details={
+                    "degraded": True,
+                    "original_inputs": "unavailable",
+                    "snapshot_kind": "unavailable",
+                },
+            )
+        try:
+            manifest = self.get_snapshot(run.starting_snapshot_id)
+        except LabError as exc:
+            raise LabError(
+                "The run's starting snapshot is missing or unreadable. "
+                "Original inputs are unavailable; current files are not claimed as the original inputs.",
+                code="starting_snapshot_unavailable",
+                status_code=409,
+                details={
+                    "degraded": True,
+                    "original_inputs": "unavailable",
+                    "snapshot_kind": "unavailable",
+                    "starting_snapshot_id": run.starting_snapshot_id,
+                },
+            ) from exc
+        if manifest.kind != "starting":
+            raise LabError(
+                "The bound snapshot is not a starting snapshot. "
+                "Original inputs are unavailable.",
+                code="starting_snapshot_unavailable",
+                status_code=409,
+                details={
+                    "degraded": True,
+                    "original_inputs": "unavailable",
+                    "snapshot_kind": manifest.kind,
+                    "starting_snapshot_id": manifest.id,
+                },
+            )
+        if manifest.workspace_id not in {workspace.id, "unbound"}:
+            raise LabError(
+                "Starting snapshot is linked to a different workspace.",
+                code="workspace_mismatch",
+                status_code=409,
+            )
+        return manifest
 
     def _resolve_knowledge_refs(self, request: CaptureRequest, run: AgentRun | None) -> KnowledgeRefs:
         memory = request.memory_version_refs

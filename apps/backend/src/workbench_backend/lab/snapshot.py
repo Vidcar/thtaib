@@ -8,7 +8,14 @@ from pathlib import Path, PurePosixPath
 
 from workbench_backend.errors import LabError
 from workbench_backend.inference.hashes import sha256_file
-from workbench_backend.lab.schemas import SnapshotExclusion, SnapshotFile
+from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.lab.schemas import (
+    SnapshotExclusion,
+    SnapshotFile,
+    SnapshotKind,
+    SnapshotManifest,
+)
+from workbench_backend.paths import WorkbenchPaths
 
 EXCLUDED_DIR_NAMES = frozenset(
     {
@@ -119,6 +126,47 @@ def plan_snapshot(
             continue
         included.append((path, relative))
     return included, excluded
+
+
+def write_snapshot_manifest(paths: WorkbenchPaths, manifest: SnapshotManifest) -> Path:
+    path = paths.snapshots / manifest.id / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    return path
+
+
+def capture_project_snapshot(
+    paths: WorkbenchPaths,
+    *,
+    workspace_id: str,
+    project_root: Path,
+    kind: SnapshotKind,
+    allowlist: list[str] | None = None,
+    unresolved_side_effects: list[str] | None = None,
+) -> SnapshotManifest:
+    """Write one application-owned directory snapshot. Not a second snapshot system."""
+
+    snapshot_id = new_id("snap")
+    tree_path = paths.snapshots / snapshot_id / "tree"
+    included, exclusions = write_snapshot_tree(
+        project_root,
+        tree_path,
+        allowlist=allowlist,
+    )
+    manifest = SnapshotManifest(
+        id=snapshot_id,
+        workspace_id=workspace_id,
+        captured_at=utc_now(),
+        kind=kind,
+        included_files=included,
+        exclusions=exclusions,
+        environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
+        unresolved_side_effects=list(unresolved_side_effects or []),
+        allowlist=allowlist,
+        tree_path=str(tree_path),
+    )
+    write_snapshot_manifest(paths, manifest)
+    return manifest
 
 
 def write_snapshot_tree(
