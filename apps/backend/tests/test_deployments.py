@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.deployments import managed_argv
-from workbench_backend.inference.process import ProcessIdentity, ProcessSupervisor
+from workbench_backend.inference.process import HttpProbe, ProcessIdentity, ProcessSupervisor
 from workbench_backend.inference.runtime import RuntimeInstaller
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
@@ -58,6 +61,70 @@ class FakeWindowsInstaller(RuntimeInstaller):
 class FailingInstaller(RuntimeInstaller):
     def download(self, url: str, dest: Path) -> None:
         raise InterruptedError("runtime download interrupted")
+
+
+class PropsVariantHandler(BaseHTTPRequestHandler):
+    """Healthy OpenAI-compatible stub whose ``/props`` is broken in a configurable way."""
+
+    props_mode = "missing"
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/health":
+            self._send(200, b'{"status":"ok"}', "application/json")
+            return
+        if self.path == "/props":
+            if self.props_mode == "missing":
+                self._send(404, b'{"error":"not found"}', "application/json")
+            elif self.props_mode == "html":
+                self._send(200, b"<html><body>not json</body></html>", "text/html")
+            else:
+                self._send(200, json.dumps(["not", "a", "dict"]).encode("utf-8"), "application/json")
+            return
+        self._send(404, b'{"error":"not found"}', "application/json")
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class BrokenPropsEndpointTests(unittest.TestCase):
+    """A healthy endpoint without usable ``/props`` stays running with nothing recorded."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.manager = ModelManager(WorkbenchPaths(Path(self.tmp.name)).ensure())
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), PropsVariantHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.endpoint = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def test_props_404_non_json_or_list_leave_deployment_running(self) -> None:
+        for mode in ("missing", "html", "list"):
+            with self.subTest(mode=mode):
+                PropsVariantHandler.props_mode = mode
+                self.assertIsNone(HttpProbe().props(self.endpoint))
+                deployment = self.manager.attach_connected(
+                    ConnectedDeploymentRequest(endpoint=self.endpoint)
+                )
+                self.assertEqual(deployment.status.value, "running")
+                self.assertTrue(deployment.health and deployment.health.healthy)
+                self.assertIsNone(deployment.server_props)
+                refreshed = self.manager.deployment_health(deployment.id)
+                self.assertEqual(refreshed.status.value, "running")
+                self.assertTrue(refreshed.health and refreshed.health.healthy)
+                self.assertIsNone(refreshed.server_props)
+                self.manager.detach_deployment(deployment.id)
 
 
 class DeploymentTests(unittest.TestCase):

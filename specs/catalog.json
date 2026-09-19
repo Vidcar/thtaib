@@ -327,7 +327,8 @@
         "apps/backend/src/workbench_backend/inference/bundles.py"
       ],
       "tests": [
-        "apps/backend/tests/test_bundles.py"
+        "apps/backend/tests/test_bundles.py",
+        "apps/backend/tests/test_deployments.py"
       ],
       "evidence": []
     },

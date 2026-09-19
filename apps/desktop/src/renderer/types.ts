@@ -241,6 +241,7 @@ export interface AgentRun {
     bags: SettingsBags;
     startup_mismatches: Array<{ key: string; selected: unknown; loaded: unknown }>;
     unsupported: Record<string, string[]>;
+    retired?: Record<string, Array<{ key: string; requested: unknown; applied: unknown; reason: string }>>;
     system_prompt: string;
     gaps: string[];
     knowledge_binding: "none" | "application_owned";

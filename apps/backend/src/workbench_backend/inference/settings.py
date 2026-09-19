@@ -246,9 +246,5 @@ def startup_cli_args(applied: dict[str, Any]) -> list[str]:
                 continue
             args.extend([flag, normalized])
             continue
-        if isinstance(value, bool):
-            if value:
-                args.append(flag)
-            continue
         args.extend([flag, str(value)])
     return args
