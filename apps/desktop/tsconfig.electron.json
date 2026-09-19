@@ -13,5 +13,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node"]
   },
-  "include": ["src/main", "vite.config.ts"]
+  "include": ["src/main", "src/generated/shared-contracts/openapi.d.ts", "vite.config.ts"]
 }

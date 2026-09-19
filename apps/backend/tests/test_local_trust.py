@@ -9,10 +9,13 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from workbench_backend.app import create_app
-from workbench_backend.local_trust import (
+from workbench_backend.contracts.auth import (
     WORKBENCH_LOCAL_BIND,
     WORKBENCH_LOCAL_TOKEN_HEADER,
     WORKBENCH_LOCAL_TOKEN_SCHEME,
+    LocalSessionTrustContract,
+)
+from workbench_backend.local_trust import (
     ensure_shared_secret,
     require_loopback_bind,
     shared_secret_path,
@@ -36,9 +39,14 @@ PRIVILEGED_GETS = (
 
 class LocalTrustConstantsTests(unittest.TestCase):
     def test_header_and_bind_match_issue_41_names(self) -> None:
+        envelope = LocalSessionTrustContract()
         self.assertEqual(WORKBENCH_LOCAL_TOKEN_HEADER, "X-Workbench-Local-Token")
+        self.assertEqual(envelope.header_name, WORKBENCH_LOCAL_TOKEN_HEADER)
         self.assertEqual(WORKBENCH_LOCAL_TOKEN_SCHEME, "shared_secret")
+        self.assertEqual(envelope.scheme, WORKBENCH_LOCAL_TOKEN_SCHEME)
         self.assertEqual(WORKBENCH_LOCAL_BIND, "127.0.0.1")
+        self.assertEqual(envelope.bind, WORKBENCH_LOCAL_BIND)
+        self.assertEqual(envelope.injector, "electron_main")
         self.assertEqual(SHARED_SECRET_FILENAME, "desktop_backend_shared_secret")
 
     def test_loopback_bind_rejects_non_loopback(self) -> None:

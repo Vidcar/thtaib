@@ -7,7 +7,8 @@ import sys
 
 import uvicorn
 
-from workbench_backend.local_trust import WORKBENCH_LOCAL_BIND, require_loopback_bind
+from workbench_backend.contracts.auth import WORKBENCH_LOCAL_BIND
+from workbench_backend.local_trust import require_loopback_bind
 
 
 def main(argv: list[str] | None = None) -> None:

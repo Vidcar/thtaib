@@ -3,9 +3,12 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, wr
 import { homedir } from "node:os";
 import path from "node:path";
 
-/** Locked names shared with Issue #41 (ADR-0002 generator, when merged). */
-export const WORKBENCH_LOCAL_TOKEN_HEADER = "X-Workbench-Local-Token";
-export const WORKBENCH_LOCAL_BIND = "127.0.0.1";
+import type { SchemaLocalSessionTrustContract } from "../generated/shared-contracts/openapi";
+
+/** Runtime names typed from the Issue #41 generated envelope. */
+export const WORKBENCH_LOCAL_TOKEN_HEADER: SchemaLocalSessionTrustContract["header_name"] =
+  "X-Workbench-Local-Token";
+export const WORKBENCH_LOCAL_BIND: SchemaLocalSessionTrustContract["bind"] = "127.0.0.1";
 export const WORKBENCH_BACKEND_ORIGIN = `http://${WORKBENCH_LOCAL_BIND}:8000`;
 export const SHARED_SECRET_FILENAME = "desktop_backend_shared_secret";
 export const PRODUCT_DATA_DIR = "LocalAIWorkbench";

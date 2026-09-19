@@ -39,7 +39,7 @@ Bound map entries: `backend-source`, `desktop-source`, `python-dependency-manife
 Issue #40 locked these defaults. They are recorded in [backend and desktop](modules/backend-desktop.md#locked-milestone-defaults-issue-40-partial-oq-002). Do not invent a remote-backend or renderer-held secret:
 
 - Secret file: `%LOCALAPPDATA%\LocalAIWorkbench\state\desktop_backend_shared_secret` (or the portable `state\` sibling). Never in the repository.
-- Header: `X-Workbench-Local-Token` (hard-aligned with Issue #41). Electron **main** injects; the renderer does not hold the secret.
+- Header: `X-Workbench-Local-Token` imported from the Issue #41 / ADR-0002 envelope. Electron **main** injects; the renderer does not hold the secret.
 - Bind: `127.0.0.1` only (v1). Remote backend is unsupported.
 - Unauthenticated / wrong-token clients receive 401/403 on privileged `/v1` routes, including Chat, Lab and project-file operations. `GET /health` remains a public smoke identity. CORS is not authorisation.
 

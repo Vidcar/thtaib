@@ -695,6 +695,7 @@
       "implementation_status": "partial",
       "code": [
         "apps/backend/src/workbench_backend/local_trust.py",
+        "apps/backend/src/workbench_backend/contracts/auth.py",
         "apps/backend/src/workbench_backend/app.py",
         "apps/backend/src/workbench_backend/__main__.py"
       ],

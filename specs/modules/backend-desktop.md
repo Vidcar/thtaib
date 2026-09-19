@@ -65,7 +65,7 @@ Present desktop surfaces are Models, Deployments, debug-quality Chat, and option
 These defaults are authorised by [Issue #40](https://github.com/Vidcar/thtaib/issues/40). They satisfy the same-machine trust prerequisite for privileged Chat/Lab/project-file routes. They do **not** close [OQ-002](../open-questions.md#oq-002): event reconnection, remaining origin/IPC details, and remote backend access stay open. They are not a catalogue `verified` claim. David-PC UAT remains required.
 
 - **Secret file:** `%LOCALAPPDATA%\LocalAIWorkbench\state\desktop_backend_shared_secret` (or the same filename under the portable product `state\` directory). Created on first use if missing. Never stored in the repository.
-- **Header:** `X-Workbench-Local-Token`. Name is hard-aligned with the Issue #41 shared-contract envelope. Electron **main** injects the header on loopback backend requests. The renderer must not hold or send the secret.
+- **Header:** `X-Workbench-Local-Token` from the Issue #41 / ADR-0002 shared-contract envelope (`workbench_backend.contracts.auth`). Electron **main** injects the header on loopback backend requests. The renderer must not hold or send the secret.
 - **Bind:** `127.0.0.1` only (v1). Non-loopback hosts are refused at process start. Remote backend is unsupported.
 - **Unauthenticated / wrong token:** privileged routes, including Chat, Lab, project-file / workspace-file operations, knowledge, harness, effects, compatibility and model-manager `/v1` routes, return **401** (missing token) or **403** (wrong token). `GET /health` stays public for smoke identity. CORS is not authorisation.
 - **Not claimed:** remote desktop/backend pairing, event-stream reconnection, a second auth scheme, or that UAT on David-PC has been run.

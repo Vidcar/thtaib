@@ -1,7 +1,7 @@
 """Same-machine desktop↔backend trust (Issue #40; partial OQ-002).
 
-Hard-aligns the #41 header/envelope names. This module owns secret-file I/O
-and request checks; it does not own the OpenAPI→TS generator.
+Imports the Issue #41 / ADR-0002 header and bind names. This module owns
+secret-file I/O and request checks; it does not own the generator.
 """
 
 from __future__ import annotations
@@ -16,13 +16,14 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from workbench_backend.contracts.auth import (
+    WORKBENCH_LOCAL_BIND,
+    WORKBENCH_LOCAL_TOKEN_HEADER,
+    WORKBENCH_LOCAL_TOKEN_SCHEME,
+)
 from workbench_backend.errors import LocalTrustError
 from workbench_backend.paths import WorkbenchPaths
 
-# Locked names shared with Issue #41 (ADR-0002 generator, when merged).
-WORKBENCH_LOCAL_TOKEN_HEADER = "X-Workbench-Local-Token"
-WORKBENCH_LOCAL_TOKEN_SCHEME = "shared_secret"
-WORKBENCH_LOCAL_BIND = "127.0.0.1"
 PUBLIC_PATHS = frozenset({"/health"})
 
 

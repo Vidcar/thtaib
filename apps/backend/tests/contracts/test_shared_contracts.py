@@ -27,7 +27,7 @@ from workbench_backend.contracts.paths import (
     generated_relative_paths,
     repo_root_from,
 )
-from support import close_workbench_sqlite
+from support import close_workbench_sqlite, workbench_client
 
 
 class SharedContractSurfaceTests(unittest.TestCase):
@@ -73,12 +73,15 @@ class SharedContractSurfaceTests(unittest.TestCase):
     def test_product_openapi_stays_unpublished(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = create_app(data_root=Path(tmp))
-            client = TestClient(app)
+            anonymous = TestClient(app)
+            authorized = workbench_client(app)
             try:
-                self.assertEqual(client.get("/openapi.json").status_code, 404)
-                self.assertEqual(client.get("/v1/shared-contracts/session-trust").status_code, 404)
+                self.assertEqual(anonymous.get("/openapi.json").status_code, 401)
+                self.assertEqual(anonymous.get("/v1/shared-contracts/session-trust").status_code, 401)
+                self.assertEqual(authorized.get("/openapi.json").status_code, 404)
+                self.assertEqual(authorized.get("/v1/shared-contracts/session-trust").status_code, 404)
             finally:
-                close_workbench_sqlite(app, client)
+                close_workbench_sqlite(app, anonymous, authorized)
 
 
 class OpenApiTypescriptInvocationTests(unittest.TestCase):

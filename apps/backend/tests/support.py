@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from gguf import GGUFWriter
 
-from workbench_backend.local_trust import WORKBENCH_LOCAL_TOKEN_HEADER
+from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.store import ApplicationStore
 
