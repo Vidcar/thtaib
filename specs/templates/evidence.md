@@ -1,30 +1,19 @@
 # Evidence: REPLACE_WITH_CHECKED_OUTCOME
 
-## Identity and scope
+**Date:** · **Requirements:** · **Tested commit:** full SHA · **Dirty tree:** yes/no and what · **Tier:** ci-smoke | uat | manual · **Related PR/issue:**
 
-Report date:
-Requirement IDs:
-Tested full Git commit/object ID:
-Dirty-tree status and any qualification:
-Related pull request/task:
-Relevant configuration/model/runtime/framework/adapter versions:
-Platform, worker environment and policy:
-Starting project/fixture/snapshot identifiers:
+## Environment
 
-## Actual execution
+Platform, GPU, runtime build, model files (name, quant, revision), dependency versions that matter, policy or fixtures in effect.
 
-Commands actually executed, with working directory and test selectors:
-Results, including failures and skipped checks:
-Live tool calls versus recordings/mocks:
-Observed artifacts and sanitised log references:
-Permission/cancellation/recovery cases exercised:
+## What ran
 
-## Conclusion and limits
+| Step or command | Working directory | Live / mocked / recorded | Result |
+| --- | --- | --- | --- |
+| | | | |
 
-Which scoped claims passed:
-Which claims remain unverified:
-Executable evidence versus model judgement:
-Known deviations or exclusions:
-Reviewer and review reference where recorded:
+Observed artifacts and sanitised log references. No secrets, weights, private data or unredacted model context.
 
-For each current verified catalogue claim, record the digest of the corresponding requirement block using the checker command. Do not invent a commit, update the digest without checking changed behaviour, or treat this report as proof of untested platforms. Replace every placeholder before using the report as evidence.
+## Conclusion
+
+Which requirement claims passed, which remain unverified, which results are executable checks and which are a model's or a person's judgement. For each `verified` row, the digest from `python scripts/check_specs.py --requirement-hash <ID>` at the time of the check.

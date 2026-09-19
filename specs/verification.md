@@ -1,88 +1,52 @@
-# Verification, evidence and implementation claims
+# Verification and evidence
 
-## What the supplied checker proves
+What a catalogue status means, what counts as evidence, and how evidence goes stale.
 
-The pack includes executable structural checks and regression tests for those checks. They detect broken local links/anchors, duplicate or untracked requirement IDs, unregistered specification documents, malformed catalogue data, missing bound paths, missing code/test/evidence files, altered source archives and a requirement changed since its recorded passing evidence.
+## Status definitions
 
-On pull requests, an additional Git-base comparison rejects requirement IDs deleted from both the current text and catalogue. It does not prove that a retained ID still has the same meaning; behavioural changes require review.
+| Status | Operational meaning |
+| --- | --- |
+| `planned` | Specified; no implementation exists. |
+| `built` | Code and passing unit tests exist for at least the core of the requirement, in CI, against fakes, scripted models or fixtures. Not a claim that it works for a user. |
+| `verified` | At least one `ci-smoke` or `uat` evidence row with `result: passed` at a recorded commit, and the requirement text unchanged since (digest matches). |
+| `retired` | The ID is preserved; the requirement is no longer active and its replacement is named in the specification. |
 
-They do **not** prove architectural semantics, actual test execution, security isolation, generated-contract freshness, valid imports, model behaviour or repository permissions. They do not poll upstream links. They do not automatically detect every code/dependency change that invalidates evidence. Human review and product checks must cover those gaps.
+A status never follows from a document being accepted, from a green unit-test job, or from a screenshot. Downgrade `verified` to `built` when code, dependency, runtime or requirement changes invalidate the evidence and re-verification has not happened.
 
-## Per-requirement traceability
+## Evidence tiers
 
-[The catalogue](catalog.json) links each requirement to its authoritative specification and separately records `implementation_status`, `code`, `tests` and `evidence`.
+Model and agent features are proven against a real local runtime, in two tiers agreed on 2026-09-19:
 
-After the repository was inspected (Windows-first scaffold, managed inference, embedded harness, Lab reuse, durable knowledge), use `planned` for absent work or `partial` for incomplete or insufficiently evidenced work. Leave `unassessed` only where no inspection has been performed. Use `verified` only for the current scope with actual implementation/test paths and passing evidence. Unit-test pointers alone are not `verified`. Preserve a retired requirement's ID/heading and explain its replacement rather than delete or reuse it.
+- **`ci-smoke` — real-model smoke in Linux CI.** A tiny GGUF on a CPU `llama-server` (the pinned llama.cpp build) driven through the product's own HTTP API. Proves plumbing: the request reaches the model, tool calls execute, the thread resumes, applied settings appear on the wire. Proves nothing about model capability. The evidence `ref` is the CI run URL.
+- **`uat` — David-PC capability UAT.** Windows, NVIDIA 3090, managed CUDA runtime, the [preferred capability UAT model](../docs/glossary.md#preferred-capability-uat-model) (with its mmproj for vision). Proves managed inference and capability claims (reply quality, tool calling, vision, MTP). Requires David's PC as a Cursor worker or David running a documented script and pasting results. The evidence `ref` is a report under `specs/evidence/` or the PR that carried it.
+- **`manual` — any other live run** (for example a hand-driven smoke on a cloud VM). Recorded for information; it cannot make a row `verified`.
 
-Issue #23 recorded that inspection. Debug-quality Chat for [AGT-001](modules/agents-workflows.md#agt-001) lands with Issue #22; it is not finished polish. CUDA 13.4 / default GPU profile / valued `flash_attn` mapping landed as a partial [OQ-007](open-questions.md#oq-007) on Issue #21; Issue #31 adds provenance-capable [MOD-006](modules/models.md#mod-006) records; the remainder stays open. [STATE-004](modules/state-recovery.md#state-004) unknown-effect safety landed as a partial on Issue #31; it is not catalogue `verified`. Issue #42 adds cancel honesty (`cancel_requested` vs `cancelled`; no false quiescence) as a further [OQ-004](open-questions.md#oq-004) partial; unit tests are not catalogue `verified`. Issue #56 adds Chat conversation↔thread↔run reuse as a further [OQ-004](open-questions.md#oq-004) partial; unit tests are not catalogue `verified` and UAT remains local-machine-required on David-PC. Issue #62 adds managed deployment ownership (duplicate start + PID identity) as a further [OQ-007](open-questions.md#oq-007) partial; fixture/unit tests are not David-PC UAT and not catalogue `verified`. Issue #78 adds Chat-facing deploy-health / connection-failure surfacing; fixture tests are not David-PC live UAT and not catalogue `verified`.
+Windows claims are not established by Linux results, and tiny-model results are never capability evidence.
 
-A code/test pointer is a repository-relative **file** path, not a guessed symbol name or future directory. Put exact test names/selectors and commands in the evidence record. Actual commands belong in [commands](commands.md), and logical-to-physical bindings belong in [the repository map](repository-map.json).
-
-## Evidence format
-
-Store a concise, sanitised Markdown report under [evidence](evidence/README.md) using the [evidence template](templates/evidence.md). Link longer logs/artifacts from that report without embedding secrets. Record the tested source revision, dirty-tree qualifications, environment/platform, dependency/configuration fingerprints, fixtures, commands, actual results, skipped work and limitations. A report must distinguish recorded-tool tests, mocks, live tools and model judgements.
-
-A `verified` catalogue row needs at least one evidence object with this shape (this is a format illustration, not a pre-existing verification claim):
+## Evidence row
 
 ```json
 {
-  "path": "specs/evidence/REPLACE_WITH_ACTUAL_REPORT.md",
-  "code_revision": "REPLACE_WITH_FULL_TESTED_GIT_COMMIT_SHA",
-  "requirement_sha256": "REPLACE_WITH_DIGEST_FROM_CHECKER",
-  "environment": "REPLACE_WITH_TESTED_PLATFORM_AND_CONFIGURATION",
-  "result": "passed"
+  "kind": "ci-smoke",
+  "ref": "https://github.com/Vidcar/thtaib/actions/runs/REPLACE_WITH_RUN_ID",
+  "commit": "REPLACE_WITH_FULL_TESTED_COMMIT_SHA",
+  "date": "2026-09-19",
+  "environment": "ubuntu-latest; llama.cpp b11045 CPU; Qwen2.5-0.5B-Instruct q4_k_m",
+  "result": "passed",
+  "requirement_sha256": "REPLACE_WITH_python_scripts/check_specs.py_--requirement-hash_ID"
 }
 ```
 
-The checker enforces real file paths, digest shape, a 40- or 64-character hexadecimal Git object ID, nonempty environment and passing result. It checks the digest against the requirement's current text/acceptance block, normalising line endings. It cannot establish that the reported commit was genuinely tested or that the evidence is sufficient; reviewers verify those claims.
+`ref` is a URL or a repository-relative path that exists. `commit` is the full SHA that was actually tested; if the evidence is committed later, say so in the report. `requirement_sha256` comes from `python scripts/check_specs.py --requirement-hash <ID>` and is checked against the current requirement block for `verified` rows; never refresh a digest without re-running the check. It may be `null` on a `manual` row or when the requirement text has changed since the run. `result` is `passed`, `failed` or `skipped`; only `passed` supports `verified`, and a failed `ci-smoke` or `uat` row on a `verified` requirement means it must be downgraded.
 
-Evidence may test a code commit and be committed in a later documentation-only commit. State that relationship. Do not claim an unknown future commit as the tested revision. Dirty-tree results may be retained as preliminary evidence, but must be repeated on the final code tree before an unqualified verified claim.
+## Evidence reports
 
-## Invalidation rules
+Longer evidence goes in `specs/evidence/<date>-<slug>.md` from the [evidence template](templates/evidence.md): commit, environment and versions, commands as run, results including failures and skips, what was live versus mocked versus recorded, what remains unverified. Sanitise: no secrets, weights, private project data or unredacted model context. Distinguish an executable check from a model's judgement.
 
-Any relevant change to requirement semantics, contract, code, fixture, model/runtime/framework version, permissions or environment triggers an impact review. Rerun affected checks or downgrade the requirement to `partial` and explain the gap. A text digest catches document edits; it does not replace code-impact analysis. Keep historical reports, but remove or replace stale evidence objects from a current verified claim.
+## What the checker proves
 
-A failing or skipped required test cannot become a passing result by changing a catalogue field. One passing unrelated test does not verify a broad requirement. Maintain separate evidence for claims that span different environments; Windows support is not established by Linux-only results.
+`scripts/check_specs.py` validates structure: links and anchors, requirement IDs and their catalogue rows, catalogue and repository-map shape, existing code/test/evidence pointers, the source archive hash, evidence-row shape, and the digest match for `verified` rows. On pull requests it also rejects requirement IDs deleted from both text and catalogue. It cannot run tests, judge semantics, confirm that a commit was really tested or inspect GitHub settings; reviewers do that.
 
-## Required product gates as code is introduced
+## Product gates
 
-Introduce each gate with its first affected implementation, not after the project is considered complete:
-
-| First implementation | Gate to add and register |
-| --- | --- |
-| Shared data/API/registry contracts | Schema validation, compatible/incompatible fixtures and generated-output freshness, including newly generated or removed files. Slice 1 freshness is registered as a required check on public `main` ([commands](commands.md#check-shared-contract-freshness)); it is not catalogue `verified`. Remaining fixture/compatibility gates stay open. |
-| Concrete module/package layout | Import/dependency boundary checks for the agreed direction |
-| Model/runtime integration | Real managed deployment, companion-file resolution and requested/applied-setting evidence. The [real-model smoke tier](#real-model-smoke-tier) covers connected attach/health and applied per-request settings against a real CPU llama-server; managed (Windows CUDA) deployment and companion files remain open. |
-| Tool/worker execution | Permission, cancellation, denied-access and real filesystem/process checks |
-| Durable runs/recovery | State transitions, crash/effect reconciliation and no-duplicate continuation checks |
-| Snapshots/branching | Consistent capture, isolated restore and parent-preservation checks |
-| Live Lab cases | Restored starting inputs and recorded-tool versus live-tool distinction |
-
-The specification-only workflow must not remain the sole required check after these features exist. Add real commands and CI/controlled-environment gates rather than relabel this workflow as product verification. Backend unittest, desktop type-check/build, shared-contract freshness and specification-integrity now have registered required checks on public `main` ([commands CI scope](commands.md#ci-scope)); the [real-model smoke tier](#real-model-smoke-tier) is registered alongside them. That does not invent the remaining table rows below, and a green product-command job is not catalogue `verified` or stage acceptance.
-
-<a id="real-model-smoke-tier"></a>
-### Real-model smoke tier — proves plumbing, not model capability
-
-The [real-model smoke](commands.md#real-model-smoke) runs the product against a real `llama-server` from the pinned llama.cpp release (Linux x64 CPU build) and a real, tiny, revision-pinned instruct GGUF on every pull request. It replaces "scripted model / fake HTTP server" proof with wire-level proof for: connected attach and health, a real tool call that writes into the project, thread continuity on a follow-up turn, and a profile's per-request settings in the outbound request body. It asserts on API responses and recorded run state, not on model prose.
-
-Known quirk, recorded so it is not mistaken for framework behaviour: the tiny model writes `hello.txt` under `/large_tool_results/` (it copies the only absolute directory in its prompt, from the Deep Agents `grep` tool description), which the bare `FilesystemBackend(root_dir=project)` places inside the project; the test asserts only that the recorded written file is inside the project. A later `CompositeBackend` change that routes `/large_tool_results/` elsewhere must adjust the smoke's `WRITE_TASK` in the same change.
-
-It is distinct from **David-PC capability UAT**: the smoke uses a 0.5B CPU model and therefore establishes nothing about reply quality, tool-calling reliability, vision, MTP or GPU/managed (Windows CUDA) behaviour. Capability claims and the managed-inference path still need the preferred capability UAT model on David-PC. A green smoke job is executable plumbing evidence for the listed checks only; it may be cited in an evidence report but does not by itself make a catalogue row `verified`.
-
-## Build-stage acceptance from revision 0.5
-
-The sequence below preserves the source's [build order](sources/README.md#build-order). It groups evidence without duplicating a second implementation-status tracker.
-
-**First — managed inference.** Demonstrate bundles/profiles/deployments/run records, Hugging Face import, llama.cpp execution and actual applied settings through the LangChain adapter, including supported advanced controls. Principal requirements: MOD-001 through MOD-006 and the relevant backend/state contracts.
-
-**Second — complete agent task.** In a minimal interface, edit real files, execute tests, open/inspect a result, stream progress and return evidence. Exercise workers, context capture, approvals, cancellation and recovery. Repeat through LangGraph, then with fresh context against retained files/memory. Principal requirements: AGT-001 through AGT-006, WF-001, WF-002, ENV-001 through ENV-003 and STATE-001, STATE-002, STATE-004.
-
-**Third — reuse and experimentation.** Demonstrate editable memory/skill drafts, snapshot-aware branching and run-to-Lab capture using shared configurations. Prove restored inputs, visible setting differences, isolated branches and live/recorded evaluation. Principal requirements: STATE-003, STATE-005 and LAB-001 through LAB-004.
-
-**Fourth — optional integrations.** Add background consolidation, experimental rubric/interpreter integration, MCP Apps and voice through the same contracts. Verify access/logging and core operation with extensions absent. Principal requirements: ARCH-007, ENV-005, ENV-006, REG-004 and the affected integration requirements.
-
-**Long-run acceptance — not a separate harness.** Exercise AGT-003 beyond observed upstream defaults without hidden task quotas, duplicated actions or lost state. Test optional budgets separately and preserve the actual stop/pause/failure reason.
-
-## Review and release evidence
-
-Before a stage exit or release, inspect the relevant requirement rows, open questions and deviations. Record which checks ran at which revision/environment. A stage with an unverified critical boundary remains incomplete even when the interface looks complete. Do not require optional fourth-stage integrations to prove the second-stage core experience.
+Each gate is added with the first implementation it protects and registered in [commands](commands.md): unit tests and the desktop type-check/build (registered, required on `main`); shared-contract freshness (registered, required); real-model CI smoke (this tier, to be registered with the `integration-tests` binding); import-boundary check (unbound); permission, cancellation and recovery checks for workers; crash and no-duplicate-continuation checks for durable runs; consistent-capture and isolated-restore checks for snapshots. A specification-only workflow is never the sole gate once code exists.

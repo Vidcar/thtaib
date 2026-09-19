@@ -1,32 +1,42 @@
 # REPLACE_WITH_MODULE_NAME
 
-## Ownership, scope and source
+[Architecture](../architecture.md) · [Status and evidence](../catalog.json) · [Decisions](../decisions/changelog.md)
 
-State the one responsibility boundary this module owns and what it explicitly does not own. Link source requirements or the approved decision. Label proposed additions rather than attributing them to a source that does not support them.
+## Purpose
 
-## Public contracts and collaboration
+One or two sentences: what this module lets the user do.
 
-Name semantic inputs, outputs, events, errors and effects. Link canonical contract paths through the repository map instead of reproducing a second exact schema. State allowed dependencies and which component executes each operation.
+## Boundaries and ownership
 
-## Lifecycle and failure
+What this module owns, which upstream framework owns the rest, and what it explicitly does not own. Link the source or approved decision.
 
-Describe startup, execution, progress, intervention, cancellation, shutdown, recovery and relevant failure handling. State data ownership, persistence, compatibility, policy and observability. Cover successful and unsuccessful paths.
+## Interfaces and contracts
 
-## Requirements and acceptance checks
+Record families, routes, events, settings keys. Name what is module-local versus generated shared contract. Point at the repository map; do not paste a second schema.
 
-Assign unique requirement IDs using the project's existing prefixes or an explicitly registered new prefix. The checker recognises the ID shape of two to eight uppercase letters, a hyphen and three digits. Put each normative requirement in this exact form, with its real lowercase ID anchor:
+## Behaviour
+
+Current intended behaviour, including failure paths, as short bullets or labelled paragraphs. Decided defaults belong here; the history of how they were decided belongs in the changelog.
+
+## Requirements
+
+Each requirement uses exactly this form, with a lowercase anchor equal to the ID:
 
 ```text
 <a id="replace-with-lowercase-id"></a>
 ### REPLACE_WITH_ID: Concise requirement title
 
-Required behaviour, without restating another module's authoritative rule.
+Required behaviour, without restating another module's rule.
 
-**Acceptance:** Specific observable/executable evidence that would demonstrate it.
+**Acceptance:** Specific observable or executable evidence that would demonstrate it.
 ```
 
-Register each real ID in the catalogue with its implementation status and actual pointers. Do not put example numbered IDs in a live specification where they could be mistaken for requirements.
+Register every ID in the catalogue in the same change.
 
-## Unresolved details
+## Status and evidence
 
-Link each blocking open question and say what cannot safely proceed until it is resolved. Do not hide design choices behind unspecified defaults.
+One line pointing at the catalogue rows, plus what has and has not been seen live.
+
+## Open questions
+
+Links to the open questions that block work in this module, one line.
