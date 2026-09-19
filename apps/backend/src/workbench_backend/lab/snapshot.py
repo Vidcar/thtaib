@@ -6,6 +6,7 @@ import shutil
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
+from workbench_backend.errors import LabError
 from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.lab.schemas import SnapshotExclusion, SnapshotFile
 
@@ -143,16 +144,90 @@ def write_snapshot_tree(
     return files, excluded
 
 
-def restore_snapshot_tree(tree_path: Path, dest_project: Path) -> None:
-    dest_project.mkdir(parents=True, exist_ok=True)
-    if tree_path.is_dir():
-        for source in tree_path.rglob("*"):
-            if not source.is_file():
-                continue
-            relative = source.relative_to(tree_path)
-            target = dest_project / relative
+def iter_snapshot_tree_files(tree_path: Path) -> list[tuple[Path, str]]:
+    files: list[tuple[Path, str]] = []
+    for source in sorted(tree_path.rglob("*"), key=lambda path: path.as_posix()):
+        if source.is_dir() and not source.is_symlink():
+            continue
+        relative = _tree_relative(tree_path, source)
+        files.append((source, relative))
+    return files
+
+
+def verify_snapshot_tree(tree_path: Path, included_files: list[SnapshotFile]) -> None:
+    if not tree_path.is_dir():
+        raise LabError(
+            "Snapshot tree is missing; an empty included-file list is not a substitute "
+            "for the captured tree.",
+            code="snapshot_tree_missing",
+            status_code=409,
+        )
+    expected = _expected_files(included_files)
+    found: dict[str, SnapshotFile] = {}
+    for source, relative in iter_snapshot_tree_files(tree_path):
+        if source.is_symlink() or not source.is_file():
+            raise LabError(
+                f"Snapshot tree contains unexpected file: {relative}",
+                code="snapshot_unexpected_file",
+                status_code=409,
+                details={"path": relative},
+            )
+        if relative not in expected:
+            raise LabError(
+                f"Snapshot tree contains unexpected file: {relative}",
+                code="snapshot_unexpected_file",
+                status_code=409,
+                details={"path": relative},
+            )
+        found[relative] = SnapshotFile(
+            path=relative,
+            sha256=sha256_file(source),
+            size_bytes=source.stat().st_size,
+        )
+    for relative, recorded in expected.items():
+        actual = found.get(relative)
+        if actual is None:
+            raise LabError(
+                f"Snapshot is missing expected file: {relative}",
+                code="snapshot_file_missing",
+                status_code=409,
+                details={"path": relative},
+            )
+        if actual.sha256 != recorded.sha256 or actual.size_bytes != recorded.size_bytes:
+            raise LabError(
+                f"Snapshot hash mismatch for {relative}",
+                code="snapshot_hash_mismatch",
+                status_code=409,
+                details={"path": relative},
+            )
+
+
+def restore_snapshot_tree(
+    tree_path: Path,
+    dest_project: Path,
+    *,
+    included_files: list[SnapshotFile],
+) -> None:
+    verify_snapshot_tree(tree_path, included_files)
+    dest = dest_project
+    if dest.exists() and _tree_has_entries(dest):
+        raise LabError(
+            "Restore destination is not empty; refusing to mix an incomplete restore.",
+            code="snapshot_restore_incomplete",
+            status_code=409,
+        )
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        for item in included_files:
+            relative = _safe_relative(item.path)
+            source = tree_path / relative
+            target = dest / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+        verify_snapshot_tree(dest, included_files)
+    except Exception:
+        _discard_failed_staging(dest)
+        raise
 
 
 def project_fingerprints(project_root: Path) -> dict[str, str]:
@@ -187,6 +262,52 @@ def write_text_files(project_root: Path, files: dict[str, str]) -> None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+
+
+def _expected_files(included_files: list[SnapshotFile]) -> dict[str, SnapshotFile]:
+    expected: dict[str, SnapshotFile] = {}
+    for item in included_files:
+        relative = _safe_relative(item.path)
+        recorded = item.model_copy(update={"path": relative})
+        existing = expected.get(relative)
+        if existing is not None and (
+            existing.sha256 != recorded.sha256 or existing.size_bytes != recorded.size_bytes
+        ):
+            raise LabError(
+                f"Snapshot hash mismatch for {relative}",
+                code="snapshot_hash_mismatch",
+                status_code=409,
+                details={"path": relative},
+            )
+        expected[relative] = recorded
+    return expected
+
+
+def _safe_relative(relative: str) -> str:
+    posix = PurePosixPath(relative.replace("\\", "/"))
+    if posix.is_absolute() or ".." in posix.parts or posix.as_posix() in {"", "."}:
+        raise LabError(
+            f"Snapshot tree contains unexpected file: {relative}",
+            code="snapshot_unexpected_file",
+            status_code=409,
+            details={"path": relative},
+        )
+    return posix.as_posix()
+
+
+def _tree_relative(tree_path: Path, source: Path) -> str:
+    return source.relative_to(tree_path).as_posix()
+
+
+def _tree_has_entries(path: Path) -> bool:
+    if not path.is_dir():
+        return True
+    return any(True for _ in path.iterdir())
+
+
+def _discard_failed_staging(dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
 
 
 def _rel(root: Path, path: Path) -> str:

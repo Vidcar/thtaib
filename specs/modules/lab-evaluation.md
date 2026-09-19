@@ -35,6 +35,16 @@ These defaults are authorised by [Issue #15](https://github.com/Vidcar/thtaib/is
 - **Surface:** minimal Lab API and an optional thin Lab panel. Not Chat or Builder polish. That panel is Task cases debug, not the Model Lab surface ([LAB-006](#lab-006)).
 - **Modes:** recorded-tool and live-tool are labelled. A recorded result is not proof of a current live integration.
 
+<a id="locked-milestone-defaults-issue-66-restore-integrity"></a>
+## Locked milestone defaults (Issue #66; restore integrity / partial OQ-005)
+
+These defaults are authorised by [Issue #66](https://github.com/Vidcar/thtaib/issues/66). They tighten Lab restore honesty for [LAB-002](#lab-002) / [STATE-003](state-recovery.md#state-003). They do **not** close [OQ-005](../open-questions.md#oq-005). They are not a catalogue `verified` claim.
+
+- **Missing or corrupted snapshot data fails.** A kept manifest with a removed tree is not restorable. A post-capture missing expected file or hash/size mismatch is not a successful restore. Unexpected tree files fail.
+- **Empty is explicit.** An intentionally empty captured tree (empty `included_files`, tree directory present) may restore to an empty workspace. A missing tree is not treated as empty.
+- **No silent workspace.** Restore stages into a new directory, verifies content against the manifest, and registers a restored workspace only after validation. Failed staging is discarded. The parent workspace is unchanged.
+- **Not claimed:** starting-snapshot capture timing ([Issue #65](https://github.com/Vidcar/thtaib/issues/65)), environment restore, or identical model output.
+
 ## Requirements and acceptance checks
 
 <a id="lab-001"></a>

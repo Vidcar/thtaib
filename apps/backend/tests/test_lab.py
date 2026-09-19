@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import time
 import unittest
@@ -435,6 +436,94 @@ class LabApiTests(unittest.TestCase):
         child_run = self.client.get(f"/v1/agent-runs/{task['agent_run_id']}").json()
         self.assertEqual(child_run["harness"], "deepagents")
         self.assertEqual(child_run["parent_run_id"], run["id"])
+
+    def _capture_without_run(self, workspace_id: str) -> dict[str, Any]:
+        captured = self.client.post(
+            "/v1/lab/cases/capture",
+            json={
+                "workspace_id": workspace_id,
+                "task": "restore-integrity",
+                "deployment_id": self.deployment_id,
+            },
+        )
+        self.assertEqual(captured.status_code, 200, captured.text)
+        return captured.json()
+
+    def _assert_no_restored_workspace(self, parent_id: str) -> None:
+        listed = self.client.get("/v1/lab/workspaces").json()
+        self.assertEqual([item["id"] for item in listed], [parent_id])
+        self.assertFalse(any(item.get("origin") == "restored" for item in listed))
+        leftover = {
+            path.name
+            for path in self.paths.workspaces.iterdir()
+            if path.is_dir() and path.name != parent_id
+        }
+        self.assertEqual(leftover, set())
+
+    def test_restore_fails_when_tree_is_missing(self) -> None:
+        workspace = self._workspace()
+        parent_before = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        case = self._capture_without_run(workspace["id"])
+        shutil.rmtree(self.paths.snapshots / case["snapshot_id"] / "tree")
+        failed = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(failed.status_code, 409, failed.text)
+        self.assertEqual(failed.json()["code"], "snapshot_tree_missing")
+        self._assert_no_restored_workspace(workspace["id"])
+        parent_after = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after, parent_before)
+
+    def test_restore_fails_on_hash_mismatch_and_missing_file(self) -> None:
+        workspace = self._workspace()
+        parent_before = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        case = self._capture_without_run(workspace["id"])
+        tree = self.paths.snapshots / case["snapshot_id"] / "tree"
+        (tree / "notes.md").write_text("bytes changed after capture", encoding="utf-8")
+        mismatched = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(mismatched.status_code, 409, mismatched.text)
+        self.assertEqual(mismatched.json()["code"], "snapshot_hash_mismatch")
+        self._assert_no_restored_workspace(workspace["id"])
+
+        (tree / "notes.md").unlink()
+        missing = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(missing.status_code, 409, missing.text)
+        self.assertEqual(missing.json()["code"], "snapshot_file_missing")
+        self._assert_no_restored_workspace(workspace["id"])
+        parent_after = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after, parent_before)
+
+    def test_restore_fails_on_unexpected_tree_file_and_leaves_parent(self) -> None:
+        workspace = self._workspace()
+        parent_before = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        case = self._capture_without_run(workspace["id"])
+        tree = self.paths.snapshots / case["snapshot_id"] / "tree"
+        (tree / "surprise.txt").write_text("not recorded", encoding="utf-8")
+        failed = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(failed.status_code, 409, failed.text)
+        self.assertEqual(failed.json()["code"], "snapshot_unexpected_file")
+        self._assert_no_restored_workspace(workspace["id"])
+        parent_after = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_after, parent_before)
+
+    def test_empty_snapshot_restores_to_empty_workspace(self) -> None:
+        workspace = self.client.post(
+            "/v1/lab/workspaces",
+            json={"display_name": "empty-project", "files": {}},
+        ).json()
+        case = self._capture_without_run(workspace["id"])
+        snapshot = self.client.get(f"/v1/lab/snapshots/{case['snapshot_id']}").json()
+        self.assertEqual(snapshot["included_files"], [])
+        self.assertTrue((self.paths.snapshots / case["snapshot_id"] / "tree").is_dir())
+        restored = self.client.post(f"/v1/lab/cases/{case['id']}/restore")
+        self.assertEqual(restored.status_code, 200, restored.text)
+        restore = restored.json()
+        self.assertTrue(restore["parent_unchanged"])
+        self.assertEqual(restore["workspace"]["origin"], "restored")
+        child_files = self.client.get(
+            f"/v1/lab/workspaces/{restore['workspace']['id']}/files"
+        ).json()["files"]
+        self.assertEqual(child_files, {})
+        parent_files = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
+        self.assertEqual(parent_files, {})
 
     def test_rerun_rejects_parent_workspace(self) -> None:
         workspace = self._workspace()

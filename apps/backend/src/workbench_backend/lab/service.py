@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -255,8 +256,19 @@ class LabService:
             case_id=case.id,
             created_at=utc_now(),
         )
-        child.path = str(self._project_dir(child.id))
-        restore_snapshot_tree(Path(snapshot.tree_path), Path(child.path))
+        workspace_root = self.paths.workspaces / child.id
+        dest = workspace_root / "project"
+        try:
+            restore_snapshot_tree(
+                Path(snapshot.tree_path),
+                dest,
+                included_files=snapshot.included_files,
+            )
+        except Exception:
+            if workspace_root.exists():
+                shutil.rmtree(workspace_root)
+            raise
+        child.path = str(dest)
         self.store.put_workspace(child)
         parent_after = project_fingerprints(Path(parent.path))
         parent_unchanged = parent_before == parent_after

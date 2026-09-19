@@ -16,7 +16,7 @@ Do not infer a distributed transaction between application SQLite, checkpointer 
 
 Persist enough linkage to explain a run after restart, including selected configuration and recovery outcome. A recoverable checkpoint, a restorable project and a reconnectable environment are separate capabilities. Recovery must reconcile them before resuming effects. A branch creates a linked attempt without overwriting its parent.
 
-Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an application-owned directory snapshot (not a git commit), captured at a quiescent boundary, stored under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`, restored into a new workspace, with secrets/weights/scratch/venv/node_modules/credentials excluded and no full environment restore. Remaining snapshot policy stays [OQ-005](../open-questions.md#oq-005). External-effect rollback stays [STATE-004](#state-004).
+Issue #15 locks the STATE-003 snapshot defaults used by Lab reuse: an application-owned directory snapshot (not a git commit), captured at a quiescent boundary, stored under `%LOCALAPPDATA%\LocalAIWorkbench\cases\` and `snapshots\`, restored into a new workspace, with secrets/weights/scratch/venv/node_modules/credentials excluded and no full environment restore. [Issue #66](https://github.com/Vidcar/thtaib/issues/66) locks restore integrity for that directory snapshot: a missing tree, missing expected file, hash mismatch or unexpected tree file fails explicitly and does not register a restored workspace. Remaining snapshot policy stays [OQ-005](../open-questions.md#oq-005). External-effect rollback stays [STATE-004](#state-004).
 
 Issue #17 locks the STATE-005 durable-knowledge store defaults used by the backend API and Lab/harness version refs. Retrieval/RAG and cross-surface sharing stay [OQ-006](../open-questions.md#oq-006).
 
@@ -85,6 +85,16 @@ These defaults are authorised by [Issue #31](https://github.com/Vidcar/thtaib/is
 - **Surfaces:** `POST /v1/effects`, acknowledge / recover / reconcile, and a rollback path that returns 409. Lab snapshot/restore carry the honesty fields. No Builder canvas.
 - **Not claimed:** exactly-once, a real worker-adapter interrupt (see [ENV-003](environments-tools.md#env-003)), or that reconnect event ordering is finished.
 
+<a id="locked-milestone-defaults-issue-66-restore-integrity"></a>
+## Locked milestone defaults (Issue #66; restore integrity / partial OQ-005)
+
+These defaults are authorised by [Issue #66](https://github.com/Vidcar/thtaib/issues/66). They tighten [STATE-003](#state-003) restore honesty for the application-owned directory snapshot. They do **not** close [OQ-005](../open-questions.md#oq-005): retention, concurrent-writer details beyond “fail if live tools are writing”, environment-snapshot adapters and any mechanism other than this directory snapshot stay open. They are not a catalogue `verified` claim.
+
+- **Tree is required.** Restore fails (`snapshot_tree_missing`) when the captured tree directory is absent. An empty `included_files` list is not a substitute for the tree. An intentionally empty snapshot keeps an empty tree directory and may restore to an empty workspace.
+- **Manifest is authoritative.** Every recorded path/sha256/size must be present. A removed expected file (`snapshot_file_missing`) or changed bytes (`snapshot_hash_mismatch`) fails. Unexpected tree files fail (`snapshot_unexpected_file`).
+- **Stage, then register.** Restore copies into a new workspace directory, verifies the destination against the manifest, and registers the restored workspace only after that check. Failed or incomplete staging is discarded. The parent workspace is not overwritten.
+- **Not claimed:** retention, environment restore, a second snapshot system, or that a valid restore guarantees identical model output.
+
 <a id="locked-milestone-defaults-issue-42-cancel-honesty"></a>
 ## Locked milestone defaults (Issue #42; cancel honesty / STATE-004 intersection)
 
@@ -134,7 +144,7 @@ These defaults are authorised by [Issue #64](https://github.com/Vidcar/thtaib/is
 
 ## Unresolved details
 
-Issue #27 locked the dual-DB and app-linkage defaults above. Issue #31 locked the [STATE-004](#state-004) unknown-effect ledger (no silent replay; no external-effect rollback promise). Issue #42 locked cancel request versus confirmed stop and the [STATE-004 intersection](#locked-milestone-defaults-issue-42-cancel-honesty) (no false quiescence; no silent replay while `cancel_requested`). [Issue #52](https://github.com/Vidcar/thtaib/issues/52) records the high-level [conversation ↔ execution-thread ↔ run](agents-workflows.md#high-level-agent-chat-continuity-issue-52) product mapping and the [STATE-002 intersection](#high-level-agent-chat-continuity-issue-52) below. Resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities, event ordering/reconnection and exactly-once. [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. Issue #64 locked diagnostic-copy and export privacy against the existing capture policy; it does not close OQ-006. No exactly-once guarantee or migration library is selected by revision 0.5.
+Issue #27 locked the dual-DB and app-linkage defaults above. Issue #31 locked the [STATE-004](#state-004) unknown-effect ledger (no silent replay; no external-effect rollback promise). Issue #42 locked cancel request versus confirmed stop and the [STATE-004 intersection](#locked-milestone-defaults-issue-42-cancel-honesty) (no false quiescence; no silent replay while `cancel_requested`). [Issue #52](https://github.com/Vidcar/thtaib/issues/52) records the high-level [conversation ↔ execution-thread ↔ run](agents-workflows.md#high-level-agent-chat-continuity-issue-52) product mapping and the [STATE-002 intersection](#high-level-agent-chat-continuity-issue-52) below. Resolve the remainder of [OQ-004](../open-questions.md#oq-004) for identities, event ordering/reconnection and exactly-once. [Issue #66](https://github.com/Vidcar/thtaib/issues/66) locked [restore integrity](#locked-milestone-defaults-issue-66-restore-integrity) (missing tree / hash mismatch / unexpected files fail; no silent empty restore). [OQ-005](../open-questions.md#oq-005) covers remaining snapshot policy. [OQ-006](../open-questions.md#oq-006) remains open for retrieval/RAG, indexing and cross-surface sharing; the store defaults above do not select those. Issue #64 locked diagnostic-copy and export privacy against the existing capture policy; it does not close OQ-006. No exactly-once guarantee or migration library is selected by revision 0.5.
 
 <a id="high-level-agent-chat-continuity-issue-52"></a>
 ## High-level Agent Chat continuity (Issue #52; STATE-001 / STATE-002 intersection)
