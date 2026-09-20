@@ -43,7 +43,7 @@ export function App() {
   const productName = window.workbench?.productName ?? "Local AI Workbench";
   const surface: WorkbenchSurface = window.workbench?.surface ?? "managed-inference";
   const [tab, setTab] = useState<WorkbenchTab>("chat");
-  const [backendStatus, setBackendStatus] = useState("Checking the local backend…");
+  const [backendStatus, setBackendStatus] = useState("Checking local services…");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -61,7 +61,7 @@ export function App() {
           return;
         }
         setBackendOk(false);
-        setBackendStatus(`Backend not reachable on 127.0.0.1:8000 · ${errorMessage(error)}`);
+        setBackendStatus(`Local service unavailable · ${errorMessage(error)}`);
       }
     }
     void check();

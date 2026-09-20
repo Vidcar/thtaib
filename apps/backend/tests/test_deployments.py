@@ -26,6 +26,7 @@ from workbench_backend.inference.schemas import (
     ManagedDeploymentRequest,
     ManagementScope,
     PinRuntimeRequest,
+    ServerProperties,
     SettingsBags,
 )
 from workbench_backend.inference.service import ModelManager
@@ -308,6 +309,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue(props.chat_template_caps.get("supports_tools"))
         self.assertEqual(props.chat_template, "{{ fake }}")
         self.assertEqual(props.n_ctx, 4096)
+        self.assertEqual(props.default_generation_settings["n_ctx"], 4096)
         stopped = self.manager.stop_deployment(deployment.id)
         self.assertIsNone(stopped.server_props)
 
@@ -329,6 +331,39 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertIsNone(unreachable.server_props)
         self.manager.detach_deployment(unreachable.id)
+
+    def test_health_refreshes_existing_server_props(self) -> None:
+        managed = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18086})
+        )
+        self.assertEqual(managed.status.value, "running")
+        connected = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:18086/v1")
+        )
+        self.assertIsNotNone(connected.server_props)
+        assert connected.server_props is not None
+        self.assertEqual(connected.server_props.n_ctx, 4096)
+
+        original_props = self.manager.deployments.probe.props
+
+        def changed_props(endpoint: str) -> ServerProperties | None:
+            props = original_props(endpoint)
+            assert props is not None
+            return props.model_copy(
+                update={
+                    "n_ctx": 8192,
+                    "default_generation_settings": {"n_ctx": 8192, "params": {}},
+                }
+            )
+
+        self.manager.deployments.probe.props = changed_props  # type: ignore[method-assign]
+        refreshed = self.manager.deployment_health(connected.id)
+        self.assertIsNotNone(refreshed.server_props)
+        assert refreshed.server_props is not None
+        self.assertEqual(refreshed.server_props.n_ctx, 8192)
+        self.assertEqual(refreshed.server_props.default_generation_settings["n_ctx"], 8192)
+        self.manager.detach_deployment(connected.id)
+        self.manager.stop_deployment(managed.id)
 
     def test_failed_import_cannot_become_deployment(self) -> None:
         job = self.manager.import_huggingface(

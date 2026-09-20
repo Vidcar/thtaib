@@ -60,12 +60,25 @@ def close_workbench_sqlite(*objects: object) -> None:
     close_all_sqlite_checkpointers()
 
 
-def write_tiny_gguf(path: Path, *, name: str = "tiny-test") -> Path:
+def write_tiny_gguf(
+    path: Path,
+    *,
+    name: str = "tiny-test",
+    context_length: int | None = None,
+    block_count: int | None = None,
+    extra_uint32: dict[str, int] | None = None,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     writer = GGUFWriter(str(path), "llama")
     writer.add_name(name)
     writer.add_quantization_version(2)
     writer.add_file_type(0)
+    if context_length is not None:
+        writer.add_context_length(context_length)
+    if block_count is not None:
+        writer.add_block_count(block_count)
+    for key, value in (extra_uint32 or {}).items():
+        writer.add_uint32(key, value)
     writer.add_tensor("token_embd.weight", np.zeros((2, 2), dtype=np.float32))
     writer.write_header_to_file()
     writer.write_kv_data_to_file()

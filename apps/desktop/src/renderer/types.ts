@@ -100,6 +100,7 @@ export interface Deployment {
     chat_template: string | null;
     bos_token: string | null;
     eos_token: string | null;
+    default_generation_settings?: { params?: Record<string, unknown>; [key: string]: unknown };
   } | null;
   error: string | null;
 }
@@ -458,4 +459,26 @@ export interface InspectReport {
   architecture: string | null;
   fields: Record<string, unknown>;
   tensors: Array<{ name: string; shape: number[]; tensor_type: string }>;
+}
+
+export interface RuntimeControlDescriptor {
+  key: string;
+  flag: string;
+  label: string;
+  description: string;
+  source: string;
+  applied: string | number | boolean | null;
+  observed: string | number | boolean | null;
+  maximum: number | null;
+  recommended?: number | null;
+  options: Array<{ value: string | number | boolean | null; label: string; description?: string }>;
+}
+
+export interface BundleConfigurationOptions {
+  bundle_id: string;
+  deployment_id: string | null;
+  context_size: RuntimeControlDescriptor;
+  gpu_layers: RuntimeControlDescriptor;
+  startup_defaults: Record<string, RuntimeControlDescriptor>;
+  metadata: Record<string, unknown>;
 }

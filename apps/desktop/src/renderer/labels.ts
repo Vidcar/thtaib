@@ -83,7 +83,7 @@ export function knowledgeActorLabel(actor: KnowledgeActor): string {
     case "human":
       return "You";
     case "api_maintainer":
-      return "API maintainer";
+      return "Maintainer";
     case "agent":
       return "Agent";
     default: {
@@ -98,7 +98,7 @@ export function redactionModeLabel(mode: RedactionMode): string {
     case "redact_secrets":
       return "Redact secrets";
     case "retain":
-      return "Keep plaintext";
+      return "Keep original text";
     case "discard":
       return "Discard";
     default: {
@@ -135,11 +135,11 @@ export function eventKindLabel(kind: string): string {
     case "running":
       return "Running";
     case "recorded_replay_failed":
-      return "Recorded replay failed";
+      return "Replay failed";
     case "recorded_reconstruction":
-      return "Recorded reconstruction";
+      return "Replay reconstruction";
     case "recorded_reconstruction_note":
-      return "Recorded note";
+      return "Replay note";
     default:
       return kind.replaceAll("_", " ");
   }

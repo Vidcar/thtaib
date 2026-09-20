@@ -66,6 +66,10 @@ export function KnowledgePanel() {
     setMessage(errorMessage(error));
   }
 
+  function entryTitle(entry: KnowledgeEntry): string {
+    return entry.display_name?.trim() || `${knowledgeKindLabel(entry.kind)} ${shortId(entry.id)}`;
+  }
+
   if (loadError) {
     return (
       <section className="surface">
@@ -83,8 +87,8 @@ export function KnowledgePanel() {
       <header className="surface-head">
         <h2>Knowledge</h2>
         <p className="lede">
-          Versioned memory, skills and protected instructions. Selecting them in Chat binds those
-          versions for the next run. This store is not the retrieval index.
+          Save reusable context for Chat, then choose exactly which memories, skills, and protected
+          instructions a conversation should use.
         </p>
       </header>
 
@@ -105,7 +109,7 @@ export function KnowledgePanel() {
               provenance: { actor, note: "desktop" },
             })
             .then(async (next) => {
-              setMessage(`Created ${next.display_name ?? next.id}`);
+              setMessage(`Created ${entryTitle(next)}.`);
               setContent("");
               await refresh();
               setSelected(next);
@@ -182,13 +186,19 @@ export function KnowledgePanel() {
           {selected ? (
             <>
               <div className="entity-head">
-                <h3>{selected.display_name ?? selected.id}</h3>
+                <h3>{entryTitle(selected)}</h3>
                 <StatusBadge label={knowledgeKindLabel(selected.kind)} />
                 <StatusBadge label={knowledgeActorLabel(selected.provenance.actor)} />
               </div>
               <p className="hint">
                 {knowledgeScopeLabel(selected.scope)} · updated {formatWhen(selected.updated_at)}
               </p>
+              <details>
+                <summary>Details</summary>
+                <p className="hint">
+                  Entry ID: {selected.id} · current version: {selected.current_version_id}
+                </p>
+              </details>
               <label>
                 Content
                 <textarea value={editContent} onChange={(event) => setEditContent(event.target.value)} />
@@ -220,7 +230,7 @@ export function KnowledgePanel() {
                       <p>
                         {formatWhen(version.created_at)} · {knowledgeActorLabel(version.provenance.actor)}
                         {version.id === selected.current_version_id ? " · current" : ""}
-                        {version.reverted_from_version_id ? " · revert" : ""}
+                        {version.reverted_from_version_id ? " · restored from an earlier version" : ""}
                       </p>
                       <p className="hint">
                         {version.content.length > 160 ? `${version.content.slice(0, 159)}…` : version.content}
@@ -256,8 +266,7 @@ export function KnowledgePanel() {
       <div className="card">
         <h3>Context capture</h3>
         <p className="hint">
-          Diagnostic copies of model requests. Default is retain with secrets redacted. This is not
-          Chat history and not the knowledge index.
+          Save request context for troubleshooting. Secrets are redacted by default.
         </p>
         <label>
           Redaction
@@ -321,7 +330,7 @@ export function KnowledgePanel() {
         ) : null}
         {capture ? (
           <p className="hint">
-            Last capture {capture.id}
+            Last capture {shortId(capture.id)}
             {capture.redacted ? " · redacted" : ""}
             {capture.discarded ? " · discarded" : ""}
             {capture.expired ? " · expired" : ""}
