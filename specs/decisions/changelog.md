@@ -4,6 +4,16 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — GitHub CI slimmed to a Linux thin gate
+
+Authority: David, product owner (use David-PC for real checks; keep shipping; do not weaken tests; GitHub CI is a thin remaining gate, not the long pole, Project 2026-09-20). Narrows [OQ-010](../open-questions.md#oq-010). Enforcement-system change (workflows and the documented required-check list). Does not reopen Issue #36 advisory-only CI. Does not change what `verified` means. No ADR: not a new execution owner, process boundary, public contract, persistence strategy, permission model, or core dependency, and not a weakening of the [verification](../verification.md) status rules.
+
+- `push` runs only on `main`. `pull_request`, `workflow_dispatch`, and `merge_group` stay. Each workflow cancels in-progress runs.
+- `spec-integrity` and `shared-contract-freshness` are Linux-only. Those Windows names are retired OS-duplicates; cheap shims keep the old check names until branch protection is updated (maintainer action).
+- Path filters skip the expensive backend, desktop, contract, and real-model-smoke suites on unrelated PRs. Required Linux check names still report.
+- One Windows `backend-unittest` and one Windows `desktop-typecheck-build` remain and still run the full suite when those paths match. They are not the required merge wall. David-PC is the real Windows and capability check.
+- Required checks on `main` slim from the Issue #76 eight-name OS matrix to the four Linux names in [commands](../commands.md#ci). Assertions, fixtures, and expected results are unchanged. Unit tests still do not invent catalogue `verified`.
+
 ## 2026-09-20 — OQ-009 MCP expansion framework; first servers browser and GitHub
 
 Authority: David, product owner (Chat-first MCP; durable framework for adding servers later; browser and GitHub are the first two, Project chat 2026-09-20); technical research against the pinned stack on 2026-09-20 (`langchain==1.4.2` extra `mcp` → `fastmcp>=4.0.1,<5`; [langchain.mcp](https://docs.langchain.com/oss/python/langchain/mcp), [connections](https://docs.langchain.com/oss/python/langchain/mcp/connections), [tools](https://docs.langchain.com/oss/python/langchain/mcp/tools), [auth](https://docs.langchain.com/oss/python/langchain/mcp/auth), [migrate from langchain-mcp-adapters](https://docs.langchain.com/oss/python/migrate/langchain-mcp-adapters); official [Playwright MCP](https://github.com/microsoft/playwright-mcp) and [GitHub MCP Server](https://github.com/github/github-mcp-server)). Narrows [OQ-009](../open-questions.md#oq-009) and [OQ-003](../open-questions.md#oq-003). Requirements: ENV-007 (`planned`); ENV-001/002 stay `built` for host-shell only; ENV-005 (MCP Apps) stays planned. No ADR: official extra of already-pinned LangChain, same `interrupt_on` permission model, no second tool bus, no workbench MCP host. Implementation is a later PR.
@@ -123,7 +133,7 @@ Authority: [PR #85](https://github.com/Vidcar/thtaib/pull/85); David, product ow
 Authority: [PR #82](https://github.com/Vidcar/thtaib/pull/82) (merged `b519320`). Requirements: MOD-004, MOD-005, AGT-001, STATE-002. Partial OQ-010.
 
 - `apps/backend/tests_integration/` (bound as `integration-tests`) starts a real `llama-server` from the product's pinned llama.cpp release (Linux x64 CPU asset, sha256-verified) with `Qwen/Qwen2.5-0.5B-Instruct-GGUF` `q4_k_m` at a pinned Hugging Face revision, then drives the product API in-process: connected attach and health, a Chat turn producing a real `write_file` into the project, a follow-up turn carrying the earlier tool call on the same thread, and a profile's per-request bag on the wire. Assertions are on API responses and recorded state, never model prose.
-- Assets land under `.scratch/real-model-smoke/`; `WORKBENCH_REAL_MODEL_SMOKE=required` (set in CI) makes missing assets a failure rather than a skip. Workflow `real-model-smoke.yml` runs on every PR as `real-model-smoke (ubuntu-latest)` and is intended to join the required checks; adding it to branch protection is a maintainer action.
+- Assets land under `.scratch/real-model-smoke/`; `WORKBENCH_REAL_MODEL_SMOKE=required` (set in CI) makes missing assets a failure rather than a skip. Workflow `real-model-smoke.yml` ran on every PR as `real-model-smoke (ubuntu-latest)` and is intended to join the required checks; adding it to branch protection is a maintainer action. Path-filtered to backend changes on 2026-09-20 (entry above).
 - The tier is the `ci-smoke` evidence tier of [verification](../verification.md): it may verify plumbing requirements only, never capability, managed inference or Windows behaviour.
 
 ## 2026-09-19 — PR #81: `--load-mode`, `--mmproj`, `/props`
@@ -167,7 +177,7 @@ Authority: [Issue #78](https://github.com/Vidcar/thtaib/issues/78) (leftover fro
 
 Authority: [Issue #76](https://github.com/Vidcar/thtaib/issues/76); supersedes the [Issue #36](https://github.com/Vidcar/thtaib/issues/36) private/advisory-only stance.
 
-- The repository is public. Classic branch protection on `main` requires the eight status checks listed in [commands](../commands.md#ci) with strict tip. No GitHub Pro is needed or requested.
+- The repository is public. Classic branch protection on `main` required the eight status checks then listed (Linux and Windows for backend, desktop, contracts, and spec-integrity) with strict tip. No GitHub Pro is needed or requested. The required OS matrix was slimmed on 2026-09-20 (entry above); current names live in [commands](../commands.md#ci).
 
 ## 2026-09-19 — Issue #67: recorded-tool replay
 

@@ -36,4 +36,4 @@ Generated outputs are not manually edited. Generation must be deterministic unde
 
 ## Evidence and approval
 
-Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Generation, committed artifacts and the freshness job exist and are a required check on `main`; the CTT-001 row in the catalogue records the current status.
+Mechanism references are in [upstream links](../sources/upstream.md#contract-generation). Human approval is Issue #41, recorded in the catalogue. Generation, committed artifacts and the Linux freshness job exist and `shared-contract-freshness (ubuntu-latest)` remains a required check on `main` (2026-09-20 CI slim: no second Windows freshness job; generation is OS-independent); the CTT-001 row in the catalogue records the current status.

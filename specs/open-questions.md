@@ -74,9 +74,11 @@ Still open: rubric and interpreter middleware (beta upstream), background consol
 <a id="oq-010"></a>
 ## OQ-010: Product verification commands and test environments
 
-**Status:** partially decided (required CI checks on public `main`, Issue #76; two-tier evidence model, 2026-09-19; real-model smoke tier bound and registered, PR #82). **Owner:** boundary implementer. **Blocks:** calling a build stage verified.
+**Status:** partially decided (required CI checks on public `main`, Issue #76; two-tier evidence model, 2026-09-19; real-model smoke tier bound and registered, PR #82; GitHub CI slimmed to a Linux thin gate, product-owner decision 2026-09-20). **Owner:** boundary implementer. **Blocks:** calling a build stage verified.
 
-Open: import-boundary check; integration tiers beyond the bound real-model smoke (managed Windows CUDA deployment, workers); MCP plumbing, when ENV-007 is implemented, is an in-process FastMCP check on the existing smoke tier rather than a new required workflow — Playwright/GitHub stay David-PC UAT; live-tool versus recorded fixtures as gates; David-PC UAT procedure and evidence retention; making `real-model-smoke` a required check (maintainer action). **Evidence needed:** registered commands run against real code at a recorded commit, including failure cases.
+Open: import-boundary check; integration tiers beyond the bound real-model smoke (managed Windows CUDA deployment, workers); MCP plumbing, when ENV-007 is implemented, is an in-process FastMCP check on the existing smoke tier rather than a new required workflow — Playwright/GitHub stay David-PC UAT; live-tool versus recorded fixtures as gates; David-PC UAT procedure and evidence retention; making `real-model-smoke` a required check (maintainer action); removing the retired Windows spec-integrity and Windows shared-contract-freshness names from classic branch protection (maintainer action). **Evidence needed:** registered commands run against real code at a recorded commit, including failure cases.
+
+The 2026-09-20 slim does not return to Issue #36 advisory-only CI. Required Linux checks remain the merge gate. Windows GitHub jobs still run on matching paths and are not dropped. David-PC is the real Windows and capability check. Green unit tests are not catalogue `verified`.
 
 <a id="oq-011"></a>
 ## OQ-011: Durable product Approvals inbox
