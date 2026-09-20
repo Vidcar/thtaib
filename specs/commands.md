@@ -25,6 +25,8 @@ Use `tests.run` (or an explicit `tests.test_module` for focused checks). The tes
 | `uv run python ../../scripts/generate_shared_contracts.py` | `apps/backend` | Regenerate OpenAPI, JSON Schema and desktop types. |
 | `uv run python ../../scripts/generate_shared_contracts.py --check` | `apps/backend` | Fail if generated contracts are stale. |
 
+Run/Chat JSON-to-SQLite migration already runs automatically when backend startup opens the application store through [state/migrate.py](../apps/backend/src/workbench_backend/state/migrate.py). It archives migrated JSON and makes `application.sqlite` authoritative, without dual writes. It has no separate migration command; [state regressions](../apps/backend/tests/test_state.py) cover the existing path.
+
 <a id="real-model-smoke"></a>
 ## Real-model smoke tier
 
@@ -49,8 +51,6 @@ For normal local use on a prepared Windows checkout, double-click root `Launch W
 ## Not yet available
 
 Import-boundary check; integration tiers beyond the local process checks and real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; migration of remaining model, compatibility, Lab and knowledge metadata from JSON to SQLite ([OQ-017](open-questions.md#oq-017)). Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
-
-Run/Chat JSON-to-SQLite migration already runs automatically when backend startup opens the application store through [state/migrate.py](../apps/backend/src/workbench_backend/state/migrate.py). It archives migrated JSON and makes `application.sqlite` authoritative, without dual writes. It has no separate migration command; [state regressions](../apps/backend/tests/test_state.py) cover the existing path.
 
 <a id="ci"></a>
 ## CI

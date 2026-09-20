@@ -103,6 +103,6 @@ The model manager stays the owner and llama.cpp the local engine; no second infe
 <a id="oq-017"></a>
 ## OQ-017: Remaining metadata migration
 
-**Owner:** persistence. Storage choice is settled in [ADR-0005](decisions/ADR-0005-application-record-storage.md); the existing run/Chat JSON cutover is [already part of startup](commands.md#not-yet-available). Remaining work concerns inference, compatibility, Lab and knowledge metadata, not a new persistence authority.
+**Owner:** persistence. Storage choice is settled in [ADR-0005](decisions/ADR-0005-application-record-storage.md); the existing run/Chat JSON cutover is [already part of startup](commands.md#backend). Remaining work concerns inference, compatibility, Lab and knowledge metadata, not a new persistence authority.
 
 Determine the family inventory and safe cutover sequence. Validate a migrated copy against every original record/reference, restart, interrupted import and rollback. Retain original JSON and a database backup until validated. This does not gate ordinary fixes, additive fields, model setup, Chat, capability evidence or memory write-through. Current boundaries are in [architecture](architecture.md#persistence).
