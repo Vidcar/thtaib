@@ -4,7 +4,7 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Models UX refinement is complete on `codex/models-experience`. Models now leads with the library and model setup, separates imports/presets, and places identifiers, paths and runtime diagnostics in disclosures. Controls offer model-specific choices, custom values and focus/hover help with flags. Related Chat, Knowledge, Lab and task-run copy is clearer.
+Models UX refinement is complete in [PR #104](https://github.com/Vidcar/thtaib/pull/104), branch `codex/models-experience`. Models now leads with the library and model setup, separates imports/presets, and places identifiers, paths and runtime diagnostics in disclosures. Controls offer model-specific choices, custom values and focus/hover help with flags. Related Chat, Knowledge, Lab and task-run copy is clearer.
 
 ## Decisions and completed checks
 
