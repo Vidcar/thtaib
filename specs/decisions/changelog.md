@@ -4,6 +4,17 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — OQ-006 memory and skills replace prompt-append
+
+Authority: technical research against the pinned stack on 2026-09-20 (`deepagents==0.7.15` wheel: `graph.py`, `middleware/memory.py`, `middleware/skills.py`, `backends/composite.py`; live [memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) pages). Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005 (stay `built`); STATE-006 unchanged (`built`, not `verified`). No ADR: no new execution owner, no `StoreBackend` knowledge store, no new lockfile package. Implementation is a later PR; current code still prompt-appends memory and skill bodies.
+
+- Selected `memory` versions load through official `create_deep_agent(memory=)` / `MemoryMiddleware` from derived `/memories/{scope}/{entry_id}.md` files on the existing `CompositeBackend` (harness scratch). Selected `skill` versions load through official `create_deep_agent(skills=["/skills/"])` / `SkillsMiddleware` from derived `/skills/{slug}/SKILL.md`. Omit a kwarg when that kind is unbound. Do not pass `[]`.
+- Application glue wraps skill bodies with Agent Skills YAML (`name` + `description`) so 0.7.15 does not silently skip them. Fail closed on an invalid slug or a selected-skill name collision.
+- Protected instructions stay in `compose_system_prompt` / `system_prompt=`. Official `MEMORY_SYSTEM_PROMPT` tells the model memory is untrusted file data it may `edit_file`; that must not wrap protected policy.
+- `compose_system_prompt` stops appending memory and skill bodies. Profile / surface composition is unchanged.
+- Project-less Chat may auto-present `ls` / `read_file` for those knowledge routes when `memory=` or `skills=` is attached. Project writes, `glob` / `grep`, and `execute` still require a project. `permissions=` deny writes on `/skills/**`. `/memories/` `edit_file` is run-local scratch, not a STATE-005 version.
+- Left out: `StoreBackend` as durable knowledge, background consolidation, write-through, remounting `knowledge\`, any STATE-006 change.
+
 ## 2026-09-20 — David-PC retrieval UAT recorded
 
 Authority: live run on David-PC against `7db7f45` ([PR #92](https://github.com/Vidcar/thtaib/pull/92)); report [evidence](../evidence/2026-09-20-david-pc-retrieval.md). Requirement: STATE-006. Does not close [OQ-006](../open-questions.md#oq-006).
