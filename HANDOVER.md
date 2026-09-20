@@ -4,7 +4,7 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Testing/CI simplification implemented on `codex/test-suite-simplification`; awaiting GitHub validation/delivery. No production application code changed. [Commands](specs/commands.md) and AGENTS now describe the tiers and isolation requirements.
+Testing/CI simplification complete in [PR #105](https://github.com/Vidcar/thtaib/pull/105), `codex/test-suite-simplification`. No production application code changed. [Commands](specs/commands.md) and AGENTS now describe the tiers and isolation requirements.
 
 ## Changes and decisions
 
@@ -20,6 +20,6 @@ Original: 304 tests, 833.17s wall, no failures; one desktop-dependency skip. Fin
 
 Isolated Electron: real reply, transcript reopening and Models health passed. Wrong tiny-model follow-up despite intact request history; no capability claim. Test processes stopped. Raw logs: `.scratch/test-audit-measurements/`, `.scratch/test-audit-live/`.
 
-## Next step
+## Delivery
 
-Create/review/merge PR after GitHub checks; refresh this state on delivery. No GitHub settings changes expected.
+All eight GitHub jobs passed, including both Windows jobs and real-model smoke. Final handover-only commit follows the same protected checks before merge. No GitHub settings changes needed. Testing/CI work is complete; resume product delivery using the [delivery map](docs/delivery-feature-map.md#next-path).
