@@ -36,6 +36,26 @@ function propsSummary(deployment: Deployment): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+function visibleHealthLabel(deployment: Deployment): string {
+  if (deployment.status === "stopped") {
+    return "Stopped";
+  }
+  return deploymentHealthLabel(deployment.health?.healthy);
+}
+
+function visibleHealthTone(deployment: Deployment): "neutral" | "ok" | "danger" {
+  if (deployment.status === "stopped") {
+    return "neutral";
+  }
+  if (deployment.health?.healthy === true) {
+    return "ok";
+  }
+  if (deployment.health?.healthy === false) {
+    return "danger";
+  }
+  return "neutral";
+}
+
 export function DeploymentsPanel() {
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
@@ -227,8 +247,8 @@ export function DeploymentsPanel() {
                   />
                   <StatusBadge label={deployment.status} tone={deployment.status === "failed" ? "danger" : "neutral"} />
                   <StatusBadge
-                    label={deploymentHealthLabel(deployment.health?.healthy)}
-                    tone={deployment.health?.healthy === true ? "ok" : deployment.health?.healthy === false ? "danger" : "neutral"}
+                    label={visibleHealthLabel(deployment)}
+                    tone={visibleHealthTone(deployment)}
                   />
                 </div>
                 <p className="hint">
@@ -256,6 +276,7 @@ export function DeploymentsPanel() {
                   {deployment.scope === "managed" ? (
                     <button
                       type="button"
+                      disabled={deployment.status === "stopped" || busy}
                       onClick={() => {
                         void api.stop(deployment.id).then(() => refresh()).catch(fail);
                       }}

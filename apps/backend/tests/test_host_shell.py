@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
+import os
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,21 @@ def execute_then_reply(command: str) -> list[AIMessage]:
         ),
         AIMessage(content="Host shell command finished."),
     ]
+
+
+def write_marker_command(filename: str) -> str:
+    """Use a platform-native write so approval tests prove execution, not PATH."""
+
+    if os.name != "nt":
+        return f"touch {filename}"
+    return f"cmd /c type nul > {filename}"
+
+
+def tool_result_text(body: dict[str, Any]) -> str:
+    results = [event for event in body["events"] if event["kind"] == "tool_result"]
+    if not results:
+        return ""
+    return str(results[-1]["detail"].get("content") or "")
 
 
 def _run(*, project_path: str | None, presented: list[str] | None = None) -> AgentRun:
@@ -170,7 +186,9 @@ class HostShellHarnessTests(unittest.TestCase):
         self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
         self.app.state.manager = self.manager
-        self.scripted = ScriptedChatModel(execute_then_reply("touch host-shell-approved.txt"))
+        self.scripted = ScriptedChatModel(
+            execute_then_reply(write_marker_command("host-shell-approved.txt"))
+        )
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return self.scripted
@@ -234,7 +252,7 @@ class HostShellHarnessTests(unittest.TestCase):
         """Reviewer scenario: project + echo-only must not run a scripted touch."""
 
         marker = self.project / "bypass-no-hitl.txt"
-        self._install(execute_then_reply("touch bypass-no-hitl.txt"))
+        self._install(execute_then_reply(write_marker_command("bypass-no-hitl.txt")))
         started = self._start(presented_tools=["echo"])
         self.assertFalse(started["host_shell"]["available"])
         body = wait_for_run(self.client, started["id"])
@@ -280,11 +298,14 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertIsNone(body["pending_interrupt"])
         self.assertTrue((self.project / "host-shell-approved.txt").is_file())
+        content = tool_result_text(body).lower()
+        self.assertNotIn("not recognized", content)
+        self.assertNotIn("error", content)
         resolved = [event["kind"] for event in body["events"]]
         self.assertIn("interrupt_resolved", resolved)
 
     def test_dangerous_execute_deny_does_not_run(self) -> None:
-        self._install(execute_then_reply("touch host-shell-denied.txt"))
+        self._install(execute_then_reply(write_marker_command("host-shell-denied.txt")))
         started = self._start()
         wait_for_interrupt(self.client, started["id"])
         decided = self.client.post(
@@ -297,7 +318,7 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertFalse((self.project / "host-shell-denied.txt").exists())
 
     def test_cancel_while_interrupted_rejects_command(self) -> None:
-        self._install(execute_then_reply("touch host-shell-cancelled.txt"))
+        self._install(execute_then_reply(write_marker_command("host-shell-cancelled.txt")))
         started = self._start()
         wait_for_interrupt(self.client, started["id"])
         cancelled = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
@@ -323,7 +344,7 @@ class HostShellHarnessTests(unittest.TestCase):
         wait_for_run(self.client, started["id"])
 
     def test_chat_interrupt_and_shell_flag(self) -> None:
-        self._install(execute_then_reply("touch chat-host-shell.txt"))
+        self._install(execute_then_reply(write_marker_command("chat-host-shell.txt")))
         created = self.client.post(
             "/v1/chat/conversations",
             json={"deployment_id": self.deployment_id, "project_path": str(self.project)},
@@ -351,6 +372,9 @@ class HostShellHarnessTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
         self.assertTrue((self.project / "chat-host-shell.txt").is_file())
+        content = tool_result_text(body["current_run"]).lower()
+        self.assertNotIn("not recognized", content)
+        self.assertNotIn("error", content)
 
     def test_chat_shell_without_project_is_rejected(self) -> None:
         created = self.client.post(

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import http.server
+import os
+import socketserver
 import tempfile
 import threading
 import time
@@ -10,17 +13,24 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+import httpx
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
+from workbench_backend.inference.adapter import RecordingTransport
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, workbench_client
+
+
+class _ThreadingHttpServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -254,6 +264,83 @@ class HarnessApiTests(unittest.TestCase):
         confirmed_kinds = [event["kind"] for event in confirmed["events"]]
         self.assertIn("cancel_requested", confirmed_kinds)
         self.assertIn("cancelled", confirmed_kinds)
+
+    def test_cancel_closes_run_owned_model_client_without_confirming_stop(self) -> None:
+        run = AgentRun(
+            id="agent_cancel_closes_client",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="held model call",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        harness = self.app.state.harness
+        client = httpx.Client(timeout=60.0)
+        self.addCleanup(client.close)
+        with harness._lock:  # Product boundary: cancel closes only this run's transport.
+            harness._runs[run.id] = run
+            harness._cancels[run.id] = threading.Event()
+            harness._decision_ready[run.id] = threading.Event()
+            harness._model_clients[run.id] = client
+
+        cancelled = harness.cancel(run.id)
+
+        self.assertTrue(client.is_closed)
+        self.assertEqual(cancelled.status, AgentRunStatus.cancel_requested)
+        self.assertIsNone(cancelled.finished_at)
+        self.assertEqual(
+            [event.kind for event in cancelled.events],
+            ["cancel_requested"],
+        )
+
+    def test_httpx_client_close_interrupts_blocked_model_transport(self) -> None:
+        if os.name != "nt":
+            self.skipTest("httpcore 1.0.9 closes sockets without shutdown; cross-thread recv unblock was validated for the Windows product runtime only.")
+        entered = threading.Event()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                entered.set()
+                time.sleep(30.0)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        server = _ThreadingHttpServer(("127.0.0.1", 0), Handler)
+        self.addCleanup(server.server_close)
+        serve = threading.Thread(target=server.serve_forever, daemon=True)
+        serve.start()
+        self.addCleanup(server.shutdown)
+        capture_sink: list[dict[str, Any]] = []
+        client = httpx.Client(
+            transport=RecordingTransport(capture_sink),
+            timeout=60.0,
+        )
+        self.addCleanup(client.close)
+        result: dict[str, str] = {}
+
+        def request() -> None:
+            try:
+                client.post(
+                    f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "wait"}]},
+                )
+                result["status"] = "returned"
+            except Exception as exc:  # noqa: BLE001 - transport error is the expected cancellation signal.
+                result["status"] = type(exc).__name__
+
+        worker = threading.Thread(target=request)
+        worker.start()
+        self.assertTrue(entered.wait(timeout=5.0))
+        client.close()
+        worker.join(timeout=5.0)
+
+        self.assertFalse(worker.is_alive(), result)
+        self.assertIn(result.get("status"), {"ReadError", "WriteError", "ConnectError"})
+        self.assertEqual(len(capture_sink), 1)
+        self.assertTrue(capture_sink[0]["url"].endswith("/v1/chat/completions"))
 
     def test_cancel_requested_is_still_live_for_quiescence(self) -> None:
         now = utc_now()

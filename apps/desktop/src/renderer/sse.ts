@@ -7,6 +7,19 @@ function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
 
+async function requestFinalSnapshot<T>(path: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(`${backendUrl()}${path}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
+  const body = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `${response.status} ${path}`);
+  }
+  return body;
+}
+
 function parseSseBlock(block: string): { event?: string; id?: string; data?: string } {
   const parsed: { event?: string; id?: string; data?: string } = {};
   for (const raw of block.split(/\r?\n/)) {
@@ -165,6 +178,7 @@ export async function subscribeWorkbenchEvents<T>(options: {
   signal: AbortSignal;
   apply: (current: T | null, envelope: RunStreamEnvelope) => T | null;
   onRecord: (record: T) => void;
+  terminalSnapshot?: (signal: AbortSignal) => Promise<T>;
 }): Promise<void> {
   const params = new URLSearchParams();
   if (options.runId) {
@@ -188,13 +202,25 @@ export async function subscribeWorkbenchEvents<T>(options: {
           if (id !== undefined) {
             lastEventId = id;
           }
+          if (envelope.type === "stream_end") {
+            return;
+          }
           current = options.apply(current, envelope);
           if (current !== null) {
             options.onRecord(current);
           }
         },
       );
-      if (outcome === "ended" || options.signal.aborted) {
+      if (options.signal.aborted) {
+        return;
+      }
+      if (outcome === "ended") {
+        if (options.terminalSnapshot) {
+          const terminal = await options.terminalSnapshot(options.signal);
+          if (!options.signal.aborted) {
+            options.onRecord(terminal);
+          }
+        }
         return;
       }
     } catch (error) {
@@ -230,4 +256,8 @@ export function applyConversationEvent(
 
 export function applyRunEvent(current: AgentRun | null, envelope: RunStreamEnvelope): AgentRun | null {
   return applyStreamEvent(current, envelope);
+}
+
+export function fetchConversationSnapshot(conversationId: string, signal: AbortSignal): Promise<ChatConversation> {
+  return requestFinalSnapshot<ChatConversation>(`/v1/chat/conversations/${conversationId}`, signal);
 }

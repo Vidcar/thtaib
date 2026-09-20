@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Status and approval of each record live in [the catalogue](../catalog.json). Records explain rationale and scope; current behaviour lives in [architecture](../architecture.md) and the module specifications. Smaller dated decisions are in the [changelog](changelog.md).
+Status of each record lives in [the catalogue](../catalog.json). Records explain authority, rationale and scope; current behaviour lives in [architecture](../architecture.md) and the module specifications. Smaller dated decisions are in the [changelog](changelog.md).
 
 | Record | Status | Purpose |
 | --- | --- | --- |

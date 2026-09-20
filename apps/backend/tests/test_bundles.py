@@ -5,8 +5,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from workbench_backend.inference.hf_fetch import HuggingFaceDownload
+from workbench_backend.inference import bundles as bundle_module
+from workbench_backend.inference import hashes
 from workbench_backend.inference.inspect import inspect_gguf_file
 from workbench_backend.inference.schemas import HuggingFaceImportRequest, LocalImportRequest
 from workbench_backend.inference.service import ModelManager
@@ -74,6 +77,37 @@ class BundleTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertTrue(path.is_relative_to(self.paths.models))
             self.assertEqual(path.stat().st_size, recorded.size_bytes)
+
+    def test_list_bundles_caches_after_first_check_and_skips_unchanged_write(self) -> None:
+        job = self.manager.import_local(
+            LocalImportRequest(source_path=str(self.source_dir), display_name="demo")
+        )
+        self.assertEqual(job.status.value, "complete")
+        bundle = self.manager.store.get_bundle(job.bundle_id or "")
+        self.assertIsNotNone(bundle)
+
+        with (
+            patch.object(hashes, "sha256_file", wraps=hashes.sha256_file) as wrapped_hash,
+            patch.object(self.manager.store, "put_bundle", wraps=self.manager.store.put_bundle) as wrapped_put,
+        ):
+            self.manager.list_bundles()
+            self.manager.list_bundles()
+
+        self.assertEqual(wrapped_hash.call_count, len(bundle.files))
+        self.assertEqual(wrapped_put.call_count, 0)
+
+    def test_get_bundle_uses_full_hash_each_time(self) -> None:
+        job = self.manager.import_local(
+            LocalImportRequest(source_path=str(self.source_dir), display_name="demo")
+        )
+        bundle = self.manager.store.get_bundle(job.bundle_id or "")
+        self.assertIsNotNone(bundle)
+
+        with patch.object(bundle_module, "sha256_file", wraps=bundle_module.sha256_file) as wrapped_hash:
+            self.manager.get_bundle(job.bundle_id or "")
+            self.manager.get_bundle(job.bundle_id or "")
+
+        self.assertEqual(wrapped_hash.call_count, len(bundle.files) * 2)
 
     def test_reuse_under_models_keeps_same_record_format(self) -> None:
         first = self.manager.import_local(LocalImportRequest(source_path=str(self.primary)))

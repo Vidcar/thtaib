@@ -2,11 +2,16 @@
 
 Local AI Workbench is a Windows-first, local-first workbench for running models and agent work on your own machine. One FastAPI backend does the work; one Electron desktop shows it. Inference comes from llama.cpp, the agent loop from Deep Agents, LangGraph and LangChain. The workbench integrates those projects behind a coherent user experience instead of reimplementing them.
 
-## Where things stand
+## Use the local product
 
-Seen working live on David's PC (2026-09-19, Qwen3.8-27B on an RTX 3090): the backend downloads the pinned llama.cpp build, starts `llama-server` itself, reports it healthy and stops it cleanly; Chat sends a task to the agent, the agent writes a real file into the project folder and a follow-up turn continues the same conversation; a saved profile's settings reach the model. A real-model smoke test with a tiny model runs on pull requests that touch the backend. Built but not yet proven live: Hugging Face import, companion files for vision, Lab capture and replay, durable knowledge. Not started: workers (shell, browser), Builder, Model Lab runners, approvals, retrieval.
+On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It starts the backend if needed and opens the built desktop. Closing and reopening the desktop retains conversations and project files; the backend and any running model remain available in the background.
 
-The honest status of every requirement is in [the catalogue](specs/catalog.json); what "built" and "verified" mean is in [verification](specs/verification.md).
+1. Open **Models**. Under **Start managed**, select the existing **Qwen3.8-27B-UD-IQ4_XS** bundle and choose **Start**. If it is already running, use it without starting another copy. The first model check after backend startup can take time; no download is needed for an installed bundle and runtime.
+2. Open **Chat**. The running model is selected automatically. Leave **Profile** at **None** for defaults, or choose a saved profile deliberately.
+3. Send a message. For file tasks, enter an existing project folder first. The assistant can read and edit files there. Shell commands that need approval show the exact command with **Approve** and **Deny**.
+4. Use **Cancel** to stop work, and choose a saved conversation from the left to continue. Recent conversations appear first. Stop the model from **Models** when you want to release its GPU memory.
+
+The current next-work list is in [the delivery map](docs/delivery-feature-map.md#next-path). Detailed requirement status and scoped evidence live only in [the catalogue](specs/catalog.json); [verification](specs/verification.md) distinguishes live checks from mocks and unfinished acceptance clauses. Builder, optional MCP integration and broader Lab workflows are not prerequisites for Chat.
 
 ## Coding agents
 
@@ -16,9 +21,9 @@ Start at [AGENTS.md](AGENTS.md). Specifications live under [`specs/`](specs/READ
 
 Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js ≥22 and <25 with pnpm 10+. Windows is the supported target; Linux is used for CI and the real-model smoke tier. All commands are listed in [commands](specs/commands.md).
 
-Backend (in `apps/backend`): `uv sync`, then `uv run python -m workbench_backend`.
+Agent setup: backend (in `apps/backend`): `uv sync`, then `uv run python -m workbench_backend`.
 
-Desktop (in `apps/desktop`): `pnpm install`, then `pnpm run dev` (needs a machine that can open a window). `pnpm run typecheck` and `pnpm run build` check and build it.
+Desktop (in `apps/desktop`): `pnpm install`, then `pnpm run build`. The double-click launcher uses that build; rebuild after code changes. `pnpm run dev` is the agent development mode. Launcher errors and backend startup logs live under the product `logs` directory.
 
 ## Where data lives
 

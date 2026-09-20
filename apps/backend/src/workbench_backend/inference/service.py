@@ -80,7 +80,7 @@ class ModelManager:
         return job
 
     def list_bundles(self) -> list[ModelBundle]:
-        return [self.bundles.verify_bundle(bundle) for bundle in self.store.list_bundles()]
+        return [self.bundles.verify_bundle(bundle, use_cache=True) for bundle in self.store.list_bundles()]
 
     def get_bundle(self, bundle_id: str) -> ModelBundle:
         bundle = self.store.get_bundle(bundle_id)
@@ -179,6 +179,7 @@ class ModelManager:
         return self.deployments.reconcile()
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
+        self._require_deployable_bundle(request.bundle_id)
         return self.deployments.create_managed(request)
 
     def attach_connected(self, request: ConnectedDeploymentRequest) -> Deployment:
@@ -198,6 +199,9 @@ class ModelManager:
         return deployment
 
     def start_deployment(self, deployment_id: str) -> Deployment:
+        deployment = self.get_deployment(deployment_id)
+        if deployment.bundle_id:
+            self._require_deployable_bundle(deployment.bundle_id)
         return self.deployments.start(deployment_id)
 
     def stop_deployment(self, deployment_id: str) -> Deployment:
@@ -211,6 +215,25 @@ class ModelManager:
 
     def deployment_smoke(self, deployment_id: str) -> SmokeResult:
         return self.deployments.smoke(deployment_id)
+
+    def _require_deployable_bundle(self, bundle_id: str) -> ModelBundle:
+        stored = self.store.get_bundle(bundle_id)
+        if stored is None:
+            raise ManagerError(
+                "A complete, on-disk bundle is required. A failed or interrupted "
+                "download is not a successful deployment.",
+                code="bundle_not_deployable",
+                status_code=409,
+            )
+        bundle = self.bundles.verify_bundle(stored)
+        if bundle.status.value != "complete" or not bundle.disk_matches:
+            raise ManagerError(
+                "A complete, on-disk bundle is required. A failed or interrupted "
+                "download is not a successful deployment.",
+                code="bundle_not_deployable",
+                status_code=409,
+            )
+        return bundle
 
 
 def manager_from_env(data_root: Path | None = None) -> ModelManager:
