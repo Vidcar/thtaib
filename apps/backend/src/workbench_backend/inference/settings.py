@@ -165,10 +165,19 @@ PER_REQUEST_KEYS: frozenset[str] = frozenset(
 AGENT_KEYS: frozenset[str] = frozenset(
     {
         "system_prompt",
-        "tools_enabled",
-        "max_iterations",
     }
 )
+
+UNSUPPORTED_AGENT_REASONS: dict[str, str] = {
+    "tools_enabled": (
+        "Not implemented as a profile setting. Tools are selected by the run "
+        "request and access policy; this requested value is preserved but not applied."
+    ),
+    "max_iterations": (
+        "Not implemented. This requested value is preserved but not applied. "
+        "The separate explicit max_steps budget controls LangGraph steps, not iterations."
+    ),
+}
 
 DEFAULT_GPU_PROFILE: dict[str, Any] = {
     "n_gpu_layers": -1,
@@ -494,11 +503,22 @@ def resolve_bag(
     *,
     defaults: dict[str, Any] | None = None,
     overrides: dict[str, Any] | None = None,
+    unsupported_reasons: dict[str, str] | None = None,
 ) -> SettingsBag:
     known_keys = set(known)
     defaults = defaults or {}
     overrides = overrides or {}
     unsupported = sorted(key for key in requested if key not in known_keys)
+    reasons = unsupported_reasons or {}
+    unsupported_notes = [
+        SettingNote(
+            key=key,
+            requested=requested.get(key),
+            applied=None,
+            reason=reasons.get(key, "Unsupported setting is preserved as requested but not applied."),
+        )
+        for key in unsupported
+    ]
     applied: dict[str, Any] = dict(defaults)
     for key, value in requested.items():
         if key in known_keys:
@@ -520,6 +540,7 @@ def resolve_bag(
         requested=dict(requested),
         applied=applied,
         unsupported=unsupported,
+        unsupported_notes=unsupported_notes,
         overridden=overridden,
         unverified=unverified,
     )
@@ -549,7 +570,11 @@ def resolve_bags(
     return SettingsBags(
         startup=startup_bag,
         per_request=resolve_bag(per_request or {}, PER_REQUEST_KEYS),
-        agent=resolve_bag(agent or {}, AGENT_KEYS),
+        agent=resolve_bag(
+            agent or {},
+            AGENT_KEYS,
+            unsupported_reasons=UNSUPPORTED_AGENT_REASONS,
+        ),
     )
 
 

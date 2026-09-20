@@ -6,18 +6,24 @@ claim perfect secret detection.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import tempfile
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+from langchain.agents.middleware import ModelRequest, ModelResponse
 
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
@@ -124,6 +130,186 @@ class CapturePolicyUnitTests(unittest.TestCase):
         self.assertEqual(applied.messages, [])
         self.assertIsNone(applied.http_payload)
         self.assertNotIn(SYNTH_API_KEY, applied.model_dump_json())
+
+    def test_discard_drops_failed_transport_evidence_bodies(self) -> None:
+        capture = ModelRequestCapture(
+            at=utc_now(),
+            http_payload={"body": {"messages": [{"content": SYNTH_ASSIGNMENT}]}},
+            http_payloads=[
+                {"body": {"messages": [{"content": SYNTH_ASSIGNMENT}]}},
+            ],
+            transport_attempted=True,
+            transport_attempt_count=1,
+            response_observed=False,
+            failure={"type": "RuntimeError", "message": SYNTH_ASSIGNMENT},
+        )
+        applied = apply_capture_policy(
+            capture, ContextCaptureSettings(redaction_mode="discard")
+        )
+        self.assertTrue(applied.discarded)
+        self.assertIsNone(applied.http_payload)
+        self.assertEqual(applied.http_payloads, [])
+        self.assertIsNone(applied.failure)
+        self.assertTrue(applied.transport_attempted)
+        self.assertEqual(applied.transport_attempt_count, 1)
+        self.assertFalse(applied.response_observed)
+        self.assertNotIn(SYNTH_API_KEY, applied.model_dump_json())
+
+
+class CaptureFailureMiddlewareTests(unittest.TestCase):
+    def _run(self) -> AgentRun:
+        now = utc_now()
+        return AgentRun(
+            id="run_capture_failure",
+            deployment_id="deploy_capture_failure",
+            task="fail",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+        )
+
+    def _request(self) -> ModelRequest:
+        return ModelRequest(
+            model=ScriptedChatModel([AIMessage(content="unused")]),
+            messages=[HumanMessage(content="please fail")],
+            tools=[],
+            model_settings={"temperature": 0.4},
+        )
+
+    def test_sync_failure_before_transport_preserves_original_exception(self) -> None:
+        run = self._run()
+        sink: list[dict[str, Any]] = []
+        middleware = WorkbenchHarnessMiddleware(run, http_sink=sink)
+        original = RuntimeError(f"synthetic transport failure {SYNTH_ASSIGNMENT}")
+
+        def handler(_request: ModelRequest) -> ModelResponse:
+            raise original
+
+        with self.assertRaises(RuntimeError) as raised:
+            middleware.wrap_model_call(self._request(), handler)
+        self.assertIs(raised.exception, original)
+        self.assertEqual(len(run.model_requests), 1)
+        capture = run.model_requests[0]
+        self.assertTrue(capture.request_prepared)
+        self.assertFalse(capture.transport_attempted)
+        self.assertEqual(capture.transport_attempt_count, 0)
+        self.assertFalse(capture.response_observed)
+        self.assertFalse(capture.handler_returned)
+        self.assertEqual(capture.failure["type"], "RuntimeError")
+        self.assertIn(REDACTION_MARK, capture.failure["message"])
+        self.assertNotIn(SYNTH_API_KEY, capture.model_dump_json())
+
+    def test_async_failure_capture_records_all_retry_payloads(self) -> None:
+        run = self._run()
+        sink: list[dict[str, Any]] = []
+        middleware = WorkbenchHarnessMiddleware(run, http_sink=sink)
+        original = RuntimeError("async failure")
+
+        async def handler(_request: ModelRequest) -> ModelResponse:
+            sink.append({"body": {"messages": [{"content": "attempt one"}]}})
+            sink.append({"body": {"messages": [{"content": "attempt two"}]}})
+            raise original
+
+        async def invoke() -> None:
+            with self.assertRaises(RuntimeError) as raised:
+                await middleware.awrap_model_call(self._request(), handler)
+            self.assertIs(raised.exception, original)
+
+        asyncio.run(invoke())
+        self.assertEqual(len(run.model_requests), 1)
+        capture = run.model_requests[0]
+        self.assertTrue(capture.request_prepared)
+        self.assertTrue(capture.transport_attempted)
+        self.assertEqual(capture.transport_attempt_count, 2)
+        self.assertFalse(capture.response_observed)
+        self.assertFalse(capture.handler_returned)
+        self.assertEqual(len(capture.http_payloads), 2)
+        self.assertEqual(capture.http_payload, capture.http_payloads[-1])
+
+    def test_success_capture_distinguishes_handler_return_from_transport_response(self) -> None:
+        run = self._run()
+        sink: list[dict[str, Any]] = []
+        middleware = WorkbenchHarnessMiddleware(run, http_sink=sink)
+
+        def handler(_request: ModelRequest) -> ModelResponse:
+            return ModelResponse(result=[AIMessage(content="ok")])
+
+        response = middleware.wrap_model_call(self._request(), handler)
+
+        self.assertEqual(response.result[0].content, "ok")
+        capture = run.model_requests[0]
+        self.assertTrue(capture.request_prepared)
+        self.assertFalse(capture.transport_attempted)
+        self.assertEqual(capture.transport_attempt_count, 0)
+        self.assertFalse(capture.response_observed)
+        self.assertTrue(capture.handler_returned)
+
+    def test_async_prepared_failure_does_not_reuse_previous_attempt(self) -> None:
+        run = self._run()
+        middleware = WorkbenchHarnessMiddleware(run, http_sink=[{"body": {"old": True}}])
+        original = RuntimeError("failed before transport")
+
+        async def handler(_request: ModelRequest) -> ModelResponse:
+            raise original
+
+        async def invoke() -> None:
+            with self.assertRaises(RuntimeError) as caught:
+                await middleware.awrap_model_call(self._request(), handler)
+            self.assertIs(caught.exception, original)
+
+        asyncio.run(invoke())
+        capture = run.model_requests[0]
+        self.assertTrue(capture.request_prepared)
+        self.assertFalse(capture.transport_attempted)
+        self.assertFalse(capture.response_observed)
+        self.assertFalse(capture.handler_returned)
+        self.assertEqual(capture.http_payloads, [])
+        self.assertIsNone(capture.http_payload)
+
+    def test_capture_failure_does_not_mask_handler_exception(self) -> None:
+        run = self._run()
+        middleware = WorkbenchHarnessMiddleware(
+            run,
+            http_sink=[],
+            settings_provider=lambda: (_ for _ in ()).throw(RuntimeError("capture failed")),
+        )
+        original = RuntimeError("handler failed")
+
+        def handler(_request: ModelRequest) -> ModelResponse:
+            raise original
+
+        with self.assertRaises(RuntimeError) as raised:
+            middleware.wrap_model_call(self._request(), handler)
+
+        self.assertIs(raised.exception, original)
+        self.assertEqual(run.model_requests, [])
+        self.assertEqual(run.events[-1].kind, "model_request_capture_failed")
+
+
+class _FailingChatHandler(BaseHTTPRequestHandler):
+    requests: list[dict[str, Any]] = []
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._json(200, {"data": [{"id": "fake-llama"}]})
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length)
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+        self.requests.append({"path": self.path, "body": body})
+        self._json(500, {"error": {"message": f"failed {SYNTH_ASSIGNMENT}"}})
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        return
+
+    def _json(self, status: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class PrivacyDiagnosticsApiTests(unittest.TestCase):
@@ -239,6 +425,68 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
             self.assertIsNone(capture["http_payload"])
         stored = self._sqlite_run(body["id"])
         self.assertNotIn(SYNTH_API_KEY, json.dumps(stored["model_requests"]))
+
+
+class FailedTransportDiagnosticsApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _FailingChatHandler.requests = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _FailingChatHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address[:2]
+        self.endpoint = f"http://{host}:{port}/v1"
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.paths = WorkbenchPaths(self.root).ensure()
+        self.app = create_app(data_root=self.root)
+        self.client = offline_workbench_client(self.app)
+        self.deployment_id = self.client.post(
+            "/v1/deployments/connected",
+            json={"endpoint": self.endpoint, "display_name": "failing-diag"},
+        ).json()["id"]
+
+    def tearDown(self) -> None:
+        close_workbench_sqlite(self.app, getattr(self, "client", None))
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def _sqlite_run(self, run_id: str) -> dict[str, Any]:
+        conn = sqlite3.connect(self.paths.application_db)
+        try:
+            row = conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        return json.loads(row[0])
+
+    def test_failed_harness_run_persists_redacted_transport_evidence(self) -> None:
+        started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": f"Use this synthetic credential marker: {SYNTH_ASSIGNMENT}",
+                "presented_tools": ["echo"],
+            },
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        body = wait_for_run(self.client, started.json()["id"])
+
+        self.assertEqual(body["status"], "failed")
+        self.assertTrue(body["model_requests"])
+        capture = body["model_requests"][0]
+        self.assertTrue(capture["request_prepared"])
+        self.assertTrue(capture["transport_attempted"])
+        self.assertGreaterEqual(capture["transport_attempt_count"], 1)
+        self.assertTrue(capture["response_observed"])
+        self.assertFalse(capture["handler_returned"])
+        self.assertEqual(capture["http_payloads"][0]["response_status_code"], 500)
+        self.assertNotIn(SYNTH_API_KEY, json.dumps(capture))
+        stored = self._sqlite_run(body["id"])
+        self.assertNotIn(SYNTH_API_KEY, json.dumps(stored["model_requests"]))
+        stored_capture = stored["model_requests"][0]
+        self.assertTrue(stored_capture["response_observed"])
+        self.assertGreaterEqual(stored_capture["transport_attempt_count"], 1)
 
 
 class PrivacyExportApiTests(unittest.TestCase):

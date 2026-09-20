@@ -38,7 +38,7 @@ EXTRA_BODY_KEYS = (
 
 
 class RecordingTransport(httpx.BaseTransport):
-    """Records the chat-completions JSON the adapter actually sends."""
+    """Records each chat-completions request and transport outcome."""
 
     def __init__(
         self,
@@ -49,15 +49,28 @@ class RecordingTransport(httpx.BaseTransport):
         self.inner = inner or httpx.HTTPTransport()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        record: dict[str, Any] | None = None
         if request.url.path.endswith("/chat/completions"):
-            self.sink.append(
-                {
-                    "url": str(request.url),
-                    "method": request.method,
-                    "body": _decode_body(request.content),
+            record = {
+                "url": str(request.url),
+                "method": request.method,
+                "body": _decode_body(request.content),
+                "response_received": False,
+            }
+            self.sink.append(record)
+        try:
+            response = self.inner.handle_request(request)
+        except Exception as exc:
+            if record is not None:
+                record["transport_error"] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
                 }
-            )
-        return self.inner.handle_request(request)
+            raise
+        if record is not None:
+            record["response_received"] = True
+            record["response_status_code"] = response.status_code
+        return response
 
     def close(self) -> None:
         self.inner.close()

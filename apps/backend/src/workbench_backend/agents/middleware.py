@@ -61,8 +61,23 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
         before = len(self.http_sink)
-        response = handler(filtered)
-        self._capture(filtered, _payload_after(self.http_sink, before))
+        try:
+            response = handler(filtered)
+        except Exception as exc:
+            self._safe_capture(
+                filtered,
+                _payload_after(self.http_sink, before),
+                http_payloads=_payloads_after(self.http_sink, before),
+                handler_returned=False,
+                failure=exc,
+            )
+            raise
+        self._safe_capture(
+            filtered,
+            _payload_after(self.http_sink, before),
+            http_payloads=_payloads_after(self.http_sink, before),
+            handler_returned=True,
+        )
         return response
 
     async def awrap_model_call(
@@ -72,8 +87,23 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
         before = len(self.http_sink)
-        response = await handler(filtered)
-        self._capture(filtered, _payload_after(self.http_sink, before))
+        try:
+            response = await handler(filtered)
+        except Exception as exc:
+            self._safe_capture(
+                filtered,
+                _payload_after(self.http_sink, before),
+                http_payloads=_payloads_after(self.http_sink, before),
+                handler_returned=False,
+                failure=exc,
+            )
+            raise
+        self._safe_capture(
+            filtered,
+            _payload_after(self.http_sink, before),
+            http_payloads=_payloads_after(self.http_sink, before),
+            handler_returned=True,
+        )
         return response
 
     def wrap_tool_call(
@@ -182,7 +212,15 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 selected.append(item)
         return selected
 
-    def _capture(self, request: ModelRequest, http_payload: dict[str, Any] | None) -> None:
+    def _capture(
+        self,
+        request: ModelRequest,
+        http_payload: dict[str, Any] | None,
+        *,
+        http_payloads: list[dict[str, Any]] | None = None,
+        handler_returned: bool = False,
+        failure: Exception | None = None,
+    ) -> None:
         setup = self.run.effective_setup
         gaps = list(setup.gaps) if setup is not None else [RAG_GAP]
         if setup is None:
@@ -192,6 +230,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 gaps.append(SKILL_GAP)
         if http_payload is None:
             gaps.append("http payload not observed for this model call")
+        attempts = list(http_payloads or ([] if http_payload is None else [http_payload]))
+        response_observed = any(item.get("response_received") is True for item in attempts)
+        if failure is not None and response_observed:
+            gaps.append("model call failed after transport response was observed")
+        elif failure is not None:
+            gaps.append("model call failed before response was observed")
         applied = dict(setup.bags.per_request.applied) if setup is not None else {}
         generation = dict(applied)
         generation.update(request.model_settings or {})
@@ -218,6 +262,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 retrieved_material=list(self.run.retrieved_material),
                 capture_gaps=gaps,
                 http_payload=http_payload,
+                http_payloads=attempts,
+                request_prepared=True,
+                transport_attempted=bool(attempts),
+                transport_attempt_count=len(attempts),
+                response_observed=response_observed,
+                handler_returned=handler_returned,
+                failure=_failure_dict(failure),
                 selected_profile_id=setup.selected_profile_id if setup is not None else self.run.profile_id,
                 applied_per_request=applied,
                 startup_mismatches=(
@@ -230,6 +281,34 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         )
         self.run.model_requests.append(captured)
         self.run.updated_at = utc_now()
+
+    def _safe_capture(
+        self,
+        request: ModelRequest,
+        http_payload: dict[str, Any] | None,
+        *,
+        http_payloads: list[dict[str, Any]] | None = None,
+        handler_returned: bool = False,
+        failure: Exception | None = None,
+    ) -> None:
+        try:
+            self._capture(
+                request,
+                http_payload,
+                http_payloads=http_payloads,
+                handler_returned=handler_returned,
+                failure=failure,
+            )
+        except Exception as capture_error:  # noqa: BLE001 - diagnostics must not mask model errors
+            self.run.events.append(
+                AgentEvent(
+                    at=utc_now(),
+                    kind="model_request_capture_failed",
+                    detail={
+                        "type": type(capture_error).__name__,
+                    },
+                )
+            )
 
 
 def _allow_projectless_knowledge_tool(
@@ -310,6 +389,21 @@ def _payload_after(sink: list[dict[str, Any]], before: int) -> dict[str, Any] | 
     if len(sink) <= before:
         return None
     return sink[-1]
+
+
+def _payloads_after(sink: list[dict[str, Any]], before: int) -> list[dict[str, Any]]:
+    if len(sink) <= before:
+        return []
+    return [dict(item) for item in sink[before:]]
+
+
+def _failure_dict(exc: Exception | None) -> dict[str, Any] | None:
+    if exc is None:
+        return None
+    return {
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
 
 
 def _system_text(request: ModelRequest) -> str | None:

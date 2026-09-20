@@ -10,6 +10,7 @@ from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, Interr
 from workbench_backend.agents.tools import enabled_for_project
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
+    ChatDeployHealth,
     ChatContinuity,
     ChatConversation,
     ChatConversationCreateRequest,
@@ -20,7 +21,7 @@ from workbench_backend.chat.schemas import (
 )
 from workbench_backend.chat.store import ChatStore
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
-from workbench_backend.errors import ChatError, HarnessError
+from workbench_backend.errors import ChatError, HarnessError, ManagerError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeRefs
@@ -133,127 +134,151 @@ class ChatService:
     def list_conversations(self) -> list[ChatConversationView]:
         views: list[ChatConversationView] = []
         for item in self.store.list_conversations():
-            self._persist_thread_if_missing(item)
-            views.append(self._view(item))
+            with self.store.conversation_lock(item.id):
+                fresh = self._require(item.id)
+                self._persist_thread_if_missing(fresh)
+            views.append(self._view(fresh, persist=True))
         return views
 
     def get(self, conversation_id: str) -> ChatConversationView:
-        conversation = self._require(conversation_id)
-        self._persist_thread_if_missing(conversation)
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            self._persist_thread_if_missing(conversation)
         return self._view(conversation, persist=True)
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
-        conversation = self._require(conversation_id)
-        if request.deployment_id:
-            self.manager.get_deployment(request.deployment_id)
-            conversation.deployment_id = request.deployment_id
-        if request.profile_id is not None:
-            conversation.profile_id = self._bind_profile(request.profile_id)
-        if (
-            request.memory_version_refs is not None
-            or request.skill_version_refs is not None
-            or request.protected_instruction_version_refs is not None
-            or request.knowledge_version_refs is not None
-        ):
-            refs = self._bind_knowledge(
-                memory_version_refs=request.memory_version_refs
-                if request.memory_version_refs is not None
-                else conversation.memory_version_refs,
-                skill_version_refs=request.skill_version_refs
-                if request.skill_version_refs is not None
-                else conversation.skill_version_refs,
-                protected_instruction_version_refs=(
-                    request.protected_instruction_version_refs
-                    if request.protected_instruction_version_refs is not None
-                    else conversation.protected_instruction_version_refs
-                ),
-                knowledge_version_refs=request.knowledge_version_refs or [],
-            )
-            conversation.memory_version_refs = refs.memory_version_refs
-            conversation.skill_version_refs = refs.skill_version_refs
-            conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
-        if request.embedding_deployment_id is not None:
-            conversation.embedding_deployment_id = request.embedding_deployment_id
-        if request.retrieval_project_paths is not None:
-            conversation.retrieval_project_paths = list(request.retrieval_project_paths)
-        if request.project_path or request.workspace_id:
-            workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
-            conversation.workspace_id = workspace_id
-            conversation.project_path = str(project_path) if project_path is not None else None
-        if conversation.current_run_id:
-            try:
-                current = self.harness.get_run(conversation.current_run_id)
-            except HarnessError:
-                current = None
-            if current is not None and is_run_lifecycle_live(current.status):
-                raise ChatError(
-                    "A Chat turn is already live on this conversation.",
-                    code="chat_turn_active",
-                    status_code=409,
-                )
-        self._ensure_thread(conversation)
         task = request.task.strip()
         if not task:
             raise ChatError("Compose text is required.", code="task_required", status_code=400)
-        now = utc_now()
-        conversation.history_replaced = False
-        conversation.transcript.append(ChatMessage(role="user", content=task, at=now))
-        try:
-            started = self.harness.start(
-                AgentStartRequest(
-                    deployment_id=conversation.deployment_id,
-                    task=task,
-                    presented_tools=request.presented_tools,
-                    system_prompt=(
-                        CHAT_SYSTEM_PROMPT
-                        if conversation.project_path
-                        else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            conversation = self._reconcile_terminal_assistant(conversation)
+            if conversation.current_run_id:
+                try:
+                    current = self.harness.get_run(conversation.current_run_id)
+                except HarnessError:
+                    current = None
+                if current is not None and is_run_lifecycle_live(current.status):
+                    raise ChatError(
+                        "A Chat turn is already live on this conversation.",
+                        code="chat_turn_active",
+                        status_code=409,
+                    )
+
+            next_conversation = conversation.model_copy(deep=True)
+            fields_set = request.model_fields_set
+            if request.deployment_id:
+                self.manager.get_deployment(request.deployment_id)
+                next_conversation.deployment_id = request.deployment_id
+            if "profile_id" in fields_set:
+                next_conversation.profile_id = self._bind_profile(request.profile_id)
+            if (
+                request.memory_version_refs is not None
+                or request.skill_version_refs is not None
+                or request.protected_instruction_version_refs is not None
+                or request.knowledge_version_refs is not None
+            ):
+                refs = self._bind_knowledge(
+                    memory_version_refs=request.memory_version_refs
+                    if request.memory_version_refs is not None
+                    else next_conversation.memory_version_refs,
+                    skill_version_refs=request.skill_version_refs
+                    if request.skill_version_refs is not None
+                    else next_conversation.skill_version_refs,
+                    protected_instruction_version_refs=(
+                        request.protected_instruction_version_refs
+                        if request.protected_instruction_version_refs is not None
+                        else next_conversation.protected_instruction_version_refs
                     ),
-                    workspace_id=conversation.workspace_id,
-                    project_path=conversation.project_path,
-                    profile_id=conversation.profile_id,
-                    source_surface="chat",
-                    thread_id=conversation.thread_id,
-                    memory_version_refs=conversation.memory_version_refs,
-                    skill_version_refs=conversation.skill_version_refs,
-                    protected_instruction_version_refs=conversation.protected_instruction_version_refs,
-                    embedding_deployment_id=conversation.embedding_deployment_id,
-                    retrieval_project_paths=list(conversation.retrieval_project_paths),
+                    knowledge_version_refs=request.knowledge_version_refs or [],
                 )
-            )
-        except HarnessError:
-            conversation.updated_at = utc_now()
-            self.store.put(conversation)
-            raise
-        conversation.current_run_id = started.id
-        conversation.run_ids.append(started.id)
-        conversation.updated_at = utc_now()
-        self.store.put(conversation)
-        return self._view(conversation)
+                next_conversation.memory_version_refs = refs.memory_version_refs
+                next_conversation.skill_version_refs = refs.skill_version_refs
+                next_conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
+            if "embedding_deployment_id" in fields_set:
+                next_conversation.embedding_deployment_id = request.embedding_deployment_id
+            if "retrieval_project_paths" in fields_set:
+                next_conversation.retrieval_project_paths = list(request.retrieval_project_paths or [])
+            project_access_changed = "project_path" in fields_set or "workspace_id" in fields_set
+            if project_access_changed:
+                workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
+                next_conversation.workspace_id = workspace_id
+                next_conversation.project_path = str(project_path) if project_path is not None else None
+                if project_path is None and "retrieval_project_paths" not in fields_set:
+                    next_conversation.retrieval_project_paths = []
+            try:
+                self.manager.get_deployment(next_conversation.deployment_id)
+            except ManagerError as exc:
+                if exc.code != "deployment_missing":
+                    raise
+                raise ChatError(
+                    "The Chat conversation is bound to a deployment that is no longer available. "
+                    "Select a deployment to continue.",
+                    code="deploy_missing",
+                    status_code=409,
+                    details={"deployment_id": next_conversation.deployment_id},
+                ) from exc
+            self._ensure_thread(next_conversation)
+            now = utc_now()
+            next_conversation.history_replaced = False
+            next_conversation.transcript.append(ChatMessage(role="user", content=task, at=now))
+            try:
+                started = self.harness.start(
+                    AgentStartRequest(
+                        deployment_id=next_conversation.deployment_id,
+                        task=task,
+                        presented_tools=request.presented_tools,
+                        system_prompt=(
+                            CHAT_SYSTEM_PROMPT
+                            if next_conversation.project_path
+                            else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
+                        ),
+                        workspace_id=next_conversation.workspace_id,
+                        project_path=next_conversation.project_path,
+                        profile_id=next_conversation.profile_id,
+                        source_surface="chat",
+                        thread_id=next_conversation.thread_id,
+                        memory_version_refs=next_conversation.memory_version_refs,
+                        skill_version_refs=next_conversation.skill_version_refs,
+                        protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
+                        embedding_deployment_id=next_conversation.embedding_deployment_id,
+                        retrieval_project_paths=list(next_conversation.retrieval_project_paths),
+                    )
+                )
+            except HarnessError:
+                raise
+            next_conversation.transcript[-1].run_id = started.id
+            next_conversation.current_run_id = started.id
+            next_conversation.run_ids.append(started.id)
+            next_conversation.updated_at = utc_now()
+            self.store.put(next_conversation)
+            return self._view(next_conversation)
 
     def cancel(self, conversation_id: str) -> ChatConversationView:
-        conversation = self._require(conversation_id)
-        if not conversation.current_run_id:
-            raise ChatError("No active Chat run to cancel.", code="chat_run_missing", status_code=409)
-        self.harness.cancel(conversation.current_run_id)
-        conversation.updated_at = utc_now()
-        return self._view(self.store.put(conversation), persist=True)
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            if not conversation.current_run_id:
+                raise ChatError("No active Chat run to cancel.", code="chat_run_missing", status_code=409)
+            self.harness.cancel(conversation.current_run_id)
+            fresh = self._require(conversation_id)
+        return self._view(fresh, persist=True)
 
     def resume_interrupt(
         self,
         conversation_id: str,
         request: InterruptDecisionRequest,
     ) -> ChatConversationView:
-        conversation = self._require(conversation_id)
-        if not conversation.current_run_id:
-            raise ChatError(
-                "No active Chat run for a host-shell interrupt decision.",
-                code="chat_run_missing",
-                status_code=409,
-            )
-        self.harness.resume_interrupt(conversation.current_run_id, request)
-        conversation.updated_at = utc_now()
-        return self._view(self.store.put(conversation), persist=True)
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            if not conversation.current_run_id:
+                raise ChatError(
+                    "No active Chat run for a host-shell interrupt decision.",
+                    code="chat_run_missing",
+                    status_code=409,
+                )
+            self.harness.resume_interrupt(conversation.current_run_id, request)
+            fresh = self._require(conversation_id)
+        return self._view(fresh, persist=True)
 
     def replace_transcript(
         self,
@@ -267,12 +292,13 @@ class ChatService:
         into the harness.
         """
 
-        conversation = self._require(conversation_id)
-        self._ensure_thread(conversation)
-        conversation.transcript = list(request.messages)
-        conversation.history_replaced = True
-        conversation.updated_at = utc_now()
-        return self._view(self.store.put(conversation))
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            self._ensure_thread(conversation)
+            conversation.transcript = list(request.messages)
+            conversation.history_replaced = True
+            conversation.updated_at = utc_now()
+            return self._view(self.store.put(conversation))
 
     def _require(self, conversation_id: str) -> ChatConversation:
         conversation = self.store.get(conversation_id)
@@ -360,17 +386,44 @@ class ChatService:
     def _view(self, conversation: ChatConversation, *, persist: bool = False) -> ChatConversationView:
         current: AgentRun | None = None
         events: list[dict[str, object]] = []
-        if conversation.current_run_id:
+        current_run_id = conversation.current_run_id
+        if current_run_id:
             try:
-                current = self.harness.get_run(conversation.current_run_id)
+                current = self.harness.get_run(current_run_id)
             except HarnessError:
                 current = None
             if current is not None:
                 events = [event.model_dump(mode="json") for event in current.events]
-                if self._maybe_append_assistant(conversation, current) and persist:
-                    self.store.put(conversation)
+                if persist:
+                    conversation = self._reconcile_terminal_assistant(conversation, current)
+                    if conversation.current_run_id != current_run_id:
+                        current = None
+                        events = []
+                        if conversation.current_run_id:
+                            try:
+                                current = self.harness.get_run(conversation.current_run_id)
+                            except HarnessError:
+                                current = None
+                            if current is not None:
+                                events = [event.model_dump(mode="json") for event in current.events]
         thread_id = conversation.thread_id or ""
-        deployment = self.manager.get_deployment(conversation.deployment_id)
+        try:
+            deployment = self.manager.get_deployment(conversation.deployment_id)
+            deploy_health = report_chat_deploy_health(deployment, current)
+        except ManagerError as exc:
+            if exc.code != "deployment_missing":
+                raise
+            deploy_health = ChatDeployHealth(
+                deployment_id=conversation.deployment_id,
+                deployment_status="missing",
+                healthy=False,
+                code="deploy_missing",
+                message=(
+                    "The deployment bound to this conversation is no longer available. "
+                    "Select a deployment to continue."
+                ),
+                detail="The bound deployment record was not found.",
+            )
         return ChatConversationView(
             **conversation.model_dump(),
             current_run=current,
@@ -381,27 +434,41 @@ class ChatService:
                 run_ids=list(conversation.run_ids),
                 current_run_id=conversation.current_run_id,
             ),
-            deploy_health=report_chat_deploy_health(deployment, current),
+            deploy_health=deploy_health,
             filesystem_tools_available=bool(conversation.project_path),
             shell_tools_available=bool(conversation.project_path),
             enabled_tools=enabled_for_project(bool(conversation.project_path)),
         )
 
-    def _maybe_append_assistant(self, conversation: ChatConversation, run: AgentRun) -> bool:
+    def _reconcile_terminal_assistant(
+        self,
+        conversation: ChatConversation,
+        run: AgentRun | None = None,
+    ) -> ChatConversation:
+        if not conversation.current_run_id:
+            return conversation
+        if run is None:
+            try:
+                run = self.harness.get_run(conversation.current_run_id)
+            except HarnessError:
+                return conversation
+        message = self._assistant_message(conversation, run)
+        if message is None:
+            return conversation
+        updated = self.store.append_message_once(conversation.id, message, run_id=run.id)
+        return updated or conversation
+
+    def _assistant_message(self, conversation: ChatConversation, run: AgentRun) -> ChatMessage | None:
         if conversation.history_replaced:
-            return False
+            return None
         if run.status.value not in {"completed", "failed", "cancelled"}:
-            return False
+            return None
         if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
-            return False
+            return None
         text = _assistant_text(run)
         if not text:
-            return False
-        conversation.transcript.append(
-            ChatMessage(role="assistant", content=text, at=run.finished_at or utc_now(), run_id=run.id)
-        )
-        conversation.updated_at = utc_now()
-        return True
+            return None
+        return ChatMessage(role="assistant", content=text, at=run.finished_at or utc_now(), run_id=run.id)
 
 
 def _assistant_text(run: AgentRun) -> str | None:

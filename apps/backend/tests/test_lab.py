@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
@@ -307,7 +308,10 @@ class LabApiTests(unittest.TestCase):
             updated_at=now,
             workspace_id=workspace["id"],
         )
-        self.app.state.harness.store.put_run(run)
+        harness = self.app.state.harness
+        with harness._lock:
+            harness._runs[run.id] = run
+            harness._cancels[run.id] = threading.Event()
         blocked = self.client.post(
             "/v1/lab/cases/capture",
             json={"workspace_id": workspace["id"], "run_id": run.id},

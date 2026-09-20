@@ -8,10 +8,15 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+import httpx
 from langchain_core.messages import HumanMessage
 
 from workbench_backend.errors import HarnessError
-from workbench_backend.inference.adapter import adapter_target, chat_model_for_deployment
+from workbench_backend.inference.adapter import (
+    RecordingTransport,
+    adapter_target,
+    chat_model_for_deployment,
+)
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import (
     Deployment,
@@ -59,6 +64,39 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _FlakyHandler(_RecordingHandler):
+    statuses: list[int] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length)
+        body = json.loads(raw.decode("utf-8")) if raw else {}
+        self.requests.append({"path": self.path, "body": body})
+        status = self.statuses.pop(0) if self.statuses else 200
+        if status >= 500:
+            self._json(status, {"error": {"message": "synthetic server failure"}})
+            return
+        self._json(
+            200,
+            {
+                "id": "adapter-test",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "pong"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+
+class _RaisingTransport(httpx.BaseTransport):
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic connect failure", request=request)
+
+
 class AdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         _RecordingHandler.requests = []
@@ -100,6 +138,42 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(sink)
         self.assertIn("/chat/completions", sink[0]["url"])
         self.assertEqual(sink[0]["body"]["messages"][0]["content"], "ping")
+        self.assertTrue(sink[0]["response_received"])
+        self.assertEqual(sink[0]["response_status_code"], 200)
+
+    def test_recording_transport_records_http_500_then_retry_response(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        _FlakyHandler.requests = []
+        _FlakyHandler.statuses = [500, 200]
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _FlakyHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        host, port = self.server.server_address[:2]
+        self.endpoint = f"http://{host}:{port}/v1"
+        sink: list[dict[str, Any]] = []
+
+        model = chat_model_for_deployment(self._deployment(), capture_sink=sink)
+        result = model.invoke([HumanMessage(content="ping")])
+
+        self.assertEqual(result.content, "pong")
+        self.assertGreaterEqual(len(sink), 2)
+        self.assertTrue(sink[0]["response_received"])
+        self.assertEqual(sink[0]["response_status_code"], 500)
+        self.assertTrue(sink[-1]["response_received"])
+        self.assertEqual(sink[-1]["response_status_code"], 200)
+
+    def test_recording_transport_records_transport_exception(self) -> None:
+        sink: list[dict[str, Any]] = []
+        client = httpx.Client(transport=RecordingTransport(sink, inner=_RaisingTransport()))
+
+        with self.assertRaises(httpx.ConnectError):
+            client.post(f"{self.endpoint}/chat/completions", json={"messages": []})
+
+        self.assertEqual(len(sink), 1)
+        self.assertFalse(sink[0]["response_received"])
+        self.assertEqual(sink[0]["transport_error"]["type"], "ConnectError")
+        client.close()
 
     def test_adapter_starts_no_inference_process(self) -> None:
         target = adapter_target(self._deployment())

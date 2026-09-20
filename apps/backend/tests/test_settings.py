@@ -31,10 +31,14 @@ class SettingsBagTests(unittest.TestCase):
         )
         self.assertEqual(bags.startup.applied["ctx_size"], 4096)
         self.assertEqual(bags.per_request.applied["temperature"], 0.1)
-        self.assertTrue(bags.agent.applied["tools_enabled"])
+        self.assertNotIn("tools_enabled", bags.agent.applied)
         self.assertIn("weird_startup", bags.startup.unsupported)
         self.assertIn("weird_request", bags.per_request.unsupported)
+        self.assertIn("tools_enabled", bags.agent.unsupported)
         self.assertIn("weird_agent", bags.agent.unsupported)
+        notes = {item.key: item for item in bags.agent.unsupported_notes}
+        self.assertIn("Not implemented", notes["tools_enabled"].reason)
+        self.assertEqual(notes["tools_enabled"].requested, True)
         self.assertNotIn("temperature", bags.startup.applied)
         self.assertNotIn("ctx_size", bags.per_request.applied)
         self.assertNotIn("tools_enabled", bags.startup.applied)
@@ -64,7 +68,12 @@ class SettingsBagTests(unittest.TestCase):
             self.assertIn("not_a_flag", profile.bags.startup.unsupported)
             self.assertEqual(profile.bags.per_request.applied["top_p"], 0.9)
             loaded = manager.get_profile(profile.id)
-            self.assertEqual(loaded.bags.agent.applied["max_iterations"], 3)
+            self.assertEqual(loaded.bags.agent.requested["max_iterations"], 3)
+            self.assertNotIn("max_iterations", loaded.bags.agent.applied)
+            self.assertIn("max_iterations", loaded.bags.agent.unsupported)
+            note = loaded.bags.agent.unsupported_notes[0]
+            self.assertEqual(note.key, "max_iterations")
+            self.assertEqual(note.requested, 3)
 
     def test_default_gpu_profile_does_not_override_model_context(self) -> None:
         bags = resolve_bags(startup={})

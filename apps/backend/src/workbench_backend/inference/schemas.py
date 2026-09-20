@@ -125,6 +125,7 @@ class SettingsBag(BaseModel):
     requested: dict[str, Any] = Field(default_factory=dict)
     applied: dict[str, Any] = Field(default_factory=dict)
     unsupported: list[str] = Field(default_factory=list)
+    unsupported_notes: list[SettingNote] = Field(default_factory=list)
     overridden: list[SettingNote] = Field(default_factory=list)
     unverified: list[str] = Field(default_factory=list)
     retired: list[SettingNote] = Field(default_factory=list)

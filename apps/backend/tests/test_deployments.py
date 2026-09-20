@@ -358,10 +358,17 @@ class DeploymentTests(unittest.TestCase):
 
         self.manager.deployments.probe.props = changed_props  # type: ignore[method-assign]
         refreshed = self.manager.deployment_health(connected.id)
+        self.assertEqual(refreshed.status, DeploymentStatus.running)
         self.assertIsNotNone(refreshed.server_props)
         assert refreshed.server_props is not None
         self.assertEqual(refreshed.server_props.n_ctx, 8192)
         self.assertEqual(refreshed.server_props.default_generation_settings["n_ctx"], 8192)
+        self.manager.deployments.probe = OfflineProbe()
+        unavailable = self.manager.deployment_health(connected.id)
+        self.assertEqual(unavailable.status, DeploymentStatus.unhealthy)
+        self.assertIsNotNone(unavailable.health)
+        assert unavailable.health is not None
+        self.assertFalse(unavailable.health.healthy)
         self.manager.detach_deployment(connected.id)
         self.manager.stop_deployment(managed.id)
 

@@ -403,13 +403,14 @@ class DeploymentService:
                 available=False,
                 reason="connected endpoint — external process is not managed",
             )
+            status = DeploymentStatus.running if report.healthy else DeploymentStatus.unhealthy
             return self.store.put_deployment(
                 deployment.model_copy(
                     update={
                         "health": report,
                         "resource_usage": usage,
                         "server_props": props,
-                        "status": deployment.status,
+                        "status": status,
                         "updated_at": utc_now(),
                     }
                 )

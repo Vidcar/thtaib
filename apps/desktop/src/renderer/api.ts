@@ -175,14 +175,14 @@ export const api = {
       task: string;
       presented_tools?: string[];
       deployment_id?: string;
-      profile_id?: string;
-      project_path?: string;
-      workspace_id?: string;
+      profile_id?: string | null;
+      project_path?: string | null;
+      workspace_id?: string | null;
       memory_version_refs?: string[];
       skill_version_refs?: string[];
       protected_instruction_version_refs?: string[];
       knowledge_version_refs?: string[];
-      embedding_deployment_id?: string;
+      embedding_deployment_id?: string | null;
       retrieval_project_paths?: string[];
     },
   ) =>

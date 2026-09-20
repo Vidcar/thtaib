@@ -66,6 +66,8 @@ def apply_capture_policy(
                 "generation_settings": {},
                 "retrieved_material": [],
                 "http_payload": None,
+                "http_payloads": [],
+                "failure": None,
                 "capture_gaps": gaps,
                 "redaction_mode": settings.redaction_mode,
                 "retention_seconds": settings.retention_seconds,
@@ -88,6 +90,8 @@ def apply_capture_policy(
         capture.retrieved_material, redacted_fields
     )
     http_payload, redacted_fields = _redact_value(capture.http_payload, redacted_fields)
+    http_payloads, redacted_fields = _redact_value(capture.http_payloads, redacted_fields)
+    failure, redacted_fields = _redact_value(capture.failure, redacted_fields)
     unique = list(dict.fromkeys(redacted_fields))
     return capture.model_copy(
         update={
@@ -100,6 +104,8 @@ def apply_capture_policy(
             if isinstance(retrieved_material, list)
             else [],
             "http_payload": http_payload if isinstance(http_payload, dict) else None,
+            "http_payloads": http_payloads if isinstance(http_payloads, list) else [],
+            "failure": failure if isinstance(failure, dict) else None,
             "capture_gaps": gaps,
             "redaction_mode": settings.redaction_mode,
             "retention_seconds": settings.retention_seconds,

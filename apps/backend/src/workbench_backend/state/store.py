@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from workbench_backend.agents.schemas import AgentRun
-from workbench_backend.chat.schemas import ChatConversation
+from workbench_backend.chat.schemas import ChatConversation, ChatMessage
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import (
     apply_run_diagnostic_policy,
@@ -91,7 +91,9 @@ class ApplicationStore:
             raise ValueError("Application store must open application.sqlite.")
         if self.path.resolve() == self.paths.checkpoints_db.resolve():
             raise ValueError("Application store must not share the checkpointer path.")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._conversation_locks: dict[str, threading.RLock] = {}
+        self._conversation_locks_guard = threading.Lock()
         self._conn: sqlite3.Connection | None = sqlite3.connect(
             str(self.path), check_same_thread=False
         )
@@ -172,6 +174,7 @@ class ApplicationStore:
             )
             self._replace_checkpoints_locked(run.id, run.thread_id, run.checkpoint_ids)
             self._replace_files_locked(run.id, run.related_files)
+            self._reconcile_chat_completion_locked(run)
             self._conn.commit()
         return run
 
@@ -230,6 +233,7 @@ class ApplicationStore:
 
     def put_conversation(self, conversation: ChatConversation) -> ChatConversation:
         with self._lock:
+            conversation = self._reconcile_conversation_current_run_locked(conversation)
             self._conn.execute(
                 """
                 INSERT INTO conversations(id, payload, created_at, updated_at)
@@ -247,6 +251,140 @@ class ApplicationStore:
             )
             self._conn.commit()
         return conversation
+
+    def _reconcile_conversation_current_run_locked(
+        self,
+        conversation: ChatConversation,
+    ) -> ChatConversation:
+        if conversation.history_replaced or not conversation.current_run_id:
+            return conversation
+        if conversation.current_run_id not in conversation.run_ids:
+            return conversation
+        if not any(
+            item.role == "user" and item.run_id == conversation.current_run_id
+            for item in conversation.transcript
+        ):
+            return conversation
+        row = self._conn.execute(
+            "SELECT payload FROM runs WHERE id = ?",
+            (conversation.current_run_id,),
+        ).fetchone()
+        if row is None:
+            return conversation
+        run = AgentRun.model_validate_json(row["payload"])
+        if run.status.value not in {"completed", "failed", "cancelled"}:
+            return conversation
+        if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
+            return conversation
+        text = _assistant_text(run)
+        if not text:
+            return conversation
+        conversation = conversation.model_copy(deep=True)
+        conversation.transcript.insert(
+            _assistant_insert_index(conversation, run.id),
+            ChatMessage(
+                role="assistant",
+                content=text,
+                at=run.finished_at or utc_now(),
+                run_id=run.id,
+            ),
+        )
+        conversation.updated_at = utc_now()
+        return conversation
+
+    def conversation_lock(self, conversation_id: str) -> threading.RLock:
+        with self._conversation_locks_guard:
+            lock = self._conversation_locks.get(conversation_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._conversation_locks[conversation_id] = lock
+            return lock
+
+    def append_conversation_message_once(
+        self,
+        conversation_id: str,
+        message: ChatMessage,
+        *,
+        run_id: str,
+    ) -> ChatConversation | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            conversation = ChatConversation.model_validate_json(row["payload"])
+            if conversation.history_replaced:
+                return conversation
+            if run_id not in conversation.run_ids:
+                return conversation
+            if run_id != conversation.current_run_id:
+                return conversation
+            if any(item.run_id == run_id and item.role == message.role for item in conversation.transcript):
+                return conversation
+            conversation.transcript.insert(
+                _assistant_insert_index(conversation, run_id),
+                message,
+            )
+            conversation.updated_at = utc_now()
+            self._conn.execute(
+                """
+                UPDATE conversations
+                SET payload = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    conversation.model_dump_json(),
+                    conversation.updated_at,
+                    conversation.id,
+                ),
+            )
+            self._conn.commit()
+            return conversation
+
+    def _reconcile_chat_completion_locked(self, run: AgentRun) -> None:
+        if run.source_surface != "chat":
+            return
+        if run.status.value not in {"completed", "failed", "cancelled"}:
+            return
+        text = _assistant_text(run)
+        if not text:
+            return
+        message = ChatMessage(
+            role="assistant",
+            content=text,
+            at=run.finished_at or utc_now(),
+            run_id=run.id,
+        )
+        rows = self._conn.execute("SELECT payload FROM conversations").fetchall()
+        for row in rows:
+            conversation = ChatConversation.model_validate_json(row["payload"])
+            if conversation.history_replaced:
+                continue
+            if run.id not in conversation.run_ids:
+                continue
+            if run.id != conversation.current_run_id:
+                continue
+            if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
+                continue
+            conversation.transcript.insert(
+                _assistant_insert_index(conversation, run.id),
+                message,
+            )
+            conversation.updated_at = utc_now()
+            self._conn.execute(
+                """
+                UPDATE conversations
+                SET payload = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    conversation.model_dump_json(),
+                    conversation.updated_at,
+                    conversation.id,
+                ),
+            )
 
     def get_conversation(self, conversation_id: str) -> ChatConversation | None:
         with self._lock:
@@ -376,6 +514,33 @@ class ApplicationStore:
                 """,
                 (run_id, item.path, item.kind, now),
             )
+
+
+def _assistant_text(run: AgentRun) -> str | None:
+    for event in reversed(run.events):
+        if event.kind != "assistant_message":
+            continue
+        content = event.detail.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return None
+
+
+def _assistant_insert_index(conversation: ChatConversation, run_id: str) -> int:
+    for index, item in enumerate(conversation.transcript):
+        if item.role == "user" and item.run_id == run_id:
+            return index + 1
+    try:
+        run_index = conversation.run_ids.index(run_id)
+    except ValueError:
+        return len(conversation.transcript)
+    user_seen = 0
+    for index, item in enumerate(conversation.transcript):
+        if item.role == "user":
+            user_seen += 1
+            if user_seen == run_index + 1:
+                return index + 1
+    return len(conversation.transcript)
 
 
 def json_chat_root(paths: WorkbenchPaths) -> Path:

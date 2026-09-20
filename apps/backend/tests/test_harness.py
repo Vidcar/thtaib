@@ -12,13 +12,20 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
+from workbench_backend.agents.schemas import (
+    AgentRun,
+    AgentRunStatus,
+    PendingInterrupt,
+    PendingInterruptAction,
+)
 from workbench_backend.app import create_app
 from workbench_backend.inference.adapter import RecordingTransport
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.state.checkpointer import open_sqlite_checkpointer
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run, wait_for_status
@@ -46,6 +53,7 @@ class HarnessApiTests(unittest.TestCase):
         self.app = create_app(data_root=self.root)
         self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(echo_then_reply())
+        self.extra_harnesses: list[HarnessService] = []
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return self.scripted
@@ -62,8 +70,33 @@ class HarnessApiTests(unittest.TestCase):
         ).json()["id"]
 
     def tearDown(self) -> None:
+        for harness in self.extra_harnesses:
+            harness.close(timeout=1.0)
+            if harness._app_store is not None:
+                harness._app_store.close()
         close_workbench_sqlite(self.app, getattr(self, "client", None))
         self.tmp.cleanup()
+
+    def _restart_harness(self) -> HarnessService:
+        restarted = HarnessService(
+            lambda: self.manager,
+            model_factory=lambda _run, _sink: self.scripted,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
+        self.extra_harnesses.append(restarted)
+        return restarted
+
+    def _put_checkpoint(self, thread_id: str) -> str:
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        saved = saver.put(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {"source": "test", "step": 0, "writes": {}, "parents": {}},
+            {},
+        )
+        checkpoint_id = saved["configurable"]["checkpoint_id"]
+        self.assertIsInstance(checkpoint_id, str)
+        return checkpoint_id
 
     def _start(self, **extra: Any) -> dict[str, Any]:
         payload = {
@@ -338,11 +371,242 @@ class HarnessApiTests(unittest.TestCase):
             workspace_id="ws_cancel_live",
         )
         harness = self.app.state.harness
-        harness.store.put_run(run)
+        with harness._lock:
+            harness._runs[run.id] = run
+            harness._cancels[run.id] = threading.Event()
         self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [run.id])
         run.status = AgentRunStatus.cancelled
         harness.store.put_run(run)
         self.assertEqual(harness.active_workspace_run_ids("ws_cancel_live"), [])
+
+    def test_restart_reconciles_orphan_running_run_as_failed(self) -> None:
+        now = utc_now()
+        run = AgentRun(
+            id="agent_orphan_running",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="lost worker",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+            workspace_id="ws_orphan",
+        )
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertIn("restarted", observed.error or "")
+        self.assertEqual(restarted.active_workspace_run_ids("ws_orphan"), [])
+
+    def test_restart_reconciles_orphan_queued_and_running_runs_as_failed(self) -> None:
+        for status in (AgentRunStatus.queued, AgentRunStatus.running):
+            with self.subTest(status=status.value):
+                now = utc_now()
+                run = AgentRun(
+                    id=f"agent_orphan_{status.value}",
+                    status=status,
+                    deployment_id=self.deployment_id,
+                    task="lost worker",
+                    enabled_tools=["echo"],
+                    presented_tools=["echo"],
+                    created_at=now,
+                    updated_at=now,
+                    workspace_id=f"ws_orphan_{status.value}",
+                )
+                self.app.state.harness.store.put_run(run)
+
+                restarted = self._restart_harness()
+
+                observed = restarted.get_run(run.id)
+                self.assertEqual(observed.status, AgentRunStatus.failed)
+                self.assertEqual(observed.stop_reason, "orphaned")
+                self.assertEqual(
+                    observed.events[-1].detail["code"],
+                    "run_orphaned_after_restart",
+                )
+                self.assertEqual(restarted.active_workspace_run_ids(run.workspace_id), [])
+
+    def test_restart_preserves_pending_interrupt_for_resume(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_pending_interrupt",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="approval paused",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_pending_interrupt",
+            checkpoint_ids=[self._put_checkpoint("thread_pending_interrupt")],
+        )
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.running)
+        self.assertIsNotNone(observed.pending_interrupt)
+        self.assertEqual(observed.pending_interrupt.action_requests[0].name, "execute")
+
+    def test_restart_fails_pending_interrupt_without_checkpoint_linkage(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_pending_without_checkpoint",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="approval paused without checkpoint",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_pending_without_checkpoint",
+        )
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertIn("no recorded checkpoint linkage", observed.error or "")
+        self.assertEqual(
+            observed.events[-1].detail["code"],
+            "pending_interrupt_checkpoint_missing",
+        )
+
+    def test_restart_marks_cancel_requested_orphan_terminal(self) -> None:
+        now = utc_now()
+        run = AgentRun(
+            id="agent_persisted_cancel",
+            status=AgentRunStatus.cancel_requested,
+            deployment_id=self.deployment_id,
+            task="cancel before restart",
+            enabled_tools=["echo"],
+            presented_tools=["echo"],
+            created_at=now,
+            updated_at=now,
+            workspace_id="ws_cancel_restart",
+        )
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertIsNotNone(observed.finished_at)
+        self.assertIn("unknown external effects", observed.error or "")
+        self.assertEqual(
+            observed.events[-1].detail["code"],
+            "cancel_requested_orphaned_after_restart",
+        )
+        self.assertEqual(restarted.active_workspace_run_ids("ws_cancel_restart"), [])
+
+    def test_restart_cancel_requested_pending_checkpoint_is_terminal_no_worker(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_cancel_pending_checkpoint",
+            status=AgentRunStatus.cancel_requested,
+            deployment_id=self.deployment_id,
+            task="cancelled approval pause",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_cancel_pending_checkpoint",
+            checkpoint_ids=[self._put_checkpoint("thread_cancel_pending_checkpoint")],
+            workspace_id="ws_cancel_pending_checkpoint",
+        )
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertIsNotNone(observed.pending_interrupt)
+        self.assertEqual(
+            observed.events[-1].detail["code"],
+            "cancel_requested_orphaned_after_restart",
+        )
+        self.assertEqual(restarted.active_workspace_run_ids("ws_cancel_pending_checkpoint"), [])
+        self.assertEqual(restarted._threads, {})
+
+        cancelled = restarted.cancel(run.id)
+
+        self.assertEqual(cancelled.status, AgentRunStatus.failed)
+        self.assertEqual(cancelled.stop_reason, "orphaned")
+        self.assertEqual(restarted._threads, {})
+
+    def test_resume_after_restart_reserves_once_before_worker_runs(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_resume_reserved",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="approval paused",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_resume_reserved",
+            checkpoint_ids=[self._put_checkpoint("thread_resume_reserved")],
+        )
+        harness = self.app.state.harness
+        harness.store.put_run(run)
+
+        request = {"decisions": [{"type": "reject"}]}
+        first = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
+        second = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 409, second.text)
+        self.assertEqual(second.json()["code"], "interrupt_decision_pending")
 
     def test_default_run_has_no_product_budget_or_rag(self) -> None:
         started = self._start()

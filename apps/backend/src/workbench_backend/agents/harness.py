@@ -55,6 +55,7 @@ from workbench_backend.agents.schemas import (
     AgentStartRequest,
     HostShellFacts,
     InterruptDecisionRequest,
+    PendingInterrupt,
     TaskCriteria,
     ToolMode,
     label_for_tool_mode,
@@ -136,6 +137,7 @@ class HarnessService:
         self._model_clients: dict[str, httpx.Client] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
+        self._startup_reconciled = False
 
     @property
     def store(self) -> ApplicationStore:
@@ -148,6 +150,7 @@ class HarnessService:
         return self._manager_provider()
 
     def list_runs(self) -> list[AgentRun]:
+        self._reconcile_startup_once()
         stored = {item.id: item for item in self.store.list_runs()}
         with self._lock:
             for run in self._runs.values():
@@ -155,6 +158,7 @@ class HarnessService:
         return [self._expose_run(item) for item in stored.values()]
 
     def get_run(self, run_id: str) -> AgentRun:
+        self._reconcile_startup_once()
         with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -172,10 +176,15 @@ class HarnessService:
         `cancel_requested` is still live. Confirmed `cancelled` is not.
         """
 
+        self._reconcile_startup_once()
         with self._lock:
             memory = {run.id: run for run in self._runs.values()}
         stored = {item.id: item for item in self.store.list_runs()}
-        stored.update(memory)
+        for run_id, run in memory.items():
+            stored_run = stored.get(run_id)
+            if stored_run is not None and not is_run_lifecycle_live(stored_run.status):
+                continue
+            stored[run_id] = run
         return [
             run.id
             for run in stored.values()
@@ -183,6 +192,7 @@ class HarnessService:
         ]
 
     def start(self, request: AgentStartRequest) -> AgentRun:
+        self._reconcile_startup_once()
         deployment = self.manager.get_deployment(request.deployment_id)
         if not deployment.endpoint:
             raise HarnessError(
@@ -380,10 +390,10 @@ class HarnessService:
     def cancel(self, run_id: str) -> AgentRun:
         """Accept a cancel request. Do not claim cancelled until the worker stops."""
 
+        self._reconcile_startup_once()
+        reject_after_restart: tuple[PendingInterrupt, threading.Event] | None = None
         with self._lock:
-            run = self._runs.get(run_id)
-            if run is None:
-                raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+            run = self._require_run(run_id)
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
@@ -391,6 +401,17 @@ class HarnessService:
             ready = self._decision_ready.get(run_id)
             if ready is not None:
                 ready.set()
+            thread = self._threads.get(run_id)
+            if (
+                is_run_lifecycle_live(run.status)
+                and run.pending_interrupt is not None
+                and (thread is None or not thread.is_alive())
+                and not self._pending_decisions.get(run_id)
+            ):
+                restart_cancel = cancel or self._cancels.setdefault(run_id, threading.Event())
+                payloads = reject_decisions_for(run.pending_interrupt)
+                self._pending_decisions[run_id] = payloads
+                reject_after_restart = (run.pending_interrupt, restart_cancel)
             if is_run_lifecycle_live(run.status) and run.status is not AgentRunStatus.cancel_requested:
                 run.status = AgentRunStatus.cancel_requested
                 run.stop_reason = None
@@ -406,12 +427,23 @@ class HarnessService:
                 self._persist_and_notify(run)
         if client is not None:
             client.close()
+        if reject_after_restart is not None:
+            pending, restart_cancel = reject_after_restart
+            worker = threading.Thread(
+                target=self._reject_pending_after_restart,
+                args=(run_id, pending, restart_cancel),
+                daemon=True,
+            )
+            with self._lock:
+                self._threads[run_id] = worker
+            worker.start()
         with self._lock:
             return run.model_copy(deep=True)
 
     def resume_interrupt(self, run_id: str, request: InterruptDecisionRequest) -> AgentRun:
         """Apply Deep Agents HITL decisions. Does not invent a durable inbox."""
 
+        self._reconcile_startup_once()
         with self._lock:
             run = self._require_run(run_id)
             pending = run.pending_interrupt
@@ -457,7 +489,7 @@ class HarnessService:
                 return self._expose_run(run)
             cancel = self._cancels.setdefault(run_id, threading.Event())
             self._decision_ready.setdefault(run_id, threading.Event())
-            self._pending_decisions[run_id] = None
+            self._pending_decisions[run_id] = payloads
         worker = threading.Thread(
             target=self._resume_after_restart,
             args=(run_id, payloads, cancel),
@@ -530,6 +562,8 @@ class HarnessService:
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
+            with self._lock:
+                self._pending_decisions[run_id] = None
             self._close_model_client(run_id)
 
     def _resume_after_restart(
@@ -586,6 +620,39 @@ class HarnessService:
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
+            self._close_model_client(run_id)
+
+    def _reject_pending_after_restart(
+        self,
+        run_id: str,
+        pending: PendingInterrupt,
+        cancel: threading.Event,
+    ) -> None:
+        """Cancel a recovered approval by rejecting at the saved checkpoint."""
+
+        with self._lock:
+            run = self._require_run(run_id)
+        http_sink: list[dict[str, Any]] = []
+        agent = None
+        try:
+            fixture_bank = (
+                FixtureBank(run.recorded_fixtures)
+                if run.tool_mode is ToolMode.recorded_tool
+                else None
+            )
+            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
+            self._resume_reject_then_stop(agent, run, pending, _invoke_config(run))
+        except Exception as exc:  # noqa: BLE001 - surface failure without replaying approval
+            if agent is not None:
+                self._link_run(run, agent)
+            else:
+                self._collect_related_files(run)
+            run.error = clarify_connection_error(exc)
+            self._finish(run, AgentRunStatus.failed, "failed")
+        finally:
+            cancel.set()
+            with self._lock:
+                self._pending_decisions[run_id] = None
             self._close_model_client(run_id)
 
     def _create_compiled_agent(
@@ -657,6 +724,7 @@ class HarnessService:
                 self._link_run(run, agent)
                 self._finish(run, AgentRunStatus.completed, "completed")
                 return
+            self._link_run(run, agent)
             self._publish_interrupt(run, pending)
             decisions = self._wait_for_interrupt_decisions(run.id, cancel)
             if decisions is None:
@@ -1016,6 +1084,82 @@ class HarnessService:
             raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
         return self._runs.setdefault(run_id, stored)
 
+    def _reconcile_startup_once(self) -> None:
+        with self._lock:
+            if self._startup_reconciled:
+                return
+            for run in self.store.list_runs():
+                if not is_run_lifecycle_live(run.status):
+                    continue
+                if (
+                    run.status is not AgentRunStatus.cancel_requested
+                    and run.pending_interrupt is not None
+                    and self._has_resume_checkpoint(run)
+                ):
+                    live = self._runs.setdefault(run.id, run)
+                    self._cancels.setdefault(run.id, threading.Event())
+                    self._decision_ready.setdefault(run.id, threading.Event())
+                    self._pending_decisions.setdefault(run.id, None)
+                    self._persist_and_notify(live)
+                    continue
+                self._mark_orphaned_run(run)
+            self._startup_reconciled = True
+
+    def _mark_orphaned_run(self, run: AgentRun) -> None:
+        with self._lock:
+            live = self._runs.setdefault(run.id, run)
+            if not is_run_lifecycle_live(live.status):
+                return
+            missing_checkpoint = live.pending_interrupt is not None
+            cancelling = live.status is AgentRunStatus.cancel_requested
+            live.status = AgentRunStatus.failed
+            live.stop_reason = "orphaned"
+            live.error = _orphan_error(
+                missing_checkpoint=missing_checkpoint,
+                cancelling=cancelling,
+            )
+            detail_code = _orphan_code(
+                missing_checkpoint=missing_checkpoint,
+                cancelling=cancelling,
+            )
+            live.finished_at = utc_now()
+            live.updated_at = live.finished_at
+            live.events.append(
+                AgentEvent(
+                    at=live.updated_at,
+                    kind="failed",
+                    detail={
+                        "stop_reason": "orphaned",
+                        "error": live.error,
+                        "confirmed": True,
+                        "code": detail_code,
+                    },
+                )
+            )
+            self._persist_and_notify(live)
+
+    def _has_resume_checkpoint(self, run: AgentRun) -> bool:
+        thread_id = (run.thread_id or "").strip()
+        if not thread_id or not run.checkpoint_ids:
+            return False
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        for checkpoint_id in run.checkpoint_ids:
+            if not checkpoint_id:
+                continue
+            config = {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": "",
+                    "checkpoint_id": checkpoint_id,
+                }
+            }
+            try:
+                if saver.get_tuple(config) is not None:
+                    return True
+            except Exception:  # noqa: BLE001 - missing/unreadable checkpoint is not resumable
+                return False
+        return False
+
     def _persist(self, run: AgentRun) -> None:
         sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
         run.model_requests = sanitized.model_requests
@@ -1106,6 +1250,35 @@ def _invoke_config(run: AgentRun) -> dict[str, Any]:
     if run.budgets is not None and run.budgets.max_steps is not None:
         config["recursion_limit"] = run.budgets.max_steps
     return config
+
+
+def _orphan_error(*, missing_checkpoint: bool, cancelling: bool) -> str:
+    if cancelling:
+        return (
+            "The application restarted while this run was cancelling. The worker "
+            "that could confirm the stop is gone, so the run is failed as orphaned "
+            "with unknown external effects. No pending host-shell command was "
+            "approved or replayed."
+        )
+    if missing_checkpoint:
+        return (
+            "The application restarted while this run was waiting for approval, "
+            "but no recorded checkpoint linkage was available to resume. Start a "
+            "new run; the host-shell command was not approved or replayed."
+        )
+    return (
+        "The application restarted while this run was live and no pending approval "
+        "checkpoint was available to resume. The worker is no longer owned; any "
+        "external effect has an unknown outcome and has not been replayed."
+    )
+
+
+def _orphan_code(*, missing_checkpoint: bool, cancelling: bool) -> str:
+    if cancelling:
+        return "cancel_requested_orphaned_after_restart"
+    if missing_checkpoint:
+        return "pending_interrupt_checkpoint_missing"
+    return "run_orphaned_after_restart"
 
 
 def _initial_related_files(project_path: str | None) -> list[RelatedFile]:

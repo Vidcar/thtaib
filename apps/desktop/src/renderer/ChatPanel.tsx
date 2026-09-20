@@ -120,7 +120,7 @@ export function ChatPanel() {
     setEnabledTools(tools.enabled);
     setConversations(newestConversationFirst(nextConversations));
     setKnowledgeEntries(nextKnowledge);
-    setDeploymentId((current) => preferredChatDeploymentId(nextDeployments, current));
+    setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments, current));
     setProfileId((current) => (nextProfiles.some((profile) => profile.id === current) ? current : ""));
     setLoadError("");
   }
@@ -199,11 +199,13 @@ export function ChatPanel() {
   const embedderDeployments = deployments.filter((item) => isDeclaredEmbedder(item));
   const chatDeployments = deployments.filter((item) => !isDeclaredEmbedder(item));
   const modelChoices = chatDeployments.length > 0 ? chatDeployments : deployments;
+  const selectedDeployment = modelChoices.find((item) => item.id === deploymentId);
+  const missingDeployment = Boolean(deploymentId && !selectedDeployment);
   const tools = conversation?.enabled_tools ?? enabledTools;
 
   async function sendTurn(): Promise<void> {
     const text = task.trim();
-    if (!text || !deploymentId || sending || runBusy) {
+    if (!text || !selectedDeployment || sending || runBusy) {
       return;
     }
     setSending(true);
@@ -223,9 +225,9 @@ export function ChatPanel() {
       const next = await api.startChat(created.id, {
         task: text,
         deployment_id: deploymentId,
-        profile_id: profileId || undefined,
-        project_path: projectPath || undefined,
-        embedding_deployment_id: embeddingDeploymentId || undefined,
+        profile_id: profileId || null,
+        project_path: projectPath.trim() || null,
+        embedding_deployment_id: embeddingDeploymentId || null,
         ...refs,
       });
       rememberConversation(next);
@@ -304,6 +306,7 @@ export function ChatPanel() {
             <label>
               Model
               <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
+                {missingDeployment ? <option value={deploymentId}>Connection unavailable — choose a model</option> : null}
                 {modelChoices.length === 0 ? <option value="">No model available</option> : null}
                 {modelChoices.map((deployment) => (
                   <option key={deployment.id} value={deployment.id}>
@@ -332,11 +335,20 @@ export function ChatPanel() {
               />
             </label>
           </div>
+          {missingDeployment ? (
+            <Notice tone="warn">This conversation's model connection is unavailable. Its history is preserved. Choose a model before sending another message.</Notice>
+          ) : null}
+          {conversation?.project_path && !projectPath.trim() ? (
+            <p className="hint">The next message will detach project file and shell access. Earlier messages and saved model context remain.</p>
+          ) : null}
           {selectedProfile ? (
             <SettingsNotes
               unsupported={selectedProfile.bags.startup.unsupported}
               retired={selectedProfile.bags.startup.retired}
             />
+          ) : null}
+          {selectedProfile?.bags.agent.unsupported.length ? (
+            <Notice tone="warn">Unsupported agent settings: {selectedProfile.bags.agent.unsupported.join(", ")}. These saved values do not govern execution.</Notice>
           ) : null}
           <details>
             <summary>Knowledge and retrieval</summary>
@@ -402,7 +414,7 @@ export function ChatPanel() {
         </div>
 
         <div className="transcript" aria-live="polite">
-          {deployments.length === 0 ? (
+          {deployments.length === 0 && !conversation ? (
             <EmptyState title="No running model">
               Open Models and start or connect a model. Chat needs a running model before it can reply.
             </EmptyState>
@@ -487,7 +499,7 @@ export function ChatPanel() {
             />
           </label>
           <div className="actions">
-            <button type="submit" disabled={!deploymentId || !task.trim() || runBusy || sending}>
+            <button type="submit" disabled={!selectedDeployment || !task.trim() || runBusy || sending}>
               {sending || runBusy ? "Sending…" : "Send"}
             </button>
             <button
