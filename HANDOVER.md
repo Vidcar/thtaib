@@ -4,7 +4,7 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Packet 01 implementation is complete on `codex/repository-cleanup`, based on `46157ed` (PR #105). Git delivery is proceeding through protected checks. Packet 02 behavioral repairs are not part of this change.
+Packet 01 is complete in [PR #106](https://github.com/Vidcar/thtaib/pull/106), `codex/repository-cleanup`, based on `46157ed` (PR #105). The PR records protected CI and merge results. Packet 02 behavioral repairs are not part of this change.
 
 ## Changes and decisions
 
@@ -17,4 +17,4 @@ Packet 01 implementation is complete on `codex/repository-cleanup`, based on `46
 
 Windows: 213 default backend tests, 92 integration tests, 41 focused replay/shell/memory tests and 62 checker/tooling tests passed. Desktop build passed (includes typecheck and SSE regression). Spec checker passed, including requirement preservation against the base commit. Live protection query confirmed the four required Ubuntu checks with strict protection.
 
-Launch remains root `Launch Workbench.vbs`; actual checks are in [commands](specs/commands.md). Complete protected PR delivery; after this packet, await the separately scoped packet 02 baseline repairs rather than expanding features. No user/model data changed.
+Launch remains root `Launch Workbench.vbs`; actual checks are in [commands](specs/commands.md). No cleanup implementation remains. Next product work is the separately scoped packet 02 baseline repairs when supplied, rather than feature expansion. No user/model data changed.
