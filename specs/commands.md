@@ -51,6 +51,8 @@ Import-boundary check; integration tiers beyond the real-model smoke (managed Wi
 
 Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`), contract freshness (`contracts.yml`) and the real-model smoke tier (`real-model-smoke.yml`, Ubuntu only, assets restored from `actions/cache` under the pin-derived key) with read-only permissions, no secrets and no Hugging Face token.
 
+Contract freshness also triggers on `inference/schemas.py`: Hugging Face discovery exports those canonical models through the existing shared schema app. Ubuntu remains a portable CI runner, not a supported Linux desktop claim. The product reset changes no required check names or branch protection.
+
 Triggers: `pull_request`, `push` to `main` only (not every feature-branch push), `workflow_dispatch`, and `merge_group`. Each workflow uses `concurrency` with `cancel-in-progress`. Path filters skip the expensive suite on unrelated changes; required Linux check names still report so classic branch protection does not deadlock. `spec-integrity` and `shared-contract-freshness` are Linux-only (OS-independent). `backend-unittest` and `desktop-typecheck-build` still run one Windows job when their paths match; that is coverage, not the merge long pole. David-PC is the real Windows and capability check. This is not Issue #36 advisory-only CI and not catalogue `verified` evidence.
 
 These four Linux status checks are the thin remaining required gate on `main` with strict tip:

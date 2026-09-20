@@ -37,7 +37,7 @@ jobs:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FILTER_REGEX: '^(apps/backend/src/workbench_backend/contracts/|apps/backend/contracts/|apps/backend/tests/contracts/|apps/desktop/src/generated/shared-contracts/|apps/desktop/package\.json$|apps/desktop/pnpm-lock\.yaml$|apps/backend/pyproject\.toml$|apps/backend/uv\.lock$|scripts/generate_shared_contracts\.py$|\.github/workflows/contracts\.yml$|\.github/scripts/ci-path-filter\.sh$)'
+          FILTER_REGEX: '^(apps/backend/src/workbench_backend/contracts/|apps/backend/src/workbench_backend/inference/schemas\.py$|apps/backend/contracts/|apps/backend/tests/contracts/|apps/desktop/src/generated/shared-contracts/|apps/desktop/package\.json$|apps/desktop/pnpm-lock\.yaml$|apps/backend/pyproject\.toml$|apps/backend/uv\.lock$|scripts/generate_shared_contracts\.py$|\.github/workflows/contracts\.yml$|\.github/scripts/ci-path-filter\.sh$)'
         run: bash .github/scripts/ci-path-filter.sh
 
   shared-contract-freshness:
