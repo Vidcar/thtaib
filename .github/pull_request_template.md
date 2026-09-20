@@ -1,28 +1,11 @@
-## What changed and why
+## Outcome
 
-Plain English first. Link the issue and the requirement IDs touched. If this implements a feature, link or paste the filled [feature template](../specs/templates/feature.md).
+What changed and why. Link a relevant issue or requirement when helpful; no issue or separate feature document is required for a small change.
 
-## Design impact
+## Validation
 
-**Within the accepted design** / **design change with ADR** (link and approval) / **enforcement change** (checker, catalogue schema, workflows, tests — say exactly what and why).
+Checks actually run and results. Distinguish local/CI, live/mocked and skipped checks. State remaining limitations.
 
-Specification text changed, or unchanged because:
+## Decisions or follow-up (omit if unnecessary)
 
-## Checks actually run
-
-| Command | Where | Result | Live / mocked / recorded |
-| --- | --- | --- | --- |
-| | | | |
-
-Skipped checks and why. Executable results versus your own judgement.
-
-## Reconciliation
-
-- [ ] Catalogue rows (status, code, tests, evidence) updated or confirmed unchanged
-- [ ] Changelog entry added for any settled default or decision
-- [ ] Links, repository-map bindings and commands repaired
-- [ ] No secrets, weights, private data or unredacted model context added
-
-## Left open
-
-Unverified behaviour, deferred leftovers (`Deferred: #N`), blockers for David, next concrete step.
+Consequential behaviour, contract or enforcement changes; affected specification/status updates; next concrete step if unfinished. Keep rationale in its existing home rather than duplicating it here.
