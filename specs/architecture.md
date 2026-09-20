@@ -42,7 +42,7 @@ Product data lives under `%LOCALAPPDATA%\LocalAIWorkbench\` on Windows (`~/.loca
 - `application.sqlite` is the application system of record for runs, chat conversations and transcripts, checkpoint-id links, external-effect ledger rows and file references.
 - `checkpoints.sqlite` belongs to the LangGraph SQLite checkpointer. The application stores checkpoint ids and never reads or writes its tables directly.
 - Files hold weights, project workspaces, knowledge versions, snapshots and artifacts; records link to them.
-- Bundles, profiles, deployments, import jobs, compatibility overrides and Lab cases are currently JSON files under `state\` with atomic replace, no locking and no migrations. Converging all application records on SQLite is [OQ-017](open-questions.md#oq-017) (recommended); it is a persistence-strategy decision and needs an ADR before implementation.
+- Inference records, compatibility overrides, Lab and knowledge metadata currently use JSON files in their component data directories. New mutable application records use the existing application SQLite store ([ADR-0005](decisions/ADR-0005-application-record-storage.md)). Existing families remain authoritative until an inventory-checked migration is validated; [OQ-017](open-questions.md#oq-017) tracks that work. Knowledge bodies and other large content remain files.
 
 Displayed chat history is not the working project and not the harness execution context ([STATE-002](modules/state-recovery.md#state-002)). Snapshots are application-owned directory copies, not git commits, and never undo external effects.
 

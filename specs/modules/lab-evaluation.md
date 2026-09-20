@@ -69,7 +69,7 @@ The Model Lab surface lets David select a bundle, running deployment and profile
 
 ## Status and evidence
 
-Rows LAB-001…006 in [the catalogue](../catalog.json). llama-bench has never run against a real binary; Model Lab runners do not exist.
+Status is owned by rows LAB-001...006 in [the catalogue](../catalog.json).
 
 ## Open questions
 

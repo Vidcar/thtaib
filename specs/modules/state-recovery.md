@@ -69,7 +69,7 @@ Retrieval is requested only when the run names `embedding_deployment_id`. Knowle
 
 ## Status and evidence
 
-Rows STATE-001…006 in [the catalogue](../catalog.json). Thread continuity across turns and a project file written by the harness were seen live on Linux ([evidence](../evidence/2026-09-19-linux-live-smoke.md)) and on David-PC ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); the effects ledger has no real producer yet. STATE-006 is `built`. David-PC UAT on 2026-09-20 covered Chat HTTP fail-closed without a loaded embedder and a live `search_knowledge` that wrote `/retrieved/` under harness scratch (not the project) and filled `retrieved_material` at `7db7f45` ([evidence](../evidence/2026-09-20-david-pc-retrieval.md)); not `verified` — acceptance still lacks recorded-tool replay and the remaining fail-closed codes. STATE-005 store and write policy stay `built`; official `memory=` / `skills=` loading is `built`, not `verified`. `/memories/` write-through is specified, not implemented.
+Status is owned by rows STATE-001...006 in [the catalogue](../catalog.json).
 
 ## Open questions
 

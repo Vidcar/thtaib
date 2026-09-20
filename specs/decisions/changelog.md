@@ -2,7 +2,15 @@
 
 Dated record of design decisions that were too small for an ADR, in reverse chronological order. Each entry names its authority (a GitHub issue, an ADR or a recorded product-owner decision) and the requirements it touched. Current intended behaviour lives in [architecture](../architecture.md) and the module specifications; this file explains when and why it got that way. An entry here is history, not a second specification: if an entry and a specification disagree, fix the specification and say so here.
 
-Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
+Add an entry when a decision's rationale will help a future agent. Use an [ADR](README.md) for consequential architectural rationale. Routine fixes need only the affected contract and relevant validation in the PR.
+
+## 2026-09-20 — Core delivery and lean tracking
+
+Authority: Dave's request to make the existing product dependable and simplify delivery. Component specifications retain purpose, ownership, interfaces, failure behaviour and acceptance checks. Requirement status/evidence stays in the catalogue; module status narratives and repeated historical approval metadata are removed. The checker still validates links, stable IDs, acceptance, and evidence supporting `verified`; no requirement is promoted by this cleanup. Older decisions remain history.
+
+GitHub protection was inspected live: only the four Linux checks in [commands](../commands.md#ci) are required. The two retired Windows-name shims are removed without changing protection; Windows backend/desktop coverage and the real-model smoke remain. Five workflows serve distinct checks, so they are retained.
+
+The harness review found existing seams for effective setup, middleware, retrieval and filesystem integration. Keep lifecycle, interrupt and checkpoint coordination together; extract only for a demonstrated change. [ADR-0005](ADR-0005-application-record-storage.md) settles SQLite for new application records; existing JSON migration is staged behind preservation/rollback checks in OQ-017. The [delivery map](../../docs/delivery-feature-map.md#next-path) is now a short next-work list rather than another completed-feature log.
 
 ## 2026-09-20 — Agent-owned delivery with proportionate process
 

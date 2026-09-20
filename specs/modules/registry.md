@@ -57,7 +57,7 @@ Configuration includes settings schemas, defaults, required fields, applied valu
 
 ## Status and evidence
 
-Rows REG-001…005 in [the catalogue](../catalog.json). No registry exists on `main`.
+Status is owned by rows REG-001...005 in [the catalogue](../catalog.json).
 
 ## Open questions
 

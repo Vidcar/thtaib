@@ -214,25 +214,10 @@ def check_adoption(root: Path, catalog: dict[str, Any], errors: list[str]) -> di
     if not isinstance(adoption, dict):
         errors.append("adoption: expected an object")
         return {}
-    exact_keys(adoption, {"state", "decision", "approval"}, errors, "adoption")
+    exact_keys(adoption, {"state", "decision"}, errors, "adoption")
     if adoption.get("state") not in {"pending", "accepted"}:
         errors.append("adoption: state must be pending or accepted")
     root_path(root, adoption.get("decision"), errors, "adoption decision")
-    approval = adoption.get("approval")
-    if adoption.get("state") == "accepted":
-        if not isinstance(approval, dict):
-            errors.append("adoption: accepted state requires approval metadata")
-        else:
-            exact_keys(approval, {"reviewer", "reference", "date"}, errors, "adoption approval")
-            if not all(valid_text(approval.get(k)) for k in ("reviewer", "reference", "date")):
-                errors.append("adoption: reviewer/reference/date cannot be empty or placeholders")
-            else:
-                try:
-                    date.fromisoformat(approval["date"])
-                except ValueError:
-                    errors.append("adoption: approval date must be ISO YYYY-MM-DD")
-    elif approval is not None:
-        errors.append("adoption: pending state must not contain a claimed approval")
     return adoption
 
 
@@ -247,7 +232,7 @@ def check_documents(root: Path, catalog: dict[str, Any], texts: dict[str, str],
         if not isinstance(row, dict):
             errors.append("document entry: expected an object")
             continue
-        exact_keys(row, {"path", "kind", "status", "approval"}, errors, "document entry")
+        exact_keys(row, {"path", "kind", "status"}, errors, "document entry")
         path = row.get("path")
         root_path(root, path, errors, "catalogue document")
         if not isinstance(path, str):
@@ -263,10 +248,6 @@ def check_documents(root: Path, catalog: dict[str, Any], texts: dict[str, str],
             errors.append(f"document {path}: invalid status")
         if row.get("status") == "informational" and row.get("kind") in {"specification", "decision"}:
             errors.append(f"document {path}: specifications and decisions cannot be informational")
-        if row.get("approval") is not None and not valid_text(row["approval"]):
-            errors.append(f"document {path}: invalid approval")
-        if row.get("status") in {"accepted", "superseded"} and not valid_text(row.get("approval")):
-            errors.append(f"document {path}: accepted/superseded status needs a real approval reference")
     if adoption.get("state") == "accepted" and doc_by_path.get(adoption.get("decision"), {}).get("status") != "accepted":
         errors.append("adoption: the adoption decision itself must be accepted in the catalogue")
     for path in texts:

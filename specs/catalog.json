@@ -2,12 +2,7 @@
   "schema_version": 2,
   "adoption": {
     "state": "accepted",
-    "decision": "specs/decisions/ADR-0004-slim-specification-pack.md",
-    "approval": {
-      "reviewer": "David (Vidcar), product owner",
-      "reference": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)",
-      "date": "2026-09-19"
-    }
+    "decision": "specs/decisions/ADR-0004-slim-specification-pack.md"
   },
   "source_archive": {
     "path": "specs/sources/Local_AI_Workbench_Starter_Specification_Revision_0_5.docx",
@@ -17,164 +12,142 @@
     {
       "path": "specs/README.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/architecture.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/commands.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/contracts.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002"
+      "status": "accepted"
     },
     {
       "path": "specs/decisions/ADR-0001-adopt-specification-pack.md",
       "kind": "decision",
-      "status": "superseded",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "superseded"
     },
     {
       "path": "specs/decisions/ADR-0002-contract-authoring.md",
       "kind": "decision",
-      "status": "accepted",
-      "approval": "https://github.com/Vidcar/thtaib/issues/41 (David / Vidcar, 2026-09-19) — Slice 1 contracts issue authorises ADR-0002"
+      "status": "accepted"
     },
     {
       "path": "specs/decisions/ADR-0003-builder-v1-chrome.md",
       "kind": "decision",
-      "status": "draft",
-      "approval": null
+      "status": "draft"
     },
     {
       "path": "specs/decisions/ADR-0004-slim-specification-pack.md",
       "kind": "decision",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
+    },
+    {
+      "path": "specs/decisions/ADR-0005-application-record-storage.md",
+      "kind": "decision",
+      "status": "accepted"
     },
     {
       "path": "specs/decisions/README.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/decisions/changelog.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/deviations.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/evidence/README.md",
       "kind": "guide",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/modules/agents-workflows.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/backend-desktop.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/environments-tools.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/lab-evaluation.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/models.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/registry.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/modules/state-recovery.md",
       "kind": "specification",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/open-questions.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     },
     {
       "path": "specs/sources/README.md",
       "kind": "source",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/sources/upstream.md",
       "kind": "reference",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/templates/decision.md",
       "kind": "template",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/templates/evidence.md",
       "kind": "template",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/templates/feature.md",
       "kind": "template",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/templates/module.md",
       "kind": "template",
-      "status": "informational",
-      "approval": null
+      "status": "informational"
     },
     {
       "path": "specs/verification.md",
       "kind": "guide",
-      "status": "accepted",
-      "approval": "Product owner instruction in Project chat, 2026-09-19; recorded via PR #84 (https://github.com/Vidcar/thtaib/pull/84)"
+      "status": "accepted"
     }
   ],
   "requirements": [

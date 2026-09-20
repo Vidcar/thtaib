@@ -71,7 +71,7 @@ Compatibility records are versioned and include requirements, supported capabili
 
 ## Status and evidence
 
-Rows MOD-001…006 in [the catalogue](../catalog.json). Managed pin → start → health → Chat turn → stop was seen live on David-PC with the preferred capability UAT model ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); companion files, Hugging Face import and a deliberately unsupported value were not part of that run.
+Status is owned by rows MOD-001...006 in [the catalogue](../catalog.json).
 
 ## Open questions
 

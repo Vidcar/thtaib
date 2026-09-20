@@ -95,7 +95,7 @@ Attach executable checks, expected artifacts and review criteria where a task ha
 
 ## Status and evidence
 
-Rows AGT-001…006, WF-001, WF-002 in [the catalogue](../catalog.json). Chat → tool call → file and thread continuity were seen working live with a tiny model on Linux ([evidence](../evidence/2026-09-19-linux-live-smoke.md)) and with the preferred capability UAT model on David-PC ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); those runs predate project-less Chat and CompositeBackend isolation. A later David-PC UAT at `8887f9f` ran a real host-shell `execute` through Chat (approve created a project file; deny did not) and a project-less conversation that refused `execute` ([evidence](../evidence/2026-09-19-david-pc-host-shell.md)). David-PC UAT at `7db7f45` ran a live `search_knowledge` that filled `retrieved_material` and wrote `/retrieved/` under harness scratch ([evidence](../evidence/2026-09-20-david-pc-retrieval.md)); that row is attached on STATE-006, not AGT-002. Compaction capture and cancellation have not been exercised live.
+Status is owned by rows AGT-001...006, WF-001 and WF-002 in [the catalogue](../catalog.json).
 
 ## Open questions
 

@@ -14,7 +14,6 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY / "scripts"))
 import check_specs  # noqa: E402
 
-APPROVAL = "synthetic-test-approval-only"
 COMMIT = "a" * 40
 
 
@@ -47,13 +46,11 @@ Required fixture behaviour.
                 kind, status = "template", "informational"
             else:
                 kind, status = "guide", "accepted"
-            documents.append({"path": name, "kind": kind, "status": status,
-                              "approval": None if status == "informational" else APPROVAL})
+            documents.append({"path": name, "kind": kind, "status": status})
         self.catalog = {
             "schema_version": 2,
             "adoption": {"state": "accepted",
-                         "decision": "specs/decisions/ADR-0004-slim-specification-pack.md",
-                         "approval": {"reviewer": "synthetic-test-reviewer", "reference": APPROVAL, "date": "2026-09-19"}},
+                         "decision": "specs/decisions/ADR-0004-slim-specification-pack.md"},
             "source_archive": {"path": "specs/sources/archive.docx",
                                "sha256": hashlib.sha256((self.root / "specs/sources/archive.docx").read_bytes()).hexdigest()},
             "documents": documents,
@@ -108,20 +105,19 @@ Required fixture behaviour.
     def test_valid_fixture_passes(self):
         self.assertEqual(self.errors(), "")
 
-    def test_pending_adoption_without_approval_passes(self):
-        self.catalog["adoption"].update({"state": "pending", "approval": None})
+    def test_pending_adoption_passes(self):
+        self.catalog["adoption"]["state"] = "pending"
         self.save()
         self.assertEqual(self.errors(), "")
 
-    def test_accepted_adoption_needs_approval_metadata(self):
-        self.catalog["adoption"]["approval"] = None
+    def test_adoption_rejects_historical_approval_metadata(self):
+        self.catalog["adoption"]["approval"] = {
+            "reviewer": "synthetic-test-reviewer",
+            "reference": "synthetic-test-approval-only",
+            "date": "2026-09-19",
+        }
         self.save()
-        self.assertIn("requires approval metadata", self.errors())
-
-    def test_invalid_approval_date_fails(self):
-        self.catalog["adoption"]["approval"]["date"] = "not-a-date"
-        self.save()
-        self.assertIn("approval date", self.errors())
+        self.assertIn("adoption: expected keys", self.errors())
 
     def test_adoption_decision_must_be_accepted(self):
         self.document("specs/decisions/ADR-0004-slim-specification-pack.md")["status"] = "draft"
@@ -135,18 +131,13 @@ Required fixture behaviour.
 
     # Documents
 
-    def test_accepted_document_needs_approval_reference(self):
-        self.document()["approval"] = None
+    def test_document_rejects_historical_approval_reference(self):
+        self.document()["approval"] = "synthetic-test-approval-only"
         self.save()
-        self.assertIn("needs a real approval reference", self.errors())
-
-    def test_placeholder_approval_fails(self):
-        self.document()["approval"] = "REPLACE_WITH_REVIEW"
-        self.save()
-        self.assertIn("invalid approval", self.errors())
+        self.assertIn("document entry: expected keys", self.errors())
 
     def test_specification_cannot_be_informational(self):
-        self.document().update({"status": "informational", "approval": None})
+        self.document()["status"] = "informational"
         self.save()
         self.assertIn("cannot be informational", self.errors())
 
@@ -310,7 +301,7 @@ Required fixture behaviour.
 
     def test_verified_claim_needs_accepted_specification(self):
         self.make_verified_fixture()
-        self.document().update({"status": "draft", "approval": None})
+        self.document()["status"] = "draft"
         self.save()
         self.assertIn("require an accepted specification", self.errors())
 
