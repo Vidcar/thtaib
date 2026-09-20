@@ -27,11 +27,9 @@ from workbench_backend.agents.host_shell import (
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, InterruptDecision, ToolMode
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.service import ModelManager
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client
 from tests.test_harness import wait_for_run
 
 
@@ -183,9 +181,8 @@ class HostShellHarnessTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.project = self.root / "project"
         self.project.mkdir()
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(
             execute_then_reply(write_marker_command("host-shell-approved.txt"))
         )
@@ -198,7 +195,7 @@ class HostShellHarnessTests(unittest.TestCase):
             model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "host-shell-fixture"},

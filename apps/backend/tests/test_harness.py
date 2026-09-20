@@ -7,12 +7,10 @@ import os
 import socketserver
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 from typing import Any
 
-from fastapi.testclient import TestClient
 import httpx
 from langchain_core.messages import AIMessage
 
@@ -21,46 +19,14 @@ from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
 from workbench_backend.inference.adapter import RecordingTransport
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.service import ModelManager
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run, wait_for_status
 
 
 class _ThreadingHttpServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
-
-
-def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") in {"completed", "cancelled", "failed"}:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not finish: {body}")
-
-
-def wait_for_status(
-    client: TestClient,
-    run_id: str,
-    status: str,
-    *,
-    timeout: float = 10.0,
-) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") == status:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -77,9 +43,8 @@ class HarnessApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(echo_then_reply())
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -90,7 +55,7 @@ class HarnessApiTests(unittest.TestCase):
             model_factory=factory,
             knowledge_provider=lambda: self.app.state.knowledge,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "harness-fixture"},
@@ -311,11 +276,12 @@ class HarnessApiTests(unittest.TestCase):
         if os.name != "nt":
             self.skipTest("httpcore 1.0.9 closes sockets without shutdown; cross-thread recv unblock was validated for the Windows product runtime only.")
         entered = threading.Event()
+        release = threading.Event()
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 entered.set()
-                time.sleep(30.0)
+                release.wait()
 
             def log_message(self, *_args: object) -> None:
                 return
@@ -325,6 +291,7 @@ class HarnessApiTests(unittest.TestCase):
         serve = threading.Thread(target=server.serve_forever, daemon=True)
         serve.start()
         self.addCleanup(server.shutdown)
+        self.addCleanup(release.set)
         capture_sink: list[dict[str, Any]] = []
         client = httpx.Client(
             transport=RecordingTransport(capture_sink),
@@ -346,13 +313,16 @@ class HarnessApiTests(unittest.TestCase):
         worker = threading.Thread(target=request)
         worker.start()
         self.assertTrue(entered.wait(timeout=5.0))
-        client.close()
-        worker.join(timeout=5.0)
+        try:
+            client.close()
+            worker.join(timeout=5.0)
 
-        self.assertFalse(worker.is_alive(), result)
-        self.assertIn(result.get("status"), {"ReadError", "WriteError", "ConnectError"})
-        self.assertEqual(len(capture_sink), 1)
-        self.assertTrue(capture_sink[0]["url"].endswith("/v1/chat/completions"))
+            self.assertFalse(worker.is_alive(), result)
+            self.assertIn(result.get("status"), {"ReadError", "WriteError", "ConnectError"})
+            self.assertEqual(len(capture_sink), 1)
+            self.assertTrue(capture_sink[0]["url"].endswith("/v1/chat/completions"))
+        finally:
+            release.set()
 
     def test_cancel_requested_is_still_live_for_quiescence(self) -> None:
         now = utc_now()

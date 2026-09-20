@@ -14,11 +14,9 @@ from langchain_core.messages import AIMessage
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
-from workbench_backend.inference.service import ModelManager
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client, offline_workbench_client
 
 UNIQUE_DETAIL = "TOKEN-ALPHA-7F3Q-ISSUE56"
 TURN_ONE = f"Remember this unique detail for later: {UNIQUE_DETAIL}"
@@ -63,9 +61,8 @@ class ChatContinuityTests(unittest.TestCase):
         self.project = self.root / "project-workspace"
         self.project.mkdir()
         (self.project / "keep.md").write_text("retain-me", encoding="utf-8")
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(
             [
                 AIMessage(content="Noted the unique detail."),
@@ -82,7 +79,7 @@ class ChatContinuityTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "continuity-a"},

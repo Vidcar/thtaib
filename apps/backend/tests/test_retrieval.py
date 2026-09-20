@@ -25,12 +25,10 @@ from workbench_backend.agents.schemas import AgentRun, ToolMode
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import Deployment, DeploymentStatus, ManagementScope
-from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeVersion
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client
 from tests.test_harness import echo_then_reply, wait_for_run
 
 MEMORY_TOKEN = "STATE006-UNIQUE-MEMORY-CHUNK-FOR-FAKE-EMBEDDINGS"
@@ -104,9 +102,8 @@ class RetrievalHarnessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(search_then_reply())
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -121,7 +118,7 @@ class RetrievalHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             embeddings_factory=embeddings,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.chat_deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "chat-fixture"},

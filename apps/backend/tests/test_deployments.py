@@ -32,7 +32,7 @@ from workbench_backend.inference.schemas import (
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import write_tiny_gguf
+from support import OfflineProbe, write_tiny_gguf
 from test_app import FakeHF
 
 
@@ -377,6 +377,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "bundle_not_deployable")
 
     def test_connected_has_no_destructive_lifecycle(self) -> None:
+        self.manager.deployments.probe = OfflineProbe()
         deployment = self.manager.attach_connected(
             ConnectedDeploymentRequest(endpoint="http://127.0.0.1:9")
         )
@@ -395,6 +396,7 @@ class DeploymentTests(unittest.TestCase):
             self.manager.get_deployment(deployment.id)
 
     def test_connected_embedder_records_declared_startup_without_gpu_defaults(self) -> None:
+        self.manager.deployments.probe = OfflineProbe()
         deployment = self.manager.attach_connected(
             ConnectedDeploymentRequest(
                 endpoint="http://127.0.0.1:9",

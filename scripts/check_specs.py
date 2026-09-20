@@ -26,8 +26,7 @@ CORE_FILES = (
     "specs/commands.md", "specs/verification.md", "specs/open-questions.md",
     "specs/deviations.md", "specs/decisions/changelog.md", "specs/templates/feature.md",
     "scripts/check_specs.py", "tests/specs/test_check_specs.py",
-    ".github/workflows/specs.yml", ".github/workflows/backend.yml",
-    ".github/workflows/desktop.yml", ".github/workflows/contracts.yml",
+    ".github/workflows/ci.yml",
 )
 SCHEMA_VERSION = 2
 ID_PATTERN = r"[A-Z]{2,8}-\d{3}"

@@ -28,7 +28,7 @@ from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel, set_capture_sink
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client
 
 # Synthetic fixtures only — never real secrets.
 SYNTH_API_KEY = "wb_synth_api_key_0001"
@@ -150,7 +150,7 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         self.app.state.lab._manager_provider = lambda: self.manager
         self.app.state.lab._harness_provider = lambda: self.app.state.harness
         self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "privacy-diag"},
@@ -262,7 +262,7 @@ class PrivacyExportApiTests(unittest.TestCase):
         self.app.state.lab._manager_provider = lambda: self.manager
         self.app.state.lab._harness_provider = lambda: self.app.state.harness
         self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "privacy-export"},

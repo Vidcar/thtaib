@@ -18,7 +18,6 @@ from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.chat.schemas import ChatConversation, ChatMessage
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import APPLICATION_DB_NAME, CHECKPOINTS_DB_NAME, WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.state.store import ApplicationStore
@@ -26,7 +25,7 @@ from workbench_backend.state.checkpointer import open_sqlite_checkpointer
 from workbench_backend.state.store import json_chat_root
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client, offline_workbench_client
 
 LANGGRAPH_PRIVATE_TABLES = {"checkpoints", "writes"}
 
@@ -165,9 +164,8 @@ class RunLinkageRestartTests(unittest.TestCase):
         self.project = self.root / "project-workspace"
         self.project.mkdir()
         (self.project / "keep.md").write_text("retain-me", encoding="utf-8")
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return ScriptedChatModel(write_then_reply())
@@ -178,7 +176,7 @@ class RunLinkageRestartTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "state-fixture"},

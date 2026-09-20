@@ -14,7 +14,7 @@ from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import close_workbench_sqlite, workbench_client, write_tiny_gguf
+from support import OfflineProbe, close_workbench_sqlite, workbench_client, write_tiny_gguf
 
 
 class FakeHF:
@@ -146,6 +146,7 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertEqual(response.json()["code"], "bundle_not_deployable")
 
     def test_connected_endpoint_rejects_stop(self) -> None:
+        self.manager.deployments.probe = OfflineProbe()
         deployment = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9", "display_name": "external"},
