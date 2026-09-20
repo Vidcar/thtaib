@@ -317,6 +317,19 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(ManagerError):
             self.manager.get_deployment(deployment.id)
 
+    def test_connected_embedder_records_declared_startup_without_gpu_defaults(self) -> None:
+        deployment = self.manager.attach_connected(
+            ConnectedDeploymentRequest(
+                endpoint="http://127.0.0.1:9",
+                startup={"embedding": "on", "pooling": "last"},
+            )
+        )
+        self.assertEqual(deployment.applied_startup.get("embedding"), "on")
+        self.assertEqual(deployment.applied_startup.get("pooling"), "last")
+        self.assertNotIn("ctx_size", deployment.applied_startup)
+        self.assertNotIn("n_gpu_layers", deployment.applied_startup)
+        self.manager.detach_deployment(deployment.id)
+
     def test_windows_pin_writes_manifest_and_rejects_unpinned_start(self) -> None:
         installer = FakeWindowsInstaller()
         other = ModelManager(

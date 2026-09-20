@@ -38,6 +38,11 @@ export const DEFAULT_GPU_STARTUP = {
   flash_attn: "on",
 } as const;
 
+export const DEFAULT_EMBEDDING_STARTUP = {
+  embedding: "on",
+  pooling: "last",
+} as const;
+
 function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
@@ -103,10 +108,10 @@ export const api = {
         auto_start: true,
       }),
     }),
-  attachConnected: (endpoint: string, display_name?: string) =>
+  attachConnected: (endpoint: string, display_name?: string, startup?: object) =>
     request<Deployment>("/v1/deployments/connected", {
       method: "POST",
-      body: JSON.stringify({ endpoint, display_name }),
+      body: JSON.stringify({ endpoint, display_name, startup }),
     }),
   stop: (id: string) => request<Deployment>(`/v1/deployments/${id}/stop`, { method: "POST" }),
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
@@ -118,10 +123,18 @@ export const api = {
     presented_tools?: string[],
     workspace_id?: string,
     project_path?: string,
+    embedding_deployment_id?: string,
   ) =>
     request<AgentRun>("/v1/agent-runs", {
       method: "POST",
-      body: JSON.stringify({ deployment_id, task, presented_tools, workspace_id, project_path }),
+      body: JSON.stringify({
+        deployment_id,
+        task,
+        presented_tools,
+        workspace_id,
+        project_path,
+        embedding_deployment_id,
+      }),
     }),
   agentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
@@ -139,6 +152,8 @@ export const api = {
     skill_version_refs?: string[];
     protected_instruction_version_refs?: string[];
     knowledge_version_refs?: string[];
+    embedding_deployment_id?: string;
+    retrieval_project_paths?: string[];
   }) =>
     request<ChatConversation>("/v1/chat/conversations", {
       method: "POST",
@@ -159,6 +174,8 @@ export const api = {
       skill_version_refs?: string[];
       protected_instruction_version_refs?: string[];
       knowledge_version_refs?: string[];
+      embedding_deployment_id?: string;
+      retrieval_project_paths?: string[];
     },
   ) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/start`, {

@@ -53,8 +53,9 @@ class HarnessBackendHelperTests(unittest.TestCase):
         self.assertFalse(is_reserved_framework_path("/hello.txt"))
         self.assertEqual(
             RESERVED_FRAMEWORK_PREFIXES,
-            ("/large_tool_results/", "/conversation_history/"),
+            ("/large_tool_results/", "/conversation_history/", "/retrieved/"),
         )
+        self.assertTrue(is_reserved_framework_path("/retrieved/batch/chunk_1.md"))
 
     def test_recorded_mode_attaches_no_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,10 +85,17 @@ class HarnessBackendHelperTests(unittest.TestCase):
             self.assertFalse(offload.error, offload.error)
             self.assertEqual((project / "hello.txt").read_text(encoding="utf-8"), "in-project")
             self.assertFalse((project / "large_tool_results").exists())
+            offload_retrieved = backend.write("/retrieved/batch/chunk.md", "retrieved")
+            self.assertFalse(offload_retrieved.error, offload_retrieved.error)
+            self.assertFalse((project / "retrieved").exists())
             scratch = harness_scratch_root(paths, "thread_iso")
             self.assertEqual(
                 (scratch / "large_tool_results" / "hello.txt").read_text(encoding="utf-8"),
                 "in-scratch",
+            )
+            self.assertEqual(
+                (scratch / "retrieved" / "batch" / "chunk.md").read_text(encoding="utf-8"),
+                "retrieved",
             )
 
     def test_project_run_attaches_host_shell_only_when_execute_presented(self) -> None:

@@ -119,6 +119,8 @@ class ChatService:
             memory_version_refs=refs.memory_version_refs,
             skill_version_refs=refs.skill_version_refs,
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
+            embedding_deployment_id=request.embedding_deployment_id,
+            retrieval_project_paths=list(request.retrieval_project_paths),
             created_at=now,
             updated_at=now,
         )
@@ -166,6 +168,10 @@ class ChatService:
             conversation.memory_version_refs = refs.memory_version_refs
             conversation.skill_version_refs = refs.skill_version_refs
             conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
+        if request.embedding_deployment_id is not None:
+            conversation.embedding_deployment_id = request.embedding_deployment_id
+        if request.retrieval_project_paths is not None:
+            conversation.retrieval_project_paths = list(request.retrieval_project_paths)
         if request.project_path or request.workspace_id:
             workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
             conversation.workspace_id = workspace_id
@@ -207,6 +213,8 @@ class ChatService:
                     memory_version_refs=conversation.memory_version_refs,
                     skill_version_refs=conversation.skill_version_refs,
                     protected_instruction_version_refs=conversation.protected_instruction_version_refs,
+                    embedding_deployment_id=conversation.embedding_deployment_id,
+                    retrieval_project_paths=list(conversation.retrieval_project_paths),
                 )
             )
         except HarnessError:

@@ -205,7 +205,7 @@ export function KnowledgePanel() {
 
       <div className="card">
         <h3>Context capture</h3>
-        <p className="hint">Default is retain with secrets redacted. RAG stays open (OQ-006).</p>
+        <p className="hint">Default is retain with secrets redacted. This store is not the retrieval index.</p>
         <label>
           Redaction mode
           <select

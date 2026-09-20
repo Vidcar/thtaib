@@ -28,6 +28,8 @@ class ChatConversationCreateRequest(BaseModel):
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     knowledge_version_refs: list[str] = Field(default_factory=list)
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
 
 
 class ChatStartRequest(BaseModel):
@@ -41,6 +43,8 @@ class ChatStartRequest(BaseModel):
     skill_version_refs: list[str] | None = None
     protected_instruction_version_refs: list[str] | None = None
     knowledge_version_refs: list[str] | None = None
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] | None = None
 
 
 class ChatTranscriptReplaceRequest(BaseModel):
@@ -104,6 +108,8 @@ class ChatConversation(BaseModel):
     memory_version_refs: list[str] = Field(default_factory=list)
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

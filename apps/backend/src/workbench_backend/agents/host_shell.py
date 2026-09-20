@@ -67,6 +67,7 @@ _SAFE_GIT_SUBCOMMANDS = frozenset({"status", "log", "diff", "branch", "show", "r
 PERMISSION_DENY_PATHS = (
     "/large_tool_results/denied/**",
     "/conversation_history/denied/**",
+    "/retrieved/denied/**",
 )
 
 HOST_SHELL_NOTE = (

@@ -4,6 +4,16 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — STATE-006 retrieval v1 built
+
+Authority: [OQ-006](../open-questions.md#oq-006) research of 2026-09-19 (include RAG in v1) and the operator note that David-PC already holds the dedicated embedding GGUF (not a bundle). Requirements: STATE-006 (`built`, not `verified`); MOD-003 startup keys `embedding` / `pooling`; AGT-002 `retrieved_material`. No ADR: no new execution owner, no persistent vector store, no second inference stack. Lockfile add: official `langchain-text-splitters`.
+
+- Live-tool runs that name `embedding_deployment_id` resolve a dedicated `embedding: on` deployment (managed running/unhealthy, or connected with a declared flag), build a per-run `InMemoryVectorStore` from selected knowledge versions and an optional project-text allowlist, present `search_knowledge`, and offload hits under `/retrieved/` on the existing `CompositeBackend` (harness scratch). Knowledge-only runs stay prompt-append and do not fail closed.
+- Fail-closed codes: `embedding_deployment_missing` 404, `embedding_deployment_unloaded` 409, `embedding_not_configured` 409, `embedding_pooling_none` 409, `retrieval_corpus_empty` 409, `retrieval_project_path_invalid` 400, `retrieval_project_requires_project` 400. Recorded-tool replay does not attach a live index.
+- Product-default GGUF is named (`Qwen3-Embedding-0.6B-Q8_0.gguf` from `Qwen/Qwen3-Embedding-0.6B-GGUF` @ `370f27d7550e0def9b39c1f16d3fbaa13aa67728`). A file under `models\` is not a deployment; the product invents no `bundle_*` record and does not start llama-server from the file existing. The operator registers/starts a dedicated `--embedding` process.
+- Connected attach records declared `embedding` / `pooling` without applying managed GPU defaults. `embedding: on` emits the bare llama-server flag `--embedding`.
+- Unit tests use official `DeterministicFakeEmbedding`. Live proof on a loaded embedding deployment remains unverified.
+
 ## 2026-09-19 — David-PC host-shell UAT recorded
 
 Authority: live run on David-PC against `8887f9f` ([PR #89](https://github.com/Vidcar/thtaib/pull/89)); report [evidence](../evidence/2026-09-19-david-pc-host-shell.md). Requirements: ENV-001, ENV-002, ARCH-005, AGT-001. Does not close [OQ-011](../open-questions.md#oq-011).

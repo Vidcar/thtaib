@@ -104,6 +104,10 @@ export interface Deployment {
   error: string | null;
 }
 
+export function isDeclaredEmbedder(deployment: Deployment): boolean {
+  return String(deployment.applied_startup?.embedding ?? "").toLowerCase() === "on";
+}
+
 export interface RuntimeManifest {
   platform: string;
   flavor?: string;
@@ -211,6 +215,7 @@ export interface AgentRun {
     presented_tools: string[];
     available_tools: string[];
     capture_gaps: string[];
+    retrieved_material?: string[];
     http_payload: Record<string, unknown> | null;
     generation_settings?: Record<string, unknown>;
     memory_versions?: string[];
@@ -228,10 +233,13 @@ export interface AgentRun {
   effective_setup?: {
     selected_profile_id: string | null;
     selected_deployment_id: string;
+    selected_embedding_deployment_id?: string | null;
     selected_memory_version_ids: string[];
     selected_skill_version_ids: string[];
     selected_protected_instruction_version_ids: string[];
     loaded_deployment_id: string;
+    loaded_embedding_deployment_id?: string | null;
+    loaded_embedding_endpoint?: string | null;
     loaded_startup: Record<string, unknown>;
     loaded_knowledge: Array<{
       version_id: string;
@@ -245,6 +253,9 @@ export interface AgentRun {
     retired?: Record<string, Array<{ key: string; requested: unknown; applied: unknown; reason: string }>>;
     system_prompt: string;
     gaps: string[];
+    retrieval_requested?: boolean;
+    retrieval_presented?: boolean;
+    retrieval_corpus_documents?: number;
     knowledge_binding: "none" | "application_owned";
   } | null;
   completion: {
@@ -261,6 +272,9 @@ export interface AgentRun {
   memory_version_refs: string[];
   skill_version_refs: string[];
   protected_instruction_version_refs: string[];
+  embedding_deployment_id?: string | null;
+  retrieval_project_paths?: string[];
+  retrieved_material?: string[];
   harness: "deepagents";
   project_path?: string | null;
   profile_id?: string | null;
@@ -362,6 +376,8 @@ export interface ChatConversation {
   memory_version_refs?: string[];
   skill_version_refs?: string[];
   protected_instruction_version_refs?: string[];
+  embedding_deployment_id?: string | null;
+  retrieval_project_paths?: string[];
   current_run: AgentRun | null;
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;

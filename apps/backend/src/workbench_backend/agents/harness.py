@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.types import Command
@@ -20,6 +21,16 @@ from langgraph.types import Command
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
+from workbench_backend.agents.retrieval import (
+    RETRIEVAL_INSTRUCTIONS,
+    SEARCH_KNOWLEDGE_TOOL_NAME,
+    build_vector_store,
+    load_retrieval_documents,
+    make_search_knowledge_tool,
+    openai_embeddings_for_deployment,
+    record_retrieved_sources,
+    resolve_embedding_deployment,
+)
 from workbench_backend.agents.host_shell import (
     filesystem_permissions_for_run,
     interrupt_on_for_run,
@@ -62,6 +73,7 @@ from workbench_backend.inference.connection_errors import (
     classify_connection_failure,
 )
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.schemas import Deployment
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.diagnostics import (
     apply_run_diagnostic_policy,
@@ -83,6 +95,7 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 ModelFactory = Callable[[AgentRun, list[dict[str, Any]]], BaseChatModel]
+EmbeddingsFactory = Callable[[Deployment], Embeddings]
 
 
 class HarnessService:
@@ -95,11 +108,13 @@ class HarnessService:
         model_factory: ModelFactory | None = None,
         knowledge_provider: Callable[[], KnowledgeService] | None = None,
         app_store: ApplicationStore | None = None,
+        embeddings_factory: EmbeddingsFactory | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._model_factory = model_factory or self._deployment_model
         self._knowledge_provider = knowledge_provider
         self._app_store = app_store
+        self._embeddings_factory = embeddings_factory or openai_embeddings_for_deployment
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -170,14 +185,6 @@ class HarnessService:
         refs = self._resolve_knowledge_refs(request)
         versions = self._load_knowledge_versions(refs)
         profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
-        setup = resolve_effective_setup(
-            deployment=deployment,
-            profile=profile,
-            knowledge_refs=refs,
-            knowledge_versions=versions,
-            surface_system_prompt=request.system_prompt,
-            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
-        )
         project_path = _resolved_project_path(request.project_path)
         if project_path is None and request.workspace_id:
             stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
@@ -186,6 +193,33 @@ class HarnessService:
         presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
             request.presented_tools,
             project_bound=project_path is not None,
+        )
+        retrieval_requested = bool((request.embedding_deployment_id or "").strip())
+        recorded = request.tool_mode is ToolMode.recorded_tool
+        if retrieval_requested and SEARCH_KNOWLEDGE_TOOL_NAME in denied:
+            denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
+        embedding_deployment = None
+        retrieval_documents = []
+        if retrieval_requested and not recorded:
+            embedding_deployment = resolve_embedding_deployment(
+                self.manager,
+                request.embedding_deployment_id or "",
+            )
+            retrieval_documents = load_retrieval_documents(
+                versions,
+                list(request.retrieval_project_paths),
+                project_path,
+            )
+            if not retrieval_documents:
+                raise HarnessError(
+                    "Retrieval was requested but the derived corpus is empty. "
+                    "Select knowledge versions or allowlisted project text files. "
+                    "No hits were invented.",
+                    code="retrieval_corpus_empty",
+                    status_code=409,
+                )
+        retrieval_presented = bool(
+            retrieval_requested and not recorded and embedding_deployment is not None
         )
         if denied:
             raise HarnessError(
@@ -208,12 +242,31 @@ class HarnessService:
                 status_code=400,
                 details={"tools": shell_blocked},
             )
+        if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in presented:
+            presented = [*presented, SEARCH_KNOWLEDGE_TOOL_NAME]
         if not presented:
             raise HarnessError(
                 "At least one enabled tool must remain presented (AGT-005).",
                 code="tools_required",
                 status_code=400,
             )
+        enabled = enabled_for_project(project_path is not None)
+        if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
+            enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
+        setup = resolve_effective_setup(
+            deployment=deployment,
+            profile=profile,
+            knowledge_refs=refs,
+            knowledge_versions=versions,
+            surface_system_prompt=request.system_prompt,
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+            embedding_deployment=embedding_deployment,
+            selected_embedding_deployment_id=request.embedding_deployment_id,
+            retrieval_requested=retrieval_requested,
+            retrieval_presented=retrieval_presented,
+            retrieval_corpus_documents=len(retrieval_documents),
+            retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
+        )
         if request.workspace_id:
             others = self.active_workspace_run_ids(request.workspace_id)
             if others:
@@ -230,7 +283,7 @@ class HarnessService:
             status=AgentRunStatus.queued,
             deployment_id=deployment.id,
             task=request.task,
-            enabled_tools=enabled_for_project(project_path is not None),
+            enabled_tools=enabled,
             presented_tools=presented,
             denied_tools=[],
             system_prompt=setup.system_prompt,
@@ -251,6 +304,8 @@ class HarnessService:
             memory_version_refs=refs.memory_version_refs,
             skill_version_refs=refs.skill_version_refs,
             protected_instruction_version_refs=refs.protected_instruction_version_refs,
+            embedding_deployment_id=request.embedding_deployment_id,
+            retrieval_project_paths=list(request.retrieval_project_paths),
             thread_id=request.thread_id or None,
             related_files=_initial_related_files(project_path),
             effective_setup=setup,
@@ -512,9 +567,13 @@ class HarnessService:
         interrupt_on = interrupt_on_for_run(run)
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
+        tools = tools_for_names(run.presented_tools, fixture_bank=fixture_bank)
+        retrieval_tool = self._live_search_knowledge_tool(run, backend)
+        if retrieval_tool is not None:
+            tools = [*tools, retrieval_tool]
         return create_deep_agent(
             model=model,
-            tools=tools_for_names(run.presented_tools, fixture_bank=fixture_bank),
+            tools=tools,
             system_prompt=run.system_prompt,
             middleware=[
                 WorkbenchHarnessMiddleware(
@@ -757,6 +816,42 @@ class HarnessService:
             per_request=per_request,
             capture_sink=http_sink,
         )
+
+    def _live_search_knowledge_tool(self, run: AgentRun, backend: Any) -> Any:
+        """Build the official search tool, or none for recorded-tool / no retrieval."""
+
+        if run.tool_mode is ToolMode.recorded_tool:
+            return None
+        if SEARCH_KNOWLEDGE_TOOL_NAME not in run.presented_tools:
+            return None
+        if not run.embedding_deployment_id or backend is None:
+            return None
+        embedding_deployment = resolve_embedding_deployment(
+            self.manager,
+            run.embedding_deployment_id,
+        )
+        refs = KnowledgeRefs(
+            memory_version_refs=run.memory_version_refs,
+            skill_version_refs=run.skill_version_refs,
+            protected_instruction_version_refs=run.protected_instruction_version_refs,
+        )
+        documents = load_retrieval_documents(
+            self._load_knowledge_versions(refs),
+            list(run.retrieval_project_paths),
+            run.project_path,
+        )
+        if not documents:
+            raise HarnessError(
+                "Retrieval was requested but the derived corpus is empty. No hits were invented.",
+                code="retrieval_corpus_empty",
+                status_code=409,
+            )
+        store = build_vector_store(documents, self._embeddings_factory(embedding_deployment))
+
+        def on_retrieved(sources: list[str]) -> None:
+            run.retrieved_material = record_retrieved_sources(run.retrieved_material, sources)
+
+        return make_search_knowledge_tool(store, backend, on_retrieved)
 
     def _resolve_knowledge_refs(self, request: AgentStartRequest) -> KnowledgeRefs:
         requested = (

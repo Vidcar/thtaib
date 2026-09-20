@@ -3,12 +3,19 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { InterruptApproval } from "./InterruptApproval";
 import { EffectiveSetupNotes } from "./settingsNotes";
-import { isAgentRunLive, visiblePendingInterrupt, type AgentRun, type Deployment } from "./types";
+import {
+  isAgentRunLive,
+  isDeclaredEmbedder,
+  visiblePendingInterrupt,
+  type AgentRun,
+  type Deployment,
+} from "./types";
 
 export function AgentRunPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
+  const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [task, setTask] = useState("Use the echo tool to repeat: harness-ok");
   const [projectPath, setProjectPath] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
@@ -64,7 +71,14 @@ export function AgentRunPanel() {
         onSubmit={(event) => {
           event.preventDefault();
           void api
-            .startAgentRun(deploymentId, task, undefined, undefined, projectPath || undefined)
+            .startAgentRun(
+              deploymentId,
+              task,
+              undefined,
+              undefined,
+              projectPath || undefined,
+              embeddingDeploymentId || undefined,
+            )
             .then((next) => {
               setRun(next);
               setMessage(`Started ${next.id}`);
@@ -83,6 +97,26 @@ export function AgentRunPanel() {
             ))}
           </select>
         </label>
+        <label>
+          Embedding deployment (optional retrieval)
+          <select
+            value={embeddingDeploymentId}
+            onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
+          >
+            <option value="">None — no retrieval requested</option>
+            {deployments.map((deployment) => (
+              <option key={deployment.id} value={deployment.id}>
+                {deployment.display_name} · {deployment.status}
+                {isDeclaredEmbedder(deployment) ? " · embedding:on" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="hint">
+          Selecting an embedder requests retrieve-and-offload and fails closed if that
+          deployment is missing, unloaded, or not embedding:on. A GGUF file on disk is
+          not registered automatically.
+        </p>
         <label>
           Project workspace path (required for host shell)
           <input

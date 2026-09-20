@@ -162,6 +162,8 @@ class AgentStartRequest(BaseModel):
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     knowledge_version_refs: list[str] = Field(default_factory=list)
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
     source_surface: SourceSurface = "agent-run"
     thread_id: str | None = None
 
@@ -201,6 +203,9 @@ class AgentRun(BaseModel):
     memory_version_refs: list[str] = Field(default_factory=list)
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
+    retrieved_material: list[str] = Field(default_factory=list)
     thread_id: str | None = None
     checkpoint_ids: list[str] = Field(default_factory=list)
     related_files: list[RelatedFile] = Field(default_factory=list)

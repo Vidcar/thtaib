@@ -6,8 +6,9 @@ close OQ-007.
 
 Valued startup enums (Issue #21): ``flash_attn`` serializes as
 ``--flash-attn on|off|auto`` and ``load_mode`` as ``--load-mode MODE``.
-Every current STARTUP_KEY takes a value; there are no bare flags. Never
-emit a bare ``--flash-attn``.
+Startup keys are valued except ``embedding: on``, which serialises the
+llama-server bare flag ``--embedding`` (required for a dedicated embedder).
+Never emit a bare ``--flash-attn``.
 
 The pinned llama.cpp b11045 rejects ``--mlock`` and ``--no-mmap``
 (``error: invalid argument``); upstream replaced both with ``--load-mode``.
@@ -34,11 +35,15 @@ STARTUP_KEYS: dict[str, str] = {
     "flash_attn": "--flash-attn",
     "load_mode": "--load-mode",
     "alias": "--alias",
+    "embedding": "--embedding",
+    "pooling": "--pooling",
 }
 
 STARTUP_ENUMS: dict[str, frozenset[str]] = {
     "flash_attn": frozenset({"on", "off", "auto"}),
     "load_mode": frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
+    "embedding": frozenset({"on", "off"}),
+    "pooling": frozenset({"mean", "cls", "last"}),
 }
 
 # Keys the workbench used to map to llama-server flags that b11045 no longer accepts.
@@ -90,6 +95,19 @@ DEFAULT_STARTUP: dict[str, Any] = {
     **DEFAULT_GPU_PROFILE,
 }
 
+_EMBEDDING_ALIASES: dict[Any, str] = {
+    True: "on",
+    False: "off",
+    1: "on",
+    0: "off",
+    "1": "on",
+    "0": "off",
+    "true": "on",
+    "false": "off",
+    "on": "on",
+    "off": "off",
+}
+
 _FLASH_ATTN_ALIASES: dict[Any, str] = {
     True: "on",
     False: "off",
@@ -130,11 +148,35 @@ def normalize_load_mode(value: Any) -> str | None:
     return None
 
 
+def normalize_embedding(value: Any) -> str | None:
+    """Map a requested embedding value to on|off, or None if invalid."""
+    if isinstance(value, bool):
+        return _EMBEDDING_ALIASES[value]
+    if isinstance(value, int):
+        return _EMBEDDING_ALIASES.get(value)
+    if isinstance(value, str):
+        return _EMBEDDING_ALIASES.get(value.strip().lower())
+    return None
+
+
+def normalize_pooling(value: Any) -> str | None:
+    """Map pooling to llama-server modes that work with ``/v1/embeddings``."""
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in STARTUP_ENUMS["pooling"]:
+            return candidate
+    return None
+
+
 def normalize_startup_enum(key: str, value: Any) -> str | None:
     if key == "flash_attn":
         return normalize_flash_attn(value)
     if key == "load_mode":
         return normalize_load_mode(value)
+    if key == "embedding":
+        return normalize_embedding(value)
+    if key == "pooling":
+        return normalize_pooling(value)
     return None
 
 
@@ -228,18 +270,42 @@ def resolve_bags(
     )
 
 
+def resolve_declared_startup(requested: dict[str, Any] | None = None) -> SettingsBag:
+    """Resolve startup keys without applying managed-process defaults.
+
+    Connected endpoints do not start llama-server; recorded ``embedding`` /
+    ``pooling`` values are a declaration, not applied argv.
+    """
+    raw = dict(requested or {})
+    cleaned, invalid = normalize_startup_requested(raw)
+    bag = resolve_bag(cleaned, STARTUP_KEYS)
+    return bag.model_copy(
+        update={
+            "requested": raw,
+            "unsupported": sorted(set(bag.unsupported) | set(invalid)),
+            "retired": retired_startup_notes(raw),
+        }
+    )
+
+
 def startup_cli_args(applied: dict[str, Any]) -> list[str]:
     """Serialize applied startup keys to llama-server argv.
 
     Valued enums always include the value; an invalid enum value is skipped
     rather than emitted. Retired keys are never in ``STARTUP_KEYS`` so they
     never reach argv. ``flash_attn`` never becomes a bare ``--flash-attn``.
+    ``embedding: on`` emits the llama-server bare flag ``--embedding``;
+    ``embedding: off`` omits it.
     """
     args: list[str] = []
     for key, flag in STARTUP_KEYS.items():
         if key not in applied:
             continue
         value = applied[key]
+        if key == "embedding":
+            if normalize_startup_enum(key, value) == "on":
+                args.append(flag)
+            continue
         if key in STARTUP_ENUMS:
             normalized = normalize_startup_enum(key, value)
             if normalized is None:

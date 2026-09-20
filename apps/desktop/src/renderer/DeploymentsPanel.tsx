@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, DEFAULT_GPU_STARTUP } from "./api";
+import { api, DEFAULT_EMBEDDING_STARTUP, DEFAULT_GPU_STARTUP } from "./api";
 import { SettingsNotes } from "./settingsNotes";
 import type { Deployment, ModelBundle, RuntimeManifest } from "./types";
 
@@ -10,6 +10,8 @@ export function DeploymentsPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [bundleId, setBundleId] = useState("");
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:8080/v1");
+  const [managedEmbedder, setManagedEmbedder] = useState(false);
+  const [connectedEmbedder, setConnectedEmbedder] = useState(false);
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
@@ -75,7 +77,13 @@ export function DeploymentsPanel() {
           onSubmit={(event) => {
             event.preventDefault();
             void api
-              .startManaged(bundleId)
+              .startManaged(
+                bundleId,
+                undefined,
+                managedEmbedder
+                  ? { ...DEFAULT_GPU_STARTUP, ...DEFAULT_EMBEDDING_STARTUP }
+                  : undefined,
+              )
               .then((deployment) => {
                 setMessage(`Managed ${deployment.status} ${deployment.endpoint ?? ""}`);
                 return refresh();
@@ -87,6 +95,8 @@ export function DeploymentsPanel() {
           <p className="hint">
             Binds the default GPU profile: ctx_size {DEFAULT_GPU_STARTUP.ctx_size}, n_gpu_layers{" "}
             {DEFAULT_GPU_STARTUP.n_gpu_layers}, flash_attn {DEFAULT_GPU_STARTUP.flash_attn}.
+            A file under models\ is not a bundle; import it first if you want a managed
+            embedder. The product does not invent a bundle record from a GGUF path.
           </p>
           <label>
             Bundle
@@ -98,6 +108,14 @@ export function DeploymentsPanel() {
               ))}
             </select>
           </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={managedEmbedder}
+              onChange={(event) => setManagedEmbedder(event.target.checked)}
+            />{" "}
+            Dedicated embedder (embedding:on, pooling last). Chat GGUFs are not embedders.
+          </label>
           <button type="submit" disabled={!bundleId}>
             Start
           </button>
@@ -108,7 +126,11 @@ export function DeploymentsPanel() {
           onSubmit={(event) => {
             event.preventDefault();
             void api
-              .attachConnected(endpoint)
+              .attachConnected(
+                endpoint,
+                undefined,
+                connectedEmbedder ? { ...DEFAULT_EMBEDDING_STARTUP } : undefined,
+              )
               .then((deployment) => {
                 setMessage(`Connected ${deployment.scope} ${deployment.status}`);
                 return refresh();
@@ -120,6 +142,14 @@ export function DeploymentsPanel() {
           <label>
             OpenAI-compatible endpoint
             <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} />
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={connectedEmbedder}
+              onChange={(event) => setConnectedEmbedder(event.target.checked)}
+            />{" "}
+            Declare embedding:on and pooling last. Does not start llama-server.
           </label>
           <button type="submit">Attach (no kill)</button>
         </form>

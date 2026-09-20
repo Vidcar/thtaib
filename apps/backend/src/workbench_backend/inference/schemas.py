@@ -228,6 +228,7 @@ class ManagedDeploymentRequest(BaseModel):
 class ConnectedDeploymentRequest(BaseModel):
     endpoint: str
     display_name: str | None = None
+    startup: dict[str, Any] = Field(default_factory=dict)
 
 
 class Deployment(BaseModel):

@@ -42,8 +42,9 @@ class KnowledgeConfig(BaseModel):
     not_git: Literal[True] = True
     not_rag: Literal[True] = True
     note: str = (
-        "Durable knowledge versioning (STATE-005). Retrieval/RAG and "
-        "cross-surface sharing remain open (OQ-006)."
+        "Durable knowledge versioning (STATE-005). This store is not a "
+        "retrieval index. Query-time RAG is a derived per-run index (STATE-006). "
+        "Automatic writes and a durable shared index remain open (OQ-006)."
     )
 
 

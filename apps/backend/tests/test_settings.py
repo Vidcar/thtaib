@@ -16,6 +16,7 @@ from workbench_backend.inference.settings import (
     STARTUP_ENUMS,
     STARTUP_KEYS,
     resolve_bags,
+    resolve_declared_startup,
     startup_cli_args,
 )
 from workbench_backend.paths import WorkbenchPaths
@@ -98,8 +99,10 @@ class SettingsBagTests(unittest.TestCase):
         self.assertNotEqual(bare, ["--flash-attn"])
 
     def test_valued_startup_enums_audit(self) -> None:
-        self.assertEqual(set(STARTUP_ENUMS), {"flash_attn", "load_mode"})
+        self.assertEqual(set(STARTUP_ENUMS), {"flash_attn", "load_mode", "embedding", "pooling"})
         self.assertEqual(STARTUP_ENUMS["flash_attn"], frozenset({"on", "off", "auto"}))
+        self.assertEqual(STARTUP_ENUMS["embedding"], frozenset({"on", "off"}))
+        self.assertEqual(STARTUP_ENUMS["pooling"], frozenset({"mean", "cls", "last"}))
         self.assertEqual(
             STARTUP_ENUMS["load_mode"],
             frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
@@ -174,6 +177,33 @@ class SettingsBagTests(unittest.TestCase):
             self.assertNotIn("mlock", loaded.bags.startup.applied)
             listed = manager.list_profiles()
             self.assertEqual(listed[0].bags.startup.unsupported, loaded.bags.startup.unsupported)
+
+    def test_embedding_on_emits_bare_flag_and_pooling_is_valued(self) -> None:
+        bags = resolve_bags(startup={"embedding": "on", "pooling": "mean"})
+        self.assertEqual(bags.startup.applied["embedding"], "on")
+        self.assertEqual(bags.startup.applied["pooling"], "mean")
+        args = startup_cli_args(bags.startup.applied)
+        self.assertIn("--embedding", args)
+        self.assertNotEqual(args[args.index("--embedding") + 1], "on")
+        self.assertEqual(args[args.index("--embedding") + 1], "--pooling")
+        self.assertEqual(args[args.index("--pooling") + 1], "mean")
+        off = startup_cli_args({"embedding": "off", "pooling": "cls"})
+        self.assertNotIn("--embedding", off)
+        self.assertEqual(off[off.index("--pooling") + 1], "cls")
+        invalid = resolve_bags(startup={"embedding": "maybe", "pooling": "none"})
+        self.assertIn("embedding", invalid.startup.unsupported)
+        self.assertIn("pooling", invalid.startup.unsupported)
+        self.assertNotIn("embedding", invalid.startup.applied)
+        self.assertNotIn("pooling", invalid.startup.applied)
+
+    def test_declared_startup_skips_managed_process_defaults(self) -> None:
+        bag = resolve_declared_startup({"embedding": True, "pooling": "last"})
+        self.assertEqual(bag.applied["embedding"], "on")
+        self.assertEqual(bag.applied["pooling"], "last")
+        self.assertNotIn("ctx_size", bag.applied)
+        self.assertNotIn("n_gpu_layers", bag.applied)
+        self.assertNotIn("host", bag.applied)
+        self.assertNotIn("port", bag.applied)
 
     def test_stream_is_not_a_per_request_key(self) -> None:
         self.assertNotIn("stream", PER_REQUEST_KEYS)
