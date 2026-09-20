@@ -62,6 +62,12 @@ class AgentEvent(BaseModel):
 
 class ModelRequestCapture(BaseModel):
     at: str
+    request_prepared: bool = True
+    transport_attempted: bool = False
+    transport_attempt_count: int = 0
+    response_observed: bool = False
+    handler_returned: bool = False
+    failure: dict[str, Any] | None = None
     instructions: str | None = None
     messages: list[dict[str, Any]] = Field(default_factory=list)
     available_tools: list[str] = Field(default_factory=list)
@@ -73,6 +79,7 @@ class ModelRequestCapture(BaseModel):
     retrieved_material: list[str] = Field(default_factory=list)
     capture_gaps: list[str] = Field(default_factory=list)
     http_payload: dict[str, Any] | None = None
+    http_payloads: list[dict[str, Any]] = Field(default_factory=list)
     selected_profile_id: str | None = None
     applied_per_request: dict[str, Any] = Field(default_factory=dict)
     startup_mismatches: list[dict[str, Any]] = Field(default_factory=list)

@@ -337,6 +337,33 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertEqual(capture["http_payload"]["body"]["temperature"], DISTINCT_TEMPERATURE)
         self.assertNotIn("http payload not observed", " ".join(capture["capture_gaps"]))
 
+    def test_profile_agent_stale_keys_are_requested_but_not_applied_after_read(self) -> None:
+        created = self.client.post(
+            "/v1/profiles",
+            json={
+                "display_name": "agent-stale-keys",
+                "agent": {
+                    "system_prompt": "Profile identity.",
+                    "tools_enabled": False,
+                    "max_iterations": 7,
+                },
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        profile_id = created.json()["id"]
+
+        read = self.client.get(f"/v1/profiles/{profile_id}")
+        self.assertEqual(read.status_code, 200, read.text)
+        bag = read.json()["bags"]["agent"]
+        self.assertEqual(bag["requested"]["tools_enabled"], False)
+        self.assertEqual(bag["requested"]["max_iterations"], 7)
+        self.assertEqual(bag["applied"], {"system_prompt": "Profile identity."})
+        self.assertIn("tools_enabled", bag["unsupported"])
+        self.assertIn("max_iterations", bag["unsupported"])
+        notes = {item["key"]: item for item in bag["unsupported_notes"]}
+        self.assertIn("Not implemented", notes["tools_enabled"]["reason"])
+        self.assertIn("max_steps budget", notes["max_iterations"]["reason"])
+
     def test_knowledge_content_is_available_not_id_only(self) -> None:
         memory = self._knowledge("memory", MEMORY_TOKEN)
         skill = self._knowledge("skill", SKILL_TOKEN)
@@ -537,6 +564,49 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
             self.assertIn(MEMORY_TOKEN, capture["instructions"] or "")
         else:
             self.assertIn("http payload not observed", " ".join(capture["capture_gaps"]))
+
+    def test_explicit_max_steps_reaches_langgraph_runtime_cap(self) -> None:
+        loop_script = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "echo", "args": {"text": f"loop-{index}"}, "id": f"call_loop_{index}"}
+                ],
+            )
+            for index in range(4)
+        ]
+        loop_script.append(AIMessage(content="Finished looping."))
+        self.scripted = ScriptedChatModel(loop_script)
+        default_started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "Loop with echo and then finish.",
+                "presented_tools": ["echo"],
+            },
+        )
+        self.assertEqual(default_started.status_code, 200, default_started.text)
+        self.assertIsNone(default_started.json()["budgets"])
+        default_body = wait_for_run(self.client, default_started.json()["id"])
+        self.assertEqual(default_body["status"], "completed", default_body.get("error"))
+        self.assertGreaterEqual(len(default_body["tool_invocations"]), 4)
+
+        self.scripted = ScriptedChatModel(loop_script)
+        capped_started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "Loop with echo and then hit the selected max step cap.",
+                "presented_tools": ["echo"],
+                "budgets": {"max_steps": 3},
+            },
+        )
+        self.assertEqual(capped_started.status_code, 200, capped_started.text)
+        self.assertEqual(capped_started.json()["budgets"]["max_steps"], 3)
+        capped_body = wait_for_run(self.client, capped_started.json()["id"])
+        self.assertEqual(capped_body["status"], "failed")
+        self.assertIn("recursion", (capped_body.get("error") or "").lower())
+        self.assertLess(len(capped_body["tool_invocations"]), 4)
 
 
 class AdapterResolvedBagTests(unittest.TestCase):

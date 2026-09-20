@@ -16,7 +16,7 @@ from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.state.effects import CANCEL_REQUESTED_RECOVERY_NOTE
+from workbench_backend.state.effects import NO_REPLAY_NOTE
 from workbench_backend.lab.schemas import RestoreResult, SnapshotManifest
 from workbench_backend.paths import WorkbenchPaths
 
@@ -270,12 +270,16 @@ class UnknownEffectSafetyTests(unittest.TestCase):
         self.assertEqual(report["effect"]["outcome"], "unknown")
         self.assertEqual(report["effect"]["replay_count"], 0)
         self.assertEqual(report["rollback_promise"], "none")
-        self.assertEqual(report["note"], CANCEL_REQUESTED_RECOVERY_NOTE)
-        self.assertIn("cancel_requested", report["note"])
-        self.assertIn("not a confirmed stop", report["note"])
+        self.assertEqual(report["note"], NO_REPLAY_NOTE)
         stored = self.app.state.app_store.get_run(run.id)
         self.assertIsNotNone(stored)
-        self.assertEqual(stored.status, AgentRunStatus.cancel_requested)
+        self.assertEqual(stored.status, AgentRunStatus.failed)
+        self.assertEqual(stored.stop_reason, "orphaned")
+        self.assertIn("unknown external effects", stored.error or "")
+        self.assertEqual(
+            stored.events[-1].detail["code"],
+            "cancel_requested_orphaned_after_restart",
+        )
 
 
 if __name__ == "__main__":

@@ -222,4 +222,25 @@ const api = await import(pathToFileURL(compiledPath).href);
 await testTerminalSnapshotHydratesFinalTranscript(api);
 await testAbortDoesNotDeliverStaleTerminalSnapshot(api);
 await testAbortDuringTerminalSnapshotDoesNotDeliver(api);
+// Exercise the actual request serializer: null clears; omission preserves.
+const requestSource = readFileSync(path.join(desktopRoot, "src/renderer/api.ts"), "utf8");
+const requestJs = ts.transpileModule(requestSource, {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText.replaceAll('from "./sse";', 'from "./sse.mjs";');
+const requestPath = path.join(scratchRoot, "api.mjs");
+writeFileSync(requestPath, requestJs);
+const { api: requests } = await import(pathToFileURL(requestPath).href);
+const posted = [];
+globalThis.fetch = async (_url, init) => {
+  posted.push(JSON.parse(init.body));
+  return { ok: true, json: async () => ({}) };
+};
+await requests.startChat("chat_clear", {
+  task: "clear", profile_id: null, project_path: null, embedding_deployment_id: null,
+});
+await requests.startChat("chat_keep", { task: "keep" });
+assert.deepEqual(posted, [
+  { task: "clear", profile_id: null, project_path: null, embedding_deployment_id: null },
+  { task: "keep" },
+]);
 console.log("SSE terminal snapshot behavior check passed.");

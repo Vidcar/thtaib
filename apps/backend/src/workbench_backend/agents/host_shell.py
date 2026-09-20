@@ -38,27 +38,32 @@ from workbench_backend.agents.schemas import (
 
 # Compound / redirect / substitution forms are never auto-allowed, even when
 # the first token is a read-only command.
-_UNSAFE_META = re.compile(r"[;&|`$><\n]|&&|\|\|")
+_UNSAFE_META = re.compile(r"[;&|`$><\n\r%!^()\"'{}\[\]*?~\\]")
 
-_SAFE_COMMANDS = frozenset(
+_NO_ARG_COMMANDS = frozenset({"pwd", "whoami", "hostname", "ver"})
+_SAFE_ECHO_FLAGS = frozenset({"on", "off"})
+_SAFE_DIR_FLAGS = frozenset({"/b", "/a"})
+_SAFE_LS_FLAGS = frozenset({"-a", "-l", "-la", "-al"})
+_SAFE_LOOKUP_FLAGS = frozenset({"/q"})
+_SAFE_GIT_STATUS_FLAGS = frozenset({"--short", "-s", "--porcelain", "--porcelain=v1"})
+_SAFE_GIT_LOG_FLAGS = frozenset({"--oneline", "--decorate", "--graph"})
+_SAFE_GIT_BRANCH_FLAGS = frozenset({"--show-current", "-a", "--all", "-r", "--remotes"})
+_SAFE_GIT_DIFF_FLAGS = frozenset(
     {
-        "echo",
-        "dir",
-        "ls",
-        "pwd",
-        "whoami",
-        "hostname",
-        "ver",
-        "type",
-        "where",
-        "which",
-        "get-childitem",
-        "get-location",
-        "get-content",
-        "get-help",
+        "--stat",
+        "--name-only",
+        "--name-status",
+        "--cached",
+        "--staged",
+        "--check",
+        "--no-ext-diff",
+        "--no-textconv",
     }
 )
-_SAFE_GIT_SUBCOMMANDS = frozenset({"status", "log", "diff", "branch", "show", "rev-parse"})
+_SAFE_GIT_SHOW_FLAGS = frozenset(
+    {"--stat", "--name-only", "--name-status", "--no-ext-diff", "--no-textconv"}
+)
+_SAFE_GIT_REV_PARSE_FLAGS = frozenset({"--show-toplevel", "--is-inside-work-tree", "--abbrev-ref"})
 
 # Routed prefixes the composite already isolates. Deny a unused subtree so
 # ``permissions=`` is real without blocking harness scratch writes.
@@ -81,8 +86,8 @@ HOST_SHELL_NOTE = (
 def is_dangerous_shell_command(command: str) -> bool:
     """True when ``execute`` must pause for approval.
 
-    Auto-allow is a small read-only prefix list without shell metacharacters.
-    Everything else interrupts, including empty commands.
+    Only explicitly understood command/argument forms are auto-allowed.
+    Quotes, expansions, unknown options and ambiguous forms need approval.
     """
 
     stripped = command.strip() if isinstance(command, str) else ""
@@ -90,15 +95,164 @@ def is_dangerous_shell_command(command: str) -> bool:
         return True
     if _UNSAFE_META.search(stripped):
         return True
-    tokens = stripped.split()
-    head = tokens[0].lower().rstrip("/\\")
+    if not re.fullmatch(r"[A-Za-z0-9_./:=+ \t-]+", stripped):
+        return True
+    tokens = _split_command(stripped)
+    if not tokens:
+        return True
+    head = tokens[0]
     if "/" in head or "\\" in head:
         return True
-    if head in _SAFE_COMMANDS:
+    args = tokens[1:]
+    if head in _NO_ARG_COMMANDS:
+        return bool(args)
+    if head == "echo":
+        return not _safe_echo_args(args)
+    if head in {"dir", "ls"}:
+        return not _safe_list_args(args, _SAFE_DIR_FLAGS if head == "dir" else _SAFE_LS_FLAGS)
+    if head == "type":
+        return not _safe_read_file_args(args)
+    if head in {"where", "which"}:
+        return not _safe_lookup_args(args)
+    if head == "git":
+        return not _is_safe_git_command(args)
+    return True
+
+
+def _split_command(command: str) -> list[str]:
+    # Quote/escape/expansion forms were rejected above. Do not pretend that
+    # shlex understands both cmd.exe and POSIX shell quoting semantics.
+    return command.split()
+
+
+def _is_safe_git_command(args: list[str]) -> bool:
+    if not args:
         return False
-    if head == "git" and len(tokens) >= 2 and tokens[1].lower() in _SAFE_GIT_SUBCOMMANDS:
+    subcommand = args[0]
+    rest = args[1:]
+    if subcommand == "status":
+        return _only_allowed_flags(rest, _SAFE_GIT_STATUS_FLAGS)
+    if subcommand == "log":
+        return _safe_git_log_args(rest)
+    if subcommand == "branch":
+        return _only_allowed_flags(rest, _SAFE_GIT_BRANCH_FLAGS)
+    if subcommand == "diff":
+        return _safe_git_path_args(
+            rest,
+            _SAFE_GIT_DIFF_FLAGS,
+            required_flags=frozenset({"--no-ext-diff", "--no-textconv"}),
+        )
+    if subcommand == "show":
+        return _safe_git_path_args(
+            rest,
+            _SAFE_GIT_SHOW_FLAGS,
+            required_flags=frozenset({"--no-ext-diff", "--no-textconv"}),
+        )
+    if subcommand == "rev-parse":
+        return _only_allowed_flags(rest, _SAFE_GIT_REV_PARSE_FLAGS)
+    return False
+
+
+def _only_allowed_flags(args: list[str], allowed: frozenset[str]) -> bool:
+    return all(arg in allowed for arg in args)
+
+
+def _safe_echo_args(args: list[str]) -> bool:
+    if not args:
+        return True
+    if len(args) == 1 and args[0].lower() in _SAFE_ECHO_FLAGS:
+        return True
+    return all(_is_plain_word(arg) for arg in args)
+
+
+def _safe_list_args(args: list[str], allowed: frozenset[str]) -> bool:
+    paths = 0
+    for arg in args:
+        lower = arg.lower()
+        if lower in allowed:
+            continue
+        if arg.startswith("-") or arg.startswith("/"):
+            return False
+        if _looks_unsafe_path_arg(arg):
+            return False
+        paths += 1
+    return paths <= 1
+
+
+def _safe_read_file_args(args: list[str]) -> bool:
+    return bool(args) and all(
+        not arg.startswith("-") and not arg.startswith("/") and not _looks_unsafe_path_arg(arg)
+        for arg in args
+    )
+
+
+def _safe_lookup_args(args: list[str]) -> bool:
+    if not args:
+        return False
+    for arg in args:
+        lower = arg.lower()
+        if lower in _SAFE_LOOKUP_FLAGS:
+            continue
+        if arg.startswith("-") or arg.startswith("/") or not _is_plain_word(arg):
+            return False
+    return True
+
+
+def _safe_git_log_args(args: list[str]) -> bool:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in _SAFE_GIT_LOG_FLAGS:
+            index += 1
+            continue
+        if arg in {"-n", "--max-count"}:
+            if index + 1 >= len(args) or not args[index + 1].isdigit():
+                return False
+            index += 2
+            continue
+        if arg.startswith("-n") and arg[2:].isdigit():
+            index += 1
+            continue
         return False
     return True
+
+
+def _safe_git_path_args(
+    args: list[str],
+    allowed_flags: frozenset[str],
+    *,
+    required_flags: frozenset[str] = frozenset(),
+) -> bool:
+    path_mode = False
+    seen_flags: set[str] = set()
+    for arg in args:
+        if arg == "--":
+            path_mode = True
+            continue
+        if not path_mode and arg.startswith("-"):
+            if arg not in allowed_flags:
+                return False
+            seen_flags.add(arg)
+            continue
+        if arg.startswith("-") or _looks_unsafe_path_arg(arg):
+            return False
+    if not required_flags.issubset(seen_flags):
+        return False
+    return True
+
+
+def _looks_unsafe_path_arg(arg: str) -> bool:
+    return (
+        not arg
+        or arg.startswith("/")
+        or "\\" in arg
+        or ":" in arg
+        or ".." in arg.split("/")
+    )
+
+
+def _is_plain_word(arg: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_.:-]+", arg))
 
 
 def execute_requires_approval(request: ToolCallRequest) -> bool:

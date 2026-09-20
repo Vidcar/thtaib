@@ -6,6 +6,8 @@ import tempfile
 import time
 import unittest
 import os
+import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ from workbench_backend.agents.host_shell import (
 )
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, InterruptDecision, ToolMode
 from workbench_backend.app import create_app
+from workbench_backend.chat.schemas import ChatMessage
 from workbench_backend.inference.ids import utc_now
 
 from tests.scripted_model import ScriptedChatModel
@@ -109,16 +112,63 @@ def _run(*, project_path: str | None, presented: list[str] | None = None) -> Age
 
 class HostShellPolicyTests(unittest.TestCase):
     def test_dangerous_command_rules(self) -> None:
-        self.assertTrue(is_dangerous_shell_command(""))
-        self.assertTrue(is_dangerous_shell_command("rm -rf /tmp/x"))
-        self.assertTrue(is_dangerous_shell_command("echo hi && rm -rf /"))
-        self.assertTrue(is_dangerous_shell_command("git commit"))
-        self.assertTrue(is_dangerous_shell_command(r"C:\Windows\System32\cmd.exe"))
-        self.assertTrue(is_dangerous_shell_command("touch file"))
-        self.assertFalse(is_dangerous_shell_command("echo host-shell-ok"))
-        self.assertFalse(is_dangerous_shell_command("dir"))
-        self.assertFalse(is_dangerous_shell_command("git status"))
-        self.assertFalse(is_dangerous_shell_command("Get-ChildItem"))
+        cases = {
+            "": True,
+            "rm -rf /tmp/x": True,
+            "echo hi && rm -rf /": True,
+            "git commit": True,
+            r"C:\Windows\System32\cmd.exe": True,
+            "touch file": True,
+            "git branch -D doomed": True,
+            "git branch -m old new": True,
+            "git diff --output=out.patch": True,
+            "git diff --output out.patch": True,
+            'git diff --no-ext-diff --no-textconv "--output=out.patch"': True,
+            "git diff --no-ext-diff --no-textconv '--output=out.patch'": True,
+            "git diff --no-ext-diff --no-textconv *": True,
+            "git DIFF --no-ext-diff --no-textconv": True,
+            "Git status": True,
+            "git diff --ext-diff": True,
+            "git diff -- README.md": True,
+            "git show --stat": True,
+            "echo %USERNAME%": True,
+            "echo !USERNAME!": True,
+            "echo ^& whoami": True,
+            "echo (hello)": True,
+            "echo hello\rwhoami": True,
+            "echo /?": True,
+            "dir /s": True,
+            "dir --all": True,
+            "ls --all": True,
+            "Get-ChildItem -Recurse": True,
+            "type /?": True,
+            "type ..\\secret.txt": True,
+            "Get-Content -Raw file.txt": True,
+            "where /r . cmd.exe": True,
+            "which --all python": True,
+            "whoami /priv": True,
+            "pwd extra": True,
+            "Get-Help -Full": True,
+            "git status --short": False,
+            "git log --oneline -n 3": False,
+            "git branch --show-current": False,
+            "git diff --no-ext-diff --no-textconv -- README.md": False,
+            "git show --no-ext-diff --no-textconv --stat": False,
+            "git rev-parse --show-toplevel": False,
+            "echo host-shell-ok": False,
+            "echo off": False,
+            "dir": False,
+            "dir README.md": False,
+            "ls README.md": False,
+            "type README.md": False,
+            "where python": False,
+            "which python": False,
+            "Get-Help Get-ChildItem": True,
+            "Get-ChildItem": True,
+        }
+        for command, dangerous in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(is_dangerous_shell_command(command), dangerous)
 
     def test_execute_predicate_reads_command_arg(self) -> None:
         class _Req:
@@ -230,6 +280,45 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def _restart_from_interrupt(self, command: str) -> tuple[dict[str, Any], HarnessService]:
+        self._install(execute_then_reply(command))
+        started = self._start()
+        paused = wait_for_interrupt(self.client, started["id"])
+        self.assertTrue(paused["checkpoint_ids"], paused)
+        old_harness = self.app.state.harness
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return self.scripted
+
+        restarted = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        self.app.state.harness = restarted
+        observed = self.client.get(f"/v1/agent-runs/{started['id']}").json()
+        self.assertEqual(observed["status"], "running", observed)
+        self.assertIsNotNone(observed["pending_interrupt"])
+        return started, old_harness
+
+    def _retire_old_waiting_harness(self, old_harness: HarnessService, run_id: str) -> None:
+        with old_harness._lock:
+            old_run = old_harness._runs.get(run_id)
+            if old_run is not None:
+                old_run.status = AgentRunStatus.completed
+                old_run.pending_interrupt = None
+                old_run.finished_at = old_run.finished_at or utc_now()
+            ready = old_harness._decision_ready.get(run_id)
+            cancel = old_harness._cancels.get(run_id)
+            if cancel is not None:
+                cancel.set()
+            if ready is not None:
+                ready.set()
+        thread = old_harness._threads.get(run_id)
+        if thread is not None:
+            thread.join(timeout=5.0)
+
     def test_catalogue_and_project_gate(self) -> None:
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
         self.assertIn("execute", catalogue)
@@ -314,6 +403,156 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(body["status"], "completed", body.get("error"))
         self.assertFalse((self.project / "host-shell-denied.txt").exists())
 
+    def test_disposable_git_mutation_pauses_rejects_then_approves_once(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.project, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=self.project,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Workbench Test"],
+            cwd=self.project,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (self.project / "tracked.txt").write_text("one\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=self.project, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=self.project, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "branch", "doomed"], cwd=self.project, check=True, capture_output=True, text=True)
+
+        self._install(execute_then_reply("git branch -D doomed"))
+        rejected = self._start()
+        wait_for_interrupt(self.client, rejected["id"])
+        response = self.client.post(
+            f"/v1/agent-runs/{rejected['id']}/interrupt-decision",
+            json={"decisions": [{"type": "reject"}]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        rejected_body = wait_for_run(self.client, rejected["id"])
+        self.assertEqual(rejected_body["status"], "completed", rejected_body.get("error"))
+        branches_after_reject = subprocess.run(
+            ["git", "branch", "--list", "doomed"],
+            cwd=self.project,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("doomed", branches_after_reject.stdout)
+
+        self._install(execute_then_reply("git branch -D doomed"))
+        approved = self._start()
+        wait_for_interrupt(self.client, approved["id"])
+        results: list[int] = []
+
+        def approve() -> None:
+            result = self.client.post(
+                f"/v1/agent-runs/{approved['id']}/interrupt-decision",
+                json={"decisions": [{"type": "approve"}]},
+            )
+            results.append(result.status_code)
+
+        threads = [threading.Thread(target=approve), threading.Thread(target=approve)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(results), [200, 409])
+        approved_body = wait_for_run(self.client, approved["id"])
+        self.assertEqual(approved_body["status"], "completed", approved_body.get("error"))
+        branches_after_approve = subprocess.run(
+            ["git", "branch", "--list", "doomed"],
+            cwd=self.project,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotIn("doomed", branches_after_approve.stdout)
+
+    def test_restart_pending_approval_can_reject_without_running_command(self) -> None:
+        marker = self.project / "restart-reject.txt"
+        started, old_harness = self._restart_from_interrupt(
+            write_marker_command("restart-reject.txt")
+        )
+        try:
+            response = self.client.post(
+                f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                json={"decisions": [{"type": "reject"}]},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            body = wait_for_run(self.client, started["id"])
+            self.assertEqual(body["status"], "completed", body.get("error"))
+            self.assertFalse(marker.exists())
+        finally:
+            self._retire_old_waiting_harness(old_harness, started["id"])
+
+    def test_restart_pending_approval_can_approve_once(self) -> None:
+        marker = self.project / "restart-approve.txt"
+        started, old_harness = self._restart_from_interrupt(
+            write_marker_command("restart-approve.txt")
+        )
+        try:
+            response = self.client.post(
+                f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                json={"decisions": [{"type": "approve"}]},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            body = wait_for_run(self.client, started["id"])
+            self.assertEqual(body["status"], "completed", body.get("error"))
+            self.assertTrue(marker.exists())
+        finally:
+            self._retire_old_waiting_harness(old_harness, started["id"])
+
+    def test_restart_pending_approval_cancel_rejects_without_running_command(self) -> None:
+        marker = self.project / "restart-cancel.txt"
+        started, old_harness = self._restart_from_interrupt(
+            write_marker_command("restart-cancel.txt")
+        )
+        try:
+            response = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+            self.assertEqual(response.status_code, 200, response.text)
+            body = wait_for_run(self.client, started["id"])
+            self.assertEqual(body["status"], "cancelled", body.get("error"))
+            self.assertFalse(marker.exists())
+        finally:
+            self._retire_old_waiting_harness(old_harness, started["id"])
+
+    def test_restart_two_resume_decisions_at_barrier_have_one_side_effect(self) -> None:
+        marker = self.project / "restart-race.txt"
+        command = (
+            "cmd /c echo hit>> restart-race.txt"
+            if os.name == "nt"
+            else "sh -c 'echo hit >> restart-race.txt'"
+        )
+        started, old_harness = self._restart_from_interrupt(command)
+        barrier = threading.Barrier(2)
+        results: list[int] = []
+
+        def approve() -> None:
+            barrier.wait(timeout=5.0)
+            result = self.client.post(
+                f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                json={"decisions": [{"type": "approve"}]},
+            )
+            results.append(result.status_code)
+
+        try:
+            threads = [threading.Thread(target=approve), threading.Thread(target=approve)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(sorted(results), [200, 409])
+            body = wait_for_run(self.client, started["id"])
+            self.assertEqual(body["status"], "completed", body.get("error"))
+            self.assertTrue(marker.exists())
+            self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["hit"])
+        finally:
+            self._retire_old_waiting_harness(old_harness, started["id"])
+
     def test_cancel_while_interrupted_rejects_command(self) -> None:
         self._install(execute_then_reply(write_marker_command("host-shell-cancelled.txt")))
         started = self._start()
@@ -372,6 +611,43 @@ class HostShellHarnessTests(unittest.TestCase):
         content = tool_result_text(body["current_run"]).lower()
         self.assertNotIn("not recognized", content)
         self.assertNotIn("error", content)
+
+    def test_chat_interrupt_resume_does_not_overwrite_concurrent_conversation_update(self) -> None:
+        self._install(execute_then_reply(write_marker_command("chat-resume-marker.txt")))
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id, "project_path": str(self.project)},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        started = self.client.post(
+            f"/v1/chat/conversations/{created.json()['id']}/start",
+            json={"task": "Run a host-shell command.", "presented_tools": ["execute"]},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        wait_for_chat_interrupt(self.client, created.json()["id"])
+        stored = self.app.state.app_store.get_conversation(created.json()["id"])
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        stored.transcript.append(
+            ChatMessage(
+                role="system",
+                content="resume concurrent marker",
+                at=utc_now(),
+            )
+        )
+        stored.updated_at = utc_now()
+        self.app.state.app_store.put_conversation(stored)
+        decided = self.client.post(
+            f"/v1/chat/conversations/{created.json()['id']}/interrupt-decision",
+            json={"decisions": [{"type": "approve"}]},
+        )
+        self.assertEqual(decided.status_code, 200, decided.text)
+        self.assertIn(
+            "resume concurrent marker",
+            [item["content"] for item in decided.json()["transcript"]],
+        )
+        body = wait_for_run(self.client, started.json()["current_run"]["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
 
     def test_chat_shell_without_project_is_rejected(self) -> None:
         created = self.client.post(

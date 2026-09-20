@@ -58,6 +58,7 @@ export interface SettingsBag {
   requested: Record<string, unknown>;
   applied: Record<string, unknown>;
   unsupported: string[];
+  unsupported_notes?: Array<{ key: string; requested: unknown; applied: unknown; reason: string }>;
   overridden: Array<{ key: string; requested: unknown; applied: unknown; reason: string }>;
   unverified: string[];
   retired: Array<{ key: string; requested: unknown; applied: unknown; reason: string }>;
@@ -212,6 +213,13 @@ export interface AgentRun {
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   model_requests: Array<{
     at: string;
+    request_prepared?: boolean;
+    transport_attempted?: boolean;
+    transport_attempt_count?: number;
+    response_observed?: boolean;
+    handler_returned?: boolean;
+    failure?: Record<string, unknown> | null;
+    http_payloads?: Array<Record<string, unknown>>;
     instructions: string | null;
     presented_tools: string[];
     available_tools: string[];
@@ -347,7 +355,7 @@ export interface ChatDeployHealth {
   deployment_id: string;
   deployment_status: string;
   healthy: boolean | null;
-  code: "deploy_unhealthy" | "deploy_unreachable" | null;
+  code: "deploy_unhealthy" | "deploy_unreachable" | "deploy_missing" | null;
   message: string | null;
   detail: string | null;
   note: string;

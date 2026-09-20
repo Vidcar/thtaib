@@ -57,7 +57,7 @@ class ChatDeployHealth(BaseModel):
     deployment_id: str
     deployment_status: str
     healthy: bool | None = None
-    code: Literal["deploy_unhealthy", "deploy_unreachable"] | None = None
+    code: Literal["deploy_unhealthy", "deploy_unreachable", "deploy_missing"] | None = None
     message: str | None = None
     detail: str | None = None
     note: str = (
