@@ -66,12 +66,12 @@ class SettingsBagTests(unittest.TestCase):
             loaded = manager.get_profile(profile.id)
             self.assertEqual(loaded.bags.agent.applied["max_iterations"], 3)
 
-    def test_default_gpu_profile_uses_large_ctx_and_full_offload(self) -> None:
+    def test_default_gpu_profile_does_not_override_model_context(self) -> None:
         bags = resolve_bags(startup={})
-        self.assertGreaterEqual(bags.startup.applied["ctx_size"], 65536)
+        self.assertNotIn("ctx_size", bags.startup.applied)
         self.assertEqual(bags.startup.applied["n_gpu_layers"], -1)
         self.assertEqual(bags.startup.applied["flash_attn"], "on")
-        self.assertEqual(DEFAULT_GPU_PROFILE["ctx_size"], 65536)
+        self.assertNotIn("ctx_size", DEFAULT_GPU_PROFILE)
         self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], -1)
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
 
@@ -99,10 +99,34 @@ class SettingsBagTests(unittest.TestCase):
         self.assertNotEqual(bare, ["--flash-attn"])
 
     def test_valued_startup_enums_audit(self) -> None:
-        self.assertEqual(set(STARTUP_ENUMS), {"flash_attn", "load_mode", "embedding", "pooling"})
+        self.assertEqual(
+            set(STARTUP_ENUMS),
+            {
+                "flash_attn",
+                "fit",
+                "cache_type_k",
+                "cache_type_v",
+                "load_mode",
+                "embedding",
+                "pooling",
+                "reasoning",
+                "reasoning_format",
+                "reasoning_effort",
+                "spec_draft_cache_type_k",
+                "spec_draft_cache_type_v",
+            },
+        )
         self.assertEqual(STARTUP_ENUMS["flash_attn"], frozenset({"on", "off", "auto"}))
         self.assertEqual(STARTUP_ENUMS["embedding"], frozenset({"on", "off"}))
         self.assertEqual(STARTUP_ENUMS["pooling"], frozenset({"mean", "cls", "last"}))
+        self.assertEqual(
+            STARTUP_ENUMS["reasoning_format"],
+            frozenset({"auto", "none", "deepseek", "deepseek-legacy"}),
+        )
+        self.assertEqual(
+            STARTUP_ENUMS["reasoning_effort"],
+            frozenset({"default", "minimal", "low", "medium", "high", "xhigh", "max"}),
+        )
         self.assertEqual(
             STARTUP_ENUMS["load_mode"],
             frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
@@ -110,11 +134,116 @@ class SettingsBagTests(unittest.TestCase):
         for key in STARTUP_KEYS:
             if key in STARTUP_ENUMS:
                 continue
+            if key == "reasoning_preserve":
+                self.assertEqual(startup_cli_args({key: True}), ["--reasoning-preserve"])
+                self.assertEqual(startup_cli_args({key: False}), ["--no-reasoning-preserve"])
+                continue
             args = startup_cli_args({key: "sample"})
             self.assertEqual(args, [STARTUP_KEYS[key], "sample"])
         invalid = resolve_bags(startup={"flash_attn": "maybe"})
         self.assertIn("flash_attn", invalid.startup.unsupported)
         self.assertEqual(invalid.startup.applied["flash_attn"], "on")
+
+    def test_b11045_startup_flags_are_normalized_and_serialized(self) -> None:
+        bags = resolve_bags(
+            startup={
+                "ctx_size": "8192",
+                "threads_batch": "12",
+                "cache_type_k": "Q8_0",
+                "cache_type_v": "f16",
+                "fit": "off",
+                "reasoning": "auto",
+                "reasoning_format": "deepseek-legacy",
+                "reasoning_effort": "xhigh",
+                "reasoning_budget": "-1",
+                "reasoning_preserve": True,
+                "chat_template_file": "template.jinja",
+                "chat_template_kwargs": '{"enable_thinking":true}',
+                "spec_type": "draft-mtp",
+                "spec_draft_model": "draft.gguf",
+                "spec_draft_n_max": "4",
+                "spec_draft_p_min": "0.1",
+                "spec_draft_threads_batch": "6",
+                "spec_draft_ngl": "all",
+                "spec_draft_cache_type_k": "q8_0",
+                "spec_draft_cache_type_v": "q8_0",
+            }
+        )
+
+        self.assertEqual(bags.startup.applied["ctx_size"], 8192)
+        self.assertEqual(bags.startup.applied["threads_batch"], 12)
+        self.assertEqual(bags.startup.applied["cache_type_k"], "q8_0")
+        self.assertEqual(bags.startup.applied["reasoning_budget"], -1)
+        self.assertTrue(bags.startup.applied["reasoning_preserve"])
+        self.assertEqual(bags.startup.applied["spec_draft_p_min"], 0.1)
+        self.assertEqual(bags.startup.applied["spec_draft_ngl"], "all")
+
+        args = startup_cli_args(bags.startup.applied)
+        self.assertEqual(args[args.index("--ctx-size") + 1], "8192")
+        self.assertEqual(args[args.index("--threads-batch") + 1], "12")
+        self.assertEqual(args[args.index("--cache-type-k") + 1], "q8_0")
+        self.assertEqual(args[args.index("--fit") + 1], "off")
+        self.assertEqual(args[args.index("--reasoning") + 1], "auto")
+        self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek-legacy")
+        self.assertEqual(args[args.index("--reasoning-effort") + 1], "xhigh")
+        self.assertEqual(args[args.index("--reasoning-budget") + 1], "-1")
+        self.assertIn("--reasoning-preserve", args)
+        self.assertEqual(args[args.index("--chat-template-file") + 1], "template.jinja")
+        self.assertEqual(args[args.index("--spec-type") + 1], "draft-mtp")
+        self.assertEqual(args[args.index("--spec-draft-model") + 1], "draft.gguf")
+        self.assertEqual(args[args.index("--spec-draft-n-max") + 1], "4")
+        self.assertEqual(args[args.index("--spec-draft-p-min") + 1], "0.1")
+        self.assertEqual(args[args.index("--spec-draft-ngl") + 1], "all")
+        self.assertEqual(args[args.index("--spec-draft-type-k") + 1], "q8_0")
+
+        for effort in ("default", "minimal", "low", "medium", "high", "xhigh", "max"):
+            with self.subTest(reasoning_effort=effort):
+                resolved = resolve_bags(startup={"reasoning_effort": effort})
+                self.assertEqual(resolved.startup.applied["reasoning_effort"], effort)
+
+    def test_invalid_supported_startup_values_are_not_emitted(self) -> None:
+        for startup in ({"fit": "auto"}, {"port": 65536}, {"port": 0}):
+            invalid = resolve_bags(startup=startup)
+            self.assertEqual(invalid.startup.unsupported, list(startup))
+        bags = resolve_bags(
+            startup={
+                "ctx_size": -1,
+                "threads_batch": "many",
+                "cache_type_k": "int4",
+                "fit": "maybe",
+                "reasoning": "perhaps",
+                "reasoning_format": "qwen3",
+                "reasoning_effort": "none",
+                "reasoning_preserve": "sometimes",
+                "spec_draft_p_min": "low",
+                "spec_draft_ngl": -2,
+                "chat_template_kwargs": "[]",
+                "spec_type": "draft-guess",
+            }
+        )
+        for key in (
+            "ctx_size",
+            "threads_batch",
+            "cache_type_k",
+            "fit",
+            "reasoning",
+            "reasoning_format",
+            "reasoning_effort",
+            "reasoning_preserve",
+            "spec_draft_p_min",
+            "spec_draft_ngl",
+            "chat_template_kwargs",
+            "spec_type",
+        ):
+            self.assertIn(key, bags.startup.unsupported)
+            self.assertNotIn(key, bags.startup.applied)
+        args = startup_cli_args(bags.startup.applied)
+        self.assertNotIn("--ctx-size", args)
+        self.assertNotIn("--threads-batch", args)
+        self.assertNotIn("--cache-type-k", args)
+        self.assertNotIn("--fit", args)
+        self.assertNotIn("--reasoning", args)
+        self.assertNotIn("--reasoning-preserve", args)
 
     def test_load_mode_is_valued_enum_matching_b11045(self) -> None:
         for mode in ("auto", "none", "mmap", "mlock", "mmap+mlock", "dio"):

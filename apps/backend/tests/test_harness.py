@@ -140,6 +140,17 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIn("no retrieval", gaps)
         self.assertIn("no durable memory", gaps)
 
+    def test_upstream_planning_tool_round_trip_without_project(self) -> None:
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[{"name": "write_todos", "args": {"todos": [{"content": "Check integration", "status": "in_progress"}]}, "id": "plan-1"}]),
+            AIMessage(content="Planning recorded."),
+        ])
+        started = self._start()
+        body = wait_for_run(self.client, started["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertIn("write_todos", body["model_requests"][0]["presented_tools"])
+        self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("name") == "write_todos" for event in body["events"]))
+
     def test_enabled_tools_are_not_silently_removed(self) -> None:
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
         self.assertEqual(
@@ -154,13 +165,14 @@ class HarnessApiTests(unittest.TestCase):
                 "glob",
                 "grep",
                 "execute",
+                "write_todos",
             ],
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos"])
         self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])
         project = self.root / "agt-005-project"
         project.mkdir()

@@ -211,7 +211,7 @@ class RuntimePinTests(unittest.TestCase):
         self.assertTrue((install / "cudart64_134.dll").is_file())
         self.assertTrue((install / exe.name).is_file())
 
-    def test_default_gpu_profile_is_bound_on_managed_create(self) -> None:
+    def test_default_gpu_profile_keeps_model_context_on_managed_create(self) -> None:
         manager = self._manager(nvidia_present=lambda: False)
         job = manager.import_local(LocalImportRequest(source_path=str(self.gguf)))
         manager.pin_runtime(
@@ -220,10 +220,11 @@ class RuntimePinTests(unittest.TestCase):
         deployment = manager.create_managed(
             ManagedDeploymentRequest(bundle_id=job.bundle_id or "", auto_start=False)
         )
-        self.assertGreaterEqual(deployment.applied_startup["ctx_size"], 65536)
+        self.assertNotIn("ctx_size", deployment.applied_startup)
         self.assertEqual(deployment.applied_startup["n_gpu_layers"], -1)
         self.assertEqual(deployment.applied_startup["flash_attn"], "on")
         args = startup_cli_args(deployment.applied_startup)
+        self.assertNotIn("--ctx-size", args)
         flash_at = args.index("--flash-attn")
         self.assertEqual(args[flash_at + 1], "on")
         self.assertNotEqual(deployment.requested_startup, {"startup": {}})

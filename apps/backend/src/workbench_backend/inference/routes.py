@@ -8,6 +8,8 @@ from workbench_backend.errors import manager_error_handler
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
     HuggingFaceImportRequest,
+    HuggingFaceInspectRequest,
+    HubRepository,
     LocalImportRequest,
     ManagedDeploymentRequest,
     PinRuntimeRequest,
@@ -31,6 +33,11 @@ def paths(request: Request) -> dict[str, str]:
 @router.post("/imports/huggingface")
 def import_huggingface(request: Request, body: HuggingFaceImportRequest) -> object:
     return get_manager(request).import_huggingface(body)
+
+
+@router.post("/models/huggingface/inspect", response_model=HubRepository)
+def inspect_huggingface(request: Request, body: HuggingFaceInspectRequest) -> HubRepository:
+    return get_manager(request).bundles.hf.inspect(repo_id=body.repo_id, revision=body.revision)
 
 
 @router.post("/imports/local")

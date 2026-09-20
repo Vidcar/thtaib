@@ -429,7 +429,7 @@ class RealModelSmokeTests(unittest.TestCase):
         conversation = created.json()
         self.assertIsNone(conversation["project_path"])
         self.assertFalse(conversation["filesystem_tools_available"])
-        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos"])
 
         self._start_chat(conversation["id"], PROJECTLESS_TASK, presented_tools=["echo"])
         streamed = wait_for_events(self.client, conversation_id=conversation["id"])
@@ -438,7 +438,7 @@ class RealModelSmokeTests(unittest.TestCase):
         body = wait_for_chat(self.client, conversation["id"])
         run = body["current_run"]
         self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")
-        self.assertEqual(run["enabled_tools"], ["echo", "time_now"])
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos"])
         self.assertEqual(run["presented_tools"], ["echo"])
         self.assertNotIn("write_file", run["presented_tools"])
         self.assertFalse(any(self.project.rglob("large_tool_results")))

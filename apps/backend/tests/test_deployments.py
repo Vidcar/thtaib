@@ -14,14 +14,19 @@ from pathlib import Path
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.deployments import managed_argv
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.process import HttpProbe, ProcessIdentity, ProcessSupervisor
 from workbench_backend.inference.runtime import RuntimeInstaller
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
+    Deployment,
+    DeploymentStatus,
     HuggingFaceImportRequest,
     LocalImportRequest,
     ManagedDeploymentRequest,
+    ManagementScope,
     PinRuntimeRequest,
+    SettingsBags,
 )
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
@@ -195,24 +200,61 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(stopped.status.value, "stopped")
         self.assertIsNone(stopped.pid)
 
-    def test_managed_argv_uses_load_mode_and_omits_retired_flags(self) -> None:
+    def test_invalid_managed_startup_fails_closed_on_create(self) -> None:
+        cases = (
+            ({"port": 18081, "ctx_size": -1}, ["ctx_size"]),
+            ({"port": "not-a-port"}, ["port"]),
+            ({"port": 18081, "unknown_flag": True}, ["unknown_flag"]),
+            ({"port": 18081, "mlock": True, "no_mmap": True}, ["mlock", "no_mmap"]),
+        )
+        for startup, keys in cases:
+            with self.subTest(startup=startup):
+                with self.assertRaises(ManagerError) as caught:
+                    self.manager.create_managed(
+                        ManagedDeploymentRequest(bundle_id=self.bundle_id, startup=startup)
+                    )
+                self.assertEqual(caught.exception.code, "managed_startup_invalid")
+                for key in keys:
+                    self.assertIn(key, caught.exception.message)
+                self.assertEqual(self.supervisor.launched, [])
+
+    def test_valid_load_mode_replaces_retired_flags(self) -> None:
         deployment = self.manager.create_managed(
             ManagedDeploymentRequest(
                 bundle_id=self.bundle_id,
-                startup={"port": 18081, "load_mode": "mlock", "mlock": True, "no_mmap": True},
+                startup={"port": 18081, "load_mode": "mlock"},
             )
         )
         self.assertIn(deployment.status.value, {"running", "unhealthy"})
         self.assertEqual(deployment.applied_startup["load_mode"], "mlock")
-        self.assertNotIn("mlock", deployment.applied_startup)
-        self.assertEqual({note.key for note in deployment.settings.startup.retired}, {"mlock", "no_mmap"})
         self.assertEqual(len(self.supervisor.launched), 1)
         argv = self.supervisor.launched[0]
         self.assertEqual(argv[argv.index("--load-mode") + 1], "mlock")
         self.assertNotIn("--mlock", argv)
         self.assertNotIn("--no-mmap", argv)
-        self.assertNotIn("--mmproj", argv)
         self.manager.stop_deployment(deployment.id)
+
+    def test_invalid_saved_managed_startup_fails_closed_on_start(self) -> None:
+        now = utc_now()
+        legacy = Deployment(
+            id="deploy_legacy_invalid_startup",
+            display_name="managed:legacy-invalid",
+            scope=ManagementScope.managed,
+            status=DeploymentStatus.stopped,
+            bundle_id=self.bundle_id,
+            endpoint="http://127.0.0.1:18085/v1",
+            requested_startup={"port": 18085, "ctx_size": -1},
+            applied_startup={"host": "127.0.0.1", "port": 18085},
+            settings=SettingsBags(),
+            created_at=now,
+            updated_at=now,
+        )
+        self.manager.store.put_deployment(legacy)
+        with self.assertRaises(ManagerError) as caught:
+            self.manager.start_deployment(legacy.id)
+        self.assertEqual(caught.exception.code, "managed_startup_invalid")
+        self.assertIn("ctx_size", caught.exception.message)
+        self.assertEqual(self.supervisor.launched, [])
 
     def test_mmproj_companion_is_passed_on_managed_start(self) -> None:
         source = self.root / "incoming" / "vision"

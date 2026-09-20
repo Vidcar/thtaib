@@ -4,7 +4,7 @@
 
 ## Purpose
 
-One application-owned, versioned description of every model, agent, tool, environment and adapter integration, consumed by React Flow for presentation, LangChain for tool exposure and LangGraph for compilation, so that no consumer keeps its own copy of the integration model.
+One application-owned, versioned description of supported model, agent, tool, environment and adapter integrations, consumed by React Flow for presentation, LangChain for tool exposure and LangGraph for compilation, so that no consumer keeps its own copy of the integration model.
 
 ## Boundaries and ownership
 
@@ -12,11 +12,11 @@ The application owns the integration model and its validation. React Flow, LangC
 
 ## Interfaces and contracts
 
-A definition carries stable identity and version with dependency support; typed inputs and outputs with connection kind (configuration or workflow); configuration schema, defaults and applied values; capabilities and discovery; environment, access, approval and memory scope; progress, results, errors and cancellation; run, checkpoint, effect, recovery and snapshot behaviour; context, evidence and provenance; presentation controls, renderers and MCP Apps permissions. This is a semantic inventory; the exact schema is authored once at the contract boundary ([contracts](../contracts.md)). Nothing is implemented yet (`integration-definitions` is unbound in [the repository map](../repository-map.json)).
+A definition carries stable identity and version with dependency support; typed inputs and outputs with connection kind (configuration or workflow); configuration schema, defaults and applied values; capabilities and discovery; environment, access, approval and memory scope; progress, results, errors and cancellation; run, checkpoint, effect, recovery and snapshot behaviour; context, evidence and provenance; presentation controls, renderers and MCP Apps permissions. This is a narrow product extension path for concrete integrations that are actually wired into controls, validation and execution; it is not a speculative generic plugin platform, hot-reload system or remote code loader. The exact schema is authored once at the contract boundary ([contracts](../contracts.md)). Nothing is implemented yet (`integration-definitions` is unbound in [the repository map](../repository-map.json)).
 
 ## Behaviour
 
-Definitions are registered, validated and resolved before execution; a stored graph names the definitions it uses. Invalid wiring is rejected with an explanation; an unverified capability is never promoted to supported. The backend repeats validation at run start because deployment, environment, access or configuration may have changed since editing; that is the same resolve-before-run step as the [effective setup](../architecture.md#effective-setup). Effective controls are the applied bag plus the actual runtime limits; user-selected budgets are distinguished from runtime boundaries. The registry does not imply dynamic code loading, remote plugin execution or hot reload.
+Definitions are registered, validated and resolved before execution; a stored graph names the definitions it uses. Invalid wiring is rejected with an explanation; an unverified capability is never promoted to supported. The backend repeats validation at run start because deployment, environment, access or configuration may have changed since editing; that is the same resolve-before-run step as the [effective setup](../architecture.md#effective-setup). Effective controls are the applied bag plus the actual runtime limits; user-selected budgets are distinguished from runtime boundaries. Cloud or remote providers may register as optional integrations later, but their absence must not stop the local core path.
 
 ## Requirements
 

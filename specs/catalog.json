@@ -297,7 +297,11 @@
         "uat"
       ],
       "code": [
-        "apps/backend/src/workbench_backend/inference/bundles.py"
+        "apps/backend/src/workbench_backend/inference/bundles.py",
+        "apps/backend/src/workbench_backend/inference/hf_fetch.py",
+        "apps/backend/src/workbench_backend/inference/routes.py",
+        "apps/backend/src/workbench_backend/inference/schemas.py",
+        "apps/desktop/src/renderer/ModelsPanel.tsx"
       ],
       "tests": [
         "apps/backend/tests/test_bundles.py",
@@ -310,6 +314,15 @@
           "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
           "date": "2026-09-19",
           "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-20-product-reset.md",
+          "commit": "ea3f8557da8c0602ad55c8af2e0751f9ccea05c0",
+          "date": "2026-09-20",
+          "environment": "David-PC Windows; llama.cpp b11045; disposable Qwen2.5-0.5B CPU and existing Qwen3.8-27B RTX 3090; partial coverage only",
           "result": "passed",
           "requirement_sha256": null
         }
@@ -346,7 +359,10 @@
         "apps/desktop/src/renderer/DeploymentsPanel.tsx",
         "apps/desktop/src/renderer/ModelsPanel.tsx",
         "apps/desktop/src/renderer/ChatPanel.tsx",
-        "apps/desktop/src/renderer/AgentRunPanel.tsx"
+        "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/backend/src/workbench_backend/inference/routes.py",
+        "apps/backend/src/workbench_backend/inference/schemas.py",
+        "apps/desktop/src/renderer/api.ts"
       ],
       "tests": [
         "apps/backend/tests/test_settings.py",
@@ -360,6 +376,15 @@
           "commit": "5728b94b393c3d9ab84924afd22398c67780f487",
           "date": "2026-09-19",
           "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS; tree identical to main b9c89d8",
+          "result": "passed",
+          "requirement_sha256": null
+        },
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-20-product-reset.md",
+          "commit": "ea3f8557da8c0602ad55c8af2e0751f9ccea05c0",
+          "date": "2026-09-20",
+          "environment": "David-PC Windows; llama.cpp b11045; disposable Qwen2.5-0.5B CPU and existing Qwen3.8-27B RTX 3090; partial coverage only",
           "result": "passed",
           "requirement_sha256": null
         }
@@ -640,7 +665,17 @@
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_memory_skills.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-20-product-reset.md",
+          "commit": "ea3f8557da8c0602ad55c8af2e0751f9ccea05c0",
+          "date": "2026-09-20",
+          "environment": "David-PC Windows; llama.cpp b11045; disposable Qwen2.5-0.5B CPU and existing Qwen3.8-27B RTX 3090; partial coverage only",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "AGT-006",
@@ -1190,7 +1225,8 @@
       ],
       "code": [
         "apps/backend/src/workbench_backend/lab/engine.py",
-        "apps/backend/src/workbench_backend/lab/service.py"
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/backend/src/workbench_backend/lab/schemas.py"
       ],
       "tests": [
         "apps/backend/tests/test_lab.py"

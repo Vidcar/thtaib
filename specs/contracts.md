@@ -12,7 +12,7 @@ Canonical source `apps/backend/src/workbench_backend/contracts`; generated `apps
 
 ## Current scope
 
-Slice 1 covers the `X-Workbench-Local-Token` header envelope and the run-lifecycle names (`queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`). The run-stream envelope (`RunStreamEnvelope`: `snapshot`, `run_event`, `stream_end`, plus the shared `AgentEvent` `{at, kind, detail}` item) is the first event-contract slice; `snapshot` still embeds the module-local GET record until those routes move onto the generated path. Every other route shape is a module-local Pydantic model mirrored by hand in `apps/desktop/src/renderer/types.ts`. Product `/openapi.json` stays unpublished. Event contracts are bound (`shared-event-contracts`).
+Slice 1 covers the `X-Workbench-Local-Token` header envelope and the run-lifecycle names (`queued`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`). The run-stream envelope (`RunStreamEnvelope`: `snapshot`, `run_event`, `stream_end`, plus the shared `AgentEvent` `{at, kind, detail}` item) is the first event-contract slice; `snapshot` still embeds the module-local GET record until those routes move onto the generated path. Hugging Face repository discovery now also exports its canonical `HubRepository` and variant records from `inference/schemas.py` through the same schema app; Models consumes the generated TypeScript shape. Remaining route shapes are module-local Pydantic models mirrored by hand in `apps/desktop/src/renderer/types.ts`. Product `/openapi.json` stays unpublished. Event contracts are bound (`shared-event-contracts`).
 
 ## Requirements
 

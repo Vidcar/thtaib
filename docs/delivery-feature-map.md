@@ -4,13 +4,19 @@ The plan for delivering Local AI Workbench, feature by feature, in the order Dav
 
 ## Next path
 
-Keep the usable Chat journey ahead of roadmap expansion. Current acceptance contracts and requirement status live in [the spec index](../specs/README.md) and [catalogue](../specs/catalog.json); completed PR history belongs in Git, not another status log.
+This is the canonical ordered next path. Keep the usable local model and Chat journey ahead of roadmap expansion. Current acceptance contracts and requirement status live in [the spec index](../specs/README.md) and [catalogue](../specs/catalog.json); completed PR history belongs in Git, not another status log.
 
-1. Keep local launch, managed model start, project file tasks, conversation continuation, cancellation and reopening working. Re-run live checks when their implementation changes; use [commands](../specs/commands.md) for the normal local loop.
-2. Migrate existing JSON metadata only after the inventory, backup, interrupted-import and rollback checks in [OQ-017](../specs/open-questions.md#oq-017). The storage choice is settled; migration is unfinished.
-3. Complete the already specified memory write-through so edits persist as Knowledge versions ([OQ-006](../specs/open-questions.md#oq-006)). Then resume optional MCP and Lab work; Builder remains later.
+1. Make model configuration, capability evidence and Chat dependable together: guided Hugging Face repo / variant / companion selection, immutable revision capture, complete bundle records, model-aware defaults, visible requested/resolved/sent/runtime-observed settings, managed start, conversation continuation, cancellation and reopening. Capability probes record provenance, inputs, runtime/template/companion/configuration identity, outcomes and opt-outs; absence of a probe is `untested`, not incompatibility. Re-run live checks when those paths change; use [commands](../specs/commands.md) for the normal local loop.
+2. Preserve existing project file tasks and host-shell approvals while extending Chat on the same shared setup: child-policy-safe delegation, conversation-adjacent context/reasoning controls with honest managed reload impact, and the minimum durable memory path already specified in [OQ-006](../specs/open-questions.md#oq-006) (official `memory=` loading plus live-tool `/memories/**` write-through into Knowledge versions). Keep retrieval derived and optional; do not turn this into a large RAG, background consolidation or second knowledge-store project.
+3. Resume Lab, Builder and optional connector work only after the shared model/configuration/evidence path is honest enough for Chat. The fixed tiny-model smoke and any `llama-bench -p 16 -n 8` style check are plumbing, not capability or context-performance evidence. Builder keeps intended LangGraph cycles, per-owning-agent setup and configuration-versus-workflow links specified, but the current compiler is partial validation and still rejects cycles.
+4. Add optional integrations in place rather than as prerequisites: voice covers transcription, speech output and conversational interaction through established local components; MCP servers and MCP Apps remain optional extensions; cloud or remote providers may be added later without blocking the local path.
+5. Migrate existing JSON metadata only after the inventory, backup, interrupted-import and rollback checks in [OQ-017](../specs/open-questions.md#oq-017). The storage choice is settled; migration is unfinished and is not a gate for the Chat-first path.
+
+**Single next delivery:** implement cancellable, rerunnable tool/vision capability checks through the existing compatibility service, keyed to the exact bundle/runtime/configuration and preserving user opt-outs. First prove a real structured tool round-trip; then an actual image request. Unknown results must not block ordinary Chat.
 
 The harness lifecycle stays together until a concrete change justifies extracting a responsibility. Its existing setup, middleware, retrieval and filesystem adapters are the extension points; do not split it just to reduce line count.
+
+Grounding for continuation: **keep** the Windows-first single backend/desktop architecture, upstream ownership boundaries and shared effective setup; **correct** stale UI paths that ask ordinary users for commit SHAs or silently choose ambiguous projectors; **defer** richer Builder execution, full snapshot branching and background consolidation until the local model and Chat base is solid; **retire** the universal 64K default, silent projector selection and storage-migration-first gate. Tiny-model smoke remains valuable plumbing evidence, distinct from capability checks.
 
 ## Features
 

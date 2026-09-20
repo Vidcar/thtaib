@@ -18,6 +18,7 @@ from workbench_backend.contracts.auth import (
 )
 from workbench_backend.contracts.events import RunStreamContract, RunStreamEnvelope
 from workbench_backend.contracts.lifecycle import RunLifecycleContract
+from workbench_backend.inference.schemas import HuggingFaceInspectRequest, HubRepository
 
 SHARED_CONTRACT_OPENAPI_TITLE = f"{PRODUCT_NAME} shared contracts"
 
@@ -79,5 +80,9 @@ def create_shared_contract_app() -> FastAPI:
     )
     def run_stream_envelope_contract() -> RunStreamEnvelope:
         return RunStreamEnvelope(type="stream_end")
+
+    @application.post("/v1/models/huggingface/inspect", response_model=HubRepository)
+    def hub_repository_contract(body: HuggingFaceInspectRequest) -> HubRepository:
+        raise NotImplementedError("Schema export only")
 
     return application

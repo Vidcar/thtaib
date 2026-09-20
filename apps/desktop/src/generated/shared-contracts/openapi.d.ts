@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/v1/models/huggingface/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hub Repository Contract */
+        post: operations["hub_repository_contract_v1_models_huggingface_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shared-contracts/run-lifecycle": {
         parameters: {
             query?: never;
@@ -76,6 +93,50 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HubRepository */
+        HubRepository: {
+            /** Guidance Files */
+            guidance_files: string[];
+            /** Projectors */
+            projectors: components["schemas"]["HubVariant"][];
+            /** Repo Id */
+            repo_id: string;
+            /** Resolved Revision */
+            resolved_revision: string;
+            /** Variants */
+            variants: components["schemas"]["HubVariant"][];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** HubVariant */
+        HubVariant: {
+            /**
+             * Complete
+             * @default true
+             */
+            complete: boolean;
+            /** Files */
+            files: string[];
+            /** Name */
+            name: string;
+            /** Size Bytes */
+            size_bytes?: number | null;
+        };
+        /** HuggingFaceInspectRequest */
+        HuggingFaceInspectRequest: {
+            /** Repo Id */
+            repo_id: string;
+            /**
+             * Revision
+             * @default main
+             */
+            revision: string;
+        };
         /**
          * LocalSessionTrustContract
          * @description Shared session-token header envelope for same-machine desktop↔backend trust.
@@ -265,6 +326,19 @@ export interface components {
             /** Kind */
             kind: string;
         };
+        /** ValidationError */
+        ValidationError: {
+            /** Context */
+            ctx?: Record<string, never>;
+            /** Input */
+            input?: unknown;
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -272,6 +346,10 @@ export interface components {
     headers: never;
     pathItems: never;
 }
+export type SchemaHttpValidationError = components['schemas']['HTTPValidationError'];
+export type SchemaHubRepository = components['schemas']['HubRepository'];
+export type SchemaHubVariant = components['schemas']['HubVariant'];
+export type SchemaHuggingFaceInspectRequest = components['schemas']['HuggingFaceInspectRequest'];
 export type SchemaLocalSessionTrustContract = components['schemas']['LocalSessionTrustContract'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
 export type SchemaRunLifecycleStatus = components['schemas']['RunLifecycleStatus'];
@@ -279,8 +357,42 @@ export type SchemaRunStreamContract = components['schemas']['RunStreamContract']
 export type SchemaRunStreamEnvelope = components['schemas']['RunStreamEnvelope'];
 export type SchemaRunStreamEventType = components['schemas']['RunStreamEventType'];
 export type SchemaSharedAgentEvent = components['schemas']['SharedAgentEvent'];
+export type SchemaValidationError = components['schemas']['ValidationError'];
 export type $defs = Record<string, never>;
 export interface operations {
+    hub_repository_contract_v1_models_huggingface_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HuggingFaceInspectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HubRepository"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_lifecycle_contract_v1_shared_contracts_run_lifecycle_get: {
         parameters: {
             query?: never;

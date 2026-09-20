@@ -32,6 +32,8 @@ Each fact has one home. Other documents point to it rather than restating it.
 
 [AGENTS.md](../AGENTS.md) defines the current working process and delivery ownership. Current user instructions override older process rules. Accepted specifications define intended product behaviour; generated contracts define wire shapes; code is what runs; tests and live evidence establish what has been checked. A mismatch must be investigated, not hidden by rewriting requirements to match a defect.
 
+The canonical ordered next path is [the delivery feature map](../docs/delivery-feature-map.md#next-path): model configuration, capability evidence and usable Chat first; then project tools, minimum durable memory, Lab, Builder and optional integrations in increments. Module specifications describe the contracts for those slices; they are not separate roadmaps.
+
 Record consequential decisions in the relevant specification and a short ADR or changelog entry when useful for future agents. Routine technical decisions within the authorized outcome are agent-owned; Dave is asked about material unresolved product choices, cost or external effects, not to approve technical paperwork. Historical records retain their original text but do not impose superseded working rules. Revision 0.5 is an archived source.
 
 Requirement IDs (`ARCH-`, `MOD-`, `AGT-`, `WF-`, `ENV-`, `STATE-`, `REG-`, `API-`, `LAB-`, `CTT-`) stay stable, with one definition/acceptance block and one catalogue row. Retire IDs rather than deleting or reusing them. Document statuses remain `accepted`, `draft`, `superseded` and `informational`; requirement statuses follow [verification](verification.md).

@@ -4,6 +4,16 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a decision's rationale will help a future agent. Use an [ADR](README.md) for consequential architectural rationale. Routine fixes need only the affected contract and relevant validation in the PR.
 
+## 2026-09-20 — Product reset ordering: model-to-Chat first
+
+Authority: Dave's 2026-09-20 scope-and-integration reset. This supersedes earlier delivery-order wording where it made JSON migration, broad Lab work or optional integrations feel like gates for the usable local model and Chat journey. The original Revision 0.5 sources and requirement IDs stay preserved; current order lives in [architecture](../architecture.md#build-order) and the [delivery map](../../docs/delivery-feature-map.md#next-path).
+
+- First priority is guided model setup, capability evidence and usable Chat together: Hugging Face repo/variant/projector selection, immutable revisions, complete bundle records, model-aware defaults, visible settings, managed deployment health and honest probe outcomes.
+- Minimum memory durability is the already specified official `memory=` loading plus `/memories/**` write-through into STATE-005 versions. Retrieval stays derived and optional; no large RAG, background consolidation or second knowledge store is required for Chat.
+- Capability evidence records provenance, inputs, outcomes and user opt-outs. Tiny-model smoke and fixed empty-context `llama-bench` runs are plumbing evidence only.
+- Planning is implemented through official `TodoListMiddleware` when `write_todos` is selected; there is no application-owned planning state. `task`/general delegation remains deferred until child setup, Workbench middleware inheritance, permissions and run hierarchy are verified. Builder keeps intended LangGraph review cycles with one owner, but the current compiler is partial validation, not shipped execution and still rejects cycles.
+- JSON migration remains OQ-017 and is not a gate for the Chat-first path.
+
 ## 2026-09-20 — Core delivery and lean tracking
 
 Authority: Dave's request to make the existing product dependable and simplify delivery. Component specifications retain purpose, ownership, interfaces, failure behaviour and acceptance checks. Requirement status/evidence stays in the catalogue; module status narratives and repeated historical approval metadata are removed. The checker still validates links, stable IDs, acceptance, and evidence supporting `verified`; no requirement is promoted by this cleanup. Older decisions remain history.
