@@ -4,7 +4,7 @@ What changed and why. Link a relevant issue or requirement when helpful; no issu
 
 ## Validation
 
-Checks actually run and results. Distinguish local/CI, live/mocked and skipped checks. State remaining limitations.
+Local checks actually run and results. Distinguish live/mocked and skipped checks. State remaining limitations.
 
 ## Decisions or follow-up (omit if unnecessary)
 

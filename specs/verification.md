@@ -2,6 +2,8 @@
 
 What a catalogue status means, what counts as evidence, and how evidence goes stale.
 
+GitHub CI was removed at Dave's request on 2026-09-20. Run applicable validation locally. The `ci-smoke` tier and its recording rules below are retained for historical evidence only; they do not require or authorize a GitHub workflow. New local live evidence uses `uat` or `manual` as appropriate. Existing evidence schemas and capability thresholds are unchanged.
+
 ## Status definitions
 
 | Status | Operational meaning |
@@ -49,7 +51,7 @@ Longer evidence goes in `specs/evidence/<date>-<slug>.md` from the [evidence tem
 
 ## What the checker proves
 
-`scripts/check_specs.py` validates structure: links and anchors, requirement IDs and their catalogue rows, catalogue and repository-map shape, existing code/test/evidence pointers, the source archive hash, evidence-row shape, the `verifiable_by` tier of every verifying row, and the digest match for `verified` rows. On pull requests it also rejects requirement IDs deleted from both text and catalogue. It cannot run tests, judge semantics, confirm that a commit was really tested or inspect GitHub settings; reviewers do that.
+`scripts/check_specs.py` validates structure: links and anchors, requirement IDs and their catalogue rows, catalogue and repository-map shape, existing code/test/evidence pointers, the source archive hash, evidence-row shape, the `verifiable_by` tier of every verifying row, and the digest match for `verified` rows. With `--base-ref` it also rejects requirement IDs deleted from both text and catalogue. It cannot run tests, judge semantics, confirm that a commit was really tested or inspect GitHub settings; reviewers do that.
 
 ## Product gates
 

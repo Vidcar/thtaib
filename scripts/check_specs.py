@@ -25,7 +25,6 @@ CORE_FILES = (
     "specs/README.md", "specs/architecture.md", "specs/contracts.md",
     "specs/catalog.json", "specs/repository-map.json", "specs/commands.md",
     "specs/verification.md", "scripts/check_specs.py", "tests/specs/test_check_specs.py",
-    ".github/workflows/ci.yml",
 )
 ROOT_MARKDOWN_FILES = ("README.md", "AGENTS.md", "HANDOVER.md", "thtaib-vision.md", ".github/pull_request_template.md")
 MAINTAINED_MARKDOWN_DIRS = ("specs", "docs")

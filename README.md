@@ -13,7 +13,7 @@ On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It sta
 
 ## Install and run
 
-Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js ≥22 and <25 with pnpm 10+. Windows is the supported target; Linux is used for CI and the real-model smoke tier. All commands are listed in [commands](specs/commands.md).
+Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js ≥22 and <25 with pnpm 10+. Windows is the supported target; the real-model smoke tier also supports Linux. Validation runs locally; GitHub CI is disabled. All commands are listed in [commands](specs/commands.md).
 
 Agent setup: backend (in `apps/backend`): `uv sync`, then `uv run python -m workbench_backend`.
 

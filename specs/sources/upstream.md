@@ -125,7 +125,7 @@ Official references consulted on 18 September 2026:
 - [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners).
 - [GitHub protected branches and required reviews/checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 
-The supplied workflows pin actions to these verified upstream release commits:
+The removed GitHub workflows used these upstream release commits (historical references only; GitHub CI was disabled on 2026-09-20):
 
 - [actions/checkout v7.0.1](https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1).
 - [actions/setup-python v7.0.0](https://github.com/actions/setup-python/commit/5fda3b95a4ea91299a34e894583c3862153e4b97).
@@ -136,4 +136,4 @@ The supplied workflows pin actions to these verified upstream release commits:
 
 The real-model smoke tier consumes the Linux x64 CPU asset of the same pinned llama.cpp release ([b11045 release](https://github.com/ggml-org/llama.cpp/releases/tag/b11045), `llama-b11045-bin-ubuntu-x64.tar.gz`) and [Qwen/Qwen2.5-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF) at the revision pinned in `apps/backend/tests_integration/assets.py`. The tiny model is a plumbing fixture, not a capability reference.
 
-These pins concern CI runners only. They do not pin application dependencies or imply every workflow has run in the user's repository. Review updates to the actions and runner compatibility like other dependency changes. The actual action references in the workflows are the executable source of truth.
+These historical pins concerned CI runners only. They do not pin application dependencies or imply that GitHub checks remain enabled.

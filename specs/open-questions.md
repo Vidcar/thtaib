@@ -60,7 +60,7 @@ Open: canonical schemas and identifiers, version compatibility and migration, in
 
 **Owner:** the affected component. Decide the import-boundary check, broader managed Windows/worker integration coverage, live-versus-recorded fixture gates, UAT procedure/evidence retention, and whether real-model smoke should ever be required. These are future choices, not CI restructuring in this packet. Optional MCP plumbing belongs on the existing smoke path with in-process FastMCP; browser/GitHub capability checks require Windows UAT under [ENV-007](modules/environments-tools.md#env-007).
 
-Read-only protection verification on 2026-09-20 confirmed strict `main` protection with exactly the four Ubuntu checks in [commands](commands.md#ci). Removing retired Windows check names is no longer a maintainer action. Current test tiers and verification rules remain in [commands](commands.md) and [verification](verification.md).
+GitHub Actions and required GitHub status checks were removed at Dave's request on 2026-09-20. Validation is local; current test tiers and verification rules remain in [commands](commands.md) and [verification](verification.md).
 
 
 <a id="oq-011"></a>

@@ -4,7 +4,7 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-The two remaining baseline races are implemented and locally validated in [PR #108](https://github.com/Vidcar/thtaib/pull/108), `codex/fix-two-baseline-races`, based on `e33b2f0` (merged PR #107). The PR records protected checks and merge status. Other baseline repairs and documentation cleanup are out of scope.
+The two remaining baseline races are implemented and locally validated in [PR #108](https://github.com/Vidcar/thtaib/pull/108), `codex/fix-two-baseline-races`, based on `e33b2f0` (merged PR #107). Dave subsequently requested complete removal of GitHub CI and removed merge rules. Actions are disabled, workflow/path selection removed, and required status checks removed. Local validation remains mandatory; do not restore GitHub CI unless Dave asks.
 
 ## Changes and decisions
 
@@ -16,6 +16,6 @@ The two remaining baseline races are implemented and locally validated in [PR #1
 
 Both final regressions fail against original code and pass with the corrections. Approval A is persisted through the compiled agent/SQLite saver; its original worker is stopped without modifying the checkpoint before fresh-harness restoration. B approve/reject/cancel and duplicate races verify exact append counts. Chat uses events and inspects stored history without GET/SSE repair.
 
-Windows backend delivery gate: all 341 tests passed; root specification check passed. No wire changes. No implementation work remains for these repairs; protected delivery is tracked in PR #108. Disposable data and scripted models only; no new real-model or desktop end-to-end claim.
+Windows backend delivery gate: all 341 tests passed; root specification check and all 59 checker tests passed after CI removal. No wire changes. Implementation and local validation are complete; PR #108 records merge status. Disposable data and scripted models only; no new real-model or desktop end-to-end claim.
 
 Launch: root `Launch Workbench.vbs`. Checks: [commands](specs/commands.md). Previous baseline live evidence remains in `.scratch/packet02-live/`; this task does not extend its claims.
