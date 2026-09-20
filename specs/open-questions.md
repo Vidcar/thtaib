@@ -44,7 +44,7 @@ v1 shape: agentic retrieve-and-offload — `RecursiveCharacterTextSplitter`, `In
 
 Product-default dedicated embedding GGUF (operator registers and starts a deployment; the file is not a `bundle_*` record and the product does not start llama-server because the file exists): official `Qwen/Qwen3-Embedding-0.6B-GGUF` @ `370f27d7550e0def9b39c1f16d3fbaa13aa67728`, file `Qwen3-Embedding-0.6B-Q8_0.gguf`, SHA-256 `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439`, 639150592 bytes. On David-PC the file is already at `%LOCALAPPDATA%\LocalAIWorkbench\models\Qwen3-Embedding-0.6B-Q8_0.gguf`. Recommended pooling for this GGUF is `last`.
 
-Still open: whether a durable index is ever shared across Chat, Lab and Builder (v1 creates none); what capture gaps a restored run must report when retrieval ran. **Evidence needed:** a redacted, retained capture on a real David-PC workload with a loaded embedding deployment. Unit tests with `DeterministicFakeEmbedding` are not that evidence.
+Still open: whether a durable index is ever shared across Chat, Lab and Builder (v1 creates none); what capture gaps a restored run must report when retrieval ran. **Evidence recorded:** David-PC Chat HTTP fail-closed (missing / chat-as-embedder / unloaded) and live `search_knowledge` writing `/retrieved/` under harness scratch at `7db7f45` ([evidence](evidence/2026-09-20-david-pc-retrieval.md)). **Evidence still needed:** recorded-tool replay without a live index; remaining fail-closed codes; Electron selectors; Lab / Agent-run HTTP. Unit tests with `DeterministicFakeEmbedding` are not that evidence. Catalogue STATE-006 stays `built`.
 
 <a id="oq-007"></a>
 ## OQ-007: Compatibility evidence and model lifecycle details
