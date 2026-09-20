@@ -20,6 +20,10 @@ from workbench_backend.inference.settings import (
     resolve_bag,
     resolve_bags,
 )
+from workbench_backend.agents.memory_skills import (
+    MEMORY_EDIT_GAP,
+    MaterializedKnowledgeFact,
+)
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
 
 NO_RETRIEVAL_GAP = "no retrieval requested"
@@ -29,7 +33,8 @@ MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
 SKILL_GAP = "no skill versions bound for this run"
 KNOWLEDGE_PREAMBLE = (
     "The following durable knowledge is application-owned versioned content "
-    "(STATE-005). It is always-load context, not query-time retrieval."
+    "(STATE-005). Protected instructions are policy in the authored system "
+    "prompt, not Deep Agents memory= file data."
 )
 
 
@@ -63,6 +68,7 @@ class EffectiveSetup(BaseModel):
     loaded_embedding_endpoint: str | None = None
     loaded_startup: dict[str, Any] = Field(default_factory=dict)
     loaded_knowledge: list[LoadedKnowledgeFact] = Field(default_factory=list)
+    materialized_knowledge: list[MaterializedKnowledgeFact] = Field(default_factory=list)
     retrieval_requested: bool = False
     retrieval_presented: bool = False
     retrieval_corpus_documents: int = 0
@@ -100,6 +106,7 @@ def resolve_effective_setup(
     retrieval_presented: bool = False,
     retrieval_corpus_documents: int = 0,
     retrieval_instructions: str | None = None,
+    materialized_knowledge: list[MaterializedKnowledgeFact] | None = None,
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
@@ -138,6 +145,8 @@ def resolve_effective_setup(
         gaps.append(NO_RETRIEVAL_GAP)
     if not knowledge_refs.memory_version_refs:
         gaps.append(MEMORY_GAP)
+    else:
+        gaps.append(MEMORY_EDIT_GAP)
     if not knowledge_refs.skill_version_refs:
         gaps.append(SKILL_GAP)
     bags = SettingsBags(
@@ -166,6 +175,7 @@ def resolve_effective_setup(
         ),
         loaded_startup=dict(deployment.applied_startup),
         loaded_knowledge=loaded,
+        materialized_knowledge=list(materialized_knowledge or []),
         retrieval_requested=retrieval_requested,
         retrieval_presented=retrieval_presented,
         retrieval_corpus_documents=retrieval_corpus_documents,
@@ -206,7 +216,9 @@ def compose_system_prompt(
     A Chat (or other surface) system prompt must not silently replace
     ``profile.bags.agent.applied['system_prompt']``. When both are set and
     differ, the profile prompt is the base and the surface prompt is appended
-    under ``SURFACE_PROMPT_HEADING``. Knowledge content is appended last.
+    under ``SURFACE_PROMPT_HEADING``. Protected-instruction content is
+    appended after that. Memory and skill bodies are not appended here;
+    Deep Agents injects them via ``memory=`` / ``skills=``.
     """
 
     profile = (profile_system_prompt or "").strip() or None
@@ -229,23 +241,13 @@ def compose_system_prompt(
 
 
 def format_knowledge_block(versions: list[KnowledgeVersion]) -> str:
-    if not versions:
+    protected = [version for version in versions if version.kind == "protected_instruction"]
+    if not protected:
         return ""
     sections = [KNOWLEDGE_PREAMBLE]
-    for version in versions:
-        heading = _knowledge_heading(version.kind)
-        sections.append(f"### {heading} (version {version.id})\n{version.content}")
+    for version in protected:
+        sections.append(f"### Protected instructions (version {version.id})\n{version.content}")
     return "\n\n".join(sections)
-
-
-def _knowledge_heading(kind: KnowledgeKind) -> str:
-    if kind == "memory":
-        return "Memory"
-    if kind == "skill":
-        return "Skill"
-    if kind == "protected_instruction":
-        return "Protected instructions"
-    raise TypeError(f"unsupported knowledge kind: {kind}")
 
 
 def _profile_system_prompt(profile: RunProfile | None) -> str | None:

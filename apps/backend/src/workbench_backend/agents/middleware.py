@@ -10,13 +10,24 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
+from workbench_backend.agents.harness_backend import is_reserved_framework_path
+from workbench_backend.agents.memory_skills import (
+    is_knowledge_route_path,
+    is_memory_route_path,
+    knowledge_routes_selected,
+)
 from workbench_backend.agents.replay import (
     RECONSTRUCTION_NOTE,
     FixtureBank,
     apply_recorded_reconstruction,
 )
 from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
-from workbench_backend.agents.tools import FILESYSTEM_TOOL_NAMES, SHELL_TOOL_NAMES, tool_name
+from workbench_backend.agents.tools import (
+    FILESYSTEM_TOOL_NAMES,
+    KNOWLEDGE_ROUTE_READ_TOOLS,
+    SHELL_TOOL_NAMES,
+    tool_name,
+)
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
@@ -90,10 +101,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return self._replay_tool_call(request)
 
     def _reject_projectless_privileged_tool(self, request: ToolCallRequest) -> ToolMessage | None:
-        """File and host-shell tools need a project; execute must also be presented."""
+        """File and host-shell tools need a project; execute must also be presented.
 
-        name, _args, call_id = _tool_call_parts(request)
+        When ``memory=`` / ``skills=`` is attached, ``ls`` / ``read_file`` may
+        target knowledge routes, and ``edit_file`` / ``write_file`` may target
+        ``/memories/**`` scratch only. Those edits are not STATE-005 versions.
+        """
+
+        name, args, call_id = _tool_call_parts(request)
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
+            if _allow_projectless_knowledge_tool(name, args, self.run):
+                return None
             return ToolMessage(
                 content=(
                     "Filesystem tools require a bound project folder. "
@@ -185,7 +203,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         captured = apply_capture_policy(
             ModelRequestCapture(
                 at=utc_now(),
-                instructions=_system_text(request),
+                instructions=_captured_instructions(request, http_payload),
                 messages=[_message_dict(message) for message in request.messages],
                 available_tools=list(self.run.enabled_tools),
                 presented_tools=[
@@ -212,6 +230,66 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         )
         self.run.model_requests.append(captured)
         self.run.updated_at = utc_now()
+
+
+def _allow_projectless_knowledge_tool(
+    name: str,
+    args: dict[str, Any],
+    run: AgentRun,
+) -> bool:
+    if not knowledge_routes_selected(run.memory_version_refs, run.skill_version_refs):
+        return False
+    path = _filesystem_tool_path(name, args)
+    if name in KNOWLEDGE_ROUTE_READ_TOOLS:
+        return path == "/" or is_knowledge_route_path(path) or is_reserved_framework_path(path)
+    if name in {"write_file", "edit_file"}:
+        return is_memory_route_path(path)
+    return False
+
+
+def _filesystem_tool_path(name: str, args: dict[str, Any]) -> str:
+    if name == "ls":
+        raw = args.get("path") or args.get("file_path") or "/"
+    else:
+        raw = args.get("file_path") or args.get("path") or ""
+    return raw if isinstance(raw, str) and raw else ("/" if name == "ls" else "")
+
+
+def _captured_instructions(request: ModelRequest, http_payload: dict[str, Any] | None) -> str | None:
+    """Prefer the outbound payload. MemoryMiddleware is tail middleware."""
+
+    outbound = _outbound_system_text(http_payload)
+    if outbound:
+        return outbound
+    return _system_text(request)
+
+
+def _outbound_system_text(http_payload: dict[str, Any] | None) -> str | None:
+    if not http_payload:
+        return None
+    body = http_payload.get("body")
+    if not isinstance(body, dict):
+        return None
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return None
+    parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append(content)
+            continue
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, str) and block.strip():
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text)
+    return "\n".join(parts) if parts else None
 
 
 def _tool_call_parts(request: ToolCallRequest) -> tuple[str, dict[str, Any], str]:

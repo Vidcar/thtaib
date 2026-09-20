@@ -113,14 +113,14 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
 
 class EffectiveSetupResolverTests(unittest.TestCase):
-    def test_compose_includes_versioned_content_not_id_only(self) -> None:
+    def test_compose_includes_protected_content_not_id_only(self) -> None:
         version = KnowledgeVersion(
-            id="knv_mem",
-            entry_id="kn_mem",
+            id="knv_prot",
+            entry_id="kn_prot",
             scope="project",
             scope_id="proj",
-            kind="memory",
-            content=MEMORY_TOKEN,
+            kind="protected_instruction",
+            content=PROTECTED_TOKEN,
             provenance={"actor": "human"},
             created_at=utc_now(),
         )
@@ -134,9 +134,40 @@ class EffectiveSetupResolverTests(unittest.TestCase):
         self.assertIn("Chat surface prompt.", prompt)
         self.assertIn(SURFACE_PROMPT_HEADING, prompt)
         self.assertLess(prompt.index("Profile identity prompt."), prompt.index("Chat surface prompt."))
-        self.assertIn(MEMORY_TOKEN, prompt)
-        self.assertIn("knv_mem", prompt)
+        self.assertIn(PROTECTED_TOKEN, prompt)
+        self.assertIn("knv_prot", prompt)
         self.assertIn(KNOWLEDGE_PREAMBLE, prompt)
+
+    def test_compose_does_not_append_memory_or_skill_bodies(self) -> None:
+        versions = [
+            KnowledgeVersion(
+                id="knv_mem",
+                entry_id="kn_mem",
+                scope="project",
+                kind="memory",
+                content=MEMORY_TOKEN,
+                provenance={"actor": "human"},
+                created_at=utc_now(),
+            ),
+            KnowledgeVersion(
+                id="knv_skill",
+                entry_id="kn_skill",
+                scope="project",
+                kind="skill",
+                content=SKILL_TOKEN,
+                provenance={"actor": "human"},
+                created_at=utc_now(),
+            ),
+        ]
+        prompt = compose_system_prompt(
+            surface_system_prompt="Chat surface prompt.",
+            profile_system_prompt="Profile identity prompt.",
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+            versions=versions,
+        )
+        self.assertNotIn(MEMORY_TOKEN, prompt)
+        self.assertNotIn(SKILL_TOKEN, prompt)
+        self.assertNotIn(KNOWLEDGE_PREAMBLE, prompt)
 
     def test_surface_prompt_does_not_replace_identical_profile_prompt(self) -> None:
         prompt = compose_system_prompt(
@@ -331,18 +362,25 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertEqual(digests["memory"], content_digest(MEMORY_TOKEN))
         self.assertEqual(digests["skill"], content_digest(SKILL_TOKEN))
         prompt = setup["system_prompt"]
-        self.assertIn(MEMORY_TOKEN, prompt)
-        self.assertIn(SKILL_TOKEN, prompt)
-        self.assertIn(KNOWLEDGE_PREAMBLE, prompt)
+        self.assertNotIn(MEMORY_TOKEN, prompt)
+        self.assertNotIn(SKILL_TOKEN, prompt)
+        self.assertNotIn(KNOWLEDGE_PREAMBLE, prompt)
+        paths = {item["path"] for item in setup["materialized_knowledge"]}
+        self.assertTrue(any(path.startswith("/memories/") for path in paths))
+        self.assertTrue(any(path.startswith("/skills/") and path.endswith("/SKILL.md") for path in paths))
         capture = body["model_requests"][0]
         instructions = capture["instructions"] or ""
         self.assertIn(MEMORY_TOKEN, instructions)
-        self.assertIn(SKILL_TOKEN, instructions)
+        self.assertIn("<agent_memory>", instructions)
+        self.assertNotIn(SKILL_TOKEN, instructions)
+        self.assertIn("## Skills System", instructions)
         outbound = json.dumps(_RecordingHandler.requests[0]["body"])
         self.assertIn(MEMORY_TOKEN, outbound)
-        self.assertIn(SKILL_TOKEN, outbound)
+        self.assertNotIn(SKILL_TOKEN, outbound)
+        self.assertIn("## Skills System", outbound)
         gaps = " ".join(capture["capture_gaps"])
         self.assertIn("no retrieval", gaps)
+        self.assertIn("memory edits are run-local", gaps)
         self.assertNotIn("no durable memory", gaps)
         self.assertNotIn("no skill versions", gaps)
 
@@ -406,8 +444,11 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertEqual(run["status"], "completed", run.get("error"))
         self.assertEqual(run["source_surface"], "chat")
         self.assertEqual(run["effective_setup"]["selected_profile_id"], profile_id)
-        self.assertIn(MEMORY_TOKEN, run["effective_setup"]["system_prompt"])
+        self.assertNotIn(MEMORY_TOKEN, run["effective_setup"]["system_prompt"])
         self.assertIn(PROTECTED_TOKEN, run["effective_setup"]["system_prompt"])
+        outbound = json.dumps(_RecordingHandler.requests[0]["body"])
+        self.assertIn(MEMORY_TOKEN, outbound)
+        self.assertIn(PROTECTED_TOKEN, outbound)
         self.assertAlmostEqual(_RecordingHandler.requests[0]["body"]["temperature"], DISTINCT_TEMPERATURE)
         denied = self.client.post(
             f"/v1/knowledge/entries/{protected['id']}/edit",
@@ -487,12 +528,16 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
         self.assertEqual(started.status_code, 200, started.text)
         body = wait_for_run(self.client, started.json()["id"])
         self.assertEqual(body["status"], "completed", body.get("error"))
-        self.assertIn(MEMORY_TOKEN, body["effective_setup"]["system_prompt"])
+        self.assertNotIn(MEMORY_TOKEN, body["effective_setup"]["system_prompt"])
         capture = body["model_requests"][0]
-        self.assertIn(MEMORY_TOKEN, capture["instructions"] or "")
         self.assertTrue(capture["loaded_knowledge"][0]["content_available"])
-        self.assertIn(MEMORY_TOKEN, "\n".join(RECEIVED_PROMPTS))
-        self.assertIn("http payload not observed", " ".join(capture["capture_gaps"]))
+        received = "\n".join(RECEIVED_PROMPTS)
+        self.assertIn(MEMORY_TOKEN, received)
+        self.assertIn("<agent_memory>", received)
+        if capture.get("http_payload"):
+            self.assertIn(MEMORY_TOKEN, capture["instructions"] or "")
+        else:
+            self.assertIn("http payload not observed", " ".join(capture["capture_gaps"]))
 
 
 class AdapterResolvedBagTests(unittest.TestCase):

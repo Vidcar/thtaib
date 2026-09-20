@@ -21,6 +21,12 @@ from langgraph.types import Command
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
+from workbench_backend.agents.memory_skills import (
+    KnowledgeMaterializePlan,
+    official_agent_kwargs,
+    materialize_onto_backend,
+    plan_knowledge_materialization,
+)
 from workbench_backend.agents.retrieval import (
     RETRIEVAL_INSTRUCTIONS,
     SEARCH_KNOWLEDGE_TOOL_NAME,
@@ -62,11 +68,12 @@ from workbench_backend.state.checkpointer import (
 from workbench_backend.state.schemas import RelatedFile
 from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
+    KNOWLEDGE_ROUTE_READ_TOOLS,
     enabled_for_project,
     resolve_presented_tools,
     tools_for_names,
 )
-from workbench_backend.errors import HarnessError, ReplayError
+from workbench_backend.errors import HarnessError, KnowledgeError, ReplayError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
@@ -184,6 +191,10 @@ class HarnessService:
             )
         refs = self._resolve_knowledge_refs(request)
         versions = self._load_knowledge_versions(refs)
+        knowledge_plan = plan_knowledge_materialization(
+            versions,
+            self._knowledge_display_names(versions),
+        )
         profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
         project_path = _resolved_project_path(request.project_path)
         if project_path is None and request.workspace_id:
@@ -193,6 +204,7 @@ class HarnessService:
         presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
             request.presented_tools,
             project_bound=project_path is not None,
+            knowledge_routes=knowledge_plan.has_knowledge_routes,
         )
         retrieval_requested = bool((request.embedding_deployment_id or "").strip())
         recorded = request.tool_mode is ToolMode.recorded_tool
@@ -244,13 +256,20 @@ class HarnessService:
             )
         if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in presented:
             presented = [*presented, SEARCH_KNOWLEDGE_TOOL_NAME]
+        if knowledge_plan.has_knowledge_routes:
+            for name in KNOWLEDGE_ROUTE_READ_TOOLS:
+                if name not in presented:
+                    presented = [*presented, name]
         if not presented:
             raise HarnessError(
                 "At least one enabled tool must remain presented (AGT-005).",
                 code="tools_required",
                 status_code=400,
             )
-        enabled = enabled_for_project(project_path is not None)
+        enabled = enabled_for_project(
+            project_path is not None,
+            knowledge_routes=knowledge_plan.has_knowledge_routes,
+        )
         if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
             enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
         setup = resolve_effective_setup(
@@ -266,6 +285,7 @@ class HarnessService:
             retrieval_presented=retrieval_presented,
             retrieval_corpus_documents=len(retrieval_documents),
             retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
+            materialized_knowledge=knowledge_plan.facts,
         )
         if request.workspace_id:
             others = self.active_workspace_run_ids(request.workspace_id)
@@ -559,8 +579,11 @@ class HarnessService:
         model = self._model_factory(run, http_sink)
         agent_kwargs: dict[str, Any] = {}
         backend = build_run_backend(run, self.manager.paths)
+        knowledge_plan = self._knowledge_plan_for_run(run)
         if backend is not None:
             agent_kwargs["backend"] = backend
+            materialize_onto_backend(backend, knowledge_plan)
+        agent_kwargs.update(official_agent_kwargs(knowledge_plan))
         permissions = filesystem_permissions_for_run(run)
         if permissions:
             agent_kwargs["permissions"] = permissions
@@ -885,6 +908,29 @@ class HarnessService:
                 status_code=409,
             )
         return [self._knowledge_provider().get_version(version_id) for version_id in refs.all_ids()]
+
+    def _knowledge_display_names(self, versions: list[KnowledgeVersion]) -> dict[str, str | None]:
+        names: dict[str, str | None] = {}
+        if self._knowledge_provider is None:
+            return names
+        service = self._knowledge_provider()
+        for version in versions:
+            if version.kind not in {"memory", "skill"} or version.entry_id in names:
+                continue
+            try:
+                names[version.entry_id] = service.get_entry(version.entry_id).display_name
+            except KnowledgeError:
+                names[version.entry_id] = None
+        return names
+
+    def _knowledge_plan_for_run(self, run: AgentRun) -> KnowledgeMaterializePlan:
+        refs = KnowledgeRefs(
+            memory_version_refs=run.memory_version_refs,
+            skill_version_refs=run.skill_version_refs,
+            protected_instruction_version_refs=run.protected_instruction_version_refs,
+        )
+        versions = self._load_knowledge_versions(refs)
+        return plan_knowledge_materialization(versions, self._knowledge_display_names(versions))
 
     def _link_run(self, run: AgentRun, agent: object) -> None:
         """Record checkpoint ids and related files in application records only."""

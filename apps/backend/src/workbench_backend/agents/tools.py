@@ -19,6 +19,7 @@ from workbench_backend.inference.ids import utc_now
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
 FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute",)
 ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES)
 
@@ -49,27 +50,42 @@ def enabled_catalogue() -> list[str]:
     return list(ENABLED_TOOL_NAMES)
 
 
-def enabled_for_project(project_bound: bool) -> list[str]:
-    """Tools enabled for one run. File and host-shell tools need a project cwd."""
+def enabled_for_project(
+    project_bound: bool,
+    *,
+    knowledge_routes: bool = False,
+) -> list[str]:
+    """Tools enabled for one run.
+
+    Project filesystem and host-shell tools need a project cwd.
+    ``ls`` / ``read_file`` may also be enabled for ``/memories/`` and
+    ``/skills/`` when official ``memory=`` / ``skills=`` is attached.
+    """
 
     if project_bound:
         return list(ENABLED_TOOL_NAMES)
-    return list(VISIBILITY_TOOL_NAMES)
+    enabled = list(VISIBILITY_TOOL_NAMES)
+    if knowledge_routes:
+        enabled.extend(KNOWLEDGE_ROUTE_READ_TOOLS)
+    return enabled
 
 
 def resolve_presented_tools(
     requested: list[str] | None,
     *,
     project_bound: bool,
+    knowledge_routes: bool = False,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """Return (presented, denied, filesystem_blocked, shell_blocked).
 
-    Denied names are not in the product catalogue. Filesystem names requested
-    without a project are ``filesystem_requires_project``. ``execute`` without
-    a project is ``shell_requires_project``.
+    Denied names are not in the product catalogue. Project filesystem names
+    requested without a project are ``filesystem_requires_project``.
+    ``ls`` / ``read_file`` are allowed without a project only when knowledge
+    routes are attached. ``execute`` without a project is
+    ``shell_requires_project``.
     """
 
-    enabled = enabled_for_project(project_bound)
+    enabled = enabled_for_project(project_bound, knowledge_routes=knowledge_routes)
     if requested is None:
         return enabled, [], [], []
     presented: list[str] = []
@@ -84,7 +100,10 @@ def resolve_presented_tools(
         if name not in ENABLED_TOOL_NAMES:
             denied.append(name)
         elif name in FILESYSTEM_TOOL_NAMES and not project_bound:
-            filesystem_blocked.append(name)
+            if knowledge_routes and name in KNOWLEDGE_ROUTE_READ_TOOLS:
+                presented.append(name)
+            else:
+                filesystem_blocked.append(name)
         elif name in SHELL_TOOL_NAMES and not project_bound:
             shell_blocked.append(name)
         elif name in enabled:
