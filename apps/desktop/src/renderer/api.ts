@@ -260,7 +260,7 @@ export const api = {
   createContextCapture: (content: string) =>
     request<ContextCapture>("/v1/knowledge/captures", {
       method: "POST",
-      body: JSON.stringify({ content, source: "debug-panel" }),
+      body: JSON.stringify({ content, source: "desktop" }),
     }),
   subscribeAgentRun: (
     runId: string,

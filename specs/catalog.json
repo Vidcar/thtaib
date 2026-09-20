@@ -1064,6 +1064,9 @@
       "code": [
         "apps/desktop/src/renderer/App.tsx",
         "apps/desktop/src/renderer/api.ts",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/ModelsPanel.tsx",
+        "apps/desktop/src/renderer/KnowledgePanel.tsx",
         "apps/desktop/src/main/main.ts",
         "apps/desktop/src/main/localTrust.ts"
       ],
@@ -1131,6 +1134,7 @@
         "apps/desktop/src/renderer/ChatPanel.tsx",
         "apps/desktop/src/renderer/AgentRunPanel.tsx",
         "apps/desktop/src/renderer/InterruptApproval.tsx",
+        "apps/desktop/src/renderer/RunProgress.tsx",
         "apps/desktop/src/renderer/LabPanel.tsx"
       ],
       "tests": [
@@ -1172,6 +1176,7 @@
         "apps/desktop/src/renderer/api.ts",
         "apps/desktop/src/renderer/ChatPanel.tsx",
         "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/desktop/src/renderer/RunProgress.tsx",
         "apps/desktop/src/renderer/LabPanel.tsx"
       ],
       "tests": [

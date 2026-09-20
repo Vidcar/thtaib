@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { deploymentOptionLabel } from "./display";
+import { EmptyState } from "./EmptyState";
+import { errorMessage } from "./errors";
 import { InterruptApproval } from "./InterruptApproval";
-import { EffectiveSetupNotes } from "./settingsNotes";
+import { Notice } from "./Notice";
+import { RunProgress } from "./RunProgress";
 import {
   isAgentRunLive,
   isDeclaredEmbedder,
@@ -16,21 +20,23 @@ export function AgentRunPanel() {
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
-  const [task, setTask] = useState("Use the echo tool to repeat: harness-ok");
+  const [task, setTask] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
 
   async function refresh(): Promise<void> {
     const [nextDeployments, tools] = await Promise.all([api.deployments(), api.agentTools()]);
     setDeployments(nextDeployments);
     setEnabledTools(tools.enabled);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
+    setLoadError("");
   }
 
   useEffect(() => {
     void refresh().catch((error: unknown) => {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setLoadError(errorMessage(error));
     });
   }, []);
 
@@ -46,25 +52,33 @@ export function AgentRunPanel() {
       if (controller.signal.aborted) {
         return;
       }
-      setMessage(error instanceof Error ? error.message : String(error));
+      setMessage(errorMessage(error));
     });
     return () => controller.abort();
   }, [liveRunId]);
 
-  return (
-    <section className="panel">
-      <h2>Agent run</h2>
-      <p className="hint">
-        Embedded Deep Agents harness debug panel. This is not Chat and not Builder. The
-        adapter talks only to a model-manager deployment endpoint and starts no inference
-        process. Host shell execute needs a bound project cwd and pauses dangerous
-        commands here for Approve or Deny.
-      </p>
+  function fail(error: unknown): void {
+    setMessage(errorMessage(error));
+  }
 
-      <div className="card">
-        <h3>Enabled tools</h3>
-        <p>{enabledTools.length ? enabledTools.join(", ") : "none"}</p>
-      </div>
+  if (loadError) {
+    return (
+      <section className="surface">
+        <h2>Agent run</h2>
+        <Notice tone="error">{loadError}</Notice>
+      </section>
+    );
+  }
+
+  return (
+    <section className="surface">
+      <header className="surface-head">
+        <h2>Agent run</h2>
+        <p className="lede">
+          One-off harness task. Prefer Chat for conversation. Approvals here are the same Deep Agents
+          interrupt, not a durable inbox.
+        </p>
+      </header>
 
       <form
         className="card"
@@ -81,137 +95,80 @@ export function AgentRunPanel() {
             )
             .then((next) => {
               setRun(next);
-              setMessage(`Started ${next.id}`);
+              setMessage("");
             })
-            .catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)));
+            .catch(fail);
         }}
       >
-        <h3>Start one task</h3>
         <label>
           Deployment
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
+            {deployments.length === 0 ? <option value="">No deployment</option> : null}
             {deployments.map((deployment) => (
               <option key={deployment.id} value={deployment.id}>
-                {deployment.display_name} · {deployment.status}
+                {deploymentOptionLabel(deployment)}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Embedding deployment (optional retrieval)
+          Embedding deployment (optional)
           <select
             value={embeddingDeploymentId}
             onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
           >
-            <option value="">None — no retrieval requested</option>
+            <option value="">None — no retrieval</option>
             {deployments.map((deployment) => (
               <option key={deployment.id} value={deployment.id}>
-                {deployment.display_name} · {deployment.status}
-                {isDeclaredEmbedder(deployment) ? " · embedding:on" : ""}
+                {deploymentOptionLabel(deployment)}
+                {isDeclaredEmbedder(deployment) ? "" : " (not declared embedding:on)"}
               </option>
             ))}
           </select>
         </label>
-        <p className="hint">
-          Selecting an embedder requests retrieve-and-offload and fails closed if that
-          deployment is missing, unloaded, or not embedding:on. A GGUF file on disk is
-          not registered automatically.
-        </p>
         <label>
-          Project workspace path (required for host shell)
+          Project folder (required for host shell)
           <input
             value={projectPath}
             onChange={(event) => setProjectPath(event.target.value)}
-            placeholder="%LOCALAPPDATA%\LocalAIWorkbench\workspaces\…"
+            placeholder="Leave empty for visibility tools only"
           />
         </label>
         <label>
           Task
           <textarea value={task} onChange={(event) => setTask(event.target.value)} />
         </label>
+        <p className="hint">Tools: {enabledTools.length ? enabledTools.join(", ") : "none"}</p>
         <div className="actions">
-          <button type="submit" disabled={!deploymentId}>
+          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId)}>
             Start
-          </button>
-          <button
-            type="button"
-            disabled={!run || !isAgentRunLive(run.status)}
-            onClick={() => {
-              if (!run) {
-                return;
-              }
-              void api
-                .cancelAgentRun(run.id)
-                .then(setRun)
-                .catch((error: unknown) =>
-                  setMessage(error instanceof Error ? error.message : String(error)),
-                );
-            }}
-          >
-            Cancel
           </button>
         </div>
       </form>
 
+      {pendingInterrupt && run ? (
+        <InterruptApproval
+          pending={pendingInterrupt}
+          onDecide={(type) => {
+            void api.decideAgentRunInterrupt(run.id, type).then(setRun).catch(fail);
+          }}
+        />
+      ) : null}
+
       {run ? (
         <div className="card">
-          <h3>
-            {run.id}
-            <span className="badge">{run.status}</span>
-          </h3>
-          <p>
-            harness: {run.harness} · stop: {run.stop_reason ?? "n/a"} · budgets:{" "}
-            {run.budgets ? "set" : "unset"} · host shell:{" "}
-            {run.host_shell?.available ? `cwd ${run.host_shell.cwd ?? ""}` : "unavailable"}
-          </p>
-          {pendingInterrupt ? (
-            <InterruptApproval
-              pending={pendingInterrupt}
-              onDecide={(type) => {
-                void api
-                  .decideAgentRunInterrupt(run.id, type)
-                  .then(setRun)
-                  .catch((error: unknown) =>
-                    setMessage(error instanceof Error ? error.message : String(error)),
-                  );
-              }}
-            />
-          ) : null}
-          <h3>Run linkage (application records)</h3>
-          <pre className="json">
-            {JSON.stringify(
-              {
-                thread_id: run.thread_id ?? null,
-                checkpoint_ids: run.checkpoint_ids ?? [],
-                related_files: run.related_files ?? [],
-              },
-              null,
-              2,
-            )}
-          </pre>
-          <p>enabled tools: {run.enabled_tools.join(", ")}</p>
-          <p>presented tools: {run.presented_tools.join(", ")}</p>
-          {run.error ? <p className="status">{run.error}</p> : null}
-          <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
-          <EffectiveSetupNotes
-            unsupportedStartup={run.effective_setup?.unsupported?.startup}
-            retiredStartup={run.effective_setup?.retired?.startup}
-            startupMismatches={run.effective_setup?.startup_mismatches}
+          <RunProgress
+            run={run}
+            title={run.task}
+            onCancel={() => {
+              void api.cancelAgentRun(run.id).then(setRun).catch(fail);
+            }}
           />
-          <pre className="json">{JSON.stringify(run.effective_setup ?? null, null, 2)}</pre>
-          <h3>Captured model request</h3>
-          <pre className="json">{JSON.stringify(run.model_requests, null, 2)}</pre>
-          <h3>Evidence (not judgement)</h3>
-          <pre className="json">{JSON.stringify(run.completion?.evidence ?? null, null, 2)}</pre>
-          <h3>Judgement</h3>
-          <pre className="json">{JSON.stringify(run.completion?.judgement ?? null, null, 2)}</pre>
-          <h3>Events</h3>
-          <pre className="json">{JSON.stringify(run.events, null, 2)}</pre>
         </div>
       ) : (
-        <p className="hint">No harness run yet.</p>
+        <EmptyState title="No run yet">Start a task after a deployment is available.</EmptyState>
       )}
-      {message ? <p className="status">{message}</p> : null}
+      {message ? <Notice tone="error">{message}</Notice> : null}
     </section>
   );
 }

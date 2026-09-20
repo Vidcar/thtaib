@@ -1,59 +1,104 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
+import { conversationTitle, deploymentOptionLabel, displayedTranscript, formatWhen } from "./display";
+import { EmptyState } from "./EmptyState";
+import { errorMessage } from "./errors";
 import { InterruptApproval } from "./InterruptApproval";
-import { EffectiveSetupNotes, SettingsNotes } from "./settingsNotes";
+import { knowledgeKindLabel } from "./labels";
+import { Notice } from "./Notice";
+import { RunProgress } from "./RunProgress";
+import { SettingsNotes } from "./settingsNotes";
+import { StatusBadge } from "./StatusBadge";
 import {
   isAgentRunLive,
-  visiblePendingInterrupt,
   isDeclaredEmbedder,
+  visiblePendingInterrupt,
   type ChatConversation,
+  type ChatMessage,
   type Deployment,
   type KnowledgeEntry,
-  type LabWorkspace,
   type RunProfile,
 } from "./types";
+
+function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[]) {
+  const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
+  return {
+    knowledge_version_refs: selectedVersionIds,
+    memory_version_refs: selected
+      .filter((entry) => entry.kind === "memory")
+      .map((entry) => entry.current_version_id),
+    skill_version_refs: selected
+      .filter((entry) => entry.kind === "skill")
+      .map((entry) => entry.current_version_id),
+    protected_instruction_version_refs: selected
+      .filter((entry) => entry.kind === "protected_instruction")
+      .map((entry) => entry.current_version_id),
+  };
+}
+
+function messageRoleLabel(role: ChatMessage["role"]): string {
+  switch (role) {
+    case "user":
+      return "You";
+    case "assistant":
+      return "Assistant";
+    case "system":
+      return "System";
+    default: {
+      const unexpected: never = role;
+      return unexpected;
+    }
+  }
+}
 
 export function ChatPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
-  const [workspaces, setWorkspaces] = useState<LabWorkspace[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [profileId, setProfileId] = useState("");
-  const [workspaceId, setWorkspaceId] = useState("");
   const [projectPath, setProjectPath] = useState("");
-  const [task, setTask] = useState("Ask a question or complete a task. File tools need a project path.");
+  const [task, setTask] = useState("");
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [sending, setSending] = useState(false);
+  const transcriptEnd = useRef<HTMLDivElement | null>(null);
+
+  function rememberConversation(next: ChatConversation): void {
+    setConversation(next);
+    setConversations((current) => {
+      const others = current.filter((item) => item.id !== next.id);
+      return [next, ...others];
+    });
+  }
 
   async function refresh(): Promise<void> {
-    const [nextDeployments, nextProfiles, nextWorkspaces, tools, nextConversations, nextKnowledge] =
-      await Promise.all([
-        api.deployments(),
-        api.profiles(),
-        api.workspaces(),
-        api.agentTools(),
-        api.chatConversations(),
-        api.knowledgeEntries(),
-      ]);
+    const [nextDeployments, nextProfiles, tools, nextConversations, nextKnowledge] = await Promise.all([
+      api.deployments(),
+      api.profiles(),
+      api.agentTools(),
+      api.chatConversations(),
+      api.knowledgeEntries(),
+    ]);
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
-    setWorkspaces(nextWorkspaces);
     setEnabledTools(tools.enabled);
     setConversations(nextConversations);
     setKnowledgeEntries(nextKnowledge);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
     setProfileId((current) => current || nextProfiles[0]?.id || "");
+    setLoadError("");
   }
 
   useEffect(() => {
     void refresh().catch((error: unknown) => {
-      setMessage(error instanceof Error ? error.message : String(error));
+      setLoadError(errorMessage(error));
     });
   }, []);
 
@@ -70,7 +115,7 @@ export function ChatPanel() {
     const controller = new AbortController();
     void api
       .subscribeChatConversation(conversationId, controller.signal, (next) => {
-        setConversation(next);
+        rememberConversation(next);
         if (next.deploy_health?.message) {
           setMessage(next.deploy_health.message);
         } else if (next.current_run?.error) {
@@ -81,375 +126,344 @@ export function ChatPanel() {
         if (controller.signal.aborted) {
           return;
         }
-        setMessage(error instanceof Error ? error.message : String(error));
+        setMessage(errorMessage(error));
       });
     return () => controller.abort();
   }, [conversationId, liveRunId]);
 
+  const transcript = conversation ? displayedTranscript(conversation) : [];
+
+  useEffect(() => {
+    transcriptEnd.current?.scrollIntoView({ block: "end" });
+  }, [transcript.length, liveRunId]);
+
   function fail(error: unknown): void {
-    setMessage(error instanceof Error ? error.message : String(error));
+    setMessage(errorMessage(error));
+  }
+
+  function startFresh(): void {
+    setConversation(null);
+    setTask("");
+    setMessage("");
   }
 
   const runBusy = conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false;
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
   const pendingInterrupt = visiblePendingInterrupt(conversation?.current_run);
+  const embedderDeployments = deployments.filter((item) => isDeclaredEmbedder(item));
+  const chatDeployments = deployments.filter((item) => !isDeclaredEmbedder(item));
+  const modelChoices = chatDeployments.length > 0 ? chatDeployments : deployments;
+  const tools = conversation?.enabled_tools ?? enabledTools;
+
+  async function sendTurn(): Promise<void> {
+    const text = task.trim();
+    if (!text || !deploymentId || sending || runBusy) {
+      return;
+    }
+    setSending(true);
+    setMessage("");
+    try {
+      const refs = knowledgePayload(knowledgeEntries, selectedKnowledgeIds);
+      const created =
+        conversation ??
+        (await api.createChatConversation({
+          deployment_id: deploymentId,
+          profile_id: profileId || undefined,
+          project_path: projectPath || undefined,
+          embedding_deployment_id: embeddingDeploymentId || undefined,
+          ...refs,
+        }));
+      rememberConversation(created);
+      const next = await api.startChat(created.id, {
+        task: text,
+        deployment_id: deploymentId,
+        profile_id: profileId || undefined,
+        project_path: projectPath || undefined,
+        embedding_deployment_id: embeddingDeploymentId || undefined,
+        ...refs,
+      });
+      rememberConversation(next);
+      setTask("");
+      if (next.deploy_health?.message) {
+        setMessage(next.deploy_health.message);
+      }
+    } catch (error: unknown) {
+      fail(error);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (loadError) {
+    return (
+      <section className="surface">
+        <h2>Chat</h2>
+        <Notice tone="error">{loadError}</Notice>
+        <button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>
+          Retry
+        </button>
+      </section>
+    );
+  }
 
   return (
-    <section className="panel">
-      <h2>Chat</h2>
-      <p className="hint">
-        Debug-quality Chat. Follow-ups reuse the conversation LangGraph thread on the embedded Deep
-        Agents harness. Selected profile per-request settings and selected knowledge versions are
-        resolved before the run (selected ≠ loaded ≠ applied). Transcript is displayed history, not
-        harness context and not the working project. New conversation allocates a new thread;
-        project files and permitted durable knowledge stay. A project folder is optional; file
-        tools and the host shell are unavailable until one is bound. Dangerous host-shell
-        commands pause here for Approve or Deny (Deep Agents interrupt_on, not a durable
-        inbox). History edits are display-only. A model/profile change applies to the next run
-        on the same thread. A profile agent.system_prompt is the identity; Chat surface
-        instructions are composed under it, not a silent replacement. Live assistant
-        completion requires a healthy managed/connected llama.cpp — harness model_requests /
-        thread reuse prove continuity only. This is not Builder polish.
-      </p>
-
-      <div className="card">
-        <h3>Enabled tools</h3>
-        <p>
-          {(conversation?.enabled_tools ?? enabledTools).length
-            ? (conversation?.enabled_tools ?? enabledTools).join(", ")
-            : "none"}
-        </p>
-        {conversation && conversation.filesystem_tools_available === false ? (
-          <p className="hint">File tools are unavailable until a project folder is bound.</p>
-        ) : null}
-        {conversation && conversation.shell_tools_available === false ? (
-          <p className="hint">
-            Host shell (execute) is unavailable until a project folder is bound as cwd. A
-            home-directory default is not invented.
-          </p>
-        ) : null}
-      </div>
-
-      <form
-        className="card"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void (async () => {
-            const knowledgeRefs = selectedKnowledgeIds;
-            const created =
-              conversation ??
-              (await api.createChatConversation({
-                deployment_id: deploymentId,
-                profile_id: profileId || undefined,
-                project_path: projectPath || undefined,
-                workspace_id: workspaceId || undefined,
-                knowledge_version_refs: knowledgeRefs,
-                embedding_deployment_id: embeddingDeploymentId || undefined,
-              }));
-            setConversation(created);
-            const next = await api.startChat(created.id, {
-              task,
-              deployment_id: deploymentId,
-              profile_id: profileId || undefined,
-              project_path: projectPath || undefined,
-              workspace_id: workspaceId || undefined,
-              knowledge_version_refs: knowledgeRefs,
-              embedding_deployment_id: embeddingDeploymentId || undefined,
-            });
-            setConversation(next);
-            setConversations((current) => {
-              const others = current.filter((item) => item.id !== next.id);
-              return [next, ...others];
-            });
-            setMessage(
-              next.deploy_health?.message ??
-                `Started harness run ${next.current_run?.id ?? next.id} on thread ${next.thread_id ?? "unassigned"}`,
-            );
-          })().catch(fail);
-        }}
-      >
-        <h3>Compose</h3>
-        <label>
-          Reopen conversation
-          <select
-            value={conversation?.id ?? ""}
-            onChange={(event) => {
-              const nextId = event.target.value;
-              if (!nextId) {
-                setConversation(null);
-                setMessage("Fresh conversation. Project files and durable knowledge are unchanged.");
-                return;
-              }
-              void api
-                .chatConversation(nextId)
-                .then((next) => {
-                  setConversation(next);
-                  setDeploymentId(next.deployment_id);
-                  setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
-                  setProfileId(next.profile_id ?? "");
-                  setWorkspaceId(next.workspace_id ?? "");
-                  setProjectPath(next.project_path ?? "");
-                  setSelectedKnowledgeIds([
-                    ...(next.memory_version_refs ?? []),
-                    ...(next.skill_version_refs ?? []),
-                    ...(next.protected_instruction_version_refs ?? []),
-                  ]);
-                  setMessage(`Reopened ${next.id} on thread ${next.thread_id ?? "unassigned"}.`);
-                })
-                .catch(fail);
-            }}
-          >
-            <option value="">New conversation</option>
-            {conversations.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.id} · thread {item.thread_id ?? "unassigned"}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Deployment
-          <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
-            {deployments.map((deployment) => (
-              <option key={deployment.id} value={deployment.id}>
-                {deployment.display_name} · {deployment.status}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Embedding deployment (optional retrieval)
-          <select
-            value={embeddingDeploymentId}
-            onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
-          >
-            <option value="">None — knowledge stays prompt-append; no retrieval</option>
-            {deployments.map((deployment) => (
-              <option key={deployment.id} value={deployment.id}>
-                {deployment.display_name} · {deployment.status}
-                {isDeclaredEmbedder(deployment) ? " · embedding:on" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="hint">
-          Retrieval is requested only when an embedding deployment is selected. That
-          deployment must already be loaded with embedding:on and pooling other than
-          none. A GGUF file on disk is not a deployment. Empty keeps knowledge as
-          always-load context and does not fail closed.
-        </p>
-        <label>
-          Profile
-          <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
-            <option value="">None</option>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.display_name}
-                {profile.bags.startup.unsupported.length || profile.bags.startup.retired.length
-                  ? " · has unsupported/retired startup"
-                  : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selectedProfile ? (
-          <SettingsNotes
-            unsupported={selectedProfile.bags.startup.unsupported}
-            retired={selectedProfile.bags.startup.retired}
-          />
-        ) : null}
-        <label>
-          Lab workspace (optional)
-          <select
-            value={workspaceId}
-            onChange={(event) => {
-              const nextId = event.target.value;
-              setWorkspaceId(nextId);
-              const selected = workspaces.find((item) => item.id === nextId);
-              if (selected) {
-                setProjectPath(selected.path);
-              }
-            }}
-          >
-            <option value="">Use project path</option>
-            {workspaces.map((workspace) => (
-              <option key={workspace.id} value={workspace.id}>
-                {workspace.display_name} · {workspace.path}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Project workspace path
-          <input
-            value={projectPath}
-            onChange={(event) => setProjectPath(event.target.value)}
-            placeholder="%LOCALAPPDATA%\LocalAIWorkbench\workspaces\…"
-          />
-        </label>
-        <fieldset>
-          <legend>Knowledge versions (content is loaded; id-only does not apply)</legend>
-          {knowledgeEntries.length === 0 ? (
-            <p className="hint">No knowledge entries. Create them on the Knowledge panel.</p>
-          ) : (
-            knowledgeEntries.map((entry) => (
-              <label key={entry.id}>
-                <input
-                  type="checkbox"
-                  checked={selectedKnowledgeIds.includes(entry.current_version_id)}
-                  onChange={() => {
-                    const versionId = entry.current_version_id;
-                    setSelectedKnowledgeIds((current) =>
-                      current.includes(versionId)
-                        ? current.filter((item) => item !== versionId)
-                        : [...current, versionId],
-                    );
-                  }}
-                />{" "}
-                {entry.kind} · {entry.display_name ?? entry.id} · {entry.current_version_id}
-              </label>
-            ))
-          )}
-        </fieldset>
-        <label>
-          Task
-          <textarea value={task} onChange={(event) => setTask(event.target.value)} />
-        </label>
-        <div className="actions">
-          <button type="submit" disabled={!deploymentId || runBusy}>
-            Start
-          </button>
-          <button
-            type="button"
-            disabled={!conversation || !runBusy}
-            onClick={() => {
-              if (!conversation) {
-                return;
-              }
-              void api
-                .cancelChat(conversation.id)
-                .then(setConversation)
-                .catch(fail);
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setConversation(null);
-              setMessage("Fresh conversation. Project files and durable knowledge are unchanged.");
-            }}
-          >
-            New conversation
-          </button>
-          <button
-            type="button"
-            disabled={!conversation}
-            onClick={() => {
-              if (!conversation) {
-                return;
-              }
-              void api
-                .replaceChatTranscript(conversation.id, [])
-                .then(setConversation)
-                .catch(fail);
-            }}
-          >
-            Clear transcript
+    <section className="chat-layout">
+      <aside className="chat-list" aria-label="Conversations">
+        <div className="chat-list-head">
+          <h2>Chat</h2>
+          <button type="button" onClick={startFresh}>
+            New
           </button>
         </div>
-      </form>
+        {conversations.length === 0 ? (
+          <p className="hint">No conversations yet.</p>
+        ) : (
+          <ul className="nav-list">
+            {conversations.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className={item.id === conversation?.id ? "nav-item active" : "nav-item"}
+                  onClick={() => {
+                    void api
+                      .chatConversation(item.id)
+                      .then((next) => {
+                        rememberConversation(next);
+                        setDeploymentId(next.deployment_id);
+                        setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
+                        setProfileId(next.profile_id ?? "");
+                        setProjectPath(next.project_path ?? "");
+                        setSelectedKnowledgeIds([
+                          ...(next.memory_version_refs ?? []),
+                          ...(next.skill_version_refs ?? []),
+                          ...(next.protected_instruction_version_refs ?? []),
+                        ]);
+                        setMessage("");
+                      })
+                      .catch(fail);
+                  }}
+                >
+                  <span className="nav-item-title">{conversationTitle(item)}</span>
+                  <span className="nav-item-meta">{formatWhen(item.updated_at)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
 
-      {conversation ? (
-        <div className="card">
-          <h3>
-            {conversation.id}
-            <span className="badge">{conversation.current_run?.status ?? "idle"}</span>
-          </h3>
-          <p>
-            harness: {conversation.harness} · second loop: {String(conversation.second_agent_loop)} ·
-            project: {conversation.project_path ?? "(none)"} · file tools:{" "}
-            {conversation.filesystem_tools_available ? "available" : "unavailable"} · host
-            shell: {conversation.shell_tools_available ? "available" : "unavailable"}
-          </p>
-          {pendingInterrupt ? (
-            <InterruptApproval
-              pending={pendingInterrupt}
-              onDecide={(type) => {
-                void api.decideChatInterrupt(conversation.id, type).then(setConversation).catch(fail);
-              }}
+      <div className="chat-main">
+        <div className="chat-setup card">
+          <div className="setup-grid">
+            <label>
+              Model
+              <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
+                {modelChoices.length === 0 ? <option value="">No deployment</option> : null}
+                {modelChoices.map((deployment) => (
+                  <option key={deployment.id} value={deployment.id}>
+                    {deploymentOptionLabel(deployment)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Profile
+              <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
+                <option value="">None</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Project folder (optional)
+              <input
+                value={projectPath}
+                onChange={(event) => setProjectPath(event.target.value)}
+                placeholder="Leave empty to chat without a project"
+              />
+            </label>
+          </div>
+          {selectedProfile ? (
+            <SettingsNotes
+              unsupported={selectedProfile.bags.startup.unsupported}
+              retired={selectedProfile.bags.startup.retired}
             />
           ) : null}
-          <p>
-            conversation: {conversation.id} · thread: {conversation.thread_id ?? "unassigned"} ·
-            deployment: {conversation.deployment_id} · embedder:{" "}
-            {conversation.embedding_deployment_id ?? "none"} · profile:{" "}
-            {conversation.profile_id ?? "none"}
+          <details>
+            <summary>Knowledge and retrieval</summary>
+            <p className="hint">
+              Selected versions are bound for the next turn. A project folder is optional; file tools
+              and the host shell stay off until one is bound. Retrieval needs a loaded embedding
+              deployment — a GGUF file on disk is not enough.
+            </p>
+            <label>
+              Embedding deployment
+              <select
+                value={embeddingDeploymentId}
+                onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
+              >
+                <option value="">None — no retrieval</option>
+                {embedderDeployments.map((deployment) => (
+                  <option key={deployment.id} value={deployment.id}>
+                    {deploymentOptionLabel(deployment)}
+                  </option>
+                ))}
+                {embedderDeployments.length === 0
+                  ? deployments
+                      .filter((item) => !isDeclaredEmbedder(item))
+                      .map((deployment) => (
+                        <option key={deployment.id} value={deployment.id}>
+                          {deploymentOptionLabel(deployment)} (not declared embedding:on)
+                        </option>
+                      ))
+                  : null}
+              </select>
+            </label>
+            <fieldset className="choice-set">
+              <legend>Knowledge versions</legend>
+              {knowledgeEntries.length === 0 ? (
+                <p className="hint">None yet. Create them on Knowledge.</p>
+              ) : (
+                knowledgeEntries.map((entry) => (
+                  <label key={entry.id} className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={selectedKnowledgeIds.includes(entry.current_version_id)}
+                      onChange={() => {
+                        const versionId = entry.current_version_id;
+                        setSelectedKnowledgeIds((current) =>
+                          current.includes(versionId)
+                            ? current.filter((item) => item !== versionId)
+                            : [...current, versionId],
+                        );
+                      }}
+                    />
+                    {knowledgeKindLabel(entry.kind)} · {entry.display_name ?? entry.id}
+                  </label>
+                ))
+              )}
+            </fieldset>
+          </details>
+          <p className="hint">
+            Tools: {tools.length ? tools.join(", ") : "none"}
+            {conversation && conversation.filesystem_tools_available === false
+              ? " · project files unavailable"
+              : ""}
+            {conversation && conversation.shell_tools_available === false ? " · host shell unavailable" : ""}
           </p>
-          <h3>Transcript (display only — not harness context)</h3>
-          <pre className="json">{JSON.stringify(conversation.transcript, null, 2)}</pre>
-          {conversation.deploy_health?.message ? (
-            <p className="status">{conversation.deploy_health.message}</p>
-          ) : conversation.current_run?.error ? (
-            <p className="status">{conversation.current_run.error}</p>
-          ) : null}
-          <h3>Deploy health (live completion ≠ continuity)</h3>
-          <pre className="json">{JSON.stringify(conversation.deploy_health ?? null, null, 2)}</pre>
-          <h3>Continuity (conversation ↔ thread ↔ run)</h3>
-          <pre className="json">
-            {JSON.stringify(
-              conversation.continuity ?? {
-                conversation_id: conversation.id,
-                thread_id: conversation.thread_id,
-                run_ids: conversation.run_ids,
-                current_run_id: conversation.current_run_id,
-              },
-              null,
-              2,
-            )}
-          </pre>
-          <h3>Run linkage (application records)</h3>
-          <pre className="json">
-            {JSON.stringify(
-              {
-                conversation_id: conversation.id,
-                conversation_thread_id: conversation.thread_id ?? null,
-                run_thread_id: conversation.current_run?.thread_id ?? null,
-                checkpoint_ids: conversation.current_run?.checkpoint_ids ?? [],
-                related_files: conversation.current_run?.related_files ?? [],
-              },
-              null,
-              2,
-            )}
-          </pre>
-          <h3>Effective setup (selected ≠ loaded ≠ applied)</h3>
-          <EffectiveSetupNotes
-            unsupportedStartup={conversation.current_run?.effective_setup?.unsupported?.startup}
-            retiredStartup={conversation.current_run?.effective_setup?.retired?.startup}
-            startupMismatches={conversation.current_run?.effective_setup?.startup_mismatches}
-          />
-          <pre className="json">
-            {JSON.stringify(conversation.current_run?.effective_setup ?? null, null, 2)}
-          </pre>
-          <h3>Captured model requests</h3>
-          <pre className="json">
-            {JSON.stringify(conversation.current_run?.model_requests ?? [], null, 2)}
-          </pre>
-          <h3>Harness events</h3>
-          <pre className="json">{JSON.stringify(conversation.events, null, 2)}</pre>
-          <h3>Evidence (not judgement)</h3>
-          <pre className="json">
-            {JSON.stringify(conversation.current_run?.completion?.evidence ?? null, null, 2)}
-          </pre>
         </div>
-      ) : (
-        <p className="hint">
-          No Chat conversation yet. Bind a deployment, then Start. A project path is optional; file
-          tools need one.
-        </p>
-      )}
-      {message ? <p className="status">{message}</p> : null}
+
+        <div className="transcript" aria-live="polite">
+          {deployments.length === 0 ? (
+            <EmptyState title="No running model">
+              Open Models, import a bundle, and start or attach a deployment. Chat will not invent a
+              reply without one.
+            </EmptyState>
+          ) : !conversation && transcript.length === 0 ? (
+            <EmptyState title="Start a conversation">
+              Send a message. A project folder is optional. Without one, the assistant can talk but
+              cannot use file tools or the host shell.
+            </EmptyState>
+          ) : (
+            transcript.map((item, index) => (
+              <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}`}>
+                <header>
+                  <strong>{messageRoleLabel(item.role)}</strong>
+                  <time>{formatWhen(item.at)}</time>
+                </header>
+                <p>{item.content}</p>
+              </article>
+            ))
+          )}
+          {runBusy && !pendingInterrupt ? (
+            <p className="hint">
+              Working… <StatusBadge status={conversation?.current_run?.status} /> A disconnected
+              window is not evidence the run ended.
+            </p>
+          ) : null}
+          <div ref={transcriptEnd} />
+        </div>
+
+        {pendingInterrupt && conversation ? (
+          <InterruptApproval
+            pending={pendingInterrupt}
+            busy={sending}
+            onDecide={(type) => {
+              void api.decideChatInterrupt(conversation.id, type).then(rememberConversation).catch(fail);
+            }}
+          />
+        ) : null}
+
+        {conversation?.current_run ? (
+          <details className="card">
+            <summary>
+              Run progress <StatusBadge status={conversation.current_run.status} />
+            </summary>
+            <RunProgress
+              run={conversation.current_run}
+              onCancel={() => {
+                void api.cancelChat(conversation.id).then(rememberConversation).catch(fail);
+              }}
+            />
+          </details>
+        ) : null}
+
+        {conversation?.deploy_health?.message ? (
+          <Notice tone={conversation.deploy_health.healthy === false ? "error" : "warn"}>
+            {conversation.deploy_health.message}
+          </Notice>
+        ) : null}
+        {message && message !== conversation?.deploy_health?.message ? (
+          <Notice tone="error">{message}</Notice>
+        ) : null}
+
+        <form
+          className="compose"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void sendTurn();
+          }}
+        >
+          <label>
+            Message
+            <textarea
+              value={task}
+              onChange={(event) => setTask(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendTurn();
+                }
+              }}
+              placeholder="Ask or give a task. Shift+Enter for a new line."
+              disabled={sending}
+            />
+          </label>
+          <div className="actions">
+            <button type="submit" disabled={!deploymentId || !task.trim() || runBusy || sending}>
+              {sending || runBusy ? "Sending…" : "Send"}
+            </button>
+            <button
+              type="button"
+              disabled={!conversation || !runBusy}
+              onClick={() => {
+                if (!conversation) {
+                  return;
+                }
+                void api.cancelChat(conversation.id).then(rememberConversation).catch(fail);
+              }}
+            >
+              Cancel
+            </button>
+            <button type="button" onClick={startFresh}>
+              New conversation
+            </button>
+          </div>
+        </form>
+      </div>
     </section>
   );
 }
