@@ -220,6 +220,16 @@ class LabService:
             created_at=utc_now(),
             snapshot_path=str(self.paths.snapshots / snapshot_id),
             knowledge=refs.binding(),
+            embedding_deployment_id=(
+                request.embedding_deployment_id
+                if request.embedding_deployment_id is not None
+                else (run.embedding_deployment_id if run is not None else None)
+            ),
+            retrieval_project_paths=(
+                list(request.retrieval_project_paths)
+                if request.retrieval_project_paths is not None
+                else (list(run.retrieval_project_paths) if run is not None else [])
+            ),
         )
         return self.store.put_case(case)
 
@@ -346,6 +356,8 @@ class LabService:
                 memory_version_refs=case.memory_version_refs,
                 skill_version_refs=case.skill_version_refs,
                 protected_instruction_version_refs=case.protected_instruction_version_refs,
+                embedding_deployment_id=case.embedding_deployment_id,
+                retrieval_project_paths=list(case.retrieval_project_paths),
             )
         )
         parent_after = project_fingerprints(Path(parent.path))
@@ -386,6 +398,8 @@ class LabService:
                 skill_version_refs=case.skill_version_refs,
                 protected_instruction_version_refs=case.protected_instruction_version_refs,
                 knowledge=case.knowledge,
+                embedding_deployment_id=case.embedding_deployment_id,
+                retrieval_project_paths=list(case.retrieval_project_paths),
             ),
             evidence=_evidence_from_run(started),
             judgement=started.completion.judgement.model_dump() if started.completion else {},

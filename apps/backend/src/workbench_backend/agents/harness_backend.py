@@ -23,7 +23,12 @@ from workbench_backend.paths import WorkbenchPaths
 # CompositeBackend.artifacts_root is "/". See:
 # https://docs.langchain.com/oss/python/deepagents/backends
 # and deepagents/middleware/filesystem.py (_large_tool_results_prefix).
-RESERVED_FRAMEWORK_PREFIXES = ("/large_tool_results/", "/conversation_history/")
+RESERVED_FRAMEWORK_PREFIXES = (
+    "/large_tool_results/",
+    "/conversation_history/",
+    "/retrieved/",
+)
+RETRIEVED_PREFIX = "/retrieved/"
 HARNESS_SCRATCH_DIRNAME = "harness"
 _UNSAFE_THREAD_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -56,7 +61,7 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
     otherwise ``StateBackend`` so a file write cannot land in a surprise
     directory. The project default is ``LocalShellBackend`` only when
     ``execute`` is presented; otherwise ``FilesystemBackend``. Reserved
-    prefixes always route to product-data scratch.
+    prefixes including ``/retrieved/`` always route to product-data scratch.
     """
 
     if run.tool_mode is ToolMode.recorded_tool:
@@ -64,11 +69,14 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
     scratch = harness_scratch_root(paths, run.thread_id or run.id)
     large = scratch / "large_tool_results"
     history = scratch / "conversation_history"
+    retrieved = scratch / "retrieved"
     large.mkdir(parents=True, exist_ok=True)
     history.mkdir(parents=True, exist_ok=True)
+    retrieved.mkdir(parents=True, exist_ok=True)
     routes: dict[str, BackendProtocol] = {
         "/large_tool_results/": FilesystemBackend(root_dir=large, virtual_mode=True),
         "/conversation_history/": FilesystemBackend(root_dir=history, virtual_mode=True),
+        RETRIEVED_PREFIX: FilesystemBackend(root_dir=retrieved, virtual_mode=True),
     }
     default: BackendProtocol
     if host_shell_requested(run):

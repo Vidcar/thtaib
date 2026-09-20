@@ -35,9 +35,14 @@ from workbench_backend.inference.schemas import (
     ModelBundle,
     ProcessIdentity,
     ResourceUsage,
+    SettingsBags,
     SmokeResult,
 )
-from workbench_backend.inference.settings import resolve_bags, startup_cli_args
+from workbench_backend.inference.settings import (
+    resolve_bags,
+    resolve_declared_startup,
+    startup_cli_args,
+)
 from workbench_backend.inference.store import RecordStore
 
 _LIVE_MANAGED = {
@@ -125,12 +130,16 @@ class DeploymentService:
             )
         health = self.probe.health(endpoint)
         status = DeploymentStatus.running if health.healthy else DeploymentStatus.unhealthy
+        startup = resolve_declared_startup(request.startup)
         deployment = Deployment(
             id=new_id("deploy"),
             display_name=request.display_name or f"connected:{parsed.netloc}",
             scope=ManagementScope.connected,
             status=status,
             endpoint=endpoint,
+            requested_startup=dict(request.startup or {}),
+            applied_startup=startup.applied,
+            settings=SettingsBags(startup=startup),
             health=health,
             resource_usage=ResourceUsage(
                 available=False,

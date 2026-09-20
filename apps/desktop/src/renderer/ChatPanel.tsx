@@ -6,6 +6,7 @@ import { EffectiveSetupNotes, SettingsNotes } from "./settingsNotes";
 import {
   isAgentRunLive,
   visiblePendingInterrupt,
+  isDeclaredEmbedder,
   type ChatConversation,
   type Deployment,
   type KnowledgeEntry,
@@ -19,6 +20,7 @@ export function ChatPanel() {
   const [workspaces, setWorkspaces] = useState<LabWorkspace[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
+  const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [profileId, setProfileId] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
   const [projectPath, setProjectPath] = useState("");
@@ -142,6 +144,7 @@ export function ChatPanel() {
                 project_path: projectPath || undefined,
                 workspace_id: workspaceId || undefined,
                 knowledge_version_refs: knowledgeRefs,
+                embedding_deployment_id: embeddingDeploymentId || undefined,
               }));
             setConversation(created);
             const next = await api.startChat(created.id, {
@@ -151,6 +154,7 @@ export function ChatPanel() {
               project_path: projectPath || undefined,
               workspace_id: workspaceId || undefined,
               knowledge_version_refs: knowledgeRefs,
+              embedding_deployment_id: embeddingDeploymentId || undefined,
             });
             setConversation(next);
             setConversations((current) => {
@@ -181,6 +185,7 @@ export function ChatPanel() {
                 .then((next) => {
                   setConversation(next);
                   setDeploymentId(next.deployment_id);
+                  setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
                   setProfileId(next.profile_id ?? "");
                   setWorkspaceId(next.workspace_id ?? "");
                   setProjectPath(next.project_path ?? "");
@@ -212,6 +217,27 @@ export function ChatPanel() {
             ))}
           </select>
         </label>
+        <label>
+          Embedding deployment (optional retrieval)
+          <select
+            value={embeddingDeploymentId}
+            onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
+          >
+            <option value="">None — knowledge stays prompt-append; no retrieval</option>
+            {deployments.map((deployment) => (
+              <option key={deployment.id} value={deployment.id}>
+                {deployment.display_name} · {deployment.status}
+                {isDeclaredEmbedder(deployment) ? " · embedding:on" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="hint">
+          Retrieval is requested only when an embedding deployment is selected. That
+          deployment must already be loaded with embedding:on and pooling other than
+          none. A GGUF file on disk is not a deployment. Empty keeps knowledge as
+          always-load context and does not fail closed.
+        </p>
         <label>
           Profile
           <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
@@ -357,7 +383,9 @@ export function ChatPanel() {
           ) : null}
           <p>
             conversation: {conversation.id} · thread: {conversation.thread_id ?? "unassigned"} ·
-            deployment: {conversation.deployment_id} · profile: {conversation.profile_id ?? "none"}
+            deployment: {conversation.deployment_id} · embedder:{" "}
+            {conversation.embedding_deployment_id ?? "none"} · profile:{" "}
+            {conversation.profile_id ?? "none"}
           </p>
           <h3>Transcript (display only — not harness context)</h3>
           <pre className="json">{JSON.stringify(conversation.transcript, null, 2)}</pre>

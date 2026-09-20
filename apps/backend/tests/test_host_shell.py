@@ -120,7 +120,14 @@ class HostShellPolicyTests(unittest.TestCase):
         assert live is not None
         self.assertEqual(live[0].mode, "deny")
         self.assertEqual(list(live[0].paths), list(PERMISSION_DENY_PATHS))
-        self.assertTrue(all(path.startswith("/large_tool_results/") or path.startswith("/conversation_history/") for path in live[0].paths))
+        self.assertTrue(
+            all(
+                path.startswith("/large_tool_results/")
+                or path.startswith("/conversation_history/")
+                or path.startswith("/retrieved/")
+                for path in live[0].paths
+            )
+        )
         recorded_run = _run(project_path="/tmp/project")
         recorded_run.tool_mode = ToolMode.recorded_tool
         self.assertIsNone(filesystem_permissions_for_run(recorded_run))

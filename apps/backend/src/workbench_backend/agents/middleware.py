@@ -197,6 +197,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 memory_versions=list(self.run.memory_version_refs),
                 skill_versions=list(self.run.skill_version_refs),
                 loaded_knowledge=list(setup.loaded_knowledge) if setup is not None else [],
+                retrieved_material=list(self.run.retrieved_material),
                 capture_gaps=gaps,
                 http_payload=http_payload,
                 selected_profile_id=setup.selected_profile_id if setup is not None else self.run.profile_id,

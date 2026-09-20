@@ -83,6 +83,8 @@ class CaptureRequest(BaseModel):
     skill_version_refs: list[str] | None = None
     protected_instruction_version_refs: list[str] | None = None
     knowledge_version_refs: list[str] | None = None
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] | None = None
 
 
 class LabCase(BaseModel):
@@ -114,6 +116,8 @@ class LabCase(BaseModel):
     created_at: str
     snapshot_path: str
     knowledge: KnowledgeBinding = "none"
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
 
 
 class RestoreResult(BaseModel):
@@ -151,6 +155,8 @@ class AppliedConfig(BaseModel):
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     knowledge: KnowledgeBinding = "none"
+    embedding_deployment_id: str | None = None
+    retrieval_project_paths: list[str] = Field(default_factory=list)
     harness: Literal["deepagents"] = "deepagents"
     adapter: Literal["mod-005"] = "mod-005"
     evaluation_kind: Literal["task_evaluation"] = "task_evaluation"

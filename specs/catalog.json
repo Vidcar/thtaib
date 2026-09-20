@@ -928,13 +928,40 @@
     {
       "id": "STATE-006",
       "document": "specs/modules/state-recovery.md",
-      "status": "planned",
+      "status": "built",
       "verifiable_by": [
         "ci-smoke",
         "uat"
       ],
-      "code": [],
-      "tests": [],
+      "code": [
+        "apps/backend/src/workbench_backend/agents/retrieval.py",
+        "apps/backend/src/workbench_backend/agents/harness.py",
+        "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/effective_setup.py",
+        "apps/backend/src/workbench_backend/agents/host_shell.py",
+        "apps/backend/src/workbench_backend/agents/middleware.py",
+        "apps/backend/src/workbench_backend/agents/schemas.py",
+        "apps/backend/src/workbench_backend/inference/settings.py",
+        "apps/backend/src/workbench_backend/inference/deployments.py",
+        "apps/backend/src/workbench_backend/chat/schemas.py",
+        "apps/backend/src/workbench_backend/chat/service.py",
+        "apps/backend/src/workbench_backend/lab/schemas.py",
+        "apps/backend/src/workbench_backend/lab/service.py",
+        "apps/desktop/src/renderer/ChatPanel.tsx",
+        "apps/desktop/src/renderer/AgentRunPanel.tsx",
+        "apps/desktop/src/renderer/DeploymentsPanel.tsx",
+        "apps/desktop/src/renderer/KnowledgePanel.tsx",
+        "apps/desktop/src/renderer/api.ts",
+        "apps/desktop/src/renderer/types.ts"
+      ],
+      "tests": [
+        "apps/backend/tests/test_retrieval.py",
+        "apps/backend/tests/test_settings.py",
+        "apps/backend/tests/test_harness_backend.py",
+        "apps/backend/tests/test_deployments.py",
+        "apps/backend/tests/test_host_shell.py",
+        "apps/backend/tests/test_recorded_tools.py"
+      ],
       "evidence": []
     },
     {

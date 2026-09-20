@@ -22,12 +22,14 @@ from workbench_backend.inference.settings import (
 )
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
 
-RAG_GAP = "no retrieval / RAG (OQ-006 unresolved)"
+NO_RETRIEVAL_GAP = "no retrieval requested"
+RAG_GAP = NO_RETRIEVAL_GAP
+RECORDED_RETRIEVAL_GAP = "recorded-tool replay does not attach a live retrieval index"
 MEMORY_GAP = "no durable memory bound for this run (AGT-004)"
 SKILL_GAP = "no skill versions bound for this run"
 KNOWLEDGE_PREAMBLE = (
     "The following durable knowledge is application-owned versioned content "
-    "(STATE-005). It is not retrieval or RAG (OQ-006)."
+    "(STATE-005). It is always-load context, not query-time retrieval."
 )
 
 
@@ -52,12 +54,18 @@ class EffectiveSetup(BaseModel):
 
     selected_profile_id: str | None = None
     selected_deployment_id: str
+    selected_embedding_deployment_id: str | None = None
     selected_memory_version_ids: list[str] = Field(default_factory=list)
     selected_skill_version_ids: list[str] = Field(default_factory=list)
     selected_protected_instruction_version_ids: list[str] = Field(default_factory=list)
     loaded_deployment_id: str
+    loaded_embedding_deployment_id: str | None = None
+    loaded_embedding_endpoint: str | None = None
     loaded_startup: dict[str, Any] = Field(default_factory=dict)
     loaded_knowledge: list[LoadedKnowledgeFact] = Field(default_factory=list)
+    retrieval_requested: bool = False
+    retrieval_presented: bool = False
+    retrieval_corpus_documents: int = 0
     bags: SettingsBags = Field(default_factory=SettingsBags)
     startup_mismatches: list[StartupMismatch] = Field(default_factory=list)
     unsupported: dict[str, list[str]] = Field(default_factory=dict)
@@ -68,7 +76,8 @@ class EffectiveSetup(BaseModel):
     knowledge_binding: str = "none"
     note: str = (
         "Selected ids are not proof of loaded content or applied bags. "
-        "Inspect this record and the outbound request. Not RAG."
+        "Inspect this record and the outbound request. Retrieval is presented "
+        "only when embedding_deployment_id resolved to a loaded embedding endpoint."
     )
 
 
@@ -85,6 +94,12 @@ def resolve_effective_setup(
     surface_system_prompt: str | None,
     default_system_prompt: str,
     per_request_overrides: dict[str, Any] | None = None,
+    embedding_deployment: Deployment | None = None,
+    selected_embedding_deployment_id: str | None = None,
+    retrieval_requested: bool = False,
+    retrieval_presented: bool = False,
+    retrieval_corpus_documents: int = 0,
+    retrieval_instructions: str | None = None,
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
@@ -112,8 +127,15 @@ def resolve_effective_setup(
         profile_system_prompt=_profile_system_prompt(profile),
         default_system_prompt=default_system_prompt,
         versions=knowledge_versions,
+        retrieval_instructions=retrieval_instructions,
     )
-    gaps = [RAG_GAP]
+    gaps: list[str] = []
+    if retrieval_presented:
+        pass
+    elif retrieval_requested:
+        gaps.append(RECORDED_RETRIEVAL_GAP)
+    else:
+        gaps.append(NO_RETRIEVAL_GAP)
     if not knowledge_refs.memory_version_refs:
         gaps.append(MEMORY_GAP)
     if not knowledge_refs.skill_version_refs:
@@ -126,14 +148,27 @@ def resolve_effective_setup(
     return EffectiveSetup(
         selected_profile_id=profile.id if profile is not None else None,
         selected_deployment_id=deployment.id,
+        selected_embedding_deployment_id=(
+            selected_embedding_deployment_id
+            or (embedding_deployment.id if embedding_deployment is not None else None)
+        ),
         selected_memory_version_ids=list(knowledge_refs.memory_version_refs),
         selected_skill_version_ids=list(knowledge_refs.skill_version_refs),
         selected_protected_instruction_version_ids=list(
             knowledge_refs.protected_instruction_version_refs
         ),
         loaded_deployment_id=deployment.id,
+        loaded_embedding_deployment_id=(
+            embedding_deployment.id if embedding_deployment is not None else None
+        ),
+        loaded_embedding_endpoint=(
+            embedding_deployment.endpoint if embedding_deployment is not None else None
+        ),
         loaded_startup=dict(deployment.applied_startup),
         loaded_knowledge=loaded,
+        retrieval_requested=retrieval_requested,
+        retrieval_presented=retrieval_presented,
+        retrieval_corpus_documents=retrieval_corpus_documents,
         bags=bags,
         startup_mismatches=mismatches,
         unsupported={
@@ -164,6 +199,7 @@ def compose_system_prompt(
     profile_system_prompt: str | None,
     default_system_prompt: str,
     versions: list[KnowledgeVersion],
+    retrieval_instructions: str | None = None,
 ) -> str:
     """Prefer the profile identity prompt; compose the surface prompt after it.
 
@@ -183,6 +219,9 @@ def compose_system_prompt(
         base = surface
     else:
         base = default_system_prompt
+    retrieval = (retrieval_instructions or "").strip()
+    if retrieval:
+        base = f"{base}\n\n{retrieval}"
     knowledge_block = format_knowledge_block(versions)
     if not knowledge_block:
         return base
