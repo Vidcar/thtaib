@@ -51,6 +51,15 @@ _LIVE_MANAGED = {
     DeploymentStatus.unhealthy,
 }
 
+LEGACY_IDENTITY_DETACHED_MESSAGE = (
+    "Deployment was detached after restart because its process identity could not be "
+    "verified. No process was stopped."
+)
+PROCESS_IDENTITY_MISMATCH_DETACHED_MESSAGE = (
+    "Deployment was detached because the recorded process identity no longer matched "
+    "the running process. No process was stopped."
+)
+
 
 class DeploymentService:
     def __init__(
@@ -339,7 +348,7 @@ class DeploymentService:
             self._clear_ownership(
                 deployment,
                 status=DeploymentStatus.stopped,
-                error="Unproven process identity; refused termination.",
+                error=LEGACY_IDENTITY_DETACHED_MESSAGE,
             )
             raise ManagerError(
                 "Refusing to terminate a managed PID without persisted "
@@ -357,7 +366,7 @@ class DeploymentService:
                 self._clear_ownership(
                     deployment,
                     status=DeploymentStatus.stopped,
-                    error="Process identity mismatch; refused termination.",
+                    error=PROCESS_IDENTITY_MISMATCH_DETACHED_MESSAGE,
                 )
                 raise
         return self._clear_ownership(
@@ -388,9 +397,7 @@ class DeploymentService:
                     )
                 )
         report = self.probe.health(deployment.endpoint)
-        props = deployment.server_props
-        if report.healthy and props is None:
-            props = self.probe.props(deployment.endpoint)
+        props = self.probe.props(deployment.endpoint) if report.healthy else None
         if deployment.scope == ManagementScope.connected:
             usage = ResourceUsage(
                 available=False,
@@ -433,7 +440,7 @@ class DeploymentService:
                 return self._clear_ownership(
                     deployment,
                     status=DeploymentStatus.stopped,
-                    error="Unproven process identity after restart; ownership cleared without termination.",
+                    error=LEGACY_IDENTITY_DETACHED_MESSAGE,
                 )
             return deployment
         verdict = self.processes.classify(identity)
@@ -458,7 +465,7 @@ class DeploymentService:
             return self._clear_ownership(
                 deployment,
                 status=DeploymentStatus.stopped,
-                error="Stale or reused PID / mismatched executable identity; ownership cleared without termination.",
+                error=PROCESS_IDENTITY_MISMATCH_DETACHED_MESSAGE,
             )
         return self._clear_ownership(
             deployment,

@@ -75,8 +75,8 @@ export function AgentRunPanel() {
       <header className="surface-head">
         <h2>Agent run</h2>
         <p className="lede">
-          One-off harness task. Prefer Chat for conversation. Approvals here are the same Deep Agents
-          interrupt, not a durable inbox.
+          Run a single task with tool approvals and progress in one place. Use Chat when you want a
+          conversation.
         </p>
       </header>
 
@@ -103,7 +103,7 @@ export function AgentRunPanel() {
         <label>
           Deployment
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
-            {deployments.length === 0 ? <option value="">No deployment</option> : null}
+            {deployments.length === 0 ? <option value="">No model available</option> : null}
             {deployments.map((deployment) => (
               <option key={deployment.id} value={deployment.id}>
                 {deploymentOptionLabel(deployment)}
@@ -112,16 +112,16 @@ export function AgentRunPanel() {
           </select>
         </label>
         <label>
-          Embedding deployment (optional)
+          Retrieval model (optional)
           <select
             value={embeddingDeploymentId}
             onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
           >
-            <option value="">None — no retrieval</option>
+            <option value="">None</option>
             {deployments.map((deployment) => (
               <option key={deployment.id} value={deployment.id}>
                 {deploymentOptionLabel(deployment)}
-                {isDeclaredEmbedder(deployment) ? "" : " (not declared embedding:on)"}
+                {isDeclaredEmbedder(deployment) ? "" : " (not marked for retrieval)"}
               </option>
             ))}
           </select>
@@ -166,7 +166,7 @@ export function AgentRunPanel() {
           />
         </div>
       ) : (
-        <EmptyState title="No run yet">Start a task after a deployment is available.</EmptyState>
+        <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>
       )}
       {message ? <Notice tone="error">{message}</Notice> : null}
     </section>

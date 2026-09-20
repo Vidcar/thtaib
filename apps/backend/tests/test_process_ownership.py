@@ -325,6 +325,11 @@ class ProcessIdentityFixtureTests(unittest.TestCase):
         self.assertIsNone(stored.pid)
         self.assertIsNone(stored.process_identity)
         self.assertEqual(stored.status, DeploymentStatus.stopped)
+        self.assertEqual(
+            stored.error,
+            "Deployment was detached because the recorded process identity no longer matched "
+            "the running process. No process was stopped.",
+        )
 
     def test_unproven_pid_is_refused_before_termination(self) -> None:
         inspector = ScriptedInspector()
@@ -337,6 +342,11 @@ class ProcessIdentityFixtureTests(unittest.TestCase):
         stored = service.store.get_deployment("deploy_fixture")
         assert stored is not None
         self.assertIsNone(stored.pid)
+        self.assertEqual(
+            stored.error,
+            "Deployment was detached after restart because its process identity could not be "
+            "verified. No process was stopped.",
+        )
 
     def test_reconcile_clears_reused_pid_without_kill(self) -> None:
         inspector = ScriptedInspector()
@@ -354,7 +364,27 @@ class ProcessIdentityFixtureTests(unittest.TestCase):
         self.assertIsNone(reconciled[0].pid)
         self.assertIsNone(reconciled[0].process_identity)
         self.assertEqual(reconciled[0].status, DeploymentStatus.stopped)
-        self.assertIn("cleared without termination", reconciled[0].error or "")
+        self.assertEqual(
+            reconciled[0].error,
+            "Deployment was detached because the recorded process identity no longer matched "
+            "the running process. No process was stopped.",
+        )
+
+    def test_reconcile_detaches_legacy_pid_with_user_safe_message(self) -> None:
+        inspector = ScriptedInspector()
+        service = self._service(inspector=inspector)
+        self._record(service, identity=None, pid=42424248)
+        reconciled = service.reconcile()
+        self.assertEqual(self.terminations, [])
+        self.assertEqual(len(reconciled), 1)
+        self.assertIsNone(reconciled[0].pid)
+        self.assertIsNone(reconciled[0].process_identity)
+        self.assertEqual(reconciled[0].status, DeploymentStatus.stopped)
+        self.assertEqual(
+            reconciled[0].error,
+            "Deployment was detached after restart because its process identity could not be "
+            "verified. No process was stopped.",
+        )
 
     def test_healthy_unknown_listen_is_not_immediate_ownership(self) -> None:
         inspector = ScriptedInspector()

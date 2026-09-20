@@ -70,6 +70,18 @@ def inspect_bundle(request: Request, bundle_id: str) -> object:
     return get_manager(request).inspect_bundle(bundle_id)
 
 
+@router.get("/bundles/{bundle_id}/configuration-options")
+def bundle_configuration_options(
+    request: Request,
+    bundle_id: str,
+    deployment_id: str | None = None,
+) -> object:
+    return get_manager(request).get_bundle_configuration_options(
+        bundle_id,
+        deployment_id=deployment_id,
+    )
+
+
 @router.get("/bundles/{bundle_id}/compatibility")
 def bundle_compatibility(request: Request, bundle_id: str) -> object:
     bundle = get_manager(request).get_bundle(bundle_id)

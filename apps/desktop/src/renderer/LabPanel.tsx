@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { deploymentOptionLabel, shortId } from "./display";
 import {
   isAgentRunLive,
   type AgentRun,
@@ -75,14 +76,25 @@ export function LabPanel() {
     setMessage(error instanceof Error ? error.message : String(error));
   }
 
+  function toolModeLabel(mode: LabToolMode): string {
+    switch (mode) {
+      case "live-tool":
+        return "Use live tools";
+      case "recorded-tool":
+        return "Replay recorded tools";
+      default: {
+        const unexpected: never = mode;
+        return unexpected;
+      }
+    }
+  }
+
   return (
     <section className="panel">
       <h2>Lab</h2>
       <p className="lede">
-        Capture a task, restore it into a new workspace, and rerun live-tool or recorded-tool.
-        Recorded-tool is not live proof. Model Lab charts and science-app runners are not here yet;
-        engine measurement is llama-bench only when that binary is present. This is not Chat and not
-        Builder.
+        Capture a task, restore it into a clean workspace, and compare a live rerun with a recorded
+        replay.
       </p>
 
       <div className="card">
@@ -102,7 +114,7 @@ export function LabPanel() {
                   setRestore(null);
                   const listed = await api.workspaceFiles(next.id);
                   setFiles(listed.files);
-                  setMessage(`Workspace ${next.id}`);
+                  setMessage("Workspace created.");
                 })
                 .catch(fail);
             }}
@@ -129,9 +141,12 @@ export function LabPanel() {
           </button>
         </div>
         {workspace ? (
-          <p>
-            {workspace.id} · {workspace.origin} · {workspace.path}
-          </p>
+          <details>
+            <summary>Workspace details</summary>
+            <p className="hint">
+              ID: {workspace.id} · source: {workspace.origin} · path: {workspace.path}
+            </p>
+          </details>
         ) : null}
         <pre className="json">{JSON.stringify(files, null, 2)}</pre>
       </div>
@@ -148,28 +163,29 @@ export function LabPanel() {
             .startAgentRun(deploymentId, "Echo the text harness-ok using the echo tool.", ["echo"], workspace.id)
             .then((next) => {
               setRun(next);
-              setMessage(`Started ${next.id}`);
+              setMessage("Tool check started.");
             })
             .catch(fail);
         }}
       >
-        <h3>Real harness run</h3>
+        <h3>Check tool use</h3>
+        <p className="hint">Ask the model to echo a short message with a tool.</p>
         <label>
-          Deployment
+          Model
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
             {deployments.map((deployment) => (
               <option key={deployment.id} value={deployment.id}>
-                {deployment.display_name} · {deployment.status}
+                {deploymentOptionLabel(deployment)}
               </option>
             ))}
           </select>
         </label>
         <button type="submit" disabled={!deploymentId || !workspace}>
-          Start harness run
+          Run tool check
         </button>
         {run ? (
           <p>
-            {run.id}
+            Run {shortId(run.id)}
             <span className="badge">{run.status}</span>
           </p>
         ) : null}
@@ -189,7 +205,7 @@ export function LabPanel() {
                 .captureCase(workspace.id, run.id)
                 .then((next) => {
                   setLabCase(next);
-                  setMessage(`Captured ${next.id} → ${next.snapshot_path}`);
+                  setMessage("Case captured.");
                 })
                 .catch(fail);
             }}
@@ -209,7 +225,9 @@ export function LabPanel() {
                   setRestore(next);
                   const listed = await api.workspaceFiles(next.workspace.id);
                   setFiles(listed.files);
-                  setMessage(`Restored ${next.workspace.id}; parent unchanged: ${String(next.parent_unchanged)}`);
+                  setMessage(
+                    next.parent_unchanged ? "Restored into a clean workspace." : "Restored workspace changed the parent.",
+                  );
                 })
                 .catch(fail);
             }}
@@ -217,7 +235,7 @@ export function LabPanel() {
             Restore into new workspace
           </button>
           <RerunButton
-            label="Rerun live-tool"
+            label={toolModeLabel("live-tool")}
             mode="live-tool"
             labCase={labCase}
             restore={restore}
@@ -225,7 +243,7 @@ export function LabPanel() {
             onError={fail}
           />
           <RerunButton
-            label="Rerun recorded-tool"
+            label={toolModeLabel("recorded-tool")}
             mode="recorded-tool"
             labCase={labCase}
             restore={restore}
@@ -239,7 +257,7 @@ export function LabPanel() {
                 .measureEngine(deploymentId || undefined)
                 .then((next) => {
                   setEngine(next);
-                  setMessage(next.available ? "Engine measurement ran" : "Engine unavailable (no fake scores)");
+                  setMessage(next.available ? "Engine measurement ran." : "Engine measurement is unavailable.");
                 })
                 .catch(fail);
             }}
@@ -248,9 +266,14 @@ export function LabPanel() {
           </button>
         </div>
         {labCase ? (
-          <p>
-            case {labCase.id} · snapshot {labCase.snapshot_id} · env restore {labCase.environment_restore}
-          </p>
+          <details>
+            <summary>Case details</summary>
+            <p className="hint">
+              Case ID: {labCase.id} · snapshot: {labCase.snapshot_id} · environment restore:{" "}
+              {labCase.environment_restore}
+            </p>
+            <p className="hint">Snapshot path: {labCase.snapshot_path}</p>
+          </details>
         ) : null}
       </div>
 
@@ -258,9 +281,12 @@ export function LabPanel() {
         <div className="card">
           <h3>Restore / branch</h3>
           <p>
-            parent unchanged: {String(restore.parent_unchanged)} · branch {restore.branch.kind}
+            Parent workspace {restore.parent_unchanged ? "unchanged" : "changed"} · branch {restore.branch.kind}
           </p>
-          <pre className="json">{JSON.stringify(restore, null, 2)}</pre>
+          <details>
+            <summary>Restore details</summary>
+            <pre className="json">{JSON.stringify(restore, null, 2)}</pre>
+          </details>
         </div>
       ) : null}
 
@@ -271,8 +297,8 @@ export function LabPanel() {
             <span className="badge">{result.tool_mode_label}</span>
           </h3>
           <p>
-            harness {result.harness} · second loop {String(result.second_agent_loop)} · recorded ≠ live proof{" "}
-            {String(result.recorded_is_not_live_proof)}
+            Harness: {result.harness} · second agent loop: {result.second_agent_loop ? "yes" : "no"} · recorded
+            replay is supporting evidence only
           </p>
           <h3>Applied config</h3>
           <pre className="json">{JSON.stringify(result.applied_config, null, 2)}</pre>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
-import { conversationTitle, deploymentOptionLabel, displayedTranscript, formatWhen } from "./display";
+import { conversationTitle, displayedTranscript, formatWhen, shortId } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { InterruptApproval } from "./InterruptApproval";
@@ -54,6 +54,12 @@ function messageRoleLabel(role: ChatMessage["role"]): string {
 
 function isDeploymentAvailable(deployment: Deployment): boolean {
   return deployment.status === "running";
+}
+
+function chatModelLabel(deployment: Deployment): string {
+  const name = deployment.display_name.replace(/^(managed|connected):/, "");
+  const status = deployment.status === "running" ? "Ready" : deployment.status;
+  return `${name} · ${status}`;
 }
 
 function preferredChatDeploymentId(deployments: Deployment[], current: string): string {
@@ -298,16 +304,16 @@ export function ChatPanel() {
             <label>
               Model
               <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
-                {modelChoices.length === 0 ? <option value="">No deployment</option> : null}
+                {modelChoices.length === 0 ? <option value="">No model available</option> : null}
                 {modelChoices.map((deployment) => (
                   <option key={deployment.id} value={deployment.id}>
-                    {deploymentOptionLabel(deployment)}
+                    {chatModelLabel(deployment)}
                   </option>
                 ))}
               </select>
             </label>
             <label>
-              Profile
+              Preset
               <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
                 <option value="">None</option>
                 {profiles.map((profile) => (
@@ -335,12 +341,11 @@ export function ChatPanel() {
           <details>
             <summary>Knowledge and retrieval</summary>
             <p className="hint">
-              Selected versions are bound for the next turn. A project folder is optional; file tools
-              and the host shell stay off until one is bound. Retrieval needs a loaded embedding
-              deployment — a GGUF file on disk is not enough.
+              Choose the memories and instructions this conversation should use. Retrieval needs a
+              running embedding model.
             </p>
             <label>
-              Embedding deployment
+              Document search model
               <select
                 value={embeddingDeploymentId}
                 onChange={(event) => setEmbeddingDeploymentId(event.target.value)}
@@ -348,7 +353,7 @@ export function ChatPanel() {
                 <option value="">None — no retrieval</option>
                 {embedderDeployments.map((deployment) => (
                   <option key={deployment.id} value={deployment.id}>
-                    {deploymentOptionLabel(deployment)}
+                    {chatModelLabel(deployment)}
                   </option>
                 ))}
                 {embedderDeployments.length === 0
@@ -356,7 +361,7 @@ export function ChatPanel() {
                       .filter((item) => !isDeclaredEmbedder(item))
                       .map((deployment) => (
                         <option key={deployment.id} value={deployment.id}>
-                          {deploymentOptionLabel(deployment)} (not declared embedding:on)
+                          {chatModelLabel(deployment)} (not marked for retrieval)
                         </option>
                       ))
                   : null}
@@ -381,7 +386,7 @@ export function ChatPanel() {
                         );
                       }}
                     />
-                    {knowledgeKindLabel(entry.kind)} · {entry.display_name ?? entry.id}
+                    {knowledgeKindLabel(entry.kind)} · {entry.display_name ?? shortId(entry.id)}
                   </label>
                 ))
               )}
@@ -399,8 +404,7 @@ export function ChatPanel() {
         <div className="transcript" aria-live="polite">
           {deployments.length === 0 ? (
             <EmptyState title="No running model">
-              Open Models, import a bundle, and start or attach a deployment. Chat will not invent a
-              reply without one.
+              Open Models and start or connect a model. Chat needs a running model before it can reply.
             </EmptyState>
           ) : !conversation && transcript.length === 0 ? (
             <EmptyState title="Start a conversation">
@@ -420,8 +424,8 @@ export function ChatPanel() {
           )}
           {runBusy && !pendingInterrupt ? (
             <p className="hint">
-              Working… <StatusBadge status={conversation?.current_run?.status} /> A disconnected
-              window is not evidence the run ended.
+              Working… <StatusBadge status={conversation?.current_run?.status} /> This can continue if
+              the window disconnects.
             </p>
           ) : null}
           <div ref={transcriptEnd} />

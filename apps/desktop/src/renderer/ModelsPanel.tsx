@@ -7,11 +7,13 @@ import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
-import { StatusBadge } from "./StatusBadge";
-import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
+import { Choice, Help, numberChoices } from "./ModelControls";
+import type { Deployment, InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 
 export function ModelsPanel() {
+  const [view, setView] = useState<"library" | "add" | "presets">("library");
+  const [localBusy, setLocalBusy] = useState(false);
   const [paths, setPaths] = useState<PathsInfo | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -25,6 +27,8 @@ export function ModelsPanel() {
   const [hubBusy, setHubBusy] = useState(false);
   const [hubMessage, setHubMessage] = useState("");
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
+  const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [presetBusy, setPresetBusy] = useState(false);
   const [profileName, setProfileName] = useState("Default chat");
   const [temperature, setTemperature] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
@@ -36,14 +40,17 @@ export function ModelsPanel() {
   async function refresh(): Promise<void> {
     setLoading(true);
     try {
-      const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
+      const [nextPaths, nextBundles, nextProfiles, nextDeployments] = await Promise.all([
         api.paths(),
         api.bundles(),
         api.profiles(),
+        api.deployments(),
       ]);
       setPaths(nextPaths);
       setBundles(nextBundles);
+      setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
       setProfiles(nextProfiles);
+      setDeployments(nextDeployments);
       setLoadError("");
     } finally {
       setLoading(false);
@@ -57,6 +64,8 @@ export function ModelsPanel() {
   }, []);
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
+  const currentGeneration = deployments.find(deployment => deployment.bundle_id === selectedId && deployment.health?.healthy)?.server_props?.default_generation_settings?.params;
+  const currentTemperature = typeof currentGeneration?.temperature === "number" ? currentGeneration.temperature : null;
   const selectedVariant = hub?.variants.find((item) => item.name === variant);
   const selectedProjector = hub?.projectors.find((item) => item.name === projector);
   const selectedHubFiles = [...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? [])];
@@ -78,24 +87,24 @@ export function ModelsPanel() {
   }
 
   return (
-    <section className="surface">
-      <header className="surface-head">
-        <h2>Models</h2>
-        <p className="lede">
-          Bundles, profiles and deployments. Chat uses a running deployment, not a file on disk.
-        </p>
-        {paths ? (
-          <p className="hint">
-            Files live in <code>{paths.models}</code>
-          </p>
-        ) : null}
+    <section className="surface models-surface">
+      <header className="models-heading">
+        <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Models</h2>
+        <p className="lede">Find your model. Make it your own.</p></div>
+        <button type="button" className="primary-button" onClick={() => setView(view === "add" ? "library" : "add")}>{view === "add" ? "Back to library" : "+ Add model"}</button>
       </header>
-
+      <nav className="model-tabs" aria-label="Model sections">
+        <button type="button" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}>My models <span>{bundles.length}</span></button>
+        <button type="button" aria-current={view === "presets" ? "page" : undefined} onClick={() => { setView("presets"); void refresh().catch(fail); }}>Saved presets <span>{profiles.length}</span></button>
+      </nav>
+      {message ? <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
+      {view === "add" ? <>
       <div className="grid">
         <form
           className="card"
           onSubmit={(event) => {
             event.preventDefault();
+            setLocalBusy(true);
             void api
               .importLocal(localPath, localName || undefined)
               .then((job) => {
@@ -103,16 +112,18 @@ export function ModelsPanel() {
                 setMessage(
                   job.error
                     ? `Local import ${job.status}: ${job.error}`
-                    : `Local import ${job.status}${job.bundle_id ? ` · ${job.bundle_id}` : ""}`,
+                    : "Model added to your library.",
                 );
+                if (job.bundle_id) setView("library");
                 return refresh();
               })
-              .catch(fail);
+              .catch(fail).finally(() => setLocalBusy(false));
           }}
         >
-          <h3>Import local GGUF</h3>
+          <h3>Add from your computer</h3>
+          <p className="hint">Use a GGUF model you’ve already downloaded.</p>
           <label>
-            Path
+            Model file or folder
             <input
               value={localPath}
               onChange={(event) => setLocalPath(event.target.value)}
@@ -123,8 +134,8 @@ export function ModelsPanel() {
             Display name (optional)
             <input value={localName} onChange={(event) => setLocalName(event.target.value)} />
           </label>
-          <button type="submit" disabled={!localPath.trim()}>
-            Import
+          <button type="submit" className="primary-button" disabled={!localPath.trim() || localBusy}>
+            {localBusy ? "Adding model…" : "Add model"}
           </button>
         </form>
 
@@ -143,7 +154,8 @@ export function ModelsPanel() {
             }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
           }}
         >
-          <h3>Import from Hugging Face</h3>
+          <h3>Download from Hugging Face</h3>
+          <p className="hint">Choose the version and size that suit your computer.</p>
           <label>
             Hugging Face link or repository
             <input
@@ -173,7 +185,7 @@ export function ModelsPanel() {
               </select>
             </label> : null}
             {hub.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
-            <p className="hint">Publisher guidance: <a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">model card</a>. Downloading does not establish tool or vision capability.</p>
+            <p className="hint">Read the publisher’s <a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">model guide</a> for recommended settings and supported features.</p>
             <details><summary>Files and recorded revision</summary>
               <p className="hint">{hub.resolved_revision}</p>
               <ul>{selectedHubFiles.map((file) => <li key={file}>{file}</li>)}</ul>
@@ -183,8 +195,8 @@ export function ModelsPanel() {
               setHubMessage("Downloading selected files and checking the bundle. This can take several minutes. Retry an interrupted download to resume it.");
               const exactFiles = selectedHubFiles.map((file) => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
               void api.importHf(hub.repo_id, hub.resolved_revision, exactFiles).then((job) => {
-                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : "Model imported. Start it below, then open Chat.");
-                if (job.bundle_id) setSelectedId(job.bundle_id);
+                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : "Model added to your library.");
+                if (job.bundle_id) { setSelectedId(job.bundle_id); setView("library"); setMessage("Model added to your library."); }
                 return refresh();
               }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
             }}>Download selected variant</button>
@@ -192,26 +204,26 @@ export function ModelsPanel() {
           {hubMessage ? <p role="status">{hubMessage}</p> : null}
         </form>
       </div>
-
-      <div className="card">
-        <h3>Bundles</h3>
+      </> : null}
+      {view === "library" ? <div className="models-workspace">
+      <aside className="model-library" aria-label="Your models">
+        <div className="section-heading"><h3>Your library</h3><span className="hint">{bundles.length} models</span></div>
         {loading ? (
-          <EmptyState title="Loading bundles">
-            Reading the model catalogue and checking recorded files. Large local models can take a
-            moment on first load.
+          <EmptyState title="Loading your models">
+            Checking model files. This may take a moment.
           </EmptyState>
         ) : bundles.length === 0 ? (
-          <EmptyState title="No bundles">
-            Import a local GGUF or choose a Hugging Face model variant. The product will not invent a
-            bundle from a file that merely exists under models.
+          <EmptyState title="Your first model starts here">
+            Add a model from your computer or download one from Hugging Face.
           </EmptyState>
         ) : (
-          <ul className="list">
+          <ul className="model-list">
             {bundles.map((bundle) => (
               <li key={bundle.id}>
                 <button
                   type="button"
-                  className={bundle.id === selectedId ? "nav-item active" : "nav-item"}
+                  className={bundle.id === selectedId ? "model-tile selected" : "model-tile"}
+                  aria-pressed={bundle.id === selectedId}
                   onClick={() => {
                     setSelectedId(bundle.id);
                     setInspect(null);
@@ -219,16 +231,21 @@ export function ModelsPanel() {
                 >
                   <span className="nav-item-title">{bundle.display_name}</span>
                   <span className="nav-item-meta">
-                    {bundle.quantization ?? "quant unknown"} ·{" "}
-                    {bundle.disk_matches ? "files match" : "disk mismatch"}
+                    {bundle.quantization ?? "GGUF"} · {formatBytes(bundle.files.reduce((total, file) => total + file.size_bytes, 0))}
+                    {!bundle.disk_matches ? " · Check files" : ""}
                   </span>
                 </button>
               </li>
             ))}
           </ul>
         )}
-        {selected ? (
-          <div className="entity">
+        {paths ? <details className="library-storage"><summary>Storage location</summary><code>{paths.models}</code></details> : null}
+      </aside>
+      <div className="model-detail">
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} />
+      {selected ? (
+          <details className="card technical-details"><summary>Model files &amp; technical details</summary>
+            <p className="hint">Model ID: <code>{selected.id}</code></p>
             <p>
               {selected.files.length} files
               {selected.companions.length ? ` · ${selected.companions.length} companions` : ""}
@@ -262,7 +279,7 @@ export function ModelsPanel() {
                 void api.inspect(selected.id).then(setInspect).catch(fail);
               }}
             >
-              Inspect GGUF (read-only)
+              Read model metadata
             </button>
             {inspect && inspect.bundle_id === selected.id ? (
               <dl className="meta compact">
@@ -286,14 +303,15 @@ export function ModelsPanel() {
                 </div>
               </dl>
             ) : null}
-          </div>
+          </details>
         ) : null}
-      </div>
-
+      </div></div> : null}
+      {view === "presets" ? <div className="presets-layout">
       <form
         className="card"
         onSubmit={(event) => {
           event.preventDefault();
+          setPresetBusy(true);
           const perRequest: Record<string, unknown> = {};
           if (temperature.trim()) perRequest.temperature = Number(temperature);
           if (maxTokens.trim()) {
@@ -308,48 +326,41 @@ export function ModelsPanel() {
               agent: systemPrompt.trim() ? { system_prompt: systemPrompt } : {},
             })
             .then((profile) => {
-              setMessage(`Saved profile ${profile.display_name}`);
+              setMessage(`Saved preset ${profile.display_name}`);
               return refresh();
             })
-            .catch(fail);
+            .catch(fail).finally(() => setPresetBusy(false));
         }}
       >
-        <h3>New profile</h3>
-        <p className="hint">
-          Profiles store requested settings. Starting a deployment is what actually loads the model.
-        </p>
+        <h3>Create a chat preset</h3>
+        <p className="hint">Save your preferred response style and instructions for Chat.</p>
         <label>
           Name
           <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
         </label>
         <div className="setup-grid">
-          <label>
-            Temperature (optional override)
-            <input type="number" min="0" step="0.01" placeholder="Runtime default" value={temperature} onChange={(event) => setTemperature(event.target.value)} />
-          </label>
-          <label>
-            Max tokens (optional)
-            <input value={maxTokens} onChange={(event) => setMaxTokens(event.target.value)} />
-          </label>
+          <Choice id="preset-temperature" label="Creativity (temperature)" help="Lower values make replies more predictable; higher values encourage variety. A preset override is sent with each reply." flag="temperature" value={temperature} onChange={setTemperature} min={0} step={0.01} options={[{ value: "", label: currentTemperature !== null ? `${currentTemperature} · current model setting` : "Use model setting · not reported" }, ...numberChoices([0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.5, 2])]} />
+          <Choice id="preset-max-tokens" label="Reply length (tokens)" help="Maximum length of each generated reply. The running model’s available context may impose a smaller limit." flag="max_tokens" value={maxTokens} onChange={setMaxTokens} min={1} options={[{ value: "", label: "No preset limit" }, ...numberChoices([512, 1024, 2048, 4096, 8192, 16384, 32768])]} />
         </div>
         <label>
-          System prompt (optional)
+          Instructions (optional)
           <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} />
         </label>
-        <button type="submit">Save profile</button>
+        <button type="submit" className="primary-button" disabled={presetBusy}>{presetBusy ? "Saving…" : "Save preset"}</button>
       </form>
 
       <div className="card">
-        <h3>Saved profiles</h3>
+        <h3>Saved presets</h3>
+        <p className="hint">Select a preset in Chat to use it.</p>
         {profiles.length === 0 ? (
-          <EmptyState title="No profiles">Save one above, or Chat can run without a profile.</EmptyState>
+          <EmptyState title="Make yourself at home">Save a preset for the way you like to work.</EmptyState>
         ) : (
           <ul className="list">
             {profiles.map((profile) => (
               <li key={profile.id} className="entity">
                 <div className="entity-head">
                   <strong>{profile.display_name}</strong>
-                  <StatusBadge label={profile.id} />
+                  <Help label={`${profile.display_name} identifier`}>Preset ID: <code>{profile.id}</code></Help>
                 </div>
                 <SettingsNotes
                   unsupported={profile.bags.startup.unsupported}
@@ -361,10 +372,7 @@ export function ModelsPanel() {
         )}
       </div>
 
-      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} />
-      {message ? (
-        <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice>
-      ) : null}
+      </div> : null}
     </section>
   );
 }

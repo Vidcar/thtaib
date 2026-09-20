@@ -489,6 +489,7 @@ def server_properties_from_payload(payload: dict[str, Any], *, source_url: str) 
         build_info=_optional_str(payload.get("build_info")),
         model_alias=_optional_str(payload.get("model_alias")),
         model_path=_optional_str(payload.get("model_path")),
+        default_generation_settings=generation if isinstance(generation, dict) else {},
         n_ctx=int(n_ctx) if isinstance(n_ctx, int) else None,
         total_slots=(
             int(payload["total_slots"]) if isinstance(payload.get("total_slots"), int) else None

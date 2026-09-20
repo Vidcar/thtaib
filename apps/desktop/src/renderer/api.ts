@@ -8,6 +8,7 @@ import type { RunStreamEnvelope } from "./sse";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
+  BundleConfigurationOptions,
   ChatConversation,
   ChatMessage,
   ContextCapture,
@@ -84,6 +85,7 @@ export const api = {
       body: JSON.stringify({ repo_id, revision, allow_patterns }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
+  modelConfiguration: (bundleId: string, deploymentId?: string) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options${deploymentId ? `?deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
   previewSettings: (startup: object, per_request: object, agent: object) =>
     request<SettingsBags>("/v1/settings/preview", {
       method: "POST",

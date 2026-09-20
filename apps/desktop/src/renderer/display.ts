@@ -92,8 +92,10 @@ export function shortId(id: string): string {
 }
 
 export function deploymentOptionLabel(deployment: Deployment): string {
-  const role = String(deployment.applied_startup?.embedding ?? "").toLowerCase() === "on" ? "embedder" : "chat";
-  return `${deployment.display_name} · ${deployment.status} · ${role}`;
+  const name = deployment.display_name.replace(/^(managed|connected):/, "");
+  const status = deployment.status === "running" ? "Ready" : deployment.status === "starting" ? "Loading" : deployment.status === "stopped" ? "Stopped" : "Not ready";
+  const role = String(deployment.applied_startup?.embedding ?? "").toLowerCase() === "on" ? " · Document search" : "";
+  return `${name} · ${status}${role}`;
 }
 
 export function relatedFileLabel(kind: "project_root" | "written_file" | "artifact"): string {

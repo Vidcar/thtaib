@@ -6,15 +6,17 @@ from pathlib import Path
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import BundleService
+from workbench_backend.inference.configuration_options import bundle_configuration_options
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
-from workbench_backend.inference.inspect import inspect_gguf_file
+from workbench_backend.inference.inspect import inspect_gguf_file, read_gguf_runtime_metadata
 from workbench_backend.inference.process import HttpProbe, ProcessSupervisor
 from workbench_backend.inference.hardware import NvidiaPresent
 from workbench_backend.inference.runtime import RuntimeInstaller, RuntimeService
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
+    BundleConfigurationOptions,
     Deployment,
     HuggingFaceImportRequest,
     ImportJob,
@@ -91,6 +93,35 @@ class ModelManager:
     def inspect_bundle(self, bundle_id: str) -> InspectReport:
         bundle = self.get_bundle(bundle_id)
         return inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id)
+
+    def get_bundle_configuration_options(
+        self,
+        bundle_id: str,
+        *,
+        deployment_id: str | None = None,
+    ) -> BundleConfigurationOptions:
+        deployment = self.get_deployment(deployment_id) if deployment_id else None
+        if deployment is not None and deployment.bundle_id != bundle_id:
+            raise ManagerError(
+                "Deployment does not belong to the requested bundle.",
+                code="deployment_bundle_mismatch",
+                status_code=400,
+                details={
+                    "bundle_id": bundle_id,
+                    "deployment_id": deployment.id,
+                    "deployment_bundle_id": deployment.bundle_id,
+                },
+            )
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+        verified = self.bundles.verify_bundle(bundle, use_cache=True)
+        metadata = read_gguf_runtime_metadata(self.bundles.inspectable_file(verified))
+        return bundle_configuration_options(
+            verified.id,
+            metadata,
+            deployment=deployment,
+        )
 
     def list_profiles(self) -> list[RunProfile]:
         return [self._resolved_profile(profile) for profile in self.store.list_profiles()]

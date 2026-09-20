@@ -195,6 +195,7 @@ class ServerProperties(BaseModel):
     build_info: str | None = None
     model_alias: str | None = None
     model_path: str | None = None
+    default_generation_settings: dict[str, Any] = Field(default_factory=dict)
     n_ctx: int | None = None
     total_slots: int | None = None
     modalities: dict[str, bool] = Field(default_factory=dict)
@@ -244,6 +245,41 @@ class ManagedDeploymentRequest(BaseModel):
     profile_id: str | None = None
     startup: dict[str, Any] = Field(default_factory=dict)
     auto_start: bool = True
+
+
+class RuntimeControlOption(BaseModel):
+    value: Any
+    label: str
+    description: str | None = None
+
+
+class RuntimeControlDescriptor(BaseModel):
+    key: str
+    flag: str | None = None
+    label: str
+    description: str
+    source: str
+    applied: Any = None
+    recommended: Any = None
+    observed: Any = None
+    maximum: int | None = None
+    options: list[RuntimeControlOption] = Field(default_factory=list)
+
+
+class GgufRuntimeMetadata(BaseModel):
+    architecture: str | None = None
+    name: str | None = None
+    context_length: int | None = None
+    block_count: int | None = None
+
+
+class BundleConfigurationOptions(BaseModel):
+    bundle_id: str
+    deployment_id: str | None = None
+    context_size: RuntimeControlDescriptor
+    gpu_layers: RuntimeControlDescriptor
+    startup_defaults: dict[str, RuntimeControlDescriptor]
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConnectedDeploymentRequest(BaseModel):
