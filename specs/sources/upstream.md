@@ -47,6 +47,19 @@ Never let an upstream example silently replace application ownership, permission
 - <https://inspect.aisi.org.uk/scorers.html>
 - <https://modelcontextprotocol.io/extensions/apps/overview>
 
+<a id="langchain-retrieval"></a>
+## LangChain / Deep Agents retrieval (OQ-006)
+
+Consulted 2026-09-19 against the pinned backend lock (`deepagents==0.7.15`, `langchain==1.4.2`, `langchain-core==1.6.3`, `langchain-openai==1.6.2`) and llama.cpp b11045. Moving `docs.langchain.com` pages are not version-pinned evidence; record the pin with the implementation.
+
+- [Retrieval Augmented Generation with Deep Agents](https://docs.langchain.com/oss/python/deepagents/rag) — retrieve, offload to `/retrieved/`, optional subagent analysis.
+- [LangChain retrieval](https://docs.langchain.com/oss/python/langchain/retrieval) — 2-step vs agentic vs hybrid RAG.
+- [Build a semantic search engine](https://docs.langchain.com/oss/python/langchain/knowledge-base) — loaders, splitters, embeddings, vector stores.
+- [`InMemoryVectorStore`](https://reference.langchain.com/python/langchain-core/vectorstores/in_memory/InMemoryVectorStore/).
+- [`OpenAIEmbeddings`](https://reference.langchain.com/python/langchain-openai/embeddings/base/OpenAIEmbeddings/) — `base_url` + `check_embedding_ctx_length=False` for OpenAI-compatible servers.
+- [Deep Agents memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) — always-load / progressive disclosure, not query-time RAG.
+- [llama-server embeddings](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) — `POST /v1/embeddings`, `--embedding`, `--pooling`.
+
 <a id="fastapi-sse"></a>
 ## FastAPI Server-Sent Events
 
