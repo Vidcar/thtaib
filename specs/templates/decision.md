@@ -1,6 +1,6 @@
 # ADR-NNNN: REPLACE_WITH_DECISION_TITLE
 
-**Status:** draft | accepted | superseded. **Approval:** reviewer, reference, date (recorded in the catalogue; never invented). **Supersedes:** none or a record.
+**Status:** draft | accepted | superseded. **Decision authority:** agent technical decision within authorized scope, or explicit product-owner decision; include reference and date (use the catalogue `approval` field for this record; never invent human approval). **Supersedes:** none or a record.
 
 ## Context
 

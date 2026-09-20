@@ -4,6 +4,17 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — Agent-owned delivery with proportionate process
+
+Authority: Dave's explicit request in the Codex setup conversation on 2026-09-20 to align this project's main instructions with his personal preferences: agents own all technical work and Git including merges; preserve clear component boundaries while removing unnecessary ceremony. This supersedes the working-process clauses in ADR-0004 and older entries where they require technical approval from Dave, universal feature paperwork or human test operation. Product architecture and requirement IDs are unchanged.
+
+- Root AGENTS.md is the current process entry point. Read the affected component, plan in proportion to the task, validate locally and keep concise durable context for the next agent.
+- Feature and PR templates are short aids. Update affected facts, not every tracking surface. ADRs retain consequential rationale; ordinary technical decisions are agent-owned. Ask about material unresolved outcomes, cost or external actions.
+- Passing local unit tests can support `built`. Existing `verified` evidence tiers, digests and capability guarantees remain unchanged. Agents operate Windows validation when able.
+- No application code, tests, checker, catalogue status, workflow or GitHub protection changes are included. Larger code/spec simplification remains a separate follow-up based on the audit.
+
+Audit handoff: the backend/desktop split and upstream framework ownership appear coherent; no wholesale rewrite is justified by this inspection. Review the large `apps/backend/src/workbench_backend/agents/harness.py` by responsibility before refactoring. Revisit [OQ-017](../open-questions.md#oq-017) for the JSON/SQLite persistence split, and compare the catalogue/evidence maintenance cost with practical product checks (53 requirements, 36 built, 17 planned, zero verified at this review). GitHub protection was checked live: only the four documented Linux checks are required, with no required PR review; retired Windows-name workflow shims are candidates for a later cleanup. Next pass should trace one working Chat flow from UI to runtime and storage, then simplify only the contracts/tracking that fail to help that flow.
+
 ## 2026-09-20 — OQ-006 memory edit_file writes through to Knowledge
 
 Authority: David, product owner (Chat-first; auto-save memories so he can see them in Knowledge; attach to official Deep Agents features, Project chat 2026-09-20); technical research against the pinned stack on 2026-09-20 (`deepagents==0.7.15` `MemoryMiddleware` / `MEMORY_SYSTEM_PROMPT`; live [memory](https://docs.langchain.com/oss/python/deepagents/memory) page). Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005 (stay `built`). No ADR: no new execution owner, no `StoreBackend` knowledge store, no new lockfile package. Implementation is a later PR. Loading landed in the 2026-09-20 memory/skills implementation entry below; current code still leaves `/memories/` edits run-local until write-through is implemented.
