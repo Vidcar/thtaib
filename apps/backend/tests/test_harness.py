@@ -10,6 +10,7 @@ import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 from langgraph.checkpoint.base import empty_checkpoint
@@ -601,12 +602,33 @@ class HarnessApiTests(unittest.TestCase):
         harness.store.put_run(run)
 
         request = {"decisions": [{"type": "reject"}]}
-        first = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
-        second = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
+        entered = threading.Event()
+        release = threading.Event()
 
-        self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(second.status_code, 409, second.text)
-        self.assertEqual(second.json()["code"], "interrupt_decision_pending")
+        def fail_compilation(*_args: Any, **_kwargs: Any) -> None:
+            entered.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("resume worker was not released")
+            raise RuntimeError("scripted resume setup failure")
+
+        with patch.object(harness, "_create_compiled_agent", side_effect=fail_compilation):
+            try:
+                first = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
+                self.assertTrue(entered.wait(timeout=10))
+                owner = harness._threads[run.id]
+                second = self.client.post(f"/v1/agent-runs/{run.id}/interrupt-decision", json=request)
+                self.assertEqual(first.status_code, 200, first.text)
+                self.assertEqual(second.status_code, 409, second.text)
+                self.assertEqual(second.json()["code"], "interrupt_decision_pending")
+                self.assertIs(harness._threads[run.id], owner)
+            finally:
+                release.set()
+                worker = harness._threads.get(run.id)
+                if worker is not None:
+                    worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(harness.get_run(run.id).status, AgentRunStatus.failed)
+        self.assertIsNone(harness._pending_decisions[run.id])
 
     def test_default_run_has_no_product_budget_or_rag(self) -> None:
         started = self._start()

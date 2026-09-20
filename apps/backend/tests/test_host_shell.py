@@ -50,6 +50,28 @@ def wait_for_interrupt(client: TestClient, run_id: str, *, timeout: float = 20.0
     raise TimeoutError(f"run {run_id} did not interrupt: {body}")
 
 
+def wait_for_interrupt_command(
+    client: TestClient,
+    run_id: str,
+    command: str,
+    *,
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = client.get(f"/v1/agent-runs/{run_id}")
+        body = response.json()
+        pending = body.get("pending_interrupt") or {}
+        action_requests = pending.get("action_requests") or []
+        if action_requests and action_requests[0].get("args", {}).get("command") == command:
+            return body
+        if body.get("status") in {"completed", "cancelled", "failed"}:
+            raise TimeoutError(f"run finished before interrupt {command}: {body}")
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_id} did not reach interrupt {command}: {body}")
+
+
 def wait_for_chat_interrupt(
     client: TestClient,
     conversation_id: str,
@@ -80,12 +102,34 @@ def execute_then_reply(command: str) -> list[AIMessage]:
     ]
 
 
+def execute_two_then_reply(first: str, second: str) -> list[AIMessage]:
+    return [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "execute", "args": {"command": first}, "id": "call_exec_a"}],
+        ),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "execute", "args": {"command": second}, "id": "call_exec_b"}],
+        ),
+        AIMessage(content="Both host shell commands were considered."),
+    ]
+
+
 def write_marker_command(filename: str) -> str:
     """Use a platform-native write so approval tests prove execution, not PATH."""
 
     if os.name != "nt":
         return f"touch {filename}"
     return f"cmd /c type nul > {filename}"
+
+
+def append_marker_command(filename: str) -> str:
+    """Append one line so restart approval tests can assert exact execution count."""
+
+    if os.name != "nt":
+        return f"sh -c 'echo hit >> {filename}'"
+    return f"cmd /c echo hit>> {filename}"
 
 
 def tool_result_text(body: dict[str, Any]) -> str:
@@ -282,10 +326,19 @@ class HostShellHarnessTests(unittest.TestCase):
 
     def _restart_from_interrupt(self, command: str) -> tuple[dict[str, Any], HarnessService]:
         self._install(execute_then_reply(command))
+        return self._restart_from_script()
+
+    def _restart_from_script(
+        self,
+        *,
+        stop_original_worker: bool = False,
+    ) -> tuple[dict[str, Any], HarnessService]:
         started = self._start()
         paused = wait_for_interrupt(self.client, started["id"])
         self.assertTrue(paused["checkpoint_ids"], paused)
         old_harness = self.app.state.harness
+        if stop_original_worker:
+            self._stop_old_waiting_harness_without_store_write(old_harness, started["id"])
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return self.scripted
@@ -318,6 +371,28 @@ class HostShellHarnessTests(unittest.TestCase):
         thread = old_harness._threads.get(run_id)
         if thread is not None:
             thread.join(timeout=5.0)
+
+    def _stop_old_waiting_harness_without_store_write(
+        self,
+        old_harness: HarnessService,
+        run_id: str,
+    ) -> None:
+        def skip_persist(_run: AgentRun) -> None:
+            return None
+
+        def skip_resume_reject(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        old_harness._persist_and_notify = skip_persist  # type: ignore[method-assign]
+        old_harness._resume_reject_then_stop = skip_resume_reject  # type: ignore[method-assign]
+        self._retire_old_waiting_harness(old_harness, run_id)
+        thread = old_harness._threads.get(run_id)
+        self.assertTrue(thread is None or not thread.is_alive())
+
+    def _marker_lines(self, marker: Path) -> list[str]:
+        if not marker.exists():
+            return []
+        return marker.read_text(encoding="utf-8").splitlines()
 
     def test_catalogue_and_project_gate(self) -> None:
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
@@ -505,6 +580,80 @@ class HostShellHarnessTests(unittest.TestCase):
             self.assertTrue(marker.exists())
         finally:
             self._retire_old_waiting_harness(old_harness, started["id"])
+
+    def test_restart_resume_releases_reservation_for_next_interrupt_decision(self) -> None:
+        for second_action in ("approve", "reject", "cancel", "race"):
+            with self.subTest(second_action=second_action):
+                first_marker = self.project / f"restart-a-{second_action}.txt"
+                second_marker = self.project / f"restart-b-{second_action}.txt"
+                second_command = append_marker_command(second_marker.name)
+                self._install(
+                    execute_two_then_reply(
+                        append_marker_command(first_marker.name),
+                        second_command,
+                    )
+                )
+                started, old_harness = self._restart_from_script(stop_original_worker=True)
+
+                first_response = self.client.post(
+                    f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                    json={"decisions": [{"type": "approve"}]},
+                )
+                self.assertEqual(first_response.status_code, 200, first_response.text)
+                second_pause = wait_for_interrupt_command(
+                    self.client,
+                    started["id"],
+                    second_command,
+                )
+                self.assertEqual(second_pause["status"], "running", second_pause)
+                self.assertEqual(
+                    second_pause["pending_interrupt"]["action_requests"][0]["args"]["command"],
+                    second_command,
+                )
+
+                if second_action == "cancel":
+                    cancelled = self.client.post(f"/v1/agent-runs/{started['id']}/cancel")
+                    self.assertEqual(cancelled.status_code, 200, cancelled.text)
+                    body = wait_for_run(self.client, started["id"])
+                    self.assertEqual(body["status"], "cancelled", body.get("error"))
+                elif second_action == "race":
+                    barrier = threading.Barrier(2)
+                    results: list[int] = []
+
+                    def approve() -> None:
+                        barrier.wait(timeout=5.0)
+                        response = self.client.post(
+                            f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                            json={"decisions": [{"type": "approve"}]},
+                        )
+                        results.append(response.status_code)
+
+                    threads = [threading.Thread(target=approve), threading.Thread(target=approve)]
+                    for thread in threads:
+                        thread.start()
+                    for thread in threads:
+                        thread.join(timeout=10)
+                        self.assertFalse(thread.is_alive())
+                    self.assertEqual(sorted(results), [200, 409])
+                    body = wait_for_run(self.client, started["id"])
+                    self.assertEqual(body["status"], "completed", body.get("error"))
+                else:
+                    second_response = self.client.post(
+                        f"/v1/agent-runs/{started['id']}/interrupt-decision",
+                        json={"decisions": [{"type": second_action}]},
+                    )
+                    self.assertEqual(second_response.status_code, 200, second_response.text)
+                    body = wait_for_run(self.client, started["id"])
+                    self.assertEqual(body["status"], "completed", body.get("error"))
+
+                self.assertEqual(self._marker_lines(first_marker), ["hit"])
+                if second_action in {"approve", "race"}:
+                    self.assertEqual(self._marker_lines(second_marker), ["hit"])
+                else:
+                    self.assertEqual(self._marker_lines(second_marker), [])
+                resolved = [event for event in body["events"] if event["kind"] == "interrupt_resolved"]
+                self.assertEqual(len(resolved), 2)
+                self.assertIsNone(self.app.state.harness._pending_decisions[started["id"]])
 
     def test_restart_pending_approval_cancel_rejects_without_running_command(self) -> None:
         marker = self.project / "restart-cancel.txt"

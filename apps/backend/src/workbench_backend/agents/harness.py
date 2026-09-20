@@ -620,6 +620,8 @@ class HarnessService:
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
+            with self._lock:
+                self._pending_decisions[run_id] = None
             self._close_model_client(run_id)
 
     def _reject_pending_after_restart(
@@ -775,9 +777,17 @@ class HarnessService:
             )
             self._persist_and_notify(run)
 
-    def _clear_pending_interrupt(self, run: AgentRun, decisions: list[dict[str, str]]) -> None:
+    def _clear_pending_interrupt(
+        self,
+        run: AgentRun,
+        decisions: list[dict[str, str]],
+    ) -> None:
         with self._lock:
             run.pending_interrupt = None
+            # The continuation already owns this decision. Release it together
+            # with the old interrupt, never while that interrupt can be answered.
+            if self._pending_decisions.get(run.id) == decisions:
+                self._pending_decisions[run.id] = None
             run.updated_at = utc_now()
             run.events.append(
                 AgentEvent(
@@ -803,7 +813,6 @@ class HarnessService:
             if ready.wait(timeout=0.2):
                 with self._lock:
                     decisions = self._pending_decisions.get(run_id)
-                    self._pending_decisions[run_id] = None
                     ready.clear()
                 if cancel.is_set():
                     return None
