@@ -1,6 +1,6 @@
 # Local AI Workbench
 
-Local AI Workbench is a Windows-first, local-first workbench for running models and agent work on your own machine. One FastAPI backend does the work; one Electron desktop shows it. Inference comes from llama.cpp, the agent loop from Deep Agents, LangGraph and LangChain. The workbench integrates those projects behind a coherent user experience instead of reimplementing them.
+Local AI Workbench is a Windows-first, local-first AI workspace for running models and agent work on your own machine. Its core experiences are **Models**, **Chat**, **Lab** and **Builder**: choose or import a model, discover what it can actually do here, configure it properly, then use it in conversation, experiments and workflows. One FastAPI backend does the work; one Electron desktop shows it. Inference comes from llama.cpp, the agent loop from Deep Agents, LangGraph and LangChain. The workbench integrates those projects behind a coherent guided setup instead of reimplementing them.
 
 ## Use the local product
 
@@ -11,7 +11,7 @@ On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It sta
 3. Send a message. For file tasks, enter an existing project folder first. The assistant can read and edit files there. Shell commands that need approval show the exact command with **Approve** and **Deny**.
 4. Use **Cancel** to stop work, and choose a saved conversation from the left to continue. Recent conversations appear first. Stop the model from **Models** when you want to release its GPU memory.
 
-The current next-work list is in [the delivery map](docs/delivery-feature-map.md#next-path). Detailed requirement status and scoped evidence live only in [the catalogue](specs/catalog.json); [verification](specs/verification.md) distinguishes live checks from mocks and unfinished acceptance clauses. Builder, optional MCP integration and broader Lab workflows are not prerequisites for Chat.
+The canonical next-work order is in [the delivery map](docs/delivery-feature-map.md#next-path). Detailed requirement status and scoped evidence live only in [the catalogue](specs/catalog.json); [verification](specs/verification.md) distinguishes live checks from mocks and unfinished acceptance clauses. Builder, optional MCP integration, voice and broader Lab workflows are intended product paths, but they are not prerequisites for the local model and Chat base.
 
 ## Coding agents
 

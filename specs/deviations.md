@@ -4,6 +4,22 @@ Running code known to differ from intended design. Gaps that are simply unbuilt 
 
 Entry fields: ID and title; affected requirements; observed behaviour and inspected commit; intended behaviour (link); risk; disposition (fix / propose design change / approved temporary deviation with approval reference); tracking reference; resolution.
 
+<a id="dev-006"></a>
+## DEV-006: Product reset gaps after guided model setup slice - open
+
+**Affected:** MOD-001, MOD-003, MOD-006, AGT-003/004/005, WF-001, LAB-001. **Baseline:** `fa9e64f622d38c00cb3ddbacf829afde21986ec3`; reconciled by the 2026-09-20 product reset.
+
+Guided repository/variant selection, immutable revision capture, bundle integrity, pin-aware startup controls and official planning are implemented in this slice. They do not complete the broader acceptance clauses:
+
+- Automatic compatibility-aware companion selection, hardware estimates, download progress/cancellation and publisher recommendation extraction remain unfinished. Filename candidates are not verified projector compatibility.
+- Shared structured capability probes and persisted feature opt-outs are absent. Compatibility records and `/props` are observations, not tool/vision round-trip evidence. Context/reasoning changes near Chat with explicit managed reload impact remain unfinished; the new controls configure managed startup from Models only.
+- Live `/memories/**` edits remain scratch-local; official memory/skills loading exists, but write-through into Knowledge versions does not. The existing capture gaps identify this limitation.
+- `write_todos` uses official upstream middleware. Delegation through `task` remains disabled pending explicit child setup/policy/capture wiring and denied-access evidence. User budgets are optional, but continuation past the measured framework recursion boundary is not implemented; failure must not be called budget-free unlimited execution.
+- The definition compiler still resolves a global setup and rejects cycles. Intended per-owning-agent inheritance, typed workflow execution and LangGraph-owned cycles are not delivered by this compiler or its current tests.
+- The fixed 16-token prefill / 8-token decode benchmark does not propagate the selected profile settings and is not a context-performance comparison. It remains plumbing; deeper runs must coordinate model loads through lifecycle management.
+
+**Disposition:** retain the intended requirements and deliver the gaps through the single [next path](../docs/delivery-feature-map.md#next-path), tracked with [#37](https://github.com/Vidcar/thtaib/issues/37). Do not inflate catalogue verification or reinterpret these gaps as permanent capability exclusions. Close this entry only as its remaining gaps acquire implementation and appropriate evidence.
+
 <a id="dev-001"></a>
 ## DEV-001: Diagnostic captures and case export bypassed the knowledge capture policy — closed
 

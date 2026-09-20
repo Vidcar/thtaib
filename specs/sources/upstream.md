@@ -47,6 +47,17 @@ Never let an upstream example silently replace application ownership, permission
 - <https://inspect.aisi.org.uk/scorers.html>
 - <https://modelcontextprotocol.io/extensions/apps/overview>
 
+## Product reset integration check (2026-09-20)
+
+The lockfile and installed Windows environment agree: `huggingface-hub==1.32.0`, `deepagents==0.7.15`, `langchain==1.4.2`, `langchain-core==1.6.3`, `langchain-openai==1.6.2`, `langgraph==1.2.11`. No dependency upgrade is part of this reset.
+
+- **Hugging Face:** inspected installed `hf_api.py` and `_snapshot_download.py`, and [v1.32.0 source](https://github.com/huggingface/huggingface_hub/blob/v1.32.0/src/huggingface_hub/_snapshot_download.py). `model_info(files_metadata=True)` supplies revision, relative filenames and sizes. `snapshot_download` owns filtering, local-directory metadata and interrupted transfer recovery. Application code groups candidate GGUF shards, requires one variant and an explicit projector choice, records the resolved commit, and preserves paths. Filename grouping is not architectural or projector compatibility evidence. Cards/config files remain untrusted reference data; they are not executable setup instructions. Live metadata lookup of Qwen2.5-0.5B returned nine variants without downloading weights.
+- **llama.cpp:** the installed managed Windows CUDA binary reports build 11045, commit `2b1847030`. Its `--help` and the [b11045 server reference](https://github.com/ggml-org/llama.cpp/blob/b11045/tools/server/README.md) agree on model-derived context (`0`), fitting, KV-cache types, batching, template/reasoning and speculative controls. The app no longer inserts a universal 65,536 context; explicit saved values remain explicit. The adapter maps supported startup controls as argument arrays. Reasoning effort names are runtime controls, not evidence that a particular model implements levels. MTP and draft decoding require suitable model/runtime prerequisites; emitted flags do not establish speed or observed behavior.
+- **Planning and delegation:** installed `deepagents/graph.py` creates a general-purpose subagent, but does not include `TodoListMiddleware`. The app now adds the official `langchain.agents.middleware.TodoListMiddleware` when `write_todos` is selected. Its checkpointed state and tool results stay upstream-owned ([middleware reference](https://docs.langchain.com/oss/python/langchain/middleware/built-in)). The application's parent tool-selection middleware is not automatically inherited by the default child. Delegation therefore still needs explicit child policy/capture wiring and denied-access tests before exposing `task`; this is an integration gap, not a permanent product exclusion.
+- **MCP:** installed `langchain/mcp` and distribution metadata confirm the existing `langchain.mcp.MCPAdapter` direction and optional `mcp` extra. The application has not wired it yet. The standalone historical adapter example is not the appropriate basis for this pin (see [MCP findings](#langchain-mcp)).
+
+No changed setting or small probe promotes a catalogue requirement to fully verified. Effective startup, sent requests and runtime observations remain distinct; missing structured capability probes are recorded in [the delivery order](../../docs/delivery-feature-map.md#next-path).
+
 <a id="langchain-retrieval"></a>
 ## LangChain / Deep Agents retrieval (OQ-006)
 
