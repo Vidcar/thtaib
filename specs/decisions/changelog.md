@@ -4,6 +4,15 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — David-PC retrieval UAT recorded
+
+Authority: live run on David-PC against `7db7f45` ([PR #92](https://github.com/Vidcar/thtaib/pull/92)); report [evidence](../evidence/2026-09-20-david-pc-retrieval.md). Requirement: STATE-006. Does not close [OQ-006](../open-questions.md#oq-006).
+
+- Chat HTTP fail-closed: missing embedder is `embedding_deployment_missing` (404); 27B as embedder is `embedding_not_configured` (409); registered-but-stopped embedder is `embedding_deployment_unloaded` (409).
+- Live `search_knowledge` on `chat_dd629963a59c` / `agent_0d0e82d70502` / `thread_7bc495cb1598` with knowledge `kn_e2611981cdc1` / `knv_88eba6c79f27`: 18 chunks in harness scratch batch `52a13eaa`; `retrieved_material` filled; project stayed `notes.md` only.
+- Catalogue `uat` row attached on STATE-006; status stays `built` (recorded-tool replay and remaining fail-closed codes were not exercised).
+- No CI run URL — this was host UAT, not `ci-smoke`.
+
 ## 2026-09-20 — STATE-006 retrieval v1 built
 
 Authority: [OQ-006](../open-questions.md#oq-006) research of 2026-09-19 (include RAG in v1) and the operator note that David-PC already holds the dedicated embedding GGUF (not a bundle). Requirements: STATE-006 (`built`, not `verified`); MOD-003 startup keys `embedding` / `pooling`; AGT-002 `retrieved_material`. No ADR: no new execution owner, no persistent vector store, no second inference stack. Lockfile add: official `langchain-text-splitters`.

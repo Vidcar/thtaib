@@ -962,7 +962,17 @@
         "apps/backend/tests/test_host_shell.py",
         "apps/backend/tests/test_recorded_tools.py"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "kind": "uat",
+          "ref": "specs/evidence/2026-09-20-david-pc-retrieval.md",
+          "commit": "7db7f45d76733e156f6a4c7db93f5eea08a2d48a",
+          "date": "2026-09-20",
+          "environment": "David-PC: Windows 11, RTX 3090 24 GB, CUDA 13.4; managed llama.cpp b11045 CUDA; Qwen3.8-27B UD-IQ4_XS + Qwen3-Embedding-0.6B Q8_0; origin/main 7db7f45",
+          "result": "passed",
+          "requirement_sha256": null
+        }
+      ]
     },
     {
       "id": "REG-001",
