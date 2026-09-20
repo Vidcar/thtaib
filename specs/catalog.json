@@ -958,7 +958,9 @@
         "apps/backend/tests/test_retrieval.py",
         "apps/backend/tests/test_settings.py",
         "apps/backend/tests/test_harness_backend.py",
-        "apps/backend/tests/test_deployments.py"
+        "apps/backend/tests/test_deployments.py",
+        "apps/backend/tests/test_host_shell.py",
+        "apps/backend/tests/test_recorded_tools.py"
       ],
       "evidence": []
     },
