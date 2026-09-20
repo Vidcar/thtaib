@@ -46,17 +46,25 @@ Import-boundary check; integration tiers beyond the real-model smoke (managed Wi
 <a id="ci"></a>
 ## CI
 
-Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`), contract freshness (`contracts.yml`) and the real-model smoke tier (`real-model-smoke.yml`, Ubuntu only, assets restored from `actions/cache` under the pin-derived key) with read-only permissions, no secrets and no Hugging Face token. These eight status checks are required on `main` with strict tip:
+Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`), contract freshness (`contracts.yml`) and the real-model smoke tier (`real-model-smoke.yml`, Ubuntu only, assets restored from `actions/cache` under the pin-derived key) with read-only permissions, no secrets and no Hugging Face token.
+
+Triggers: `pull_request`, `push` to `main` only (not every feature-branch push), `workflow_dispatch`, and `merge_group`. Each workflow uses `concurrency` with `cancel-in-progress`. Path filters skip the expensive suite on unrelated changes; required Linux check names still report so classic branch protection does not deadlock. `spec-integrity` and `shared-contract-freshness` are Linux-only (OS-independent). `backend-unittest` and `desktop-typecheck-build` still run one Windows job when their paths match; that is coverage, not the merge long pole. David-PC is the real Windows and capability check. This is not Issue #36 advisory-only CI and not catalogue `verified` evidence.
+
+These four Linux status checks are the thin remaining required gate on `main` with strict tip:
 
 ```text
 backend-unittest (ubuntu-latest)
-backend-unittest (windows-latest)
 desktop-typecheck-build (ubuntu-latest)
-desktop-typecheck-build (windows-latest)
 shared-contract-freshness (ubuntu-latest)
-shared-contract-freshness (windows-latest)
 spec-integrity (ubuntu-latest)
-spec-integrity (windows-latest)
 ```
 
-A ninth check, `real-model-smoke (ubuntu-latest)`, runs on every pull request and is intended to join the required set; adding it to branch protection is a maintainer action, and until it is listed above it is not a merge gate. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).
+These jobs still run when their paths match and are not the required merge wall:
+
+```text
+backend-unittest (windows-latest)
+desktop-typecheck-build (windows-latest)
+real-model-smoke (ubuntu-latest)
+```
+
+`spec-integrity (windows-latest)` and `shared-contract-freshness (windows-latest)` are retired OS-duplicates. Workflows still emit those names as cheap shims until the maintainer removes them from classic branch protection (agents cannot edit that setting). Adding `real-model-smoke (ubuntu-latest)` to the required set is also a maintainer action. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).

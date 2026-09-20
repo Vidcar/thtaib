@@ -3,13 +3,26 @@
 # Proves plumbing (attach/health, tool-call round trip, thread continuity,
 # applied settings), not model capability. Not David-PC capability UAT and
 # not catalogue verified evidence. Weights are cached, never committed.
+# Not a required merge gate. Path-filtered so unrelated PRs skip it.
 name: Real-model smoke
 
 on:
   pull_request:
+    paths:
+      - "apps/backend/**"
+      - ".github/workflows/real-model-smoke.yml"
   push:
+    branches:
+      - main
+    paths:
+      - "apps/backend/**"
+      - ".github/workflows/real-model-smoke.yml"
   workflow_dispatch:
   merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,13 +32,9 @@ env:
 
 jobs:
   real-model-smoke:
-    name: real-model-smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: real-model-smoke (ubuntu-latest)
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
     defaults:
       run:
         working-directory: apps/backend

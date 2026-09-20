@@ -50,7 +50,7 @@ Exact versions live in the lockfiles and runtime manifests, never in prose. Befo
 
 ## Repository protection and CI
 
-CI runs on ordinary `pull_request` events with read-only permissions, hosted runners and no product credentials. Never move untrusted pull-request code to `pull_request_target` or a privileged self-hosted worker to get past a failure. Agent credentials must not be able to administer branch protection or bypass required checks; an agent never approves its own architecture change, and a pull-request author cannot supply their own review. Required checks are listed in [commands](commands.md#ci). A tool-specific instruction file (for Cursor, Copilot or another agent) contains only a pointer to [AGENTS.md](../AGENTS.md) and unavoidable local conventions, never a second copy of these rules.
+CI runs on ordinary `pull_request` events (and `push` to `main`, plus `workflow_dispatch`) with read-only permissions, hosted runners and no product credentials. Product workflows path-filter and cancel in-progress runs; they do not run on every feature-branch push. Never move untrusted pull-request code to `pull_request_target` or a privileged self-hosted worker to get past a failure. Agent credentials must not be able to administer branch protection or bypass required checks; an agent never approves its own architecture change, and a pull-request author cannot supply their own review. Required checks are the Linux thin gate listed in [commands](commands.md#ci). A tool-specific instruction file (for Cursor, Copilot or another agent) contains only a pointer to [AGENTS.md](../AGENTS.md) and unavoidable local conventions, never a second copy of these rules.
 
 <a id="issues-and-pull-requests"></a>
 ## Issues and pull requests

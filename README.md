@@ -4,7 +4,7 @@ Local AI Workbench is a Windows-first, local-first workbench for running models 
 
 ## Where things stand
 
-Seen working live on David's PC (2026-09-19, Qwen3.8-27B on an RTX 3090): the backend downloads the pinned llama.cpp build, starts `llama-server` itself, reports it healthy and stops it cleanly; Chat sends a task to the agent, the agent writes a real file into the project folder and a follow-up turn continues the same conversation; a saved profile's settings reach the model. A real-model smoke test with a tiny model now runs on every pull request. Built but not yet proven live: Hugging Face import, companion files for vision, Lab capture and replay, durable knowledge. Not started: workers (shell, browser), Builder, Model Lab runners, approvals, retrieval.
+Seen working live on David's PC (2026-09-19, Qwen3.8-27B on an RTX 3090): the backend downloads the pinned llama.cpp build, starts `llama-server` itself, reports it healthy and stops it cleanly; Chat sends a task to the agent, the agent writes a real file into the project folder and a follow-up turn continues the same conversation; a saved profile's settings reach the model. A real-model smoke test with a tiny model runs on pull requests that touch the backend. Built but not yet proven live: Hugging Face import, companion files for vision, Lab capture and replay, durable knowledge. Not started: workers (shell, browser), Builder, Model Lab runners, approvals, retrieval.
 
 The honest status of every requirement is in [the catalogue](specs/catalog.json); what "built" and "verified" mean is in [verification](specs/verification.md).
 
