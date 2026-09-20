@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from fastapi import FastAPI
@@ -10,8 +12,14 @@ from fastapi.testclient import TestClient
 from gguf import GGUFWriter
 
 from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
+from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.process import HttpProbe
+from workbench_backend.inference.schemas import HealthReport, ServerProperties
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.store import ApplicationStore
+
+
+TERMINAL_RUN_STATUSES = {"completed", "cancelled", "failed"}
 
 
 def workbench_client(application: FastAPI, *, token: str | None = None) -> TestClient:
@@ -20,6 +28,30 @@ def workbench_client(application: FastAPI, *, token: str | None = None) -> TestC
     if token != "":
         headers[WORKBENCH_LOCAL_TOKEN_HEADER] = token or application.state.local_trust_token
     return TestClient(application, headers=headers)
+
+
+class OfflineProbe(HttpProbe):
+    """Opt-in probe for scripted fixtures with no live local model server."""
+
+    def health(self, endpoint: str) -> HealthReport:
+        return HealthReport(
+            healthy=False,
+            endpoint=endpoint,
+            checked=utc_now(),
+            detail="scripted fixture: no live server",
+        )
+
+    def props(self, endpoint: str) -> ServerProperties | None:
+        return None
+
+    def smoke(self, endpoint: str) -> tuple[bool, str]:
+        return False, "scripted fixture: no live server"
+
+
+def offline_workbench_client(application: FastAPI, *, token: str | None = None) -> TestClient:
+    """Client for scripted fixtures that intentionally have no live model server."""
+    application.state.manager.deployments.probe = OfflineProbe()
+    return workbench_client(application, token=token)
 
 
 def close_workbench_sqlite(*objects: object) -> None:
@@ -58,6 +90,51 @@ def close_workbench_sqlite(*objects: object) -> None:
         seen.add(marker)
         store.close()
     close_all_sqlite_checkpointers()
+
+
+def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    body: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/v1/agent-runs/{run_id}")
+        body = response.json()
+        if body.get("status") in TERMINAL_RUN_STATUSES:
+            return body
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_id} did not finish: {body}")
+
+
+def wait_for_status(
+    client: TestClient,
+    run_id: str,
+    status: str,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    body: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/v1/agent-runs/{run_id}")
+        body = response.json()
+        if body.get("status") == status:
+            return body
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
+
+
+def wait_for_lab_result(client: TestClient, result_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    body: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/v1/lab/results/{result_id}")
+        body = response.json()
+        evidence = body.get("evidence") or {}
+        if evidence.get("executable_checks") or body.get("judgement") or body.get("deviations"):
+            run = client.get(f"/v1/agent-runs/{body['agent_run_id']}").json()
+            if run.get("status") in TERMINAL_RUN_STATUSES:
+                return client.get(f"/v1/lab/results/{result_id}").json()
+        time.sleep(0.05)
+    raise TimeoutError(f"lab result {result_id} did not finish: {body}")
 
 
 def write_tiny_gguf(

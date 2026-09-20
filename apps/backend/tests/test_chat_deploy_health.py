@@ -8,12 +8,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
+from workbench_backend.inference.adapter import RecordingTransport, chat_model_for_deployment
 from workbench_backend.inference.connection_errors import (
     DEPLOY_UNHEALTHY_MESSAGE,
     DEPLOY_UNREACHABLE_MESSAGE,
@@ -21,7 +23,7 @@ from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
 )
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client
 
 
 def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -56,7 +58,7 @@ class ChatDeployHealthTests(unittest.TestCase):
         self.project.mkdir()
         self.app = create_app(data_root=self.root)
         self.manager = self.app.state.manager
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         attached = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "unreachable-llama"},
@@ -92,7 +94,25 @@ class ChatDeployHealthTests(unittest.TestCase):
         self.assertEqual(conversation["continuity"]["thread_id"], conversation["thread_id"])
         self.assertTrue(conversation["thread_id"])
 
-    def test_live_adapter_unreachable_is_failed_not_empty_success(self) -> None:
+    def test_adapter_connection_failure_is_failed_not_empty_success(self) -> None:
+        def fail_request(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("deterministic connection failure")
+
+        def factory(run: AgentRun, sink: list[dict[str, Any]]) -> Any:
+            deployment = self.manager.get_deployment(run.deployment_id)
+            client = httpx.Client(
+                transport=RecordingTransport(sink, inner=httpx.MockTransport(fail_request)),
+                timeout=1.0,
+            )
+            self.addCleanup(client.close)
+            return chat_model_for_deployment(deployment, capture_sink=sink, http_client=client)
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
         conversation = self._create()
         thread_id = conversation["thread_id"]
         started = self.client.post(

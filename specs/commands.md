@@ -13,11 +13,15 @@ Run pack commands from the repository root (Python 3.11+; on Windows `py -3` if 
 
 ## Backend
 
+Use `tests.run` (or an explicit `tests.test_module` for focused checks). The test package selects a disposable `.scratch/` data root before importing the application, including its default app instance, and cleans up after the process. Avoid bare `unittest discover -s tests` without `-t .`: that bypasses package bootstrap. The default tier covers Models/Chat and pure rules; integration contains the cross-service and process fixtures. Neither tier downloads models.
+
 | Command | Working directory | Purpose |
 | --- | --- | --- |
 | `uv sync` | `apps/backend` | Install locked dependencies (`--frozen` in CI). |
 | `uv run python -m workbench_backend` | `apps/backend` | Start the backend on `127.0.0.1:8000`; `/health` is public, `/v1` needs `X-Workbench-Local-Token`. |
-| `uv run python -m unittest discover -s tests -p "test_*.py"` | `apps/backend` | Backend unit tests (fakes and scripted models; not live evidence). |
+| `uv run python -m tests.run` | `apps/backend` | Fast default backend behaviour/regression suite (fakes and scripted models; not live evidence). |
+| `uv run python -m tests.run --tier integration --durations 10` | `apps/backend` | Cross-service harness/replay, real loopback HTTP/SSE, host-shell, managed process and Windows cancellation checks; no real model required. |
+| `uv run python -m tests.run --tier all --durations 20` | `apps/backend` | Every backend regression, including integration. Use before delivery for backend changes. |
 | `uv run python ../../scripts/generate_shared_contracts.py` | `apps/backend` | Regenerate OpenAPI, JSON Schema and desktop types. |
 | `uv run python ../../scripts/generate_shared_contracts.py --check` | `apps/backend` | Fail if generated contracts are stale. |
 
@@ -44,18 +48,18 @@ For normal local use on a prepared Windows checkout, double-click root `Launch W
 
 ## Not yet available
 
-Import-boundary check; integration tiers beyond the real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; application migrations. Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
+Import-boundary check; integration tiers beyond the local process checks and real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; application migrations. Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
 
 <a id="ci"></a>
 ## CI
 
-Workflows in `.github/workflows/` run the pack checks (`specs.yml`), backend unit tests (`backend.yml`), desktop type-check and build (`desktop.yml`), contract freshness (`contracts.yml`) and the real-model smoke tier (`real-model-smoke.yml`, Ubuntu only, assets restored from `actions/cache` under the pin-derived key) with read-only permissions, no secrets and no Hugging Face token.
+One workflow, `.github/workflows/ci.yml`, selects changed paths once and runs backend regressions, desktop build (including typecheck and SSE behaviour), contract freshness and spec integrity. Backend and desktop changes retain Windows and Ubuntu coverage. Required jobs still report on unrelated changes; do not use top-level path filters that leave required checks pending. Unknown revisions or failed diffs select every tier.
 
-Contract freshness also triggers on `inference/schemas.py`: Hugging Face discovery exports those canonical models through the existing shared schema app. Ubuntu remains a portable CI runner, not a supported Linux desktop claim. The product reset changes no required check names or branch protection.
+The fast default suite is for the local development loop. CI also runs the process integration tier on backend changes. Real-model smoke is separate: relevant backend implementation/integration/dependency changes and CI changes run it on pull requests, and manual dispatch runs it explicitly. It no longer repeats on post-merge pushes or unrelated merge queues. Missing assets fail this tier in CI; local asset-free runs may skip and must be reported as skipped. Do not treat tiny-model success as capability evidence.
 
-Triggers: `pull_request`, `push` to `main` only (not every feature-branch push), `workflow_dispatch`, and `merge_group`. Each workflow uses `concurrency` with `cancel-in-progress`. Path filters skip the expensive suite on unrelated changes; required Linux check names still report so classic branch protection does not deadlock. `spec-integrity` and `shared-contract-freshness` are Linux-only (OS-independent). `backend-unittest` and `desktop-typecheck-build` still run one Windows job when their paths match; that is coverage, not the merge long pole. David-PC is the real Windows and capability check. This is not Issue #36 advisory-only CI and not catalogue `verified` evidence.
+Commands are not additive checklists: `pnpm run build` already includes typecheck and the SSE regression script. Do not run them again immediately before/after that build without a relevant change. Contract freshness is run once in its own job; cheap contract unit checks remain in the backend suite.
 
-These four Linux status checks are the thin remaining required gate on `main` with strict tip:
+The existing four required GitHub status names are preserved, with strict tip protection:
 
 ```text
 backend-unittest (ubuntu-latest)
@@ -64,12 +68,4 @@ shared-contract-freshness (ubuntu-latest)
 spec-integrity (ubuntu-latest)
 ```
 
-These jobs still run when their paths match and are not the required merge wall:
-
-```text
-backend-unittest (windows-latest)
-desktop-typecheck-build (windows-latest)
-real-model-smoke (ubuntu-latest)
-```
-
-`spec-integrity (windows-latest)` and `shared-contract-freshness (windows-latest)` are retired OS-duplicates; their shims were removed after live inspection confirmed neither is required on `main` (2026-09-20). No branch-protection setting changed. The five workflows retain distinct coverage and path filters; combining them would not reduce the actual checks. Adding a required check is a separate repository-policy change. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).
+Windows backend/desktop and Ubuntu real-model jobs remain additional checks. No GitHub settings change is required. Ubuntu checks provide portability coverage, not a supported Linux desktop claim. CI is a final guard; live Windows validation uses isolated product data under `.scratch/` and existing model assets without changing the everyday workspace.

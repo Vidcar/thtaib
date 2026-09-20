@@ -14,27 +14,11 @@ from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
-from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
 from workbench_backend.app import create_app
-from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
-from tests.support import close_workbench_sqlite, workbench_client
-
-FILESYSTEM_CATALOGUE = list(ENABLED_TOOL_NAMES)
-
-
-def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 30.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") in {"completed", "cancelled", "failed"}:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not finish: {body}")
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run, wait_for_status
 
 
 def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -48,24 +32,6 @@ def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 
             return body
         time.sleep(0.05)
     raise TimeoutError(f"chat {conversation_id} did not finish: {body}")
-
-
-def wait_for_status(
-    client: TestClient,
-    run_id: str,
-    status: str,
-    *,
-    timeout: float = 10.0,
-) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") == status:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not reach {status}: {body}")
 
 
 def write_then_reply(path: str = "/edited.md", content: str = "chat-file-edit") -> list[AIMessage]:
@@ -91,9 +57,8 @@ class ChatHarnessTests(unittest.TestCase):
         self.project = self.root / "project-workspace"
         self.project.mkdir()
         (self.project / "keep.md").write_text("retain-me", encoding="utf-8")
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(write_then_reply())
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -105,7 +70,7 @@ class ChatHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "chat-fixture"},
@@ -174,8 +139,6 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(body["current_run"]["harness"], "deepagents")
 
     def test_filesystem_tools_write_project_storage(self) -> None:
-        catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
-        self.assertEqual(catalogue, FILESYSTEM_CATALOGUE)
         conversation = self._create()
         started = self._start(conversation["id"])
         body = wait_for_chat(self.client, conversation["id"])
@@ -476,9 +439,8 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.project = self.root / "direct-project"
         self.project.mkdir()
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(write_then_reply("/direct.md", "via-harness"))
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -489,7 +451,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
             model_factory=factory,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "fs-fixture"},

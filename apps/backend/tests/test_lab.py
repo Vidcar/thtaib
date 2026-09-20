@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
 
-from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents.harness import HarnessService
@@ -21,34 +19,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client, write_tiny_gguf
-
-
-def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") in {"completed", "cancelled", "failed"}:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not finish: {body}")
-
-
-def wait_for_lab_result(client: TestClient, result_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/lab/results/{result_id}")
-        body = response.json()
-        evidence = body.get("evidence") or {}
-        if evidence.get("executable_checks") or body.get("judgement"):
-            run = client.get(f"/v1/agent-runs/{body['agent_run_id']}").json()
-            if run.get("status") in {"completed", "cancelled", "failed"}:
-                return client.get(f"/v1/lab/results/{result_id}").json()
-        time.sleep(0.05)
-    raise TimeoutError(f"lab result {result_id} did not finish: {body}")
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_lab_result, wait_for_run, write_tiny_gguf
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -75,7 +46,7 @@ class LabApiTests(unittest.TestCase):
         self.app.state.harness = HarnessService(lambda: self.manager, model_factory=factory)
         self.app.state.lab._manager_provider = lambda: self.manager
         self.app.state.lab._harness_provider = lambda: self.app.state.harness
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "lab-fixture"},

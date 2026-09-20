@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import socket
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import httpx
 from langchain_core.messages import AIMessage
+import uvicorn
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
+from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.event_stream import resume_after_snapshot
-from workbench_backend.inference.service import ModelManager
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -102,28 +105,63 @@ def read_stream_until_end(
     return collected
 
 
-def read_stream_until_idle(
-    client: TestClient,
+@contextmanager
+def loopback_app_server(app: Any) -> Iterator[str]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(128)
+    host, port = sock.getsockname()
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="off")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while not server.started:
+            if not thread.is_alive():
+                raise RuntimeError("uvicorn test server stopped before startup")
+            if time.monotonic() > deadline:
+                raise TimeoutError("uvicorn test server did not start")
+            time.sleep(0.01)
+        yield f"http://{host}:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5.0)
+        sock.close()
+        if thread.is_alive():
+            raise TimeoutError("uvicorn test server did not stop")
+
+
+def read_loopback_stream_until_idle(
+    base_url: str,
     *,
+    token: str,
     params: dict[str, str],
     headers: dict[str, str] | None = None,
     timeout: float = 8.0,
 ) -> list[dict[str, Any]]:
-    """Collect through the first snapshot and the next idle signal.
-
-    Idle means ``stream_end`` or a keep-alive comment. Used for a live run
-    that must not be waited to completion.
-    """
-
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     collected: list[dict[str, Any]] = []
     saw_snapshot = False
-    with client.stream("GET", "/v1/events", params=params, headers=headers) as response:
+    request_headers = {WORKBENCH_LOCAL_TOKEN_HEADER: token, **(headers or {})}
+    http_timeout = httpx.Timeout(timeout)
+    with httpx.stream(
+        "GET",
+        f"{base_url}/v1/events",
+        params=params,
+        headers=request_headers,
+        timeout=http_timeout,
+    ) as response:
         if response.status_code != 200:
             body = response.read().decode("utf-8", errors="replace")
             raise AssertionError(f"stream HTTP {response.status_code}: {body}")
         buffer = ""
-        for chunk in response.iter_text():
+        chunks = response.iter_text()
+        while time.monotonic() < deadline:
+            try:
+                chunk = next(chunks)
+            except StopIteration:
+                raise AssertionError(f"SSE closed before snapshot and idle signal: {collected!r}")
             buffer += chunk
             events = parse_sse_events(buffer)
             if events and events[-1].get("event") is None and events[-1].get("data") is None and not events[-1].get("comment"):
@@ -136,9 +174,7 @@ def read_stream_until_idle(
             )
             if saw_snapshot and idle:
                 return collected
-            if time.time() > deadline:
-                raise TimeoutError(f"SSE idle timed out; so far={collected!r}")
-    return collected
+    raise TimeoutError(f"SSE idle timed out; so far={collected!r}")
 
 
 def record_events(record: dict[str, Any] | None) -> list[Any]:
@@ -196,9 +232,8 @@ class EventStreamTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel(echo_then_reply())
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -210,7 +245,7 @@ class EventStreamTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "stream-fixture"},
@@ -368,42 +403,49 @@ class EventStreamTests(unittest.TestCase):
         self.assertGreaterEqual(len(persisted_events), 2, persisted)
         self.assertTrue(is_run_lifecycle_live(persisted["status"]), persisted["status"])
 
-        with patch("workbench_backend.event_stream.WAIT_TIMEOUT_SECONDS", 0.2):
-            replay = read_stream_until_idle(
-                self.client,
-                params={"run_id": started["id"]},
-                headers={"Last-Event-ID": "1"},
-                timeout=5.0,
-            )
-        self.assertEqual(replay[0]["event"], "snapshot")
-        snapshot_events = replay[0]["data"]["snapshot"]["events"]
-        self.assertGreaterEqual(len(snapshot_events), 2, snapshot_events)
+        with loopback_app_server(self.app) as base_url:
+            try:
+                with patch("workbench_backend.event_stream.WAIT_TIMEOUT_SECONDS", 0.2):
+                    replay = read_loopback_stream_until_idle(
+                        base_url,
+                        token=self.app.state.local_trust_token,
+                        params={"run_id": started["id"]},
+                        headers={"Last-Event-ID": "1"},
+                        timeout=5.0,
+                    )
+                self.assertEqual(replay[0]["event"], "snapshot")
+                self.assertTrue(any(item.get("comment") == "keepalive" for item in replay), replay)
+                snapshot_events = replay[0]["data"]["snapshot"]["events"]
+                self.assertGreaterEqual(len(snapshot_events), 2, snapshot_events)
 
-        merged: dict[str, Any] | None = None
-        newer = 0
-        for item in replay:
-            merged = apply_snapshot_replace_then_append(merged, item.get("data"), item.get("event"))
-            seen = record_events(merged)
-            if item.get("event") == "run_event":
-                seq = item["data"]["seq"] if item.get("data") else None
-                self.assertIsNotNone(seq)
-                self.assertGreater(
-                    seq,
-                    len(snapshot_events),
-                    f"live reconnect replayed snapshot row seq={seq} after a "
-                    f"{len(snapshot_events)}-event snapshot",
-                )
-                newer += 1
-            self.assertEqual(
-                len(seen),
-                len(snapshot_events) + newer,
-                f"live reconnect duplicated events after {item.get('event')} "
-                f"id={item.get('id')}: {len(seen)} != {len(snapshot_events) + newer}",
-            )
+                merged: dict[str, Any] | None = None
+                newer = 0
+                for item in replay:
+                    merged = apply_snapshot_replace_then_append(merged, item.get("data"), item.get("event"))
+                    seen = record_events(merged)
+                    if item.get("event") == "run_event":
+                        seq = item["data"]["seq"] if item.get("data") else None
+                        self.assertIsNotNone(seq)
+                        self.assertGreater(
+                            seq,
+                            len(snapshot_events),
+                            f"live reconnect replayed snapshot row seq={seq} after a "
+                            f"{len(snapshot_events)}-event snapshot",
+                        )
+                        newer += 1
+                    self.assertEqual(
+                        len(seen),
+                        len(snapshot_events) + newer,
+                        f"live reconnect duplicated events after {item.get('event')} "
+                        f"id={item.get('id')}: {len(seen)} != {len(snapshot_events) + newer}",
+                    )
 
-        latest = self.client.get(f"/v1/agent-runs/{started['id']}").json()["events"]
-        self.assertEqual(record_events(merged), latest[: len(record_events(merged))])
-        hold.set()
+                latest_body = self.client.get(f"/v1/agent-runs/{started['id']}").json()
+                self.assertTrue(is_run_lifecycle_live(latest_body["status"]), latest_body["status"])
+                latest = latest_body["events"]
+                self.assertEqual(record_events(merged), latest[: len(record_events(merged))])
+            finally:
+                hold.set()
 
     def test_subscriber_wait_does_not_cancel_run(self) -> None:
         """A waiting consumer is not a run end. TestClient buffers SSE until the

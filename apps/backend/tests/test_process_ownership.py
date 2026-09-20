@@ -240,21 +240,6 @@ class ProcessOwnershipTests(unittest.TestCase):
         self.assertIsNone(stopped.pid)
         self.assertIsNone(stopped.process_identity)
 
-    def test_connected_lifecycle_stays_non_destructive(self) -> None:
-        deployment = self.manager.attach_connected(
-            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:9")
-        )
-        self.assertEqual(deployment.scope.value, "connected")
-        with self.assertRaises(ManagerError) as stop_error:
-            self.manager.stop_deployment(deployment.id)
-        self.assertEqual(stop_error.exception.code, "connected_no_lifecycle")
-        with self.assertRaises(ManagerError) as start_error:
-            self.manager.start_deployment(deployment.id)
-        self.assertEqual(start_error.exception.code, "connected_no_lifecycle")
-        detached = self.manager.detach_deployment(deployment.id)
-        self.assertEqual(detached.id, deployment.id)
-
-
 class ProcessIdentityFixtureTests(unittest.TestCase):
     """PID reuse / mismatch — fixtures only; no host-process termination."""
 

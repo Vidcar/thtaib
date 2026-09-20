@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -25,7 +26,6 @@ from workbench_backend.contracts.paths import (
     DESKTOP_TYPES_RELATIVE,
     OPENAPI_RELATIVE,
     generated_relative_paths,
-    repo_root_from,
 )
 from support import close_workbench_sqlite, workbench_client
 
@@ -90,15 +90,19 @@ class SharedContractSurfaceTests(unittest.TestCase):
 
 class OpenApiTypescriptInvocationTests(unittest.TestCase):
     def test_windows_safe_command_uses_node_and_pinned_cli(self) -> None:
-        repo = repo_root_from(Path(__file__).resolve())
-        desktop = repo / "apps" / "desktop"
-        if not (desktop / OPENAPI_TYPESCRIPT_CLI).is_file():
-            self.skipTest("desktop node_modules not installed in this environment")
-        command = openapi_typescript_command(repo, pnpm_dir=desktop)
-        self.assertNotEqual(command[0], "pnpm")
-        self.assertTrue(command[0].lower().endswith(("node", "node.exe")))
-        self.assertEqual(Path(command[1]), desktop / OPENAPI_TYPESCRIPT_CLI)
-        self.assertIn("--root-types", command)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "workspace with spaces"
+            desktop = repo / "apps" / "desktop"
+            cli = desktop / OPENAPI_TYPESCRIPT_CLI
+            cli.parent.mkdir(parents=True)
+            cli.write_text("// package fixture", encoding="utf-8")
+            node = "C:/Program Files/nodejs/node.exe"
+            with patch("workbench_backend.contracts.cli.resolve_executable", return_value=node):
+                command = openapi_typescript_command(repo, pnpm_dir=desktop)
+            self.assertEqual(command, [
+                node, str(cli), str(repo / OPENAPI_RELATIVE),
+                "-o", str(repo / DESKTOP_TYPES_RELATIVE), "--root-types",
+            ])
 
 
 class FreshnessComparisonTests(unittest.TestCase):

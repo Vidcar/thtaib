@@ -9,6 +9,14 @@ from workbench_backend.paths import PRODUCT_DATA_DIR, SHARED_SECRET_FILENAME, Wo
 
 
 class PathResolutionTests(unittest.TestCase):
+    def test_import_time_application_uses_isolated_test_data(self) -> None:
+        from workbench_backend.app import app
+
+        scratch = Path(__file__).resolve().parents[3] / ".scratch"
+        root = app.state.manager.paths.root
+        self.assertTrue(root.is_relative_to(scratch), root)
+        self.assertTrue(root.parent.name.startswith("backend-tests-"), root)
+
     def test_windows_uses_localappdata_layout(self) -> None:
         root = resolve_data_root(
             environ={"LOCALAPPDATA": r"C:\Users\david\AppData\Local"},

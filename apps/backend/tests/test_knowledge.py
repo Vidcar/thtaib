@@ -20,7 +20,7 @@ from workbench_backend.knowledge.schemas import KnowledgeConfig
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client, offline_workbench_client
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -309,7 +309,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
         self.app.state.lab._manager_provider = lambda: self.manager
         self.app.state.lab._harness_provider = lambda: self.app.state.harness
         self.app.state.lab._knowledge_provider = lambda: self.app.state.knowledge
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "knowledge-lab"},

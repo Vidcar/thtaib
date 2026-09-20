@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from workbench_backend.agents import harness_backend as harness_backend_mod
@@ -22,38 +20,9 @@ from workbench_backend.agents.replay import (
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.errors import ReplayError
-from workbench_backend.inference.service import ModelManager
-from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
-
-
-def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/agent-runs/{run_id}")
-        body = response.json()
-        if body.get("status") in {"completed", "cancelled", "failed"}:
-            return body
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_id} did not finish: {body}")
-
-
-def wait_for_lab_result(client: TestClient, result_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    body: dict[str, Any] = {}
-    while time.time() < deadline:
-        response = client.get(f"/v1/lab/results/{result_id}")
-        body = response.json()
-        evidence = body.get("evidence") or {}
-        if evidence.get("executable_checks") or body.get("judgement") or body.get("deviations"):
-            run = client.get(f"/v1/agent-runs/{body['agent_run_id']}").json()
-            if run.get("status") in {"completed", "cancelled", "failed"}:
-                return client.get(f"/v1/lab/results/{result_id}").json()
-        time.sleep(0.05)
-    raise TimeoutError(f"lab result {result_id} did not finish: {body}")
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_lab_result, wait_for_run
 
 
 def write_then_reply(path: str, content: str, call_id: str = "call_write") -> list[AIMessage]:
@@ -175,10 +144,9 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.project.mkdir()
         self.outside = self.root / "outside-sentinel.txt"
         self.outside.write_text("untouched", encoding="utf-8")
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
-        self.client = workbench_client(self.app)
+        self.manager = self.app.state.manager
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "recorded-fixture"},
@@ -371,11 +339,10 @@ class RecordedToolLabTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self._install_script(write_then_reply("/case.md", "case-bytes"))
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "lab-recorded"},

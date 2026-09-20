@@ -39,7 +39,7 @@ from workbench_backend.knowledge.schemas import KnowledgeRefs, KnowledgeVersion
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client, offline_workbench_client
 
 MEMORY_TOKEN = "MEM-TOKEN-57-QWERTY-UNIQUE"
 SKILL_TOKEN = "SKILL-TOKEN-57-ZXCVB-UNIQUE"
@@ -482,9 +482,8 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.project = self.root / "project"
         self.project.mkdir()
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted = ScriptedChatModel([AIMessage(content="Noted.")])
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -496,7 +495,7 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "scripted"},

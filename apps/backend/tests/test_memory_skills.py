@@ -30,12 +30,11 @@ from workbench_backend.agents.tools import resolve_presented_tools
 from workbench_backend.app import create_app
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
-from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeVersion
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, workbench_client
+from tests.support import close_workbench_sqlite, workbench_client, offline_workbench_client
 
 HUMAN = {"actor": "human", "note": "memory-skills"}
 MEMORY_TOKEN = "MEM-TOKEN-MS-UNIQUE"
@@ -314,9 +313,8 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.manager = ModelManager(WorkbenchPaths(self.root).ensure())
         self.app = create_app(data_root=self.root)
-        self.app.state.manager = self.manager
+        self.manager = self.app.state.manager
         self.scripted: ScriptedChatModel | None = None
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
@@ -329,7 +327,7 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        self.client = workbench_client(self.app)
+        self.client = offline_workbench_client(self.app)
         self.deployment_id = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:9/v1", "display_name": "scripted-ms"},

@@ -4,19 +4,22 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Models UX refinement is complete in [PR #104](https://github.com/Vidcar/thtaib/pull/104), branch `codex/models-experience`. Models now leads with the library and model setup, separates imports/presets, and places identifiers, paths and runtime diagnostics in disclosures. Controls offer model-specific choices, custom values and focus/hover help with flags. Related Chat, Knowledge, Lab and task-run copy is clearer.
+Testing/CI simplification implemented on `codex/test-suite-simplification`; awaiting GitHub validation/delivery. No production application code changed. [Commands](specs/commands.md) and AGENTS now describe the tiers and isolation requirements.
 
-## Decisions and completed checks
+## Changes and decisions
 
-- GGUF metadata drives context choices and GPU layer limits. Keep gguf-py behind the existing inference boundary; its metadata-only reader skips tensor construction for newer tensor formats. Requested launch values remain distinct from observed server properties. CPU suggestions are recommendations, not fabricated observations.
-- Stop-before-reconfigure retains edits. Explicit health checks refresh observed server properties.
-- Old local UAT records were removed as requested. Current conversation, live model and downloaded weights remain. Future synthetic checks use isolated `.scratch/` product-data roots.
-- Full backend suite: 302 tests passed. Desktop typecheck/build and SSE check passed. Shared-contract freshness and spec checker passed. Isolated Windows CUDA tiny-model managed start/props/stop passed with the new UI flags; this proves plumbing, not capability.
-- Browser checks: 256k model offers eight 32k–256k choices, invalid oversized custom values are blocked, help is focusable, and the 500px layout has no horizontal overflow.
-- Final backend restart passed: all three real models return configuration options, and the existing model remains healthy at 64k context with four concurrent slots. Latest metadata-reader and deployment tests passed after the full suite.
+- Default: Models/Chat plus fast rules. Integration: cross-service harness/replay, real HTTP/SSE, host-shell and process checks. CI runs both on backend changes; no required coverage silently excluded.
+- Scripted fixtures explicitly use an offline unhealthy probe instead of real closed-port waits. Reused application managers; consolidated polling helpers. Removed a duplicate lifecycle test and tautological catalogue assertion.
+- Live SSE reconnect now observes a real loopback stream while the run remains live (0.8s versus 30s). Windows blocked transport uses event cleanup.
+- Test bootstrap isolates the import-time app under `.scratch/`; early baseline imports could refresh everyday deployment metadata. No model weights/settings/conversations were used as test fixtures.
+- Five workflows consolidated into one; three path-filter jobs become one; removed duplicate desktop typecheck and repeated post-merge real-model runs. Four required Linux check names preserved.
 
-## Pointers and next step
+## Measured checks (Windows, installed dependencies)
 
-UI: `apps/desktop/src/renderer/{ModelsPanel,DeploymentsPanel,ModelControls}.tsx`. Backend: `inference/configuration_options.py`, `inspect.py`, `deployments.py`. Behaviour: [model spec](specs/modules/models.md). Exact checks: [commands](specs/commands.md).
+Original: 304 tests, 833.17s wall, no failures; one desktop-dependency skip. Final: 213 default tests / 18.166s and 91 integration tests / 40.504s; all passed without skips. Real CUDA tiny-model smoke: four passed / 6.099s. Desktop: 4.540s before, 2.760s after. Spec checks, 57 tooling tests, contracts and actionlint pass.
 
-No implementation work remains. Launch locally with root `Launch Workbench.vbs`; desktop build is refreshed and the backend is healthy. Bonsai setup supports its newer tensor format; full tensor inspection still depends on gguf-py support. Synthetic validation must remain isolated from everyday product data.
+Isolated Electron: real reply, transcript reopening and Models health passed. Wrong tiny-model follow-up despite intact request history; no capability claim. Test processes stopped. Raw logs: `.scratch/test-audit-measurements/`, `.scratch/test-audit-live/`.
+
+## Next step
+
+Create/review/merge PR after GitHub checks; refresh this state on delivery. No GitHub settings changes expected.
