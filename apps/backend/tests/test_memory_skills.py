@@ -144,7 +144,7 @@ class MemorySkillsGlueTests(unittest.TestCase):
             project_bound=False,
             knowledge_routes=True,
         )
-        self.assertEqual(presented, ["echo", "time_now", "ls", "read_file"])
+        self.assertEqual(presented, ["echo", "time_now", "write_todos", "ls", "read_file"])
         self.assertEqual(denied, [])
         self.assertEqual(blocked, [])
         self.assertEqual(shell, [])

@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 from deepagents import create_deep_agent
+from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -616,6 +617,7 @@ class HarnessService:
             tools=tools,
             system_prompt=run.system_prompt,
             middleware=[
+                *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
                 WorkbenchHarnessMiddleware(
                     run,
                     http_sink,

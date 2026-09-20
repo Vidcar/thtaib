@@ -21,7 +21,8 @@ VISIBILITY_TOOL_NAMES = ("echo", "time_now")
 FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute",)
-ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES)
+PLANNING_TOOL_NAMES = ("write_todos",)
+ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES)
 
 
 @tool("echo")
@@ -64,7 +65,7 @@ def enabled_for_project(
 
     if project_bound:
         return list(ENABLED_TOOL_NAMES)
-    enabled = list(VISIBILITY_TOOL_NAMES)
+    enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES]
     if knowledge_routes:
         enabled.extend(KNOWLEDGE_ROUTE_READ_TOOLS)
     return enabled

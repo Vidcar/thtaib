@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { api, DEFAULT_EMBEDDING_STARTUP, DEFAULT_GPU_STARTUP } from "./api";
+import { api, DEFAULT_EMBEDDING_STARTUP } from "./api";
 import { formatBytes } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
@@ -8,7 +8,43 @@ import { deploymentHealthLabel } from "./labels";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
-import type { Deployment, ModelBundle, RuntimeManifest } from "./types";
+import type { Deployment, ModelBundle, RuntimeManifest, SettingsBags } from "./types";
+
+const KV_CACHE_TYPES = ["", "f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"] as const;
+const FLASH_ATTN_VALUES = ["on", "off", "auto"] as const;
+const FIT_VALUES = ["", "on", "off"] as const;
+
+function parseOptionalNumber(label: string, value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} must be a number.`);
+  }
+  return parsed;
+}
+
+function parseAdvancedStartup(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Advanced startup must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function compactStartup(startup: Record<string, unknown>): string {
+  const entries = Object.entries(startup);
+  if (!entries.length) {
+    return "none";
+  }
+  return entries.map(([key, value]) => `${key}: ${String(value)}`).join(" | ");
+}
 
 function resourceLabel(deployment: Deployment): string {
   const usage = deployment.resource_usage;
@@ -56,7 +92,7 @@ function visibleHealthTone(deployment: Deployment): "neutral" | "ok" | "danger" 
   return "neutral";
 }
 
-export function DeploymentsPanel() {
+export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }: { selectedBundleId?: string; bundlesVersion?: string } = {}) {
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -64,6 +100,15 @@ export function DeploymentsPanel() {
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:8080/v1");
   const [managedEmbedder, setManagedEmbedder] = useState(false);
   const [connectedEmbedder, setConnectedEmbedder] = useState(false);
+  const [contextSize, setContextSize] = useState("");
+  const [gpuLayers, setGpuLayers] = useState("-1");
+  const [flashAttn, setFlashAttn] = useState<(typeof FLASH_ATTN_VALUES)[number]>("on");
+  const [fit, setFit] = useState<(typeof FIT_VALUES)[number]>("");
+  const [threadsBatch, setThreadsBatch] = useState("");
+  const [cacheTypeK, setCacheTypeK] = useState<(typeof KV_CACHE_TYPES)[number]>("");
+  const [cacheTypeV, setCacheTypeV] = useState<(typeof KV_CACHE_TYPES)[number]>("");
+  const [advancedStartup, setAdvancedStartup] = useState("");
+  const [settingsPreview, setSettingsPreview] = useState<SettingsBags | null>(null);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -85,10 +130,45 @@ export function DeploymentsPanel() {
     void refresh().catch((error: unknown) => {
       setLoadError(errorMessage(error));
     });
-  }, []);
+  }, [bundlesVersion]);
+
+  useEffect(() => {
+    if (selectedBundleId) setBundleId(selectedBundleId);
+  }, [selectedBundleId]);
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
+  }
+
+  function managedStartup(): Record<string, unknown> {
+    const startup: Record<string, unknown> = {
+      ...parseAdvancedStartup(advancedStartup),
+      n_gpu_layers: gpuLayers.trim() || "auto",
+      flash_attn: flashAttn,
+    };
+    const parsedContext = parseOptionalNumber("Context size", contextSize);
+    if (parsedContext !== undefined) startup.ctx_size = parsedContext;
+    if (fit) startup.fit = fit;
+    const parsedThreadsBatch = parseOptionalNumber("Batch threads", threadsBatch);
+    if (parsedThreadsBatch !== undefined) startup.threads_batch = parsedThreadsBatch;
+    if (cacheTypeK) startup.cache_type_k = cacheTypeK;
+    if (cacheTypeV) startup.cache_type_v = cacheTypeV;
+    if (managedEmbedder) Object.assign(startup, DEFAULT_EMBEDDING_STARTUP);
+    return startup;
+  }
+
+  async function previewManagedStartup(): Promise<SettingsBags> {
+    const preview = await api.previewSettings(managedStartup(), {}, {});
+    setSettingsPreview(preview);
+    if (preview.startup.unsupported.length || preview.startup.retired.length) {
+      throw new Error(
+        `Startup settings need correction: ${[
+          ...preview.startup.unsupported,
+          ...preview.startup.retired.map((item) => item.key),
+        ].join(", ")}`,
+      );
+    }
+    return preview;
   }
 
   if (loadError) {
@@ -142,12 +222,8 @@ export function DeploymentsPanel() {
           onSubmit={(event) => {
             event.preventDefault();
             setBusy(true);
-            void api
-              .startManaged(
-                bundleId,
-                undefined,
-                managedEmbedder ? { ...DEFAULT_GPU_STARTUP, ...DEFAULT_EMBEDDING_STARTUP } : undefined,
-              )
+            void previewManagedStartup()
+              .then(() => api.startManaged(bundleId, undefined, managedStartup()))
               .then((deployment) => {
                 setMessage(
                   deployment.health?.healthy === false
@@ -162,8 +238,8 @@ export function DeploymentsPanel() {
         >
           <h3>Start managed</h3>
           <p className="hint">
-            Uses ctx_size {DEFAULT_GPU_STARTUP.ctx_size}, all GPU layers, flash attention on. A file
-            under models is not a bundle — import it first. PATH llama-server is unsupported.
+            Context is blank by default so llama.cpp can use the model and fit behavior. A file
+            under models is not a bundle; import it first. PATH llama-server is unsupported.
           </p>
           <label>
             Bundle
@@ -176,17 +252,163 @@ export function DeploymentsPanel() {
               ))}
             </select>
           </label>
+          <div className="setup-grid">
+            <label>
+              Context size
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Model default"
+                value={contextSize}
+                onChange={(event) => {
+                  setContextSize(event.target.value);
+                  setSettingsPreview(null);
+                }}
+              />
+            </label>
+            <label>
+              GPU layers
+              <input
+                value={gpuLayers}
+                onChange={(event) => {
+                  setGpuLayers(event.target.value);
+                  setSettingsPreview(null);
+                }}
+                placeholder="auto, all, -1, or a number"
+              />
+            </label>
+            <label>
+              Fit memory
+              <select
+                value={fit}
+                onChange={(event) => {
+                  setFit(event.target.value as (typeof FIT_VALUES)[number]);
+                  setSettingsPreview(null);
+                }}
+              >
+                <option value="">Runtime default</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label>
+              Flash attention
+              <select
+                value={flashAttn}
+                onChange={(event) => {
+                  setFlashAttn(event.target.value as (typeof FLASH_ATTN_VALUES)[number]);
+                  setSettingsPreview(null);
+                }}
+              >
+                <option value="on">On</option>
+                <option value="off">Off</option>
+                <option value="auto">Auto</option>
+              </select>
+            </label>
+            <label>
+              KV cache K
+              <select
+                value={cacheTypeK}
+                onChange={(event) => {
+                  setCacheTypeK(event.target.value as (typeof KV_CACHE_TYPES)[number]);
+                  setSettingsPreview(null);
+                }}
+              >
+                <option value="">Runtime default</option>
+                {KV_CACHE_TYPES.filter(Boolean).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              KV cache V
+              <select
+                value={cacheTypeV}
+                onChange={(event) => {
+                  setCacheTypeV(event.target.value as (typeof KV_CACHE_TYPES)[number]);
+                  setSettingsPreview(null);
+                }}
+              >
+                <option value="">Runtime default</option>
+                {KV_CACHE_TYPES.filter(Boolean).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Batch threads
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Same as generation"
+                value={threadsBatch}
+                onChange={(event) => {
+                  setThreadsBatch(event.target.value);
+                  setSettingsPreview(null);
+                }}
+              />
+            </label>
+          </div>
           <label className="check-row">
             <input
               type="checkbox"
               checked={managedEmbedder}
-              onChange={(event) => setManagedEmbedder(event.target.checked)}
+              onChange={(event) => {
+                setManagedEmbedder(event.target.checked);
+                setSettingsPreview(null);
+              }}
             />
             Dedicated embedder (embedding on, pooling last). Chat models are not embedders.
           </label>
-          <button type="submit" disabled={!bundleId || busy}>
-            Start
-          </button>
+          <details>
+            <summary>Advanced startup JSON</summary>
+            <p className="hint">
+              Preview checks startup keys with the backend. Visible controls above win when keys overlap.
+            </p>
+            <textarea
+              value={advancedStartup}
+              onChange={(event) => {
+                setAdvancedStartup(event.target.value);
+                setSettingsPreview(null);
+              }}
+              placeholder='{"reasoning":"auto","cache_type_k":"q8_0"}'
+            />
+          </details>
+          <div className="actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void previewManagedStartup()
+                  .then((preview) => {
+                    setMessage(`Startup preview: ${compactStartup(preview.startup.applied)}`);
+                  })
+                  .catch(fail)
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Preview settings
+            </button>
+            <button type="submit" disabled={!bundleId || busy}>
+              Start
+            </button>
+          </div>
+          {settingsPreview ? (
+            <>
+              <p className="hint">Resolved startup preview: {compactStartup(settingsPreview.startup.applied)}. Nothing has been applied to a running model.</p>
+              <SettingsNotes
+                unsupported={settingsPreview.startup.unsupported}
+                retired={settingsPreview.startup.retired}
+              />
+            </>
+          ) : null}
         </form>
 
         <form

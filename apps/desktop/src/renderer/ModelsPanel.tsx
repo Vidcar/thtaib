@@ -9,6 +9,7 @@ import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
+import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 
 export function ModelsPanel() {
   const [paths, setPaths] = useState<PathsInfo | null>(null);
@@ -18,10 +19,14 @@ export function ModelsPanel() {
   const [localPath, setLocalPath] = useState("");
   const [localName, setLocalName] = useState("");
   const [repoId, setRepoId] = useState("");
-  const [revision, setRevision] = useState("");
+  const [hub, setHub] = useState<SchemaHubRepository | null>(null);
+  const [variant, setVariant] = useState("");
+  const [projector, setProjector] = useState("");
+  const [hubBusy, setHubBusy] = useState(false);
+  const [hubMessage, setHubMessage] = useState("");
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [profileName, setProfileName] = useState("Default chat");
-  const [temperature, setTemperature] = useState("0.7");
+  const [temperature, setTemperature] = useState("");
   const [maxTokens, setMaxTokens] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [message, setMessage] = useState("");
@@ -52,6 +57,9 @@ export function ModelsPanel() {
   }, []);
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
+  const selectedVariant = hub?.variants.find((item) => item.name === variant);
+  const selectedProjector = hub?.projectors.find((item) => item.name === projector);
+  const selectedHubFiles = [...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? [])];
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
@@ -91,6 +99,7 @@ export function ModelsPanel() {
             void api
               .importLocal(localPath, localName || undefined)
               .then((job) => {
+                if (job.bundle_id) setSelectedId(job.bundle_id);
                 setMessage(
                   job.error
                     ? `Local import ${job.status}: ${job.error}`
@@ -123,39 +132,64 @@ export function ModelsPanel() {
           className="card"
           onSubmit={(event) => {
             event.preventDefault();
-            void api
-              .importHf(repoId, revision)
-              .then((job) => {
-                setMessage(
-                  job.error
-                    ? `Hugging Face import ${job.status}: ${job.error}`
-                    : `Hugging Face import ${job.status}`,
-                );
-                return refresh();
-              })
-              .catch(fail);
+            setHubBusy(true);
+            setHubMessage("Reading available model files…");
+            setHub(null);
+            void api.inspectHf(repoId).then((result) => {
+              setHub(result);
+              setVariant(result.variants.length === 1 && result.variants[0].complete ? result.variants[0].name : "");
+              setProjector(result.projectors.length ? "" : "text-only");
+              setHubMessage("");
+            }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
           }}
         >
           <h3>Import from Hugging Face</h3>
           <label>
-            Repository
+            Hugging Face link or repository
             <input
               value={repoId}
-              onChange={(event) => setRepoId(event.target.value)}
+              onChange={(event) => { setRepoId(event.target.value); setHub(null); }}
+              disabled={hubBusy}
               placeholder="unsloth/Qwen3.8-27B-GGUF"
             />
           </label>
-          <label>
-            Pinned revision
-            <input
-              value={revision}
-              onChange={(event) => setRevision(event.target.value)}
-              placeholder="commit SHA or tag"
-            />
-          </label>
-          <button type="submit" disabled={!repoId.trim() || !revision.trim()}>
-            Import pinned revision
+          <button type="submit" disabled={!repoId.trim() || hubBusy}>
+            Find model files
           </button>
+          {hub ? <>
+            <label>Model variant
+              <select value={variant} disabled={hubBusy} onChange={(event) => setVariant(event.target.value)}>
+                <option value="">Choose a GGUF variant</option>
+                {hub.variants.map((item) => <option key={item.name} value={item.name} disabled={!item.complete}>
+                  {item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}
+                </option>)}
+              </select>
+            </label>
+            {hub.projectors.length ? <label>Vision companion
+              <select value={projector} disabled={hubBusy} onChange={(event) => setProjector(event.target.value)}>
+                <option value="">Choose a projector or text-only</option>
+                <option value="text-only">Text-only — no projector</option>
+                {hub.projectors.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+              </select>
+            </label> : null}
+            {hub.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
+            <p className="hint">Publisher guidance: <a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">model card</a>. Downloading does not establish tool or vision capability.</p>
+            <details><summary>Files and recorded revision</summary>
+              <p className="hint">{hub.resolved_revision}</p>
+              <ul>{selectedHubFiles.map((file) => <li key={file}>{file}</li>)}</ul>
+            </details>
+            <button type="button" disabled={hubBusy || !selectedVariant || !projector} onClick={() => {
+              setHubBusy(true);
+              setHubMessage("Downloading selected files and checking the bundle. This can take several minutes. Retry an interrupted download to resume it.");
+              const exactFiles = selectedHubFiles.map((file) => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
+              void api.importHf(hub.repo_id, hub.resolved_revision, exactFiles).then((job) => {
+                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : "Model imported. Start it below, then open Chat.");
+                if (job.bundle_id) setSelectedId(job.bundle_id);
+                return refresh();
+              }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
+            }}>Download selected variant</button>
+          </> : null}
+          {hubMessage ? <p role="status">{hubMessage}</p> : null}
         </form>
       </div>
 
@@ -168,7 +202,7 @@ export function ModelsPanel() {
           </EmptyState>
         ) : bundles.length === 0 ? (
           <EmptyState title="No bundles">
-            Import a local GGUF or a pinned Hugging Face revision. The product will not invent a
+            Import a local GGUF or choose a Hugging Face model variant. The product will not invent a
             bundle from a file that merely exists under models.
           </EmptyState>
         ) : (
@@ -260,9 +294,8 @@ export function ModelsPanel() {
         className="card"
         onSubmit={(event) => {
           event.preventDefault();
-          const perRequest: Record<string, unknown> = {
-            temperature: Number(temperature) || 0.7,
-          };
+          const perRequest: Record<string, unknown> = {};
+          if (temperature.trim()) perRequest.temperature = Number(temperature);
           if (maxTokens.trim()) {
             perRequest.max_tokens = Number(maxTokens);
           }
@@ -270,7 +303,7 @@ export function ModelsPanel() {
             .createProfile({
               display_name: profileName.trim() || "Untitled profile",
               bundle_id: selectedId || undefined,
-              startup: { ctx_size: 65536, n_gpu_layers: -1, flash_attn: "on" },
+              startup: {},
               per_request: perRequest,
               agent: systemPrompt.trim() ? { system_prompt: systemPrompt } : {},
             })
@@ -291,8 +324,8 @@ export function ModelsPanel() {
         </label>
         <div className="setup-grid">
           <label>
-            Temperature
-            <input value={temperature} onChange={(event) => setTemperature(event.target.value)} />
+            Temperature (optional override)
+            <input type="number" min="0" step="0.01" placeholder="Runtime default" value={temperature} onChange={(event) => setTemperature(event.target.value)} />
           </label>
           <label>
             Max tokens (optional)
@@ -328,7 +361,7 @@ export function ModelsPanel() {
         )}
       </div>
 
-      <DeploymentsPanel />
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} />
       {message ? (
         <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice>
       ) : null}

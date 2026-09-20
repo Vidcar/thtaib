@@ -83,9 +83,30 @@ class ImportJob(BaseModel):
 
 class HuggingFaceImportRequest(BaseModel):
     repo_id: str
-    revision: str
+    revision: str = "main"
     allow_patterns: list[str] | None = None
     display_name: str | None = None
+
+
+class HuggingFaceInspectRequest(BaseModel):
+    repo_id: str
+    revision: str = "main"
+
+
+class HubVariant(BaseModel):
+    name: str
+    files: list[str]
+    size_bytes: int | None = None
+    complete: bool = True
+
+
+class HubRepository(BaseModel):
+    repo_id: str
+    resolved_revision: str
+    variants: list[HubVariant]
+    projectors: list[HubVariant]
+    guidance_files: list[str]
+    warnings: list[str]
 
 
 class LocalImportRequest(BaseModel):

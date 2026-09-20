@@ -5,6 +5,7 @@ import {
   subscribeWorkbenchEvents,
 } from "./sse";
 import type { RunStreamEnvelope } from "./sse";
+import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
   ChatConversation,
@@ -34,7 +35,6 @@ import type {
 } from "./types";
 
 export const DEFAULT_GPU_STARTUP = {
-  ctx_size: 65536,
   n_gpu_layers: -1,
   flash_attn: "on",
 } as const;
@@ -73,10 +73,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ source_path, display_name }),
     }),
-  importHf: (repo_id: string, revision: string) =>
-    request<ImportJob>("/v1/imports/huggingface", {
+  inspectHf: (repo_id: string, revision = "main") =>
+    request<SchemaHubRepository>("/v1/models/huggingface/inspect", {
       method: "POST",
       body: JSON.stringify({ repo_id, revision }),
+    }),
+  importHf: (repo_id: string, revision: string, allow_patterns: string[]) =>
+    request<ImportJob>("/v1/imports/huggingface", {
+      method: "POST",
+      body: JSON.stringify({ repo_id, revision, allow_patterns }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
   previewSettings: (startup: object, per_request: object, agent: object) =>

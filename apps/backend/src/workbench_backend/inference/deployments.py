@@ -93,13 +93,20 @@ class DeploymentService:
         requested_startup.update(request.startup)
         per_request = profile.bags.per_request.requested if profile else {}
         agent = profile.bags.agent.requested if profile else {}
-        host, port, overrides = self._allocate_listen(requested_startup)
+        bags = resolve_bags(
+            startup=requested_startup,
+            per_request=per_request,
+            agent=agent,
+        )
+        _require_valid_managed_startup(bags.startup)
+        host, port, overrides = self._allocate_listen(bags.startup.applied)
         bags = resolve_bags(
             startup=requested_startup,
             per_request=per_request,
             agent=agent,
             startup_overrides=overrides,
         )
+        _require_valid_managed_startup(bags.startup)
         deployment = Deployment(
             id=new_id("deploy"),
             display_name=f"managed:{bundle.display_name}",
@@ -222,6 +229,27 @@ class DeploymentService:
                 "Cannot start a deployment from a missing or unsuccessful bundle.",
                 code="bundle_not_deployable",
                 status_code=409,
+            )
+        startup_overrides: dict[str, Any] = {}
+        for key in ("host", "port"):
+            if key in deployment.applied_startup:
+                startup_overrides[key] = deployment.applied_startup[key]
+        bags = resolve_bags(
+            startup=deployment.requested_startup,
+            per_request=deployment.settings.per_request.requested,
+            agent=deployment.settings.agent.requested,
+            startup_overrides=startup_overrides,
+        )
+        _require_valid_managed_startup(bags.startup)
+        if bags.startup.applied != deployment.applied_startup or bags != deployment.settings:
+            deployment = self.store.put_deployment(
+                deployment.model_copy(
+                    update={
+                        "applied_startup": bags.startup.applied,
+                        "settings": bags,
+                        "updated_at": utc_now(),
+                    }
+                )
             )
         executable = self.runtime.require_executable()
         argv = managed_argv(executable, bundle, deployment.applied_startup)
@@ -507,7 +535,15 @@ class DeploymentService:
         requested: dict[str, Any],
     ) -> tuple[str, int, dict[str, Any]]:
         host = str(requested.get("host") or "127.0.0.1")
-        requested_port = int(requested.get("port") or 8080)
+        try:
+            requested_port = int(requested.get("port") or 8080)
+        except (TypeError, ValueError) as exc:
+            raise ManagerError(
+                "Invalid managed startup setting: port must be an integer.",
+                code="managed_startup_invalid",
+                status_code=400,
+                details={"unsupported": ["port"], "retired": []},
+            ) from exc
         port = _first_free_port(host, requested_port)
         overrides: dict[str, Any] = {"host": host, "port": port}
         return host, port, overrides
@@ -542,6 +578,22 @@ def managed_argv(executable: Path | str, bundle: ModelBundle, applied_startup: d
     return argv
 
 
+def _require_valid_managed_startup(startup: Any) -> None:
+    unsupported = list(getattr(startup, "unsupported", []) or [])
+    retired = list(getattr(startup, "retired", []) or [])
+    if not unsupported and not retired:
+        return
+    retired_keys = [note.key for note in retired]
+    keys = [*unsupported, *retired_keys]
+    raise ManagerError(
+        "Invalid managed startup settings: "
+        f"{', '.join(keys)}. Correct or remove these settings before starting llama-server.",
+        code="managed_startup_invalid",
+        status_code=400,
+        details={"unsupported": unsupported, "retired": retired_keys},
+    )
+
+
 def _endpoint_port(endpoint: str | None) -> int | None:
     if not endpoint:
         return None
@@ -556,7 +608,7 @@ def _endpoint_port(endpoint: str | None) -> int | None:
 
 
 def _first_free_port(host: str, start: int) -> int:
-    for port in range(start, start + 50):
+    for port in range(start, min(start + 50, 65536)):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
