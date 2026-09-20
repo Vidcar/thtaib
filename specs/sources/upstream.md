@@ -57,8 +57,19 @@ Consulted 2026-09-19 against the pinned backend lock (`deepagents==0.7.15`, `lan
 - [Build a semantic search engine](https://docs.langchain.com/oss/python/langchain/knowledge-base) — loaders, splitters, embeddings, vector stores.
 - [`InMemoryVectorStore`](https://reference.langchain.com/python/langchain-core/vectorstores/in_memory/InMemoryVectorStore/).
 - [`OpenAIEmbeddings`](https://reference.langchain.com/python/langchain-openai/embeddings/base/OpenAIEmbeddings/) — `base_url` + `check_embedding_ctx_length=False` for OpenAI-compatible servers.
-- [Deep Agents memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) — always-load / progressive disclosure, not query-time RAG.
+- [Deep Agents memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) — always-load / progressive disclosure, not query-time RAG (see also the 2026-09-20 pin-checked note below).
 - [llama-server embeddings](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) — `POST /v1/embeddings`, `--embedding`, `--pooling`.
+
+<a id="deepagents-memory-skills"></a>
+## Deep Agents memory and skills (OQ-006 / AGT-004)
+
+Consulted 2026-09-20 against the pinned backend lock (`deepagents==0.7.15`). Live `docs.langchain.com` pages are not the pin. The 0.7.15 wheel was read for `create_deep_agent` (`deepagents/graph.py`), `MemoryMiddleware` (`deepagents/middleware/memory.py`), `SkillsMiddleware` (`deepagents/middleware/skills.py`) and `CompositeBackend` routing (`deepagents/backends/composite.py`). Cross-checked with:
+
+- [Memory](https://docs.langchain.com/oss/python/deepagents/memory) — `memory=` file paths; `MemoryMiddleware` always-loads via `backend.download_files`; default fragment treats files as untrusted data and encourages `edit_file`.
+- [Skills](https://docs.langchain.com/oss/python/deepagents/skills) — `skills=` directory sources; progressive disclosure of `SKILL.md` YAML `name` / `description`; a path that points at one skill directory is not loaded; invalid frontmatter is skipped.
+- [`create_deep_agent`](https://reference.langchain.com/python/deepagents/graph/create_deep_agent) — `memory=` and `skills=` kwargs; `MemoryMiddleware` is tail middleware (after caller middleware); `SkillsMiddleware` is base middleware.
+
+`StoreBackend` and background consolidation appear on the live memory page as optional platform patterns. They are not adopted here as a knowledge owner ([OQ-006](../open-questions.md#oq-006), [OQ-009](../open-questions.md#oq-009)).
 
 <a id="fastapi-sse"></a>
 ## FastAPI Server-Sent Events
