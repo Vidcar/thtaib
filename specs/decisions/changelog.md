@@ -15,6 +15,14 @@ Authority: technical research against the pinned stack on 2026-09-20 (`deepagent
 - Project-less Chat may auto-present `ls` / `read_file` for those knowledge routes when `memory=` or `skills=` is attached. Project writes, `glob` / `grep`, and `execute` still require a project. `permissions=` deny writes on `/skills/**`. `/memories/` `edit_file` is run-local scratch, not a STATE-005 version.
 - Left out: `StoreBackend` as durable knowledge, background consolidation, write-through, remounting `knowledge\`, any STATE-006 change.
 
+## 2026-09-20 — Core desktop product surfaces
+
+Authority: product-owner outcome (usable Chat / Models / Knowledge; project-less Chat). Requirements: API-002, API-004, API-006. Status stays `built`, not `verified`. No ADR: same Electron desktop, same routes, no new execution owner.
+
+- Chat, Models (bundles, profiles, deployments) and Knowledge replace raw JSON debug panels. Empty and error states are explicit. Chat is the default surface and works without a project folder.
+- In-run Approve/Deny and run progress use the existing `GET /v1/events` SSE stream. Cancel stays enabled only while the run is live; `cancel_requested` is shown as stopping, not idle.
+- Lab remains reachable with an honest note that Model Lab runners are not a science app yet. Builder, MCP, voice, ComfyUI and Deep Agents `memory=` / `skills=` loading are out of this change.
+
 ## 2026-09-20 — David-PC retrieval UAT recorded
 
 Authority: live run on David-PC against `7db7f45` ([PR #92](https://github.com/Vidcar/thtaib/pull/92)); report [evidence](../evidence/2026-09-20-david-pc-retrieval.md). Requirement: STATE-006. Does not close [OQ-006](../open-questions.md#oq-006).

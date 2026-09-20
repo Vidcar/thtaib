@@ -2,7 +2,7 @@ import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
 
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "models" | "deployments" | "chat" | "agent-run" | "lab" | "knowledge";
+export type WorkbenchTab = "chat" | "models" | "knowledge" | "agent-run" | "lab";
 
 export interface PathsInfo {
   root: string;

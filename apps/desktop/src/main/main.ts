@@ -26,8 +26,8 @@ function preloadScriptPath(): string {
 function createWindow(): void {
   const window = new BrowserWindow({
     title: "Local AI Workbench",
-    width: 1100,
-    height: 780,
+    width: 1280,
+    height: 860,
     show: false,
     webPreferences: {
       preload: preloadScriptPath(),

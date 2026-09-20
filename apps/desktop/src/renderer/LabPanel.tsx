@@ -78,10 +78,11 @@ export function LabPanel() {
   return (
     <section className="panel">
       <h2>Lab</h2>
-      <p className="hint">
-        Thin capture → restore → rerun panel. Task evaluation calls the shared Deep
-        Agents harness / MOD-005. Engine measurement is llama-bench when present.
-        This is not Chat, not Builder, and not a second evaluation agent loop.
+      <p className="lede">
+        Capture a task, restore it into a new workspace, and rerun live-tool or recorded-tool.
+        Recorded-tool is not live proof. Model Lab charts and science-app runners are not here yet;
+        engine measurement is llama-bench only when that binary is present. This is not Chat and not
+        Builder.
       </p>
 
       <div className="card">

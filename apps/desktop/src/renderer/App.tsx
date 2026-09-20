@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AgentRunPanel } from "./AgentRunPanel";
 import { api } from "./api";
 import { ChatPanel } from "./ChatPanel";
-import { DeploymentsPanel } from "./DeploymentsPanel";
+import { errorMessage } from "./errors";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
 import { ModelsPanel } from "./ModelsPanel";
@@ -12,7 +12,7 @@ import type { WorkbenchSurface, WorkbenchTab } from "./types";
 function surfaceLabel(surface: WorkbenchSurface): string {
   switch (surface) {
     case "managed-inference":
-      return "Managed inference";
+      return "Local models";
     default: {
       const unexpected: never = surface;
       return unexpected;
@@ -22,18 +22,16 @@ function surfaceLabel(surface: WorkbenchSurface): string {
 
 function tabLabel(tab: WorkbenchTab): string {
   switch (tab) {
-    case "models":
-      return "Models";
-    case "deployments":
-      return "Deployments";
     case "chat":
       return "Chat";
+    case "models":
+      return "Models";
+    case "knowledge":
+      return "Knowledge";
     case "agent-run":
       return "Agent run";
     case "lab":
       return "Lab";
-    case "knowledge":
-      return "Knowledge";
     default: {
       const unexpected: never = tab;
       return unexpected;
@@ -44,30 +42,50 @@ function tabLabel(tab: WorkbenchTab): string {
 export function App() {
   const productName = window.workbench?.productName ?? "Local AI Workbench";
   const surface: WorkbenchSurface = window.workbench?.surface ?? "managed-inference";
-  const [tab, setTab] = useState<WorkbenchTab>("models");
-  const [backendStatus, setBackendStatus] = useState("checking backend…");
+  const [tab, setTab] = useState<WorkbenchTab>("chat");
+  const [backendStatus, setBackendStatus] = useState("Checking the local backend…");
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    void api
-      .health()
-      .then((health) => setBackendStatus(`${health.product} · ${health.surface}`))
-      .catch(() => setBackendStatus("Backend not reachable on 127.0.0.1:8000"));
-  }, []);
+    let cancelled = false;
+    async function check(): Promise<void> {
+      try {
+        const health = await api.health();
+        if (cancelled) {
+          return;
+        }
+        setBackendOk(true);
+        setBackendStatus(`${health.product} · ${surfaceLabel(surface)}`);
+      } catch (error: unknown) {
+        if (cancelled) {
+          return;
+        }
+        setBackendOk(false);
+        setBackendStatus(`Backend not reachable on 127.0.0.1:8000 · ${errorMessage(error)}`);
+      }
+    }
+    void check();
+    const timer = window.setInterval(() => {
+      void check();
+    }, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [surface]);
 
   function renderTab(current: WorkbenchTab) {
     switch (current) {
-      case "models":
-        return <ModelsPanel />;
-      case "deployments":
-        return <DeploymentsPanel />;
       case "chat":
         return <ChatPanel />;
+      case "models":
+        return <ModelsPanel />;
+      case "knowledge":
+        return <KnowledgePanel />;
       case "agent-run":
         return <AgentRunPanel />;
       case "lab":
         return <LabPanel />;
-      case "knowledge":
-        return <KnowledgePanel />;
       default: {
         const unexpected: never = current;
         return unexpected;
@@ -75,31 +93,28 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["models", "deployments", "chat", "agent-run", "lab", "knowledge"];
+  const tabs: WorkbenchTab[] = ["chat", "models", "knowledge", "agent-run", "lab"];
 
   return (
-    <main className="shell">
-      <p className="eyebrow">Local AI Workbench</p>
-      <h1>{productName}</h1>
-      <p className="lede">
-        {surfaceLabel(surface)}. Chat is debug-quality and calls the embedded
-        harness. Agent-run, Lab and Knowledge remain raw debug panels. Not
-        Builder.
-      </p>
-      <p className="hint">{backendStatus}</p>
-      <nav className="tabs" aria-label="Workbench surfaces">
-        {tabs.map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={item === tab ? "tab active" : "tab"}
-            onClick={() => setTab(item)}
-          >
-            {tabLabel(item)}
-          </button>
-        ))}
-      </nav>
-      {renderTab(tab)}
-    </main>
+    <div className="app">
+      <aside className="app-nav" aria-label="Workbench">
+        <p className="eyebrow">Local AI Workbench</p>
+        <h1>{productName}</h1>
+        <nav className="side-tabs">
+          {tabs.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={item === tab ? "tab active" : "tab"}
+              onClick={() => setTab(item)}
+            >
+              {tabLabel(item)}
+            </button>
+          ))}
+        </nav>
+        <p className={backendOk === false ? "notice notice-error" : "hint"}>{backendStatus}</p>
+      </aside>
+      <main className="app-main">{renderTab(tab)}</main>
+    </div>
   );
 }
