@@ -11,6 +11,11 @@ import {
 } from "./localTrust";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const ownsSingleInstance = app.requestSingleInstanceLock();
+
+if (!ownsSingleInstance) {
+  app.quit();
+}
 
 function preloadScriptPath(): string {
   const candidates = ["preload.js", "preload.mjs", "preload.cjs"];
@@ -51,6 +56,18 @@ function createWindow(): void {
   void window.loadFile(path.join(currentDir, "../dist/index.html"));
 }
 
+function focusExistingWindow(): void {
+  const [window] = BrowserWindow.getAllWindows();
+  if (!window) {
+    return;
+  }
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+}
+
 function installLocalTrustHeader(): void {
   const token = ensureSharedSecret(resolveProductDataRoot());
   session.defaultSession.webRequest.onBeforeSendHeaders(
@@ -66,16 +83,20 @@ function installLocalTrustHeader(): void {
   );
 }
 
-app.whenReady().then(() => {
-  installLocalTrustHeader();
-  createWindow();
+if (ownsSingleInstance) {
+  app.on("second-instance", focusExistingWindow);
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+  app.whenReady().then(() => {
+    installLocalTrustHeader();
+    createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

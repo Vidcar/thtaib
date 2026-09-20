@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.hashes import sha256_file
+from workbench_backend.inference.hashes import cached_sha256_file, sha256_file
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.schemas import (
@@ -182,17 +182,23 @@ class BundleService:
             return self._fail_job(job, str(exc), status)
         return self._complete_job(job, bundle)
 
-    def verify_bundle(self, bundle: ModelBundle) -> ModelBundle:
+    def verify_bundle(self, bundle: ModelBundle, *, use_cache: bool = False) -> ModelBundle:
         matches = True
         for recorded in bundle.files:
             path = Path(recorded.path)
-            if not path.is_file() or sha256_file(path) != recorded.sha256:
+            if not path.is_file():
+                matches = False
+                break
+            digest = cached_sha256_file(path) if use_cache else sha256_file(path)
+            if digest != recorded.sha256:
                 matches = False
                 break
             if not is_under(path, self.paths.models):
                 matches = False
                 break
         updated = bundle.model_copy(update={"disk_matches": matches})
+        if updated == bundle:
+            return bundle
         return self.store.put_bundle(updated)
 
     def inspectable_file(self, bundle: ModelBundle) -> Path:
@@ -266,6 +272,7 @@ class BundleService:
             status=ImportStatus.complete,
             disk_matches=True,
         )
+        self.store.put_bundle(bundle)
         return self.verify_bundle(bundle)
 
     def _new_job(self, kind: BundleSourceKind, display_name: str | None) -> ImportJob:

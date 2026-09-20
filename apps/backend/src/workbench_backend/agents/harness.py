@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import httpx
 from deepagents import create_deep_agent
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -74,7 +75,11 @@ from workbench_backend.agents.tools import (
     tools_for_names,
 )
 from workbench_backend.errors import HarnessError, KnowledgeError, ReplayError
-from workbench_backend.inference.adapter import chat_model_for_deployment
+from workbench_backend.inference.adapter import (
+    DEFAULT_ADAPTER_TIMEOUT,
+    RecordingTransport,
+    chat_model_for_deployment,
+)
 from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
     classify_connection_failure,
@@ -127,6 +132,7 @@ class HarnessService:
         self._threads: dict[str, threading.Thread] = {}
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
+        self._model_clients: dict[str, httpx.Client] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
 
@@ -361,7 +367,10 @@ class HarnessService:
                 cancel.set()
             for ready in self._decision_ready.values():
                 ready.set()
+            clients = list(self._model_clients.values())
             threads = list(self._threads.values())
+        for client in clients:
+            client.close()
         for thread in threads:
             thread.join(timeout=timeout)
         with self._lock:
@@ -377,6 +386,7 @@ class HarnessService:
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
+            client = self._model_clients.get(run_id)
             ready = self._decision_ready.get(run_id)
             if ready is not None:
                 ready.set()
@@ -393,6 +403,9 @@ class HarnessService:
                     )
                 )
                 self._persist_and_notify(run)
+        if client is not None:
+            client.close()
+        with self._lock:
             return run.model_copy(deep=True)
 
     def resume_interrupt(self, run_id: str, request: InterruptDecisionRequest) -> AgentRun:
@@ -515,6 +528,8 @@ class HarnessService:
                 return
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
+        finally:
+            self._close_model_client(run_id)
 
     def _resume_after_restart(
         self,
@@ -569,6 +584,8 @@ class HarnessService:
                 return
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
+        finally:
+            self._close_model_client(run_id)
 
     def _create_compiled_agent(
         self,
@@ -834,11 +851,24 @@ class HarnessService:
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
         deployment = self.manager.get_deployment(run.deployment_id)
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+        client = httpx.Client(
+            transport=RecordingTransport(http_sink),
+            timeout=DEFAULT_ADAPTER_TIMEOUT,
+        )
+        with self._lock:
+            self._model_clients[run.id] = client
         return chat_model_for_deployment(
             deployment,
             per_request=per_request,
             capture_sink=http_sink,
+            http_client=client,
         )
+
+    def _close_model_client(self, run_id: str) -> None:
+        with self._lock:
+            client = self._model_clients.pop(run_id, None)
+        if client is not None:
+            client.close()
 
     def _live_search_knowledge_tool(self, run: AgentRun, backend: Any) -> Any:
         """Build the official search tool, or none for recorded-tool / no retrieval."""

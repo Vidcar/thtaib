@@ -52,6 +52,28 @@ function messageRoleLabel(role: ChatMessage["role"]): string {
   }
 }
 
+function isDeploymentAvailable(deployment: Deployment): boolean {
+  return deployment.status === "running";
+}
+
+function preferredChatDeploymentId(deployments: Deployment[], current: string): string {
+  const chatDeployments = deployments.filter((deployment) => !isDeclaredEmbedder(deployment));
+  if (chatDeployments.some((deployment) => deployment.id === current)) {
+    return current;
+  }
+  return (
+    chatDeployments.find(isDeploymentAvailable)?.id ??
+    chatDeployments[0]?.id ??
+    deployments.find(isDeploymentAvailable)?.id ??
+    deployments[0]?.id ??
+    ""
+  );
+}
+
+function newestConversationFirst(items: ChatConversation[]): ChatConversation[] {
+  return [...items].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+}
+
 export function ChatPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
@@ -69,6 +91,7 @@ export function ChatPanel() {
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
   const transcriptEnd = useRef<HTMLDivElement | null>(null);
+  const streamRef = useRef<{ key: string; controller: AbortController } | null>(null);
 
   function rememberConversation(next: ChatConversation): void {
     setConversation(next);
@@ -89,10 +112,10 @@ export function ChatPanel() {
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
     setEnabledTools(tools.enabled);
-    setConversations(nextConversations);
+    setConversations(newestConversationFirst(nextConversations));
     setKnowledgeEntries(nextKnowledge);
-    setDeploymentId((current) => current || nextDeployments[0]?.id || "");
-    setProfileId((current) => current || nextProfiles[0]?.id || "");
+    setDeploymentId((current) => preferredChatDeploymentId(nextDeployments, current));
+    setProfileId((current) => (nextProfiles.some((profile) => profile.id === current) ? current : ""));
     setLoadError("");
   }
 
@@ -112,7 +135,13 @@ export function ChatPanel() {
     if (!conversationId || !liveRunId) {
       return;
     }
+    const key = `${conversationId}:${liveRunId}`;
+    if (streamRef.current?.key === key) {
+      return;
+    }
+    streamRef.current?.controller.abort();
     const controller = new AbortController();
+    streamRef.current = { key, controller };
     void api
       .subscribeChatConversation(conversationId, controller.signal, (next) => {
         rememberConversation(next);
@@ -127,9 +156,20 @@ export function ChatPanel() {
           return;
         }
         setMessage(errorMessage(error));
+      })
+      .finally(() => {
+        if (streamRef.current?.key === key) {
+          streamRef.current = null;
+        }
       });
-    return () => controller.abort();
   }, [conversationId, liveRunId]);
+
+  useEffect(() => {
+    return () => {
+      streamRef.current?.controller.abort();
+      streamRef.current = null;
+    };
+  }, [conversationId]);
 
   const transcript = conversation ? displayedTranscript(conversation) : [];
 

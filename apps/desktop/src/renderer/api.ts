@@ -1,6 +1,7 @@
 import {
   applyConversationEvent,
   applyRunEvent,
+  fetchConversationSnapshot,
   subscribeWorkbenchEvents,
 } from "./sse";
 import type { RunStreamEnvelope } from "./sse";
@@ -283,6 +284,7 @@ export const api = {
       signal,
       apply: applyConversationEvent,
       onRecord: onConversation,
+      terminalSnapshot: (terminalSignal) => fetchConversationSnapshot(conversationId, terminalSignal),
     }),
 };
 

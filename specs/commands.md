@@ -31,13 +31,16 @@ Run pack commands from the repository root (Python 3.11+; on Windows `py -3` if 
 
 ## Desktop
 
+For normal local use on a prepared Windows checkout, double-click root `Launch Workbench.vbs`. `scripts/Launch-Workbench.ps1` starts/reuses the loopback backend and opens the built Electron app; it does not install dependencies or download a model. Rebuild after desktop changes. Agents can validate startup with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Launch-Workbench.ps1 -CheckOnly -NoDesktop -ShowConsole` from root. Logs are in the product `logs` directory. Closing the desktop leaves the backend/model available; stop a model from Models when finished.
+
 | Command | Working directory | Purpose |
 | --- | --- | --- |
 | `pnpm install` | `apps/desktop` | Install locked dependencies (`--frozen-lockfile` in CI). |
 | `pnpm run typecheck` | `apps/desktop` | `tsc --noEmit` for renderer and Electron main/preload. |
-| `pnpm run build` | `apps/desktop` | Type-check and Vite-build renderer and Electron bundles. |
+| `pnpm run build` | `apps/desktop` | Type-check, exercise SSE terminal hydration with mock streams, and Vite-build renderer and Electron bundles. |
 | `pnpm run dev` | `apps/desktop` | Vite plus Electron; needs a display (David-PC). |
 | `pnpm run package` | `apps/desktop` | Windows NSIS installer via electron-builder (not required yet). |
+| `node scripts/check-sse-terminal-snapshot.mjs` | `apps/desktop` | Exercise terminal Chat hydration and aborted subscriptions with mock fetch streams; no model or browser. |
 
 ## Not yet available
 

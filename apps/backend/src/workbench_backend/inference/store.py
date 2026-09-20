@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import RLock
 from typing import Any, TypeVar
+from uuid import uuid4
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -18,6 +20,7 @@ from workbench_backend.inference.schemas import (
 from workbench_backend.paths import WorkbenchPaths
 
 T = TypeVar("T", bound=BaseModel)
+_STORE_LOCK = RLock()
 
 
 class RecordStore:
@@ -69,8 +72,9 @@ class RecordStore:
         )
 
     def delete_deployment(self, deployment_id: str) -> None:
-        remaining = [item for item in self.list_deployments() if item.id != deployment_id]
-        self._write_list(self.deployments_path, remaining)
+        with _STORE_LOCK:
+            remaining = [item for item in self.list_deployments() if item.id != deployment_id]
+            self._write_list(self.deployments_path, remaining)
 
     def read_runtime_manifest(self) -> RuntimeManifest | None:
         if not self.runtime_manifest_path.is_file():
@@ -84,31 +88,37 @@ class RecordStore:
         return manifest
 
     def _read_list(self, path: Path, model: type[T]) -> list[T]:
-        if not path.is_file():
-            return []
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return TypeAdapter(list[model]).validate_python(raw)
+        with _STORE_LOCK:
+            if not path.is_file():
+                return []
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return TypeAdapter(list[model]).validate_python(raw)
 
     def _write_list(self, path: Path, items: list[BaseModel]) -> None:
         self._write_json(path, [item.model_dump(mode="json") for item in items])
 
     def _upsert(self, path: Path, model: type[T], item: T) -> T:
-        items = self._read_list(path, model)
-        replaced = False
-        next_items: list[T] = []
-        for existing in items:
-            if getattr(existing, "id") == getattr(item, "id"):
+        with _STORE_LOCK:
+            items = self._read_list(path, model)
+            replaced = False
+            next_items: list[T] = []
+            for existing in items:
+                if getattr(existing, "id") == getattr(item, "id"):
+                    next_items.append(item)
+                    replaced = True
+                else:
+                    next_items.append(existing)
+            if not replaced:
                 next_items.append(item)
-                replaced = True
-            else:
-                next_items.append(existing)
-        if not replaced:
-            next_items.append(item)
-        self._write_list(path, next_items)
+            self._write_list(path, next_items)
         return item
 
     def _write_json(self, path: Path, payload: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.tmp")
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
-        tmp.replace(path)
+        with _STORE_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+            try:
+                tmp.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
+                tmp.replace(path)
+            finally:
+                tmp.unlink(missing_ok=True)

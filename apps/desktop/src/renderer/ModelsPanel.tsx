@@ -26,17 +26,23 @@ export function ModelsPanel() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function refresh(): Promise<void> {
-    const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
-      api.paths(),
-      api.bundles(),
-      api.profiles(),
-    ]);
-    setPaths(nextPaths);
-    setBundles(nextBundles);
-    setProfiles(nextProfiles);
-    setLoadError("");
+    setLoading(true);
+    try {
+      const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
+        api.paths(),
+        api.bundles(),
+        api.profiles(),
+      ]);
+      setPaths(nextPaths);
+      setBundles(nextBundles);
+      setProfiles(nextProfiles);
+      setLoadError("");
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -155,7 +161,12 @@ export function ModelsPanel() {
 
       <div className="card">
         <h3>Bundles</h3>
-        {bundles.length === 0 ? (
+        {loading ? (
+          <EmptyState title="Loading bundles">
+            Reading the model catalogue and checking recorded files. Large local models can take a
+            moment on first load.
+          </EmptyState>
+        ) : bundles.length === 0 ? (
           <EmptyState title="No bundles">
             Import a local GGUF or a pinned Hugging Face revision. The product will not invent a
             bundle from a file that merely exists under models.

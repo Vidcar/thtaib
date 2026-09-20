@@ -59,6 +59,9 @@ class RecordingTransport(httpx.BaseTransport):
             )
         return self.inner.handle_request(request)
 
+    def close(self) -> None:
+        self.inner.close()
+
 
 def chat_model_for_deployment(
     deployment: Deployment,
