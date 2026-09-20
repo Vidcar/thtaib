@@ -608,7 +608,7 @@ class HarnessService:
         interrupt_on = interrupt_on_for_run(run)
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
-        tools = tools_for_names(run.presented_tools, fixture_bank=fixture_bank)
+        tools = tools_for_names(run.presented_tools)
         retrieval_tool = self._live_search_knowledge_tool(run, backend)
         if retrieval_tool is not None:
             tools = [*tools, retrieval_tool]

@@ -297,6 +297,33 @@ class RecordedToolHarnessTests(unittest.TestCase):
         self.assertEqual(body["status"], "failed")
         self.assertIn("exhausted", (body.get("error") or "").lower())
 
+    def test_recorded_echo_uses_fixture_instead_of_live_visibility_tool(self) -> None:
+        self._install_script(echo_then_reply("live-echo-input"))
+        started = self.client.post(
+            "/v1/agent-runs",
+            json={
+                "deployment_id": self.deployment_id,
+                "task": "echo once",
+                "presented_tools": ["echo"],
+                "tool_mode": "recorded-tool",
+                "recorded_fixtures": [
+                    {
+                        "name": "echo",
+                        "args": {"text": "live-echo-input"},
+                        "result": "fixture-echo-output",
+                    }
+                ],
+            },
+        )
+        body = wait_for_run(self.client, started.json()["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        tool_results = [
+            event["detail"]["content"]
+            for event in body["events"]
+            if event["kind"] == "tool_result" and event["detail"].get("name") == "echo"
+        ]
+        self.assertEqual(tool_results, ["fixture-echo-output"])
+
     def test_live_write_file_still_uses_project_backend_and_is_labelled(self) -> None:
         self._install_script(write_then_reply("/live.md", "live-bytes"))
         with self._spy_filesystem_backend(), self._spy_local_shell_backend():

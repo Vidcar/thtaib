@@ -49,7 +49,7 @@ Use llama.cpp's gguf-py for metadata and tensor inspection feeding compatibility
 <a id="mod-003"></a>
 ### MOD-003: Preserve profile fidelity
 
-Separate server-startup, per-request inference and agent settings. Preserve explicit overrides and supported runtime-specific controls. Record actual applied configuration and expose unsupported, overridden or unverified values in Lab, Chat and Builder. Selecting a profile does not rewrite an already-loaded deployment's startup bag ([effective setup](../architecture.md#effective-setup)).
+Separate server-startup, per-request inference and agent settings. Preserve explicit overrides and supported runtime-specific controls. Record actual applied configuration and expose unsupported, overridden or unverified values in Lab, Chat and Workflows. Selecting a profile does not rewrite an already-loaded deployment's startup bag ([effective setup](../architecture.md#effective-setup)).
 
 **Acceptance:** Exercise a startup setting, request setting and agent setting; compare requested and applied values across surfaces, including a deliberately unsupported value.
 

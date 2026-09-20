@@ -2,7 +2,7 @@
 
 Dave wants to use the product, not manage development. Agents own engineering, validation, Git, pull requests, merges, conflict resolution and delivery. Give brief, plain-English updates and a usable result. Do not ask Dave to read code, review technical documents, run commands or operate Git when you can do the work.
 
-The product is a Windows-first, local-first AI workspace with four core experiences: Models, Chat, Lab and Builder. The current delivery order is model configuration/capability evidence/usable Chat first, then incremental project tools, durable memory, Lab, Builder and optional integrations. Use the canonical order in [the delivery map](docs/delivery-feature-map.md#next-path); do not make JSON migration, broad RAG, voice, MCP Apps, cloud providers or full Builder execution prerequisites for the local model and Chat path.
+Product intent lives in [thtaib-vision.md](thtaib-vision.md); the current next path lives in [the delivery map](docs/delivery-feature-map.md#next-path). Use **Workflows** for the intended product area; **Agent run / Builder** are existing UI and legacy terminology. Documentation cleanup does not rename code, schemas, the desktop or product data directories.
 
 ## Start small
 

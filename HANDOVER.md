@@ -4,22 +4,17 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Testing/CI simplification complete in [PR #105](https://github.com/Vidcar/thtaib/pull/105), `codex/test-suite-simplification`. No production application code changed. [Commands](specs/commands.md) and AGENTS now describe the tiers and isolation requirements.
+Packet 01 is complete in [PR #106](https://github.com/Vidcar/thtaib/pull/106), `codex/repository-cleanup`, based on `46157ed` (PR #105). The PR records protected CI and merge results. Packet 02 behavioral repairs are not part of this change.
 
 ## Changes and decisions
 
-- Default: Models/Chat plus fast rules. Integration: cross-service harness/replay, real HTTP/SSE, host-shell and process checks. CI runs both on backend changes; no required coverage silently excluded.
-- Scripted fixtures explicitly use an offline unhealthy probe instead of real closed-port waits. Reused application managers; consolidated polling helpers. Removed a duplicate lifecycle test and tautological catalogue assertion.
-- Live SSE reconnect now observes a real loopback stream while the run remains live (0.8s versus 30s). Windows blocked transport uses event cleanup.
-- Test bootstrap isolates the import-time app under `.scratch/`; early baseline imports could refresh everyday deployment metadata. No model weights/settings/conversations were used as test fixtures.
-- Five workflows consolidated into one; three path-filter jobs become one; removed duplicate desktop typecheck and repeated post-merge real-model runs. Four required Linux check names preserved.
+- [David's exact vision](thtaib-vision.md) is canonical product intent. README/spec index provide the short reading path; Workflows is the intended area, Agent run / Builder legacy/UI terminology. Revision 0.5 stays historical.
+- Documentation is about 24% smaller including the new vision. Current decisions live in owning contracts; unique rationale/evidence remains linked. All 53 requirement IDs and 22 evidence rows remain, without status promotion.
+- Removed the empty Compose stub, unused reserved-prefix wrapper, duplicate replay wrappers and unused React Flow package/transitive dependencies. React Flow remains the intended workflow-canvas integration. Replay middleware retains fixture matching, reconstruction and no live dispatch.
+- Checker covers maintained docs, vision and handover without requiring obsolete ancillary files. Existing run/Chat startup migration is bound; remaining metadata migration stays separate. CI and branch protection are unchanged.
 
-## Measured checks (Windows, installed dependencies)
+## Validation and next step
 
-Original: 304 tests, 833.17s wall, no failures; one desktop-dependency skip. Final: 213 default tests / 18.166s and 91 integration tests / 40.504s; all passed without skips. Real CUDA tiny-model smoke: four passed / 6.099s. Desktop: 4.540s before, 2.760s after. Spec checks, 57 tooling tests, contracts and actionlint pass.
+Windows: 213 default backend tests, 92 integration tests, 41 focused replay/shell/memory tests and 62 checker/tooling tests passed. Desktop build passed (includes typecheck and SSE regression). Spec checker passed, including requirement preservation against the base commit. Live protection query confirmed the four required Ubuntu checks with strict protection.
 
-Isolated Electron: real reply, transcript reopening and Models health passed. Wrong tiny-model follow-up despite intact request history; no capability claim. Test processes stopped. Raw logs: `.scratch/test-audit-measurements/`, `.scratch/test-audit-live/`.
-
-## Delivery
-
-All eight GitHub jobs passed, including both Windows jobs and real-model smoke. Final handover-only commit follows the same protected checks before merge. No GitHub settings changes needed. Testing/CI work is complete; resume product delivery using the [delivery map](docs/delivery-feature-map.md#next-path).
+Launch remains root `Launch Workbench.vbs`; actual checks are in [commands](specs/commands.md). No cleanup implementation remains. Next product work is the separately scoped packet 02 baseline repairs when supplied, rather than feature expansion. No user/model data changed.

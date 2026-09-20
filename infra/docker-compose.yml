@@ -1,8 +1,0 @@
-# Local AI Workbench — container-service stub.
-# Docker Compose will manage product container services later.
-# This milestone records the file location only. Do not start product
-# services from this file.
-
-name: local-ai-workbench
-
-services: {}

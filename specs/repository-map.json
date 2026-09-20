@@ -131,11 +131,11 @@
     },
     {
       "id": "application-migrations",
-      "state": "unbound",
-      "path": null,
-      "kind": "directory",
+      "state": "bound",
+      "path": "apps/backend/src/workbench_backend/state/migrate.py",
+      "kind": "file",
       "owner_spec": "specs/modules/state-recovery.md",
-      "required_before": "First durable stored-version change"
+      "required_before": "Run/Chat JSON-to-SQLite cutover at application-store startup; remaining metadata migration tracked separately in OQ-017"
     },
     {
       "id": "contract-tests",

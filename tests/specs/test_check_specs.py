@@ -24,6 +24,9 @@ class SpecificationCheckerTests(unittest.TestCase):
         self.root = Path(temp.name)
         for name in check_specs.CORE_FILES:
             self.write(name, "# Synthetic test fixture\n")
+        self.write("HANDOVER.md", "# Current handover\n")
+        self.write("docs/delivery-feature-map.md", "# Delivery map\n")
+        self.write("docs/glossary.md", "# Glossary\n")
         self.write("specs/architecture.md", '''# Architecture fixture
 
 <a id="mod-001"></a>
@@ -149,6 +152,36 @@ Required fixture behaviour.
         self.write("specs/evidence/2026-09-19-fixture.md", "# Report\n\nBody.\n")
         self.assertEqual(self.errors(), "")
 
+    def test_markdown_scan_covers_docs_and_root_vision(self):
+        names = {path.relative_to(self.root).as_posix() for path in check_specs.markdown_files(self.root)}
+        self.assertIn("docs/delivery-feature-map.md", names)
+        self.assertIn("docs/glossary.md", names)
+        self.assertIn("HANDOVER.md", names)
+        self.assertIn("thtaib-vision.md", names)
+
+    def test_optional_registered_doc_can_be_deleted_when_catalogue_entry_is_removed(self):
+        target = "specs/decisions/changelog.md"
+        self.write(target, "# Optional retained spec note\n")
+        self.catalog["documents"].append({"path": target, "kind": "guide", "status": "accepted"})
+        self.save()
+        self.assertEqual(self.errors(), "")
+        self.catalog["documents"] = [row for row in self.catalog["documents"] if row["path"] != target]
+        (self.root / target).unlink()
+        self.save()
+        self.assertEqual(self.errors(), "")
+
+    def test_deleted_optional_doc_still_fails_when_referenced(self):
+        target = "specs/decisions/changelog.md"
+        self.write(target, "# Optional retained spec note\n")
+        self.catalog["documents"].append({"path": target, "kind": "guide", "status": "accepted"})
+        self.write("README.md", "[Optional doc](specs/decisions/changelog.md)\n")
+        self.save()
+        self.assertEqual(self.errors(), "")
+        self.catalog["documents"] = [row for row in self.catalog["documents"] if row["path"] != target]
+        (self.root / target).unlink()
+        self.save()
+        self.assertIn("README.md: broken local link", self.errors())
+
     # Requirement definitions and references
 
     def test_duplicate_requirement_definition_fails(self):
@@ -212,6 +245,14 @@ Required fixture behaviour.
     def test_relative_markdown_link_cannot_escape_repository(self):
         self.write("README.md", "[Outside](../outside.md)\n")
         self.assertIn("local link escapes the repository", self.errors())
+
+    def test_docs_markdown_links_are_checked(self):
+        self.write("docs/glossary.md", "[Missing](../specs/missing.md)\n")
+        self.assertIn("docs/glossary.md: broken local link", self.errors())
+
+    def test_root_vision_markdown_ids_are_checked(self):
+        self.write("thtaib-vision.md", "# Vision\n\nSee MOD-999.\n")
+        self.assertIn("thtaib-vision.md: unknown requirement reference: MOD-999", self.errors())
 
     # Catalogue shape and pointers
 

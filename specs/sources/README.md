@@ -1,5 +1,7 @@
 # Source provenance
 
+Current product intent is [David's supplied thtaib vision](../../thtaib-vision.md). Revision 0.5 below is historical provenance; where its framing conflicts, the current vision takes precedence. Its archived bytes and source anchors remain for traceability.
+
 ## Original supplied document
 
 [Local AI Workbench Starter Specification — revision 0.5](Local_AI_Workbench_Starter_Specification_Revision_0_5.docx), dated **18 September 2026**, supplied by the user. The document title also uses “The House: That AI Built”. The archived bytes are unchanged.

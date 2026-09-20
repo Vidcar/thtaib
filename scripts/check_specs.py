@@ -21,13 +21,14 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 CORE_FILES = (
-    "README.md", "AGENTS.md", "specs/README.md", "specs/architecture.md",
-    "specs/contracts.md", "specs/catalog.json", "specs/repository-map.json",
-    "specs/commands.md", "specs/verification.md", "specs/open-questions.md",
-    "specs/deviations.md", "specs/decisions/changelog.md", "specs/templates/feature.md",
-    "scripts/check_specs.py", "tests/specs/test_check_specs.py",
+    "README.md", "AGENTS.md", "thtaib-vision.md",
+    "specs/README.md", "specs/architecture.md", "specs/contracts.md",
+    "specs/catalog.json", "specs/repository-map.json", "specs/commands.md",
+    "specs/verification.md", "scripts/check_specs.py", "tests/specs/test_check_specs.py",
     ".github/workflows/ci.yml",
 )
+ROOT_MARKDOWN_FILES = ("README.md", "AGENTS.md", "HANDOVER.md", "thtaib-vision.md", ".github/pull_request_template.md")
+MAINTAINED_MARKDOWN_DIRS = ("specs", "docs")
 SCHEMA_VERSION = 2
 ID_PATTERN = r"[A-Z]{2,8}-\d{3}"
 ID_RE = re.compile(rf"\b({ID_PATTERN})\b")
@@ -140,8 +141,12 @@ def exact_keys(obj: dict[str, Any], keys: set[str], errors: list[str], label: st
 
 
 def markdown_files(root: Path) -> list[Path]:
-    files = set((root / "specs").rglob("*.md"))
-    for name in ("README.md", "AGENTS.md", ".github/pull_request_template.md"):
+    files: set[Path] = set()
+    for directory in MAINTAINED_MARKDOWN_DIRS:
+        path = root / directory
+        if path.is_dir():
+            files.update(path.rglob("*.md"))
+    for name in ROOT_MARKDOWN_FILES:
         path = root / name
         if path.is_file():
             files.add(path)
