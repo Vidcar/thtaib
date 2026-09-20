@@ -26,16 +26,17 @@ Authority: David, product owner (Chat-first MCP; durable framework for adding se
 - `langchain.mcp` elicitation uses `Command(resume={"responses": …})`, distinct from host-shell `{"decisions": …}`. Same Chat Approve/Deny surface; not [OQ-011](../open-questions.md#oq-011).
 - Left out: MCP Apps, prompts/resources/sampling/roots, Docker GitHub, OAuth app, `@latest`, GitHub `all` / insiders, attaching David's daily Chrome.
 
-## 2026-09-20 — OQ-006 memory and skills replace prompt-append
+## 2026-09-20 — OQ-006 memory and skills load through official kwargs
 
-Authority: technical research against the pinned stack on 2026-09-20 (`deepagents==0.7.15` wheel: `graph.py`, `middleware/memory.py`, `middleware/skills.py`, `backends/composite.py`; live [memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) pages). Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005 (stay `built`); STATE-006 unchanged (`built`, not `verified`). No ADR: no new execution owner, no `StoreBackend` knowledge store, no new lockfile package. Implementation is a later PR; current code still prompt-appends memory and skill bodies.
+Authority: implementation of the 2026-09-20 specify-first recommendation against pinned `deepagents==0.7.15`. Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005, AGT-002, STATE-002 stay `built` (not `verified`). No ADR: same execution owner, same composite, no `StoreBackend`, no new lockfile package.
 
-- Selected `memory` versions load through official `create_deep_agent(memory=)` / `MemoryMiddleware` from derived `/memories/{scope}/{entry_id}.md` files on the existing `CompositeBackend` (harness scratch). Selected `skill` versions load through official `create_deep_agent(skills=["/skills/"])` / `SkillsMiddleware` from derived `/skills/{slug}/SKILL.md`. Omit a kwarg when that kind is unbound. Do not pass `[]`.
-- Application glue wraps skill bodies with Agent Skills YAML (`name` + `description`) so 0.7.15 does not silently skip them. Fail closed on an invalid slug or a selected-skill name collision.
-- Protected instructions stay in `compose_system_prompt` / `system_prompt=`. Official `MEMORY_SYSTEM_PROMPT` tells the model memory is untrusted file data it may `edit_file`; that must not wrap protected policy.
-- `compose_system_prompt` stops appending memory and skill bodies. Profile / surface composition is unchanged.
-- Project-less Chat may auto-present `ls` / `read_file` for those knowledge routes when `memory=` or `skills=` is attached. Project writes, `glob` / `grep`, and `execute` still require a project. `permissions=` deny writes on `/skills/**`. `/memories/` `edit_file` is run-local scratch, not a STATE-005 version.
-- Left out: `StoreBackend` as durable knowledge, background consolidation, write-through, remounting `knowledge\`, any STATE-006 change.
+- Selected `memory` versions materialize to `/memories/{scope}/{entry_id}.md` and are passed as `create_deep_agent(memory=)` only when that kind is selected. Selected `skill` versions wrap as `/skills/{slug}/SKILL.md` and are passed as `skills=["/skills/"]`. Omit a kwarg rather than pass `[]`.
+- Fail-closed codes: `skill_materialize_invalid`, `skill_name_collision`, `knowledge_materialize_failed`. Agent Skills `name` is a hyphenated entry-id slug matching the directory.
+- Protected instructions stay in `compose_system_prompt`. Memory/skill bodies no longer append there.
+- Project-less Chat auto-presents `ls` / `read_file` for those routes. `filesystem_tools_available` stays about the project. `permissions=` deny writes on `/skills/**` when skills are selected, including project-less knowledge runs. `/memories/` `edit_file` is run-local scratch (gap recorded); it is not a STATE-005 version.
+- AGT-002 capture prefers the outbound / post-`MemoryMiddleware` request so `<agent_memory>` and the skill index are visible; unread skill bodies stay off the wire.
+- Recorded-tool still attaches no live project, host-shell, or retrieval index; knowledge routes may use scratch so official middleware can `download_files`.
+- Left out: `StoreBackend`, write-through, background consolidation, any STATE-006 change, any `verified` row.
 
 ## 2026-09-20 — Core desktop product surfaces
 
@@ -44,6 +45,17 @@ Authority: product-owner outcome (usable Chat / Models / Knowledge; project-less
 - Chat, Models (bundles, profiles, deployments) and Knowledge replace raw JSON debug panels. Empty and error states are explicit. Chat is the default surface and works without a project folder.
 - In-run Approve/Deny and run progress use the existing `GET /v1/events` SSE stream. Cancel stays enabled only while the run is live; `cancel_requested` is shown as stopping, not idle.
 - Lab remains reachable with an honest note that Model Lab runners are not a science app yet. Builder, MCP, voice, ComfyUI and Deep Agents `memory=` / `skills=` loading are out of this change.
+
+## 2026-09-20 — OQ-006 memory and skills replace prompt-append
+
+Authority: technical research against the pinned stack on 2026-09-20 (`deepagents==0.7.15` wheel: `graph.py`, `middleware/memory.py`, `middleware/skills.py`, `backends/composite.py`; live [memory](https://docs.langchain.com/oss/python/deepagents/memory) and [skills](https://docs.langchain.com/oss/python/deepagents/skills) pages). Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005 (stay `built`); STATE-006 unchanged (`built`, not `verified`). No ADR: no new execution owner, no `StoreBackend` knowledge store, no new lockfile package. The later implementation entry above records what landed.
+
+- Selected `memory` versions load through official `create_deep_agent(memory=)` / `MemoryMiddleware` from derived `/memories/{scope}/{entry_id}.md` files on the existing `CompositeBackend` (harness scratch). Selected `skill` versions load through official `create_deep_agent(skills=["/skills/"])` / `SkillsMiddleware` from derived `/skills/{slug}/SKILL.md`. Omit a kwarg when that kind is unbound. Do not pass `[]`.
+- Application glue wraps skill bodies with Agent Skills YAML (`name` + `description`) so 0.7.15 does not silently skip them. Fail closed on an invalid slug or a selected-skill name collision.
+- Protected instructions stay in `compose_system_prompt` / `system_prompt=`. Official `MEMORY_SYSTEM_PROMPT` tells the model memory is untrusted file data it may `edit_file`; that must not wrap protected policy.
+- `compose_system_prompt` stops appending memory and skill bodies. Profile / surface composition is unchanged.
+- Project-less Chat may auto-present `ls` / `read_file` for those knowledge routes when `memory=` or `skills=` is attached. Project writes, `glob` / `grep`, and `execute` still require a project. `permissions=` deny writes on `/skills/**`. `/memories/` `edit_file` is run-local scratch, not a STATE-005 version.
+- Left out: `StoreBackend` as durable knowledge, background consolidation, write-through, remounting `knowledge\`, any STATE-006 change.
 
 ## 2026-09-20 — David-PC retrieval UAT recorded
 

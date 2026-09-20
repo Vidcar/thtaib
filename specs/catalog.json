@@ -582,12 +582,14 @@
       "code": [
         "apps/backend/src/workbench_backend/agents/middleware.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
-        "apps/backend/src/workbench_backend/knowledge/diagnostics.py"
+        "apps/backend/src/workbench_backend/knowledge/diagnostics.py",
+        "apps/backend/src/workbench_backend/agents/memory_skills.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_effective_setup.py",
-        "apps/backend/tests/test_privacy_diagnostics.py"
+        "apps/backend/tests/test_privacy_diagnostics.py",
+        "apps/backend/tests/test_memory_skills.py"
       ],
       "evidence": [
         {
@@ -633,13 +635,15 @@
         "apps/backend/src/workbench_backend/agents/harness.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
         "apps/backend/src/workbench_backend/chat/service.py",
-        "apps/backend/src/workbench_backend/knowledge/service.py"
+        "apps/backend/src/workbench_backend/knowledge/service.py",
+        "apps/backend/src/workbench_backend/agents/memory_skills.py"
       ],
       "tests": [
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_knowledge.py",
         "apps/backend/tests/test_chat_continuity.py",
-        "apps/backend/tests/test_effective_setup.py"
+        "apps/backend/tests/test_effective_setup.py",
+        "apps/backend/tests/test_memory_skills.py"
       ],
       "evidence": []
     },
@@ -660,7 +664,8 @@
       "tests": [
         "apps/backend/tests/test_harness.py",
         "apps/backend/tests/test_host_shell.py",
-        "apps/backend/tests/test_chat.py"
+        "apps/backend/tests/test_chat.py",
+        "apps/backend/tests/test_memory_skills.py"
       ],
       "evidence": []
     },
@@ -843,14 +848,16 @@
         "apps/backend/src/workbench_backend/chat/schemas.py",
         "apps/backend/src/workbench_backend/chat/store.py",
         "apps/backend/src/workbench_backend/agents/harness.py",
-        "apps/backend/src/workbench_backend/agents/harness_backend.py"
+        "apps/backend/src/workbench_backend/agents/harness_backend.py",
+        "apps/backend/src/workbench_backend/agents/memory_skills.py"
       ],
       "tests": [
         "apps/backend/tests/test_chat.py",
         "apps/backend/tests/test_harness_backend.py",
         "apps/backend/tests/test_state.py",
         "apps/backend/tests/test_chat_continuity.py",
-        "apps/backend/tests_integration/test_real_model_smoke.py"
+        "apps/backend/tests_integration/test_real_model_smoke.py",
+        "apps/backend/tests/test_memory_skills.py"
       ],
       "evidence": [
         {
@@ -928,12 +935,15 @@
         "apps/backend/src/workbench_backend/knowledge/store.py",
         "apps/backend/src/workbench_backend/agents/effective_setup.py",
         "apps/backend/src/workbench_backend/knowledge/diagnostics.py",
-        "apps/backend/src/workbench_backend/knowledge/redaction.py"
+        "apps/backend/src/workbench_backend/knowledge/redaction.py",
+        "apps/backend/src/workbench_backend/agents/memory_skills.py",
+        "apps/backend/src/workbench_backend/agents/harness.py"
       ],
       "tests": [
         "apps/backend/tests/test_knowledge.py",
         "apps/backend/tests/test_effective_setup.py",
-        "apps/backend/tests/test_privacy_diagnostics.py"
+        "apps/backend/tests/test_privacy_diagnostics.py",
+        "apps/backend/tests/test_memory_skills.py"
       ],
       "evidence": []
     },

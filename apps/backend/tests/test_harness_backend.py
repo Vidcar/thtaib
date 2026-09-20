@@ -53,9 +53,17 @@ class HarnessBackendHelperTests(unittest.TestCase):
         self.assertFalse(is_reserved_framework_path("/hello.txt"))
         self.assertEqual(
             RESERVED_FRAMEWORK_PREFIXES,
-            ("/large_tool_results/", "/conversation_history/", "/retrieved/"),
+            (
+                "/large_tool_results/",
+                "/conversation_history/",
+                "/retrieved/",
+                "/memories/",
+                "/skills/",
+            ),
         )
         self.assertTrue(is_reserved_framework_path("/retrieved/batch/chunk_1.md"))
+        self.assertTrue(is_reserved_framework_path("/memories/user/kn_mem.md"))
+        self.assertTrue(is_reserved_framework_path("/skills/review/SKILL.md"))
 
     def test_recorded_mode_attaches_no_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,6 +73,18 @@ class HarnessBackendHelperTests(unittest.TestCase):
                 paths,
             )
             self.assertIsNone(backend)
+
+    def test_recorded_mode_with_knowledge_attaches_scratch_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = WorkbenchPaths(Path(tmp)).ensure()
+            run = _run(project_path=str(Path(tmp) / "project"), tool_mode=ToolMode.recorded_tool)
+            run.memory_version_refs = ["knv_mem"]
+            backend = build_run_backend(run, paths)
+            self.assertIsInstance(backend, CompositeBackend)
+            assert isinstance(backend, CompositeBackend)
+            self.assertIsInstance(backend.default, StateBackend)
+            self.assertIn("/memories/", backend.routes)
+            self.assertIn("/skills/", backend.routes)
 
     def test_project_run_routes_reserved_prefixes_to_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,6 +108,12 @@ class HarnessBackendHelperTests(unittest.TestCase):
             offload_retrieved = backend.write("/retrieved/batch/chunk.md", "retrieved")
             self.assertFalse(offload_retrieved.error, offload_retrieved.error)
             self.assertFalse((project / "retrieved").exists())
+            memory_write = backend.write("/memories/user/kn_mem.md", "memory")
+            self.assertFalse(memory_write.error, memory_write.error)
+            skill_write = backend.write("/skills/review/SKILL.md", "skill")
+            self.assertFalse(skill_write.error, skill_write.error)
+            self.assertFalse((project / "memories").exists())
+            self.assertFalse((project / "skills").exists())
             scratch = harness_scratch_root(paths, "thread_iso")
             self.assertEqual(
                 (scratch / "large_tool_results" / "hello.txt").read_text(encoding="utf-8"),
@@ -96,6 +122,14 @@ class HarnessBackendHelperTests(unittest.TestCase):
             self.assertEqual(
                 (scratch / "retrieved" / "batch" / "chunk.md").read_text(encoding="utf-8"),
                 "retrieved",
+            )
+            self.assertEqual(
+                (scratch / "memories" / "user" / "kn_mem.md").read_text(encoding="utf-8"),
+                "memory",
+            )
+            self.assertEqual(
+                (scratch / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8"),
+                "skill",
             )
 
     def test_project_run_attaches_host_shell_only_when_execute_presented(self) -> None:

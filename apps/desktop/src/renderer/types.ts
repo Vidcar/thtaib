@@ -247,6 +247,11 @@ export interface AgentRun {
       content_digest: string;
       content_available: boolean;
     }>;
+    materialized_knowledge?: Array<{
+      version_id: string;
+      kind: KnowledgeKind;
+      path: string;
+    }>;
     bags: SettingsBags;
     startup_mismatches: Array<{ key: string; selected: unknown; loaded: unknown }>;
     unsupported: Record<string, string[]>;

@@ -30,6 +30,7 @@ from workbench_backend.agents.harness_backend import (
     RESERVED_FRAMEWORK_PREFIXES,
     host_shell_requested,
 )
+from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.agents.schemas import (
     AgentRun,
     InterruptDecision,
@@ -69,6 +70,7 @@ PERMISSION_DENY_PATHS = (
     "/conversation_history/denied/**",
     "/retrieved/denied/**",
 )
+SKILLS_WRITE_DENY_PATHS = ("/skills/**",)
 
 HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
@@ -112,17 +114,40 @@ def execute_requires_approval(request: ToolCallRequest) -> bool:
 
 
 def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] | None:
-    """Route-scoped allow/deny rules, or none when there is no live project backend."""
+    """Route-scoped allow/deny rules, or none when no routed backend is attached.
 
-    if run.tool_mode is ToolMode.recorded_tool or not run.project_path:
+    ``/skills/**`` writes are denied whenever selected skills are materialized,
+    including project-less and recorded-tool knowledge runs. Unused-subtree
+    denies stay on live project backends. Rules stay on routed prefixes so
+    a sandbox default (``LocalShellBackend``) is not given project-wide
+    ``permissions=``.
+    """
+
+    recorded = run.tool_mode is ToolMode.recorded_tool
+    knowledge_routes = knowledge_routes_selected(
+        run.memory_version_refs,
+        run.skill_version_refs,
+    )
+    if recorded and not knowledge_routes:
         return None
-    return [
-        FilesystemPermission(
-            operations=["write"],
-            paths=list(PERMISSION_DENY_PATHS),
-            mode="deny",
+    rules: list[FilesystemPermission] = []
+    if not recorded and run.project_path:
+        rules.append(
+            FilesystemPermission(
+                operations=["write"],
+                paths=list(PERMISSION_DENY_PATHS),
+                mode="deny",
+            )
         )
-    ]
+    if run.skill_version_refs:
+        rules.append(
+            FilesystemPermission(
+                operations=["write"],
+                paths=list(SKILLS_WRITE_DENY_PATHS),
+                mode="deny",
+            )
+        )
+    return rules or None
 
 
 def interrupt_on_for_run(run: AgentRun) -> dict[str, bool | dict[str, Any]] | None:

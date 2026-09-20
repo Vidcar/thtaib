@@ -4,8 +4,9 @@ Live runs attach ``CompositeBackend`` so framework internals stay out of the
 user's project. A bound project uses ``LocalShellBackend`` as the default only
 when ``execute`` is presented (Windows host shell with approvals). Otherwise
 the default is ``FilesystemBackend`` so Deep Agents does not put a live
-``execute`` tool on the node. Recorded-tool mode attaches nothing
-(LAB-003 / Issue #67).
+``execute`` tool on the node. Recorded-tool mode attaches no live project,
+host-shell, or retrieval backend; knowledge routes may use scratch so
+official ``memory=`` / ``skills=`` can ``download_files`` (LAB-003).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
 from deepagents.backends.protocol import BackendProtocol
 
+from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.agents.schemas import AgentRun, ToolMode
 from workbench_backend.paths import WorkbenchPaths
 
@@ -23,12 +25,18 @@ from workbench_backend.paths import WorkbenchPaths
 # CompositeBackend.artifacts_root is "/". See:
 # https://docs.langchain.com/oss/python/deepagents/backends
 # and deepagents/middleware/filesystem.py (_large_tool_results_prefix).
+# /memories/ and /skills/ are derived STATE-005 files for official
+# memory= / skills= (harness scratch, never the project or knowledge\).
 RESERVED_FRAMEWORK_PREFIXES = (
     "/large_tool_results/",
     "/conversation_history/",
     "/retrieved/",
+    "/memories/",
+    "/skills/",
 )
 RETRIEVED_PREFIX = "/retrieved/"
+MEMORIES_PREFIX = "/memories/"
+SKILLS_PREFIX = "/skills/"
 HARNESS_SCRATCH_DIRNAME = "harness"
 _UNSAFE_THREAD_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -55,31 +63,46 @@ def harness_scratch_root(paths: WorkbenchPaths, thread_id: str) -> Path:
 
 
 def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol | None:
-    """Attach a live CompositeBackend, or none for recorded-tool replay.
+    """Attach a CompositeBackend, or none for recorded-tool without knowledge.
 
     Default backend is the bound project (virtual ``/``) when one exists,
     otherwise ``StateBackend`` so a file write cannot land in a surprise
     directory. The project default is ``LocalShellBackend`` only when
     ``execute`` is presented; otherwise ``FilesystemBackend``. Reserved
-    prefixes including ``/retrieved/`` always route to product-data scratch.
+    prefixes including ``/retrieved/``, ``/memories/`` and ``/skills/``
+    always route to product-data scratch. Recorded-tool still attaches no
+    live project, host-shell, or retrieval backend; knowledge routes may
+    use scratch so official ``memory=`` / ``skills=`` can ``download_files``.
     """
 
-    if run.tool_mode is ToolMode.recorded_tool:
+    knowledge_routes = knowledge_routes_selected(
+        run.memory_version_refs,
+        run.skill_version_refs,
+    )
+    if run.tool_mode is ToolMode.recorded_tool and not knowledge_routes:
         return None
     scratch = harness_scratch_root(paths, run.thread_id or run.id)
     large = scratch / "large_tool_results"
     history = scratch / "conversation_history"
     retrieved = scratch / "retrieved"
+    memories = scratch / "memories"
+    skills = scratch / "skills"
     large.mkdir(parents=True, exist_ok=True)
     history.mkdir(parents=True, exist_ok=True)
     retrieved.mkdir(parents=True, exist_ok=True)
+    memories.mkdir(parents=True, exist_ok=True)
+    skills.mkdir(parents=True, exist_ok=True)
     routes: dict[str, BackendProtocol] = {
         "/large_tool_results/": FilesystemBackend(root_dir=large, virtual_mode=True),
         "/conversation_history/": FilesystemBackend(root_dir=history, virtual_mode=True),
         RETRIEVED_PREFIX: FilesystemBackend(root_dir=retrieved, virtual_mode=True),
+        MEMORIES_PREFIX: FilesystemBackend(root_dir=memories, virtual_mode=True),
+        SKILLS_PREFIX: FilesystemBackend(root_dir=skills, virtual_mode=True),
     }
     default: BackendProtocol
-    if host_shell_requested(run):
+    if run.tool_mode is ToolMode.recorded_tool:
+        default = StateBackend()
+    elif host_shell_requested(run):
         # Host shell cwd is the user-chosen project. inherit_env so PATH and
         # the Windows host environment are the real machine, not an empty env.
         # virtual_mode does not restrict execute() (LocalShellBackend docs).

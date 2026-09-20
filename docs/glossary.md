@@ -34,7 +34,7 @@ Locked names for issues, pull requests and user-facing copy. Behaviour lives in 
 **Model Lab** — hardware-local model trait and capability testing on David's machine, presented as data and charts to understand model behaviour. It never writes back into profiles and has no apply button. Separate delivery from Task cases.
 
 <a id="task-cases-and-replay"></a>
-**Task cases and replay** — save a real run as a case, restore its starting inputs, rerun with **recorded-tool** (fixture replay, no live filesystem) or **live-tool** mode, compare evidence. **Trait catalogue** — the growing list of Model Lab questions; not a task-case library.
+**Task cases and replay** — save a real run as a case, restore its starting inputs, rerun with **recorded-tool** (fixture replay; no live project, host-shell, or retrieval index) or **live-tool** mode, compare evidence. **Trait catalogue** — the growing list of Model Lab questions; not a task-case library.
 
 **Builder** — the visual workflow editor. Not shipped; v1 chrome is recorded in ADR-0003. The visual graph is never executable authority.
 
