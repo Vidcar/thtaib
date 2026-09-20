@@ -164,6 +164,14 @@ class ChatService:
                         code="chat_turn_active",
                         status_code=409,
                     )
+                # Completion persists outside the conversation admission lock.
+                # Once the harness confirms terminal state, reconcile against
+                # fresh durable history before constructing the next turn.
+                # Do not hold the store lock across harness calls: completion
+                # takes the harness lock before the store lock.
+                conversation = self._require(conversation_id)
+                if current is not None:
+                    conversation = self._reconcile_terminal_assistant(conversation, current)
 
             next_conversation = conversation.model_copy(deep=True)
             fields_set = request.model_fields_set

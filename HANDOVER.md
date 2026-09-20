@@ -4,21 +4,18 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Packet 02 baseline repairs are implemented and locally validated in [PR #107](https://github.com/Vidcar/thtaib/pull/107), `codex/repair-baseline`, based on `f50011b` (packet 01 / PR #106). The PR records protected CI and merge results. Scope stops at the seven supplied defects; the full vision is not delivered.
+The two remaining baseline races are implemented and locally validated in [PR #108](https://github.com/Vidcar/thtaib/pull/108), `codex/fix-two-baseline-races`, based on `e33b2f0` (merged PR #107). Dave subsequently requested complete removal of GitHub CI and removed merge rules. Actions are disabled, workflow/path selection removed, and required status checks removed. Local validation remains mandatory; do not restore GitHub CI unless Dave asks.
 
 ## Changes and decisions
 
-- Shell approval uses conservative full argument forms; unknown options, quoting/expansion and mutations require approval. Existing Deep Agents interrupts remain the gate.
-- Chat optional bindings distinguish omitted/unchanged, value/set and null/clear. Project clear detaches workspace and stale retrieval paths, without erasing checkpoint content or historical run setup.
-- Scoped conversation admission and atomic store reconciliation preserve terminal replies without polling, including fast completion; stale hydration/cancel/resume cannot overwrite later turns. Transcript replacement stays display-only.
-- Restart orphans fail with unresolved external effects; real checkpoint-backed approvals retain one continuation owner. Cancellation rejects a recovered pending command.
-- Detached endpoints preserve history and require deliberate rebind. Observed health controls availability without granting process ownership.
-- Unimplemented agent keys remain requested/unsupported. Failure diagnostics retain redacted prepared/attempt/response facts and retry evidence; original errors remain intact.
+- Chat regression forces A to complete after initial reconciliation sees it running but before B's active-run check. It reproduced loss of assistant A directly in SQLite, without GET/SSE repair. Start now reloads durable conversation state and reconciles the observed terminal run before constructing B.
+- Keep per-conversation admission and existing store completion writes. Never hold the store lock across harness calls (completion locks harness before store). Preserve display-only replacement and existing thread/configuration linkage.
+- Approval reservations now release atomically with their consumed interrupt, after worker ownership is secured. Failed restart setup also cleans its reservation. Deep Agents interrupts, policy and single-worker ownership remain unchanged.
 
-## Validation and use
+## Validation and next step
 
-Windows backend delivery gate: 339 tests passed. Desktop build (typecheck, SSE, null/omission serialization), generated-contract freshness and root spec check passed. An initial gate failure in a cancelling-worker fixture was corrected without weakening quiescence coverage.
+Both final regressions fail against original code and pass with the corrections. Approval A is persisted through the compiled agent/SQLite saver; its original worker is stopped without modifying the checkpoint before fresh-harness restoration. B approve/reject/cancel and duplicate races verify exact append counts. Chat uses events and inspects stored history without GET/SSE repair.
 
-Isolated Windows tiny-model checks passed: UI turns/reopening, independent clears, shell approve/reject/cancel, no-GET durable two-turn sequence, detach/rebind and preserved server health. Scripted tests separately cover races, restart approvals through the real saver/compiled agent, failure/retry/redaction and explicit budgets. Evidence remains in `.scratch/packet02-live/`; no downloads or everyday data/model changes. Tiny-model evidence proves plumbing, not capability.
+Windows backend delivery gate: all 341 tests passed; root specification check and all 59 checker tests passed after CI removal. No wire changes. Implementation and local validation are complete; PR #108 records merge status. Disposable data and scripted models only; no new real-model or desktop end-to-end claim.
 
-Launch: root `Launch Workbench.vbs`. Checks: [commands](specs/commands.md). No feature-expansion work is authorized by this packet.
+Launch: root `Launch Workbench.vbs`. Checks: [commands](specs/commands.md). Previous baseline live evidence remains in `.scratch/packet02-live/`; this task does not extend its claims.

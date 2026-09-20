@@ -8,6 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -15,7 +16,7 @@ from langchain_core.messages import AIMessage
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
-from workbench_backend.chat.schemas import ChatMessage
+from workbench_backend.chat.schemas import ChatConversation, ChatConversationView, ChatMessage, ChatStartRequest
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
 
@@ -411,6 +412,94 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(transcript[2]["content"], "Second turn.")
         self.assertEqual(second["run_ids"], [first_run_id, second["current_run"]["id"]])
         wait_for_chat(self.client, conversation["id"])
+
+    def test_completion_between_next_start_reconciliation_and_admission_is_preserved(self) -> None:
+        first_hold = threading.Event()
+        second_hold = threading.Event()
+        reconciled_running = threading.Event()
+        admit_next = threading.Event()
+        completed = threading.Event()
+        set_generate_hold(first_hold)
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="assistant A"), AIMessage(content="assistant B"),
+        ])
+        conversation_id = self._create()["id"]
+        store = self.app.state.app_store
+        chat = self.app.state.chat
+        original_put_run = store.put_run
+        original_reconcile = chat._reconcile_terminal_assistant
+        results: list[ChatConversationView] = []
+        errors: list[BaseException] = []
+
+        def observe_completion(run: AgentRun) -> AgentRun:
+            result = original_put_run(run)
+            if run.status.value == "completed":
+                completed.set()
+            return result
+
+        def pause_after_reconciliation(
+            conversation: ChatConversation, run: AgentRun | None = None,
+        ) -> ChatConversation:
+            result = original_reconcile(conversation, run)
+            if not reconciled_running.is_set():
+                self.assertEqual(chat.harness.get_run(first_id).status.value, "running")
+                self.assertEqual([item.role for item in result.transcript], ["user"])
+                reconciled_running.set()
+                if not admit_next.wait(timeout=10):
+                    raise TimeoutError("next-turn admission was not released")
+            return result
+
+        def start_next() -> None:
+            try:
+                results.append(chat.start(conversation_id, ChatStartRequest(task="user B")))
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=start_next)
+        try:
+            with patch.object(store, "put_run", side_effect=observe_completion):
+                first_id = self._start(conversation_id, "user A")["current_run_id"]
+                wait_for_generate_hold()
+                with patch.object(chat, "_reconcile_terminal_assistant", side_effect=pause_after_reconciliation):
+                    worker.start()
+                    self.assertTrue(reconciled_running.wait(timeout=10))
+                    first_hold.set()
+                    self.assertTrue(completed.wait(timeout=10))
+                    before = store.get_conversation(conversation_id)
+                    self.assertEqual([item.content for item in before.transcript], ["user A", "assistant A"])
+                    completed.clear()
+                    set_generate_hold(second_hold)
+                    admit_next.set()
+                    worker.join(timeout=10)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 1)
+                second_id = results[0].current_run_id
+                wait_for_generate_hold()
+                # Read SQLite directly: neither GET nor SSE may repair this assertion.
+                stored = store.get_conversation(conversation_id)
+                self.assertEqual(
+                    [(item.role, item.content, item.run_id) for item in stored.transcript],
+                    [("user", "user A", first_id), ("assistant", "assistant A", first_id),
+                     ("user", "user B", second_id)],
+                )
+                self.assertEqual(stored.run_ids, [first_id, second_id])
+                second_hold.set()
+                self.assertTrue(completed.wait(timeout=10))
+                stored = store.get_conversation(conversation_id)
+                expected = [("user", "user A", first_id), ("assistant", "assistant A", first_id),
+                            ("user", "user B", second_id), ("assistant", "assistant B", second_id)]
+                self.assertEqual([(m.role, m.content, m.run_id) for m in stored.transcript], expected)
+                reopened = chat.get(conversation_id)
+                self.assertEqual([(m.role, m.content, m.run_id) for m in reopened.transcript], expected)
+                self.assertEqual(reopened.thread_id, results[0].current_run.thread_id)
+        finally:
+            first_hold.set()
+            second_hold.set()
+            admit_next.set()
+            if worker.ident is not None:
+                worker.join(timeout=10)
+            set_generate_hold(None)
 
     def test_same_conversation_start_race_admits_one_turn(self) -> None:
         hold = threading.Event()
