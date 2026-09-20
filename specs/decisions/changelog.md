@@ -4,6 +4,16 @@ Dated record of design decisions that were too small for an ADR, in reverse chro
 
 Add an entry when a merged change settles a default, a name, a scope boundary or a build-order choice. Move to an [ADR](README.md) when the change alters an execution owner, process boundary, public contract, persistence strategy, permission model or core dependency.
 
+## 2026-09-20 — OQ-006 memory edit_file writes through to Knowledge
+
+Authority: David, product owner (Chat-first; auto-save memories so he can see them in Knowledge; attach to official Deep Agents features, Project chat 2026-09-20); technical research against the pinned stack on 2026-09-20 (`deepagents==0.7.15` `MemoryMiddleware` / `MEMORY_SYSTEM_PROMPT`; live [memory](https://docs.langchain.com/oss/python/deepagents/memory) page). Narrows [OQ-006](../open-questions.md#oq-006). Requirements: AGT-004, STATE-005 (stay `built`). No ADR: no new execution owner, no `StoreBackend` knowledge store, no new lockfile package. Implementation is a later PR. Loading landed in the 2026-09-20 memory/skills implementation entry below; current code still leaves `/memories/` edits run-local until write-through is implemented.
+
+- A successful live-tool official `edit_file` / `write_file` on `/memories/**` creates a new STATE-005 version (kind `memory`, `actor=agent`, `run_id` set). Knowledge `GET /v1/knowledge/entries` shows it. Scratch `/memories/` stays derived, not a second store.
+- That harness path is the explicit automatic-write policy. HTTP `/v1/knowledge` agent-origin writes still require `scope_policies[scope].automatic_agent_writes` (default false). Skills stay non-writable (`permissions=` deny `/skills/**`). Protected instructions stay in `system_prompt=` and still reject agent-origin writes.
+- Chat live-tool always attaches `memory=` (selected paths, or `/memories/user/chat.md` if none) and auto-presents `edit_file` / `write_file` for `/memories/**`, including project-less Chat. `filesystem_tools_available` stays about the project. Lab and Agent-run do not force a default memory file.
+- After write-through, the Chat conversation and live run replace or append `memory_version_refs` so the next turn rematerializes the new version. `knowledge_conflict` does not overwrite. Recorded-tool does not write-through. Identical content does not append a version.
+- Left out: `StoreBackend`, background consolidation, skill write-through, remounting `knowledge\`, flipping HTTP scope-policy defaults, any STATE-006 change.
+
 ## 2026-09-20 — GitHub CI slimmed to a Linux thin gate
 
 Authority: David, product owner (use David-PC for real checks; keep shipping; do not weaken tests; GitHub CI is a thin remaining gate, not the long pole, Project 2026-09-20). Narrows [OQ-010](../open-questions.md#oq-010). Enforcement-system change (workflows and the documented required-check list). Does not reopen Issue #36 advisory-only CI. Does not change what `verified` means. No ADR: not a new execution owner, process boundary, public contract, persistence strategy, permission model, or core dependency, and not a weakening of the [verification](../verification.md) status rules.

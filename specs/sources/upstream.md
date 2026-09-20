@@ -65,11 +65,11 @@ Consulted 2026-09-19 against the pinned backend lock (`deepagents==0.7.15`, `lan
 
 Consulted 2026-09-20 against the pinned backend lock (`deepagents==0.7.15`). Live `docs.langchain.com` pages are not the pin. The 0.7.15 wheel was read for `create_deep_agent` (`deepagents/graph.py`), `MemoryMiddleware` (`deepagents/middleware/memory.py`), `SkillsMiddleware` (`deepagents/middleware/skills.py`) and `CompositeBackend` routing (`deepagents/backends/composite.py`). Cross-checked with:
 
-- [Memory](https://docs.langchain.com/oss/python/deepagents/memory) — `memory=` file paths; `MemoryMiddleware` always-loads via `backend.download_files`; default fragment treats files as untrusted data and encourages `edit_file`.
+- [Memory](https://docs.langchain.com/oss/python/deepagents/memory) — `memory=` file paths; `MemoryMiddleware` always-loads via `backend.download_files`; default fragment treats files as untrusted data and encourages `edit_file` on the hot path. Official durable example is `StoreBackend`; this product write-throughs those official file writes into STATE-005 instead.
 - [Skills](https://docs.langchain.com/oss/python/deepagents/skills) — `skills=` directory sources; progressive disclosure of `SKILL.md` YAML `name` / `description`; a path that points at one skill directory is not loaded; invalid frontmatter is skipped.
 - [`create_deep_agent`](https://reference.langchain.com/python/deepagents/graph/create_deep_agent) — `memory=` and `skills=` kwargs; `MemoryMiddleware` is tail middleware (after caller middleware); `SkillsMiddleware` is base middleware.
 
-`StoreBackend` and background consolidation appear on the live memory page as optional platform patterns. They are not adopted here as a knowledge owner ([OQ-006](../open-questions.md#oq-006), [OQ-009](../open-questions.md#oq-009)).
+`StoreBackend` and background consolidation appear on the live memory page as optional platform patterns. They are not adopted here as a knowledge owner ([OQ-006](../open-questions.md#oq-006), [OQ-009](../open-questions.md#oq-009)). Agent memory durability is official `edit_file` / `write_file` plus application write-through to STATE-005.
 
 <a id="langchain-mcp"></a>
 ## LangChain MCP adapter (OQ-009 / ENV-007)
