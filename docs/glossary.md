@@ -40,6 +40,8 @@ Locked names for issues, pull requests and user-facing copy. Behaviour lives in 
 
 **Workers** — declared environments for shell, browser and graphical execution. The first is the **Windows host shell with approvals**; WSL and Docker come later. A working directory is not a security boundary; MCP is not isolation.
 
+**MCP server** — an optional extra tool source registered by the application and adapted through official LangChain `MCPAdapter`. Not the default tool bus and not a worker. First product servers: **browser** (Playwright MCP) and **github** (official GitHub remote MCP). Adding another server is a new record on the same path ([ENV-007](../specs/modules/environments-tools.md#env-007)). **MCP Apps** are interactive panels ([ENV-005](../specs/modules/environments-tools.md#env-005)), not ordinary MCP connectivity.
+
 **`X-Workbench-Local-Token`** — the desktop↔backend header. Electron main injects it; the renderer never holds the secret at `state\desktop_backend_shared_secret`. CORS is not authorisation.
 
 **Product data** — `%LOCALAPPDATA%\LocalAIWorkbench\` (Linux `~/.local/share/LocalAIWorkbench/`): models, runtimes, state, cases, snapshots, workspaces, knowledge, logs, `application.sqlite`, `checkpoints.sqlite`. Never the repository, never `.scratch/`.
