@@ -785,6 +785,18 @@
       "evidence": []
     },
     {
+      "id": "ENV-007",
+      "document": "specs/modules/environments-tools.md",
+      "status": "planned",
+      "verifiable_by": [
+        "ci-smoke",
+        "uat"
+      ],
+      "code": [],
+      "tests": [],
+      "evidence": []
+    },
+    {
       "id": "STATE-001",
       "document": "specs/modules/state-recovery.md",
       "status": "built",

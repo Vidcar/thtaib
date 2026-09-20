@@ -71,6 +71,21 @@ Consulted 2026-09-20 against the pinned backend lock (`deepagents==0.7.15`). Liv
 
 `StoreBackend` and background consolidation appear on the live memory page as optional platform patterns. They are not adopted here as a knowledge owner ([OQ-006](../open-questions.md#oq-006), [OQ-009](../open-questions.md#oq-009)).
 
+<a id="langchain-mcp"></a>
+## LangChain MCP adapter (OQ-009 / ENV-007)
+
+Consulted 2026-09-20 against the pinned backend lock (`langchain==1.4.2`, `deepagents==0.7.15`). Live `docs.langchain.com` pages are not the pin. PyPI 1.4.2 extra `mcp` requires `fastmcp>=4.0.1,<5`. The `langchain.mcp` namespace is beta. Cross-checked with:
+
+- [Model Context Protocol (MCP)](https://docs.langchain.com/oss/python/langchain/mcp) — `MCPAdapter`, transport inference, `langchain[mcp]>=1.4.0`.
+- [Connections](https://docs.langchain.com/oss/python/langchain/mcp/connections) — lifecycle, `MCPConfig`, `ClientGroup`, hold-open vs reentrant tools, protocol eras.
+- [Tools](https://docs.langchain.com/oss/python/langchain/mcp/tools) — `list_tools()`, metadata annotations, HITL via `interrupt_on`, elicitation as LangGraph interrupt.
+- [Authentication](https://docs.langchain.com/oss/python/langchain/mcp/auth) — bearer, OAuth, per-server `Client`.
+- [Migrate from langchain-mcp-adapters](https://docs.langchain.com/oss/python/migrate/langchain-mcp-adapters) — `MultiServerMCPClient` is replaced; do not add that package on this pin.
+- [MCPAdapter reference](https://reference.langchain.com/python/langchain/mcp/adapter/MCPAdapter).
+- Official first servers: [Playwright MCP](https://github.com/microsoft/playwright-mcp) (`@playwright/mcp`) and [GitHub MCP Server](https://github.com/github/github-mcp-server) (remote `https://api.githubcopilot.com/mcp/`).
+
+Live Deep Agents customisation pages still show `langchain-mcp-adapters`. That is stale relative to `langchain==1.4.2`. Implementation must call `langchain.mcp.MCPAdapter`, not the standalone package. Prompts, resources, sampling, roots, and MCP Apps are out of [ENV-007](../modules/environments-tools.md#env-007).
+
 <a id="fastapi-sse"></a>
 ## FastAPI Server-Sent Events
 
