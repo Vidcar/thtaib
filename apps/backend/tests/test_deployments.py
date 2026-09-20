@@ -363,12 +363,21 @@ class DeploymentTests(unittest.TestCase):
         assert refreshed.server_props is not None
         self.assertEqual(refreshed.server_props.n_ctx, 8192)
         self.assertEqual(refreshed.server_props.default_generation_settings["n_ctx"], 8192)
+        healthy_probe = self.manager.deployments.probe
         self.manager.deployments.probe = OfflineProbe()
         unavailable = self.manager.deployment_health(connected.id)
         self.assertEqual(unavailable.status, DeploymentStatus.unhealthy)
         self.assertIsNotNone(unavailable.health)
         assert unavailable.health is not None
         self.assertFalse(unavailable.health.healthy)
+        self.manager.deployments.probe = healthy_probe
+        recovered = self.manager.deployment_health(connected.id)
+        self.assertEqual(recovered.status, DeploymentStatus.running)
+        self.assertTrue(recovered.health.healthy)
+        self.manager.deployments.probe = OfflineProbe()
+        failed_again = self.manager.deployment_health(connected.id)
+        self.assertEqual(failed_again.status, DeploymentStatus.unhealthy)
+        self.assertFalse(failed_again.health.healthy)
         self.manager.detach_deployment(connected.id)
         self.manager.stop_deployment(managed.id)
 

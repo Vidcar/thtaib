@@ -4,7 +4,7 @@ Last updated: 2026-09-20.
 
 ## Goal and state
 
-Packet 02 baseline repairs are validated on `codex/repair-baseline`, based on `f50011b` (packet 01 / PR #106). The packet PR records CI and merge results. Scope stops at the seven supplied defects; the full vision is not delivered.
+Packet 02 baseline repairs are implemented and locally validated in [PR #107](https://github.com/Vidcar/thtaib/pull/107), `codex/repair-baseline`, based on `f50011b` (packet 01 / PR #106). The PR records protected CI and merge results. Scope stops at the seven supplied defects; the full vision is not delivered.
 
 ## Changes and decisions
 
