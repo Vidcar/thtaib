@@ -26,10 +26,7 @@ from typing import Any
 from deepagents import FilesystemPermission
 from langchain.agents.middleware import ToolCallRequest
 
-from workbench_backend.agents.harness_backend import (
-    RESERVED_FRAMEWORK_PREFIXES,
-    host_shell_requested,
-)
+from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.agents.schemas import (
     AgentRun,
@@ -165,10 +162,6 @@ def interrupt_on_for_run(run: AgentRun) -> dict[str, bool | dict[str, Any]] | No
             ),
         }
     }
-
-
-def reserved_prefixes() -> tuple[str, ...]:
-    return RESERVED_FRAMEWORK_PREFIXES
 
 
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:

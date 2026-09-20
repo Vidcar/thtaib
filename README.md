@@ -1,6 +1,6 @@
 # Local AI Workbench
 
-Local AI Workbench is a Windows-first, local-first AI workspace for running models and agent work on your own machine. Its core experiences are **Models**, **Chat**, **Lab** and **Builder**: choose or import a model, discover what it can actually do here, configure it properly, then use it in conversation, experiments and workflows. One FastAPI backend does the work; one Electron desktop shows it. Inference comes from llama.cpp, the agent loop from Deep Agents, LangGraph and LangChain. The workbench integrates those projects behind a coherent guided setup instead of reimplementing them.
+The Windows-first desktop for **thtaib**, a local-first AI workspace. [David's product vision](thtaib-vision.md) defines the intended **Models**, **Chat**, **Lab** and **Workflows** experiences. **Agent run / Builder** are existing UI and legacy specification terms for Workflows; the desktop name remains Local AI Workbench. Feature status and evidence live in [the catalogue](specs/catalog.json), not the vision.
 
 ## Use the local product
 
@@ -10,12 +10,6 @@ On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It sta
 2. Open **Chat**. The running model is selected automatically. Leave **Profile** at **None** for defaults, or choose a saved profile deliberately.
 3. Send a message. For file tasks, enter an existing project folder first. The assistant can read and edit files there. Shell commands that need approval show the exact command with **Approve** and **Deny**.
 4. Use **Cancel** to stop work, and choose a saved conversation from the left to continue. Recent conversations appear first. Stop the model from **Models** when you want to release its GPU memory.
-
-The canonical next-work order is in [the delivery map](docs/delivery-feature-map.md#next-path). Detailed requirement status and scoped evidence live only in [the catalogue](specs/catalog.json); [verification](specs/verification.md) distinguishes live checks from mocks and unfinished acceptance clauses. Builder, optional MCP integration, voice and broader Lab workflows are intended product paths, but they are not prerequisites for the local model and Chat base.
-
-## Coding agents
-
-Start at [AGENTS.md](AGENTS.md). Specifications live under [`specs/`](specs/README.md).
 
 ## Install and run
 
@@ -34,7 +28,8 @@ Product data — models, runtimes, state, cases, snapshots, knowledge, the two S
 | Need | Open |
 | --- | --- |
 | Agent working rules | [AGENTS.md](AGENTS.md) |
-| Index and working rules | [specs/README.md](specs/README.md) |
+| Product intent | [thtaib-vision.md](thtaib-vision.md) |
+| Contract index and authority | [specs/README.md](specs/README.md) |
 | Architecture | [specs/architecture.md](specs/architecture.md) |
 | Status and evidence | [specs/catalog.json](specs/catalog.json) |
 | Commands | [specs/commands.md](specs/commands.md) |
@@ -42,4 +37,4 @@ Product data — models, runtimes, state, cases, snapshots, knowledge, the two S
 | Open questions | [specs/open-questions.md](specs/open-questions.md) |
 | Glossary | [docs/glossary.md](docs/glossary.md) |
 | Delivery plan | [docs/delivery-feature-map.md](docs/delivery-feature-map.md) |
-| Original vision (Revision 0.5) | [specs/sources/README.md](specs/sources/README.md) |
+| Historical source (Revision 0.5) | [specs/sources/README.md](specs/sources/README.md) |

@@ -1,61 +1,46 @@
 # Open architecture questions
 
-Design choices not yet made. Recording a question is not permission to choose silently; source-derived selections (llama.cpp, Deep Agents, LangGraph, LangChain, one FastAPI backend, one Electron desktop) are not reopened here. Resolve a question with an [ADR](decisions/README.md) or a [changelog](decisions/changelog.md) entry and matching specification edits; keep the ID and mark it resolved. Defaults already decided under a question are in the changelog, not repeated here. No product question is currently waiting on David.
-
-<a id="oq-001"></a>
-## OQ-001: Repository layout, versions and reproducible setup
-
-**Status:** resolved for layout and toolchain ([architecture](architecture.md#repository-layout-and-toolchain), Issue #1). **Remaining:** a clean install and build on David-PC has not been recorded as evidence.
+Remaining design uncertainty, grouped by owner. Settled behavior belongs in the linked contracts, implementation status/evidence in [the catalogue](catalog.json), and working rules in [AGENTS.md](../AGENTS.md). Remove resolved questions after repairing incoming links; Git preserves their history. These questions do not authorize additional work in the current packet.
 
 <a id="oq-002"></a>
 ## OQ-002: Desktop/backend trust and communication
 
-**Status:** partially decided (same-machine shared secret and loopback bind, Issue #40; SSE for same-machine run/chat events, [changelog](decisions/changelog.md)). **Owner:** backend/desktop boundary. **Blocks:** treating a remote backend as supported.
+**Owner:** backend/desktop. Remaining origin/IPC checks and whether remote backend access should ever be supported. Local binding alone is not security. Same-machine trust and SSE are settled in [API-001](modules/backend-desktop.md#api-001) and [API-006](modules/backend-desktop.md#api-006). Validate dropped-client reconnect and a real Electron/backend pairing before broader support claims.
 
-Decided for this machine: one `GET /v1/events` SSE stream (`run_id` or `conversation_id`), same `X-Workbench-Local-Token` header, FastAPI `EventSourceResponse`, reconnect `snapshot` then only `run_event`s newer than that snapshot ([API-006](modules/backend-desktop.md#api-006)). WebSockets are not the transport. Open: remaining origin/IPC checks; whether remote backend access is ever supported. An API bound locally must not be assumed secure solely because it is local. **Evidence needed:** reconnect behaviour under a dropped Electron client and a real Electron ↔ backend pairing on David-PC.
 
 <a id="oq-003"></a>
 ## OQ-003: Worker protocol, isolation and access policy
 
-**Status:** partially decided — the first environment is the **Windows host shell with approvals**, built on Deep Agents `permissions=` / `interrupt_on=` and `LocalShellBackend`; WSL and Docker later (product owner decision, 2026-09-19, [changelog](decisions/changelog.md#2026-09-19--product-owner-decisions-project-chat)). Host-shell approval flow for that environment is specified in [environments and tools](modules/environments-tools.md) (auto-allow read-only prefixes; otherwise `interrupt_on`; decisions on the run via `POST .../interrupt-decision`; no invented home cwd). **Owner:** environment/tool boundary. **Blocks:** browser or graphical execution; WSL, Docker or remote workers; sensitive mounts and installation rights beyond the approved host-shell policy.
+**Owner:** environments/tools. Decide executable/network access, credential delivery, sensitive mounts, installation rights and identities for later isolated or remote workers; define their cancellation/teardown guarantees. The existing [host-shell policy](modules/environments-tools.md#behaviour) and [MCP tools](modules/environments-tools.md#env-007) do not establish isolation. The durable inbox is [OQ-011](#oq-011).
 
-Open: executable and network access and credential delivery; what the host shell exposes versus what later environments isolate; cancellation and teardown truth beyond reject-then-cancel on an interrupt; worker identity for later remote environments. MCP is discovery and invocation, not isolation. Chat browser access through the Playwright MCP product server is [ENV-007](modules/environments-tools.md#env-007), not an isolated browser worker, and does not close this question. A durable Approvals inbox remains [OQ-011](open-questions.md#oq-011). **Evidence recorded:** David-PC Chat HTTP approve and deny, plus no-project `shell_requires_project`, at `8887f9f` ([evidence](evidence/2026-09-19-david-pc-host-shell.md)). **Evidence still needed:** Electron Approve/Deny; cancel-while-interrupted on this machine; an attempt to exceed the approved boundary beyond the no-project 400; explicitly authorised host access versus isolated execution when later environments arrive.
+[Host-shell evidence](evidence/2026-09-19-david-pc-host-shell.md) records HTTP approve/deny and no-project rejection. Remaining live checks include Electron approval, cancellation while interrupted, attempts beyond approved access, and host-versus-isolated behavior when later workers arrive.
+
 
 <a id="oq-004"></a>
-## OQ-004: Run state, events, continuation and uncertain effects
+## OQ-004: Run state, continuation and uncertain effects
 
-**Status:** partially decided (two databases and linkage #27; effects ledger #31; cancel honesty #42; Chat thread reuse #56). **Owner:** backend, agent and persistence boundaries jointly. **Blocks:** durable-run claims beyond the recorded linkage.
+**Owner:** backend, agents and persistence. Resolve parent/child identities beyond conversation/thread/run, remaining transitions/stop reasons, model or adapter changes on a resumed thread, and recovery across databases, files and services. [STATE-001/002](modules/state-recovery.md#state-001) and [API-006](modules/backend-desktop.md#api-006) define current linkage/event ordering; they make no cross-service exactly-once promise. Validate crash/cancel at external-effect and checkpoint boundaries, plus continuation beyond a measured framework limit without duplicates.
 
-Open: identity formats and parent/child semantics beyond conversation → thread → run; remaining state transitions and stop reasons; whether the same thread can resume after a model or adapter change; exactly-once across databases, files and services. For this stream, event order is the append order of application `AgentEvent` rows; `run_event` seq is that 1-based index. After a reconnect `snapshot`, only later seq values stream ([API-006](modules/backend-desktop.md#api-006)). That is not an exactly-once claim across a backend restart. **Evidence needed:** cancel and crash tests around an external effect and a checkpoint boundary; continuation beyond a measured framework limit without duplicates.
 
 <a id="oq-005"></a>
-## OQ-005: Consistent project snapshots and restoration
+## OQ-005: Snapshot policy beyond directory copies
 
-**Status:** partially decided (directory snapshot #15; starting snapshot #65; restore integrity #66). **Owner:** persistence/environment boundary. **Blocks:** snapshot policy beyond the recorded defaults.
+**Owner:** persistence/environments. Decide retention, concurrent-writer handling beyond rejection while live, environment adapters and the boundary between project files and environment state. [STATE-003](modules/state-recovery.md#state-003) defines current capture/restore. Validate controlled capture, separate restore, visible exclusions and unchanged parent on Windows; checkpoints/git commits alone do not capture services, dependencies or remote effects.
 
-Open: retention; concurrent-writer handling beyond "fail if live"; environment-snapshot adapters; the boundary between project files and an environment snapshot. Do not assume checkpoints or git commits capture untracked files, dependencies, services or remote effects. **Evidence needed:** capture at a controlled boundary, restore into a separate workspace, exclusions visible, parent unchanged, on David-PC.
 
 <a id="oq-006"></a>
-## OQ-006: Memory, skills, retrieval and sensitive context
+## OQ-006: Memory, retrieval and restored context
 
-**Status:** partially decided (knowledge store #17; capture privacy #64; content loaded before run #57; retrieval v1 built 2026-09-20; memory/skills loading specified 2026-09-20; memory write-through specified 2026-09-20). **Research recorded 2026-09-19:** query-time RAG **is** in the first usable version, delivered through LangChain / Deep Agents retrieval components with little custom code ([changelog](decisions/changelog.md#2026-09-19--oq-006-retrieval-research-include-rag-in-v1); product owner's 2026-09-19 "if" is satisfied). Implemented as [STATE-006](modules/state-recovery.md#state-006) (`built`, not `verified`). **Research recorded 2026-09-20:** Deep Agents `memory=` / `skills=` replace the memory/skill system-prompt append ([changelog](decisions/changelog.md#2026-09-20--oq-006-memory-and-skills-replace-prompt-append); [AGT-004](modules/agents-workflows.md#agt-004), [STATE-005](modules/state-recovery.md#state-005)). Loading is `built`, not `verified`. **Research recorded 2026-09-20:** official `edit_file` / `write_file` on `/memories/**` write through to STATE-005 so David can see agent memories in Knowledge ([changelog](decisions/changelog.md#2026-09-20--oq-006-memory-edit_file-writes-through-to-knowledge); product owner, Chat-first auto-save, 2026-09-20). Write-through is specified, not implemented, not `verified`. Catalogue rows stay `built`. **Owner:** persistence/agent boundary. **Blocks:** a decision that a *durable* retrieval index or Deep Agents store is shared across surfaces; implementing a second knowledge store or a workbench-written retriever or memory middleware.
+**Owner:** persistence/agents. Decide whether a durable retrieval index or Deep Agents store is ever shared across surfaces (v1 creates neither), and what restored-context gaps must be reported for retrieval, memory/skills loading and memory write-through. Current decisions live in [STATE-005](modules/state-recovery.md#state-005), [STATE-006](modules/state-recovery.md#state-006) and [AGT-004](modules/agents-workflows.md#agt-004).
 
-v1 retrieval shape: agentic retrieve-and-offload — `RecursiveCharacterTextSplitter`, `InMemoryVectorStore`, `OpenAIEmbeddings` against llama-server `POST /v1/embeddings`, a LangChain `@tool` that `similarity_search`es and writes chunks to `/retrieved/` on the existing `CompositeBackend` (harness scratch, never the project). The STATE-005 store stays the durable source; the vector index is derived per run. Retrieved documents are neither durable project memory nor training. Retrieval is requested only via `embedding_deployment_id`; missing or unloaded embedders fail closed.
+[Retrieval evidence](evidence/2026-09-20-david-pc-retrieval.md) records fail-closed cases and live offload under harness scratch. Remaining evidence includes recorded replay without a live index, other failure codes, Electron selectors, Lab/Agent-run paths, live memory/skills loading and write-through. Do not create another knowledge owner to resolve a capture gap.
 
-v1 memory/skills loading: selected `memory` versions are always-load via `create_deep_agent(memory=)` (`MemoryMiddleware` + `/memories/` files); selected `skill` versions are progressive disclosure via `create_deep_agent(skills=["/skills/"])` (`SkillsMiddleware` + `SKILL.md`). Materialized files are derived per run on the existing composite (harness scratch), not a `StoreBackend` and not the `knowledge\` JSON tree. Protected instructions stay in `system_prompt=` / `compose_system_prompt` — the official memory fragment tells the model those files are untrusted data it may `edit_file`.
-
-v1 memory write-through: a successful live-tool official `edit_file` / `write_file` on `/memories/**` becomes a new STATE-005 version (kind `memory`, `actor=agent`, `run_id` set) that Knowledge lists. That is the explicit automatic-write policy. Scratch `/memories/` stays derived and is discarded with the run; the durable copy is the new version. HTTP agent-origin `/v1/knowledge` writes still require `scope_policies`. Skills stay non-writable. Chat live-tool always attaches `memory=` (selected paths, or `/memories/user/chat.md` if none) so the official save prompt is present without a Knowledge form. Current code still leaves `/memories/` edits run-local until the write-through implementation PR.
-
-Product-default dedicated embedding GGUF (operator registers and starts a deployment; the file is not a `bundle_*` record and the product does not start llama-server because the file exists): official `Qwen/Qwen3-Embedding-0.6B-GGUF` @ `370f27d7550e0def9b39c1f16d3fbaa13aa67728`, file `Qwen3-Embedding-0.6B-Q8_0.gguf`, SHA-256 `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439`, 639150592 bytes. On David-PC the file is already at `%LOCALAPPDATA%\LocalAIWorkbench\models\Qwen3-Embedding-0.6B-Q8_0.gguf`. Recommended pooling for this GGUF is `last`.
-
-Still open: whether a durable retrieval index or Deep Agents store is ever shared across Chat, Lab and Builder (v1 creates none); what capture gaps a restored run must report when retrieval, `memory=` / `skills=`, or write-through ran. **Evidence recorded:** David-PC Chat HTTP fail-closed (missing / chat-as-embedder / unloaded) and live `search_knowledge` writing `/retrieved/` under harness scratch at `7db7f45` ([evidence](evidence/2026-09-20-david-pc-retrieval.md)). **Evidence still needed:** recorded-tool replay without a live index; remaining fail-closed codes; Electron selectors; Lab / Agent-run HTTP; live `memory=` / `skills=` UAT (ordinary Chat with memory + skill + protected; project-less skill `read_file`; skill write denied); live write-through (not yet implemented). Unit tests with `DeterministicFakeEmbedding` are not retrieval evidence. Catalogue STATE-006, STATE-005 and AGT-004 stay `built`.
 
 <a id="oq-007"></a>
-## OQ-007: Compatibility evidence and model lifecycle details
+## OQ-007: Compatibility evidence and lifecycle details
 
-**Status:** partially decided (CUDA pin and default profile #21; provenance records #31; deployment ownership #62; `load_mode`, `--mmproj` and `server_props` #81). **Owner:** model-management boundary. **Blocks:** declaring any model capability or runtime control supported.
+**Owner:** models. Resolve how runtime observations and tested adjustments support capability claims, and validate remaining reasoning/template controls against the pinned runtime. Refine cache/recovery behavior for interrupted downloads and lifecycle boundaries for connected endpoints without granting ownership. [Models](modules/models.md) owns the contracts. Evidence must cover managed companions, a connected service, an unfamiliar model and an applied-setting mismatch; startup or `/props` alone is not capability proof.
 
-Open: turning recorded `server_props` and tested adjustments into compatibility records and capability claims; the remaining startup and per-request controls (reasoning format, chat-template kwargs, thinking controls) against the pinned llama.cpp; cache reuse and interrupted downloads (pin currently re-downloads unconditionally); lifecycle authority over external endpoints. **Evidence needed:** a managed model with companion files, a connected service, an unfamiliar model and an applied-setting mismatch, all on David-PC (managed start without companions was seen live on 2026-09-19).
 
 <a id="oq-008"></a>
 ## OQ-008: Registry schemas, compatibility and extension loading
@@ -65,22 +50,18 @@ Open: turning recorded `server_props` and tested adjustments into compatibility 
 Open: canonical schemas and identifiers, version compatibility and migration, invalidation of stale definitions, discovery and trust of extensions, skills/plugins discovery UX. No plugin sandbox or hot reload follows from the word "registry". **Evidence needed:** compatible/incompatible/unverified fixtures; reload against a changed definition; rejection after a permission change.
 
 <a id="oq-009"></a>
-## OQ-009: Optional experimental integrations
+## OQ-009: Optional integrations
 
-**Status:** partially decided — MCP is an **optional extra tool source**, not the default or only tool bus (product owner decision, 2026-09-20, [changelog](decisions/changelog.md#2026-09-20--oq-009-mcp-expansion-framework-first-servers-browser-and-github)). The durable expansion framework and the first two product servers (`browser`, `github`) are specified as [ENV-007](modules/environments-tools.md#env-007) (`planned`, not implemented, not `verified`). **Owner:** relevant adapter/harness/desktop boundary. **Blocks:** that integration only.
+**Owner:** adapter/harness/desktop boundaries. Remaining choices cover rubric/interpreter middleware, background consolidation, [MCP Apps hosting](modules/environments-tools.md#env-005), voice and multimodal surfaces. Speech recognition and text-to-speech are separate choices; transcription alone does not deliver voice conversation. Each integration must preserve access, cancellation and events when enabled, while core paths work with it disabled. The ordinary MCP integration decision is settled in [ENV-007](modules/environments-tools.md#env-007), not reopened here.
 
-**Research recorded 2026-09-20:** the official client on the pinned stack is `langchain.mcp.MCPAdapter` via `langchain[mcp]` (`langchain==1.4.2`, extra pulls `fastmcp>=4.0.1,<5`). Do not add standalone `langchain-mcp-adapters`. Do not remake an MCP host. Tools from `list_tools()` merge into the existing `create_deep_agent(tools=)` list. MCP is not isolation ([OQ-003](open-questions.md#oq-003)); the Windows host shell remains the first worker. First product servers: official Playwright MCP (`@playwright/mcp`, pinned) and official GitHub remote MCP (`https://api.githubcopilot.com/mcp/` with a PAT). Core Chat must run with MCP disabled ([ARCH-007](architecture.md#arch-007)).
-
-Still open: rubric and interpreter middleware (beta upstream), background consolidation, MCP Apps host support ([ENV-005](modules/environments-tools.md#env-005)), voice and multimodal surfaces. Voice means transcription, speech output and conversational interaction through established local components; transcription alone is not complete voice Chat. All stay optional. **Evidence needed:** each integration disabled and enabled with the same access, cancellation and event behaviour. ENV-007 evidence is in-process FastMCP plumbing plus David-PC Chat UAT of browser and GitHub; none exists yet.
 
 <a id="oq-010"></a>
-## OQ-010: Product verification commands and test environments
+## OQ-010: Remaining verification coverage
 
-**Status:** partially decided (required CI checks on public `main`, Issue #76; two-tier evidence model, 2026-09-19; real-model smoke tier bound and registered, PR #82; GitHub CI slimmed to a Linux thin gate, product-owner decision 2026-09-20). **Owner:** boundary implementer. **Blocks:** calling a build stage verified.
+**Owner:** the affected component. Decide the import-boundary check, broader managed Windows/worker integration coverage, live-versus-recorded fixture gates, UAT procedure/evidence retention, and whether real-model smoke should ever be required. These are future choices, not CI restructuring in this packet. Optional MCP plumbing belongs on the existing smoke path with in-process FastMCP; browser/GitHub capability checks require Windows UAT under [ENV-007](modules/environments-tools.md#env-007).
 
-Open: import-boundary check; integration tiers beyond the bound real-model smoke (managed Windows CUDA deployment, workers); MCP plumbing, when ENV-007 is implemented, is an in-process FastMCP check on the existing smoke tier rather than a new required workflow — Playwright/GitHub stay David-PC UAT; live-tool versus recorded fixtures as gates; David-PC UAT procedure and evidence retention; making `real-model-smoke` a required check (maintainer action); removing the retired Windows spec-integrity and Windows shared-contract-freshness names from classic branch protection (maintainer action). **Evidence needed:** registered commands run against real code at a recorded commit, including failure cases.
+Read-only protection verification on 2026-09-20 confirmed strict `main` protection with exactly the four Ubuntu checks in [commands](commands.md#ci). Removing retired Windows check names is no longer a maintainer action. Current test tiers and verification rules remain in [commands](commands.md) and [verification](verification.md).
 
-The 2026-09-20 slim does not return to Issue #36 advisory-only CI. Required Linux checks remain the merge gate. Windows GitHub jobs still run on matching paths and are not dropped. David-PC is the real Windows and capability check. Green unit tests are not catalogue `verified`.
 
 <a id="oq-011"></a>
 ## OQ-011: Durable product Approvals inbox
@@ -114,15 +95,14 @@ The model manager stays the owner and llama.cpp the local engine; no second infe
 **Status:** open. **Owner:** agent/workflow and registry boundaries. **Blocks:** shipping import/export. Interchange only; LangGraph remains the runtime and an imported graph is not executable authority without backend validation ([WF-001](modules/agents-workflows.md#wf-001)). **Evidence needed:** a round-trip or rejected import against a registered definition with configuration links still excluded from execution sequencing.
 
 <a id="oq-016"></a>
-## OQ-016: Builder canvas and chrome UX
+## OQ-016: Workflows canvas and inspection UX
 
-**Status:** partially decided for v1 chrome ([ADR-0003](decisions/ADR-0003-builder-v1-chrome.md), draft). **Owner:** desktop and agent boundaries. **Blocks:** presenting Builder as a product surface.
+**Owner:** desktop/agents. Resolve canvas, node-library and run-inspector interaction beyond the historical **Builder** chrome in [ADR-0003](decisions/ADR-0003-builder-v1-chrome.md). Validate the interface with matching contract checks and live use. The visual graph remains a definition rather than executable authority ([API-002](modules/backend-desktop.md#api-002)).
 
-Open: the React Flow canvas, node library, run-inspector wiring and UAT. The visual graph is never executable authority ([API-002](modules/backend-desktop.md#api-002)). **Evidence needed:** an implementation issue with matching specification, tests and live evidence.
 
 <a id="oq-017"></a>
-## OQ-017: One persistence strategy for application records
+## OQ-017: Remaining metadata migration
 
-**Status:** storage choice resolved by the technical owner, 2026-09-20; migration remains unfinished. **Owner:** persistence boundary. **Decision:** [application record storage](decisions/ADR-0005-application-record-storage.md). New durable application record families use `application.sqlite`; existing JSON families keep their current format until an inventory-checked migration is ready.
+**Owner:** persistence. Storage choice is settled in [ADR-0005](decisions/ADR-0005-application-record-storage.md); the existing run/Chat JSON cutover is [already part of startup](commands.md#not-yet-available). Remaining work concerns inference, compatibility, Lab and knowledge metadata, not a new persistence authority.
 
-**Remaining check:** inventory inference, compatibility, Lab and knowledge record families; migrate a copy of existing data; compare every record and reference; exercise restart, interrupted import and rollback before cutover. Retain original JSON and a database backup until the migration is validated. This does not block ordinary fixes, additive fields in existing stores, guided model setup, Chat continuity, capability evidence, or the minimum `/memories/**` write-through path. Current storage boundaries live in [architecture](architecture.md#persistence).
+Determine the family inventory and safe cutover sequence. Validate a migrated copy against every original record/reference, restart, interrupted import and rollback. Retain original JSON and a database backup until validated. This does not gate ordinary fixes, additive fields, model setup, Chat, capability evidence or memory write-through. Current boundaries are in [architecture](architecture.md#persistence).

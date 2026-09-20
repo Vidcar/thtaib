@@ -20,7 +20,6 @@
     "generate:shared-contracts": "openapi-typescript ../backend/contracts/openapi.json -o src/generated/shared-contracts/openapi.d.ts --root-types"
   },
   "dependencies": {
-    "@xyflow/react": "12.11.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

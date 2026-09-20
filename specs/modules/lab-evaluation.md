@@ -16,6 +16,8 @@ Routes under `/v1/lab/`: `workspaces` (create, list, get, files), `cases/capture
 
 ## Behaviour
 
+**Replay matching.** Consume the first unused fixture with equal tool name and canonical arguments: sorted keys, omitted `None`, path-like values normalized to POSIX without a leading `/`. Missing, exhausted or mismatched captures fail with `recorded_fixture_missing`, `recorded_fixture_exhausted` or `recorded_fixture_arg_mismatch`; never fall back to live execution. Reconstructed `write_file` / `edit_file` bytes are labelled fixture application and confined to the replay workspace.
+
 **Task cases.** Capture from a real run reuses the run's `starting` snapshot; a run without one reports `starting_snapshot_unavailable` rather than presenting current files as inputs. Restore goes to a new workspace and a linked branch run ([state and recovery](state-recovery.md)). Rerun is labelled `recorded-tool` or `live-tool`. Recorded mode attaches no live project, host-shell, or retrieval backend; knowledge routes may use scratch or `StateBackend` so official `memory=` / `skills=` middleware can `download_files`. Fixtures match by tool name and canonical arguments, and a missing, exhausted or mismatched fixture fails the run with a recorded deviation. Matched write fixtures apply only inside the replay workspace and must not write-through into STATE-005. Live-tool mode uses `FilesystemBackend` bound to project storage and stays labelled `live-tool`; when `memory=` is attached, official `/memories/**` writes write-through like Chat. Missing snapshots, external dependencies or permissions are reported, never replaced with convenient inputs. Export sanitises or blocks detectable secrets in task text, tool fixtures and included files using the knowledge redaction detector; filename exclusions alone are not sufficient; `secret_scan_clean` is true only when nothing was detected; stored local cases and snapshots are not rewritten by export. Restoring inputs never promises identical model output.
 
 **Engine measurements.** llama-bench from the managed runtime when present; otherwise `unavailable`. Scores are never invented. A fixed smoke command such as `llama-bench -p 16 -n 8` proves only that the runner can invoke the binary; it is not context-performance evidence and must not be labelled as performance at a configured 64K/256K context. Context traits record configured capacity, actual prompt/past-context occupancy, prefill/decode measurements, applied runtime settings, warmup/cache condition, generated length, repetitions and resource use.
@@ -49,7 +51,7 @@ Keep recorded-tool tests separate from live-tool tests. Exclude or redact secret
 <a id="lab-004"></a>
 ### LAB-004: Preserve interpretable evidence
 
-Expose answers, failures, resource use, artifacts and checks rather than scores alone. Preserve applied configuration, distinguish executable checks from model judgement, and make profile differences visible across Lab, Chat and Builder.
+Expose answers, failures, resource use, artifacts and checks rather than scores alone. Preserve applied configuration, distinguish executable checks from model judgement, and make profile differences visible across Lab, Chat and Workflows.
 
 **Acceptance:** Compare two case runs with a changed setting; inspect actual configuration and evidence for each outcome, including one failing executable check.
 

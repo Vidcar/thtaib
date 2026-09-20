@@ -4,17 +4,11 @@ Visibility tools are application-owned. Filesystem tools are Deep Agents
 built-ins, bound to project storage. ``execute`` is the host-shell tool from
 ``LocalShellBackend`` and is enabled only when a project (cwd) is bound.
 ``task`` and ``delete`` stay out of the enabled catalogue.
-Recorded-tool wrappers replay fixtures by invocation identity; they are not
-live integrations and are not proof of live behaviour.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
-from langchain_core.tools import BaseTool, StructuredTool, tool
-
-from workbench_backend.agents.replay import FixtureBank
+from langchain_core.tools import BaseTool, tool
 from workbench_backend.inference.ids import utc_now
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
@@ -114,39 +108,9 @@ def resolve_presented_tools(
     return presented, denied, filesystem_blocked, shell_blocked
 
 
-def tools_for_names(
-    names: list[str],
-    *,
-    recorded_fixtures: list[dict[str, Any]] | None = None,
-    fixture_bank: FixtureBank | None = None,
-) -> list[BaseTool]:
+def tools_for_names(names: list[str]) -> list[BaseTool]:
     selected = [name for name in names if name in ENABLED_TOOLS]
-    bank = fixture_bank
-    if bank is None and recorded_fixtures:
-        bank = FixtureBank(recorded_fixtures)
-    if bank is None:
-        return [ENABLED_TOOLS[name] for name in selected]
-    return [_recorded_wrapper(name, bank) for name in selected]
-
-
-def _recorded_wrapper(name: str, bank: FixtureBank) -> BaseTool:
-    original = ENABLED_TOOLS[name]
-
-    def replay(**kwargs: Any) -> str:
-        return bank.take(name, kwargs)
-
-    replay.__name__ = f"recorded_{name}"
-    replay.__doc__ = (
-        f"{original.description} Recorded-tool fixture replay; "
-        "not a live integration and not proof of live behaviour."
-    )
-    return StructuredTool.from_function(
-        func=replay,
-        name=name,
-        description=replay.__doc__,
-        args_schema=original.args_schema,
-        handle_tool_error=False,
-    )
+    return [ENABLED_TOOLS[name] for name in selected]
 
 
 def tool_name(tool_obj: object) -> str | None:

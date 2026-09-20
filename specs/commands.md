@@ -48,7 +48,9 @@ For normal local use on a prepared Windows checkout, double-click root `Launch W
 
 ## Not yet available
 
-Import-boundary check; integration tiers beyond the local process checks and real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; application migrations. Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
+Import-boundary check; integration tiers beyond the local process checks and real-model smoke (managed Windows CUDA deployment, workers, MCP); product Docker services; migration of remaining model, compatibility, Lab and knowledge metadata from JSON to SQLite ([OQ-017](open-questions.md#oq-017)). Add each here with its exact command when it lands and bind its path in [the repository map](repository-map.json).
+
+Run/Chat JSON-to-SQLite migration already runs automatically when backend startup opens the application store through [state/migrate.py](../apps/backend/src/workbench_backend/state/migrate.py). It archives migrated JSON and makes `application.sqlite` authoritative, without dual writes. It has no separate migration command; [state regressions](../apps/backend/tests/test_state.py) cover the existing path.
 
 <a id="ci"></a>
 ## CI

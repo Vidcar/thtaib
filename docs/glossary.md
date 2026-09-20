@@ -1,63 +1,51 @@
 # Glossary
 
-Locked names for issues, pull requests and user-facing copy. Behaviour lives in the [specifications](../specs/README.md); this list only fixes the words.
+Terminology for [the product vision](../thtaib-vision.md) and [contracts](../specs/README.md). Implementation status belongs in [the catalogue](../specs/catalog.json).
 
 ## Product
 
-**Local AI Workbench** — the product name. The repository is `thtaib`; that is not the product name.
+**thtaib** — the intended product and repository. **Local AI Workbench** remains the desktop name and application data directory name.
 
-**Managed inference** — the workbench downloads a pinned llama.cpp runtime, starts `llama-server` itself and owns that process (MOD-001…004). **Connected endpoint** — an existing OpenAI-compatible server the workbench attaches to and never starts, stops or kills.
+**Workflows** — the intended visual agent-process area. **Agent run / Builder** are existing UI and legacy specification terms. The Agent-run panel exposes the embedded harness; the visual editor's graph is a definition, never executable authority ([WF-001](../specs/modules/agents-workflows.md#wf-001)).
 
-**Model bundle** — the recorded manifest of a model: quantisation, shards, companion files such as `mmproj`, Hugging Face repository and revision, hashes, local paths. **Run profile** — saved startup, per-request and agent settings. **Running deployment** — a live managed process or a connected endpoint; a saved profile is not a deployment.
+**Chat** — the conversation surface, with or without a project folder. **Embedded harness** — the shared Deep Agents implementation used by Chat and agent workflow steps.
 
-**Startup / per-request / agent bags** — the three settings groups (MOD-003). Startup applies when a deployment starts or attaches; selecting a profile never rewrites a running server.
+**Managed inference** — the application owns the pinned runtime and server process. **Connected endpoint** — an external server the application never starts, stops or kills. **Health ≠ ownership** — a healthy endpoint does not prove process ownership.
 
-**Selected ≠ loaded ≠ applied** — a chosen name or id (selected) is not the resident process or content (loaded) and not what reached the request (applied). Only the live process or the outbound request proves the last two ([effective setup](../specs/architecture.md#effective-setup)).
+**Model bundle** — the manifest of quantisation, shards, companions, source revision, hashes and local paths. **Run profile** — saved startup, per-request and agent settings. **Running deployment** — a managed process or connected endpoint; a profile is not a deployment ([models](../specs/modules/models.md)).
 
-**Unverified ≠ incompatible** — a model without a compatibility record is usable and unverified, not known-incompatible. **Health ≠ ownership** — a healthy endpoint is not proof the workbench owns the process; process identity is.
+**Startup / per-request / agent bags** — settings groups with separate application points. **Selected ≠ loaded ≠ applied** — a chosen reference, resident content and values actually sent are different facts ([effective setup](../specs/architecture.md#effective-setup)). **Unverified ≠ incompatible** — missing evidence is not known incompatibility.
 
-**Embedded harness** — the backend API that runs one Deep Agents task (AGT-001). **Agent-run panel** — a debug view onto that API; it is not Chat.
+**Conversation / execution thread / run** — the Chat record, LangGraph thread and one harness invocation. **Continue** reuses conversation and thread with a new run; **Fresh** creates both anew without erasing project files or durable knowledge. Displayed history is not execution context ([STATE-002](../specs/modules/state-recovery.md#state-002)).
 
-**Chat** — the first-class conversation surface. Today it is *debug-quality Chat*: it works but is not polished. Chat works with or without a project folder.
+**`cancel_requested` / `cancelled`** — requested stop versus confirmed stop. **Unknown-effect safety** — an unacknowledged external effect is never silently repeated after recovery ([STATE-004](../specs/modules/state-recovery.md#state-004)).
 
-**Conversation / execution thread / run** — the Chat record, the LangGraph `thread_id` the harness resumes, and one harness invocation. **Continue** = same conversation + same thread + new run. **Fresh** = new conversation + new thread; project files and durable knowledge stay. **Displayed history ≠ execution thread** — the transcript is presentation; editing it changes no file, no thread and no next request.
+**Application directory snapshot** — a quiescent copy of allowlisted project files; neither a git commit nor rollback of external actions ([STATE-003](../specs/modules/state-recovery.md#state-003)).
 
-**`cancel_requested` / `cancelled`** — a cancel request leaves the run live until the worker confirms the stop. Never treat `cancel_requested` as idle.
-
-**Unknown-effect safety** — after a crash or restart an unacknowledged external effect is reported unknown and never silently repeated. Snapshots make no rollback promise for external actions.
-
-**Application directory snapshot** — an application-owned copy of allowlisted project files at a quiescent boundary under `cases\` and `snapshots\`. Not a git commit.
-
-**Durable knowledge** — versioned user, agent and project memories, skills and protected instructions under `knowledge\` (STATE-005). **Protected instruction** — a knowledge kind that rejects agent-origin writes; loaded through `system_prompt=`, not Deep Agents `memory=`. **Knowledge conflict** — the explicit failure when `base_version` does not match. **Memory write-through** — a live-tool official `edit_file` / `write_file` on `/memories/**` becomes a new STATE-005 memory version that Knowledge lists; scratch is not the durable copy. **Retrieval / RAG** — query-time search over a derived LangChain index (STATE-006); not the durable store and not training. Requested only by selecting a loaded dedicated embedding deployment (`embedding: on`; chat GGUFs are not embedders). A GGUF file on disk is not that deployment. Deep Agents `memory=` / `skills=` are always-load / progressive disclosure of selected STATE-005 versions (derived `/memories/` and `/skills/` files on the harness composite), not retrieval and not a second store. Remainder under [OQ-006](../specs/open-questions.md#oq-006).
+**Durable knowledge** — versioned memories, skills and protected instructions. **Memory write-through** — harness memory edits becoming durable versions under the same owner. **Retrieval / RAG** — query-time search over a derived index, not a second store or training ([STATE-005/006](../specs/modules/state-recovery.md#state-005)).
 
 <a id="model-lab"></a>
-**Model Lab** — hardware-local model trait and capability testing on David's machine, presented as data and charts to understand model behaviour. It never writes back into profiles and has no apply button. Separate delivery from Task cases.
+**Model Lab** — hardware-local trait and capability testing with measurements, outputs and failures. It does not automatically modify profiles ([LAB-005/006](../specs/modules/lab-evaluation.md#lab-005)).
 
 <a id="task-cases-and-replay"></a>
-**Task cases and replay** — save a real run as a case, restore its starting inputs, rerun with **recorded-tool** (fixture replay; no live project, host-shell, or retrieval index) or **live-tool** mode, compare evidence. **Trait catalogue** — the growing list of Model Lab questions; not a task-case library.
+**Task cases and replay** — restore starting inputs and compare **recorded-tool** fixture replay with **live-tool** execution. Recorded replay dispatches no live tools and is not live proof. **Trait catalogue** — Model Lab questions, distinct from task cases ([Lab contracts](../specs/modules/lab-evaluation.md)).
 
-**Builder** — the visual workflow editor. Not shipped; v1 chrome is recorded in ADR-0003. The visual graph is never executable authority.
+**Workers** — declared execution environments. **MCP server** — optional extra tools, not a worker or isolation. **MCP Apps** — interactive panels, distinct from ordinary MCP connectivity ([environments and tools](../specs/modules/environments-tools.md)).
 
-**Workers** — declared environments for shell, browser and graphical execution. The first is the **Windows host shell with approvals**; WSL and Docker come later. A working directory is not a security boundary; MCP is not isolation.
-
-**MCP server** — an optional extra tool source registered by the application and adapted through official LangChain `MCPAdapter`. Not the default tool bus and not a worker. First product servers: **browser** (Playwright MCP) and **github** (official GitHub remote MCP). Adding another server is a new record on the same path ([ENV-007](../specs/modules/environments-tools.md#env-007)). **MCP Apps** are interactive panels ([ENV-005](../specs/modules/environments-tools.md#env-005)), not ordinary MCP connectivity.
-
-**`X-Workbench-Local-Token`** — the desktop↔backend header. Electron main injects it; the renderer never holds the secret at `state\desktop_backend_shared_secret`. CORS is not authorisation.
-
-**Product data** — `%LOCALAPPDATA%\LocalAIWorkbench\` (Linux `~/.local/share/LocalAIWorkbench/`): models, runtimes, state, cases, snapshots, workspaces, knowledge, logs, `application.sqlite`, `checkpoints.sqlite`. Never the repository, never `.scratch/`.
+**`X-Workbench-Local-Token`** — the desktop-to-backend secret header injected by Electron main; the renderer never holds it. **Product data** — durable application files and databases outside the repository ([architecture](../specs/architecture.md#persistence)).
 
 ## Verification
 
-**David-PC** — David's Windows machine with an NVIDIA 3090: the only place managed CUDA inference and capability UAT can run. **Cloud or CI** proves plumbing, not capability.
+**David-PC** — David's Windows machine, used for managed CUDA and capability UAT. CI and tiny-model smoke prove scoped plumbing, not general model capability ([verification](../specs/verification.md)).
 
 <a id="preferred-capability-uat-model"></a>
-**Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS)** — Hugging Face `unsloth/Qwen3.8-27B-GGUF`, file `Qwen3.8-27B-UD-IQ4_XS.gguf` (~14.3 GB), downloaded once with `huggingface_hub` at a pinned revision under `models\` and registered as a Model bundle; the official mmproj from the same repository goes in the same bundle for vision. Reuse it by path; never copy weights into scratch or commit them. Tiny (~0.5B) models are for smoke and process tests only, never for reply, tool-calling or capability acceptance.
+**Preferred capability UAT model (Qwen3.8-27B UD-IQ4_XS)** — `unsloth/Qwen3.8-27B-GGUF`, `Qwen3.8-27B-UD-IQ4_XS.gguf`, with the same repository's projector for vision and a pinned revision in its bundle. Reuse installed weights by path. Tiny models are for smoke/process tests, not reply or capability acceptance.
 
-**`planned` / `built` / `verified`** — specified only; unit-tested code exists; seen working live at a recorded commit through the CI smoke tier or David-PC UAT ([verification](../specs/verification.md)).
+**`planned` / `built` / `verified`** — specified; implemented with automated checks; established by scoped live evidence. Exact rules live in [verification](../specs/verification.md).
 
-**Scratch workspace** — `.scratch/` at the repository root, gitignored, with `.scratch/uat/` for UAT workroots and `.scratch/logs/` for captures. Never create `uat-workroot*` or temp files elsewhere.
+**Scratch workspace** — gitignored root `.scratch/` for disposable development and UAT data; working rules live in [AGENTS.md](../AGENTS.md).
 
 <a id="issue-tracking"></a>
 ## Issue tracking
 
-**Project Status** — agent pipeline state only (Backlog, Ready, In progress, Review, UAT, Done). **Milestone** — the plain-English delivery an issue belongs to (feature Milestones #3–#12); no due dates, sprints or velocity. **Tracking issue** — a checklist that stays open until the whole proof is done. **Ship when AC met** — merge when acceptance criteria are met and the tip is shippable; each acknowledged leftover becomes a focused follow-up issue noted `Deferred: #N`. Out-of-scope discoveries become a follow-up issue, not scope creep in the current PR.
+**Project Status** — delivery state such as Backlog, In progress or Done. **Milestone** — the feature an issue belongs to. These organise work; they do not establish implementation or verification status.
