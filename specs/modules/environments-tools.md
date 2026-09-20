@@ -76,7 +76,7 @@ Discover and invoke tools from application-registered MCP servers through offici
 
 ## Status and evidence
 
-Rows ENV-001…007 in [the catalogue](../catalog.json). ENV-001 and ENV-002 are `built` for the host-shell path (Chat and Agent-run). David-PC UAT on 2026-09-19 covered Chat HTTP approve, deny, and `shell_requires_project` at `8887f9f` ([evidence](../evidence/2026-09-19-david-pc-host-shell.md)); not `verified` — acceptance still lacks other invocation paths, Electron, and the durable Approvals inbox ([OQ-011](../open-questions.md#oq-011)). ENV-003…006 are unstarted. ENV-007 is specified (`planned`); no code, no tests, no evidence. WSL/Docker are out of scope.
+Status is owned by rows ENV-001...007 in [the catalogue](../catalog.json).
 
 ## Open questions
 

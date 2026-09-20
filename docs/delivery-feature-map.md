@@ -4,15 +4,13 @@ The plan for delivering Local AI Workbench, feature by feature, in the order Dav
 
 ## Next path
 
-Decided 2026-09-19: return to the Revision 0.5 build order and prove managed inference before more features.
+Keep the usable Chat journey ahead of roadmap expansion. Current acceptance contracts and requirement status live in [the spec index](../specs/README.md) and [catalogue](../specs/catalog.json); completed PR history belongs in Git, not another status log.
 
-1. **Managed inference proof on David-PC** — done on 2026-09-19 for pin → download → start → health → Chat turn → continuity → stop with the preferred capability UAT model ([evidence](../specs/evidence/2026-09-19-david-pc-managed-inference.md)); the runtime flag and `mmproj` fixes landed in PR #81. Remaining for the first `verified` rows: the clauses each acceptance line still lacks (companion files, an unsupported value, the connected half of MOD-004, project-less Chat) and the official mmproj for vision.
-2. **Real-model CI smoke tier** — landed in PR #82; runs on pull requests that touch the backend (path-filtered), on `main` pushes that do the same, and on `workflow_dispatch`. Remaining: make `real-model-smoke` a required check (maintainer action) and start recording its runs as `ci-smoke` evidence rows.
-3. **Project storage hardening and streaming** — landed in PRs #85, #86 and #87: harness scratch stays out of the project ([DEV-004](../specs/deviations.md#dev-004)); Chat works without a project folder ([DEV-003](../specs/deviations.md#dev-003)); run events stream over SSE instead of 750 ms polling ([DEV-005](../specs/deviations.md#dev-005)); managed `llama-server` logs are captured under the product `logs\` directory. Remaining: fix the profile `system_prompt` override.
-4. **First worker environment** — landed in PR #89. David-PC UAT on 2026-09-19 proved Chat HTTP approve, deny, and no-project `shell_requires_project` at `8887f9f` ([evidence](../specs/evidence/2026-09-19-david-pc-host-shell.md)). Catalogue rows stay `built`. Remaining: Electron Approve/Deny, cancel-while-interrupted on this machine, the durable Approvals inbox ([OQ-011](../specs/open-questions.md#oq-011)), later environments under [OQ-003](../specs/open-questions.md#oq-003).
-5. **Retrieval v1** — landed in PR #92. David-PC UAT on 2026-09-20 proved Chat HTTP fail-closed without a loaded embedder and a live `search_knowledge` that wrote harness `/retrieved/` (not the project) at `7db7f45` ([evidence](../specs/evidence/2026-09-20-david-pc-retrieval.md)). Catalogue STATE-006 stays `built`. Remaining: recorded-tool replay, remaining fail-closed codes, Electron selectors, [OQ-006](../specs/open-questions.md#oq-006) remainder (durable shared index, restore capture gaps). Memory write-through is specified (not built).
-6. **MCP expansion framework** — specified 2026-09-20 ([ENV-007](../specs/modules/environments-tools.md#env-007) `planned`). Official `langchain.mcp.MCPAdapter`; first product servers browser (Playwright MCP) and GitHub. Not implemented. Not a second tool bus; host-shell stays the first worker. Implementation after Chat / memory-skills UAT, not instead of it.
-7. **Model Lab runners** (llama-bench and a tool-calling probe) on David-PC, then **Builder**.
+1. Keep local launch, managed model start, project file tasks, conversation continuation, cancellation and reopening working. Re-run live checks when their implementation changes; use [commands](../specs/commands.md) for the normal local loop.
+2. Migrate existing JSON metadata only after the inventory, backup, interrupted-import and rollback checks in [OQ-017](../specs/open-questions.md#oq-017). The storage choice is settled; migration is unfinished.
+3. Complete the already specified memory write-through so edits persist as Knowledge versions ([OQ-006](../specs/open-questions.md#oq-006)). Then resume optional MCP and Lab work; Builder remains later.
+
+The harness lifecycle stays together until a concrete change justifies extracting a responsibility. Its existing setup, middleware, retrieval and filesystem adapters are the extension points; do not split it just to reduce line count.
 
 ## Features
 

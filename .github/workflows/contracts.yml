@@ -1,8 +1,6 @@
 # Generated-contract freshness gate (CTT-001). Linux-only: generation is
 # OS-independent. Required as shared-contract-freshness (ubuntu-latest).
-# shared-contract-freshness (windows-latest) is a retired-name shim so
-# classic branch protection does not deadlock until that required check
-# is removed. Not catalogue verified evidence. Not Issue #36 advisory-only.
+# Not catalogue verified evidence. Not Issue #36 advisory-only.
 name: Shared-contract freshness
 
 on:
@@ -87,13 +85,3 @@ jobs:
         if: needs.changes.outputs.run == 'true'
         working-directory: apps/backend
         run: uv run python ../../scripts/generate_shared_contracts.py --check
-
-  shared-contract-freshness-windows-retired:
-    name: shared-contract-freshness (windows-latest)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Retired OS-duplicate
-        run: |
-          echo "shared-contract-freshness is Linux-only. This check name is a branch-protection shim."
-          echo "Maintainer: remove shared-contract-freshness (windows-latest) from required checks on main."

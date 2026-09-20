@@ -78,7 +78,7 @@ One privileged SSE endpoint publishes application run events for an agent run or
 
 ## Status and evidence
 
-Rows API-001…006 in [the catalogue](../catalog.json). The 401/403 trust behaviour was seen live on Linux ([evidence](../evidence/2026-09-19-linux-live-smoke.md)) and on David-PC ([evidence](../evidence/2026-09-19-david-pc-managed-inference.md)); the Electron window itself has not been exercised on David-PC. SSE run events and the product Chat/Models/Knowledge surfaces are `built`, not `verified`.
+Status is owned by rows API-001...006 in [the catalogue](../catalog.json).
 
 ## Open questions
 

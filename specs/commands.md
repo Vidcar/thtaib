@@ -67,4 +67,4 @@ desktop-typecheck-build (windows-latest)
 real-model-smoke (ubuntu-latest)
 ```
 
-`spec-integrity (windows-latest)` and `shared-contract-freshness (windows-latest)` are retired OS-duplicates. Workflows still emit those names as cheap shims until the maintainer removes them from classic branch protection (agents cannot edit that setting). Adding `real-model-smoke (ubuntu-latest)` to the required set is also a maintainer action. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).
+`spec-integrity (windows-latest)` and `shared-contract-freshness (windows-latest)` are retired OS-duplicates; their shims were removed after live inspection confirmed neither is required on `main` (2026-09-20). No branch-protection setting changed. The five workflows retain distinct coverage and path filters; combining them would not reduce the actual checks. Adding a required check is a separate repository-policy change. Green CI is merge enforcement, not `verified` evidence ([verification](verification.md)).

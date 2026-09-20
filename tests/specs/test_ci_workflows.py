@@ -42,12 +42,14 @@ class CiWorkflowPolicyTests(unittest.TestCase):
     def test_spec_integrity_is_linux_only(self) -> None:
         text = self.read("specs.yml")
         self.assertIn("name: spec-integrity (ubuntu-latest)", text)
+        self.assertNotIn("spec-integrity (windows-latest)", text)
         self.assertNotIn("os: [ubuntu-latest, windows-latest]", text)
         self.assertNotIn("runs-on: windows-latest", text)
 
     def test_shared_contract_freshness_is_linux_only(self) -> None:
         text = self.read("contracts.yml")
         self.assertIn("name: shared-contract-freshness (ubuntu-latest)", text)
+        self.assertNotIn("shared-contract-freshness (windows-latest)", text)
         self.assertNotIn("os: [ubuntu-latest, windows-latest]", text)
         self.assertNotIn("runs-on: windows-latest", text)
 
