@@ -107,6 +107,7 @@ def resolve_effective_setup(
     retrieval_corpus_documents: int = 0,
     retrieval_instructions: str | None = None,
     materialized_knowledge: list[MaterializedKnowledgeFact] | None = None,
+    inherit_deployment_settings: bool = True,
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
@@ -124,14 +125,17 @@ def resolve_effective_setup(
             status_code=404,
             details={"missing_version_ids": missing},
         )
-    per_request = _resolve_per_request(profile, deployment, per_request_overrides)
-    agent = _resolve_agent(profile)
-    startup_selected = _resolve_startup(profile)
+    # A saved setup is a snapshot. Only an explicitly selected profile resolves
+    # its current values; opting out clears both response and agent preset bags.
+    inherited = profile is None and inherit_deployment_settings
+    per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
+    agent = deployment.settings.agent if inherited else _resolve_agent(profile)
+    startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
     loaded = [_loaded_fact(version) for version in knowledge_versions]
     system_prompt = compose_system_prompt(
         surface_system_prompt=surface_system_prompt,
-        profile_system_prompt=_profile_system_prompt(profile),
+        profile_system_prompt=(agent.applied.get("system_prompt") if isinstance(agent.applied.get("system_prompt"), str) else None),
         default_system_prompt=default_system_prompt,
         versions=knowledge_versions,
         retrieval_instructions=retrieval_instructions,
@@ -155,7 +159,7 @@ def resolve_effective_setup(
         agent=agent,
     )
     return EffectiveSetup(
-        selected_profile_id=profile.id if profile is not None else None,
+        selected_profile_id=profile.id if profile is not None else deployment.profile_id if inherited else None,
         selected_deployment_id=deployment.id,
         selected_embedding_deployment_id=(
             selected_embedding_deployment_id
@@ -261,11 +265,14 @@ def _resolve_per_request(
     profile: RunProfile | None,
     deployment: Deployment,
     overrides: dict[str, Any] | None,
+    inherit_deployment_settings: bool = True,
 ) -> SettingsBag:
     if profile is not None:
         requested = dict(profile.bags.per_request.requested)
         requested.update(overrides or {})
         return resolve_bag(requested, PER_REQUEST_KEYS)
+    if not inherit_deployment_settings:
+        return resolve_bag(dict(overrides or {}), PER_REQUEST_KEYS)
     requested = dict(deployment.settings.per_request.requested)
     requested.update(overrides or {})
     if requested:

@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +23,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.process import (
     PROCESS_IDENTITY_MISMATCH,
     PROCESS_IDENTITY_UNPROVEN,
+    PROCESS_STOP_FAILED,
     ProcessInspector,
     ProcessSupervisor,
     wait_for_owned_health,
@@ -50,11 +52,14 @@ class ScriptedInspector(ProcessInspector):
     """In-memory identity map. Does not inspect or kill the host process table."""
 
     def __init__(self) -> None:
-        self.by_pid: dict[int, ProcessIdentity | None] = {}
+        self.by_pid: dict[int, ProcessIdentity | None | BaseException] = {}
         self.ports: dict[int, list[int] | None] = {}
 
     def identity_of(self, pid: int) -> ProcessIdentity | None:
-        return self.by_pid.get(int(pid))
+        value = self.by_pid.get(int(pid))
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
     def listen_ports(self, pid: int) -> list[int] | None:
         return self.ports.get(int(pid))
@@ -408,6 +413,147 @@ class ProcessIdentityFixtureTests(unittest.TestCase):
             supervisor.stop(owned)
         self.assertEqual(caught.exception.code, PROCESS_IDENTITY_MISMATCH)
         self.assertEqual(self.terminations, [])
+
+    def test_supervisor_stop_reports_still_running_after_terminate_and_kill(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424249, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424249] = owned
+        supervisor = ProcessSupervisor(inspector=inspector)
+        attempts: list[tuple[int, bool]] = []
+
+        def no_effect_stop(pid: int, *, timeout: float, force: bool = False) -> None:
+            attempts.append((int(pid), force))
+
+        supervisor._stop_process_tree = no_effect_stop  # type: ignore[method-assign]
+        with self.assertRaises(ManagerError) as caught:
+            supervisor.stop(owned, timeout=0.0)
+        self.assertEqual(caught.exception.code, PROCESS_STOP_FAILED)
+        self.assertEqual(attempts, [(owned.pid, False), (owned.pid, True)])
+
+    def test_wait_until_gone_fails_when_pid_survives_budget(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424251, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424251] = owned
+        supervisor = ProcessSupervisor(inspector=inspector)
+        with self.assertRaises(ManagerError) as caught:
+            supervisor.wait_until_gone(owned.pid, timeout=0.0)
+        self.assertEqual(caught.exception.code, PROCESS_STOP_FAILED)
+
+    def test_identity_becoming_unverifiable_after_stop_is_not_success(self):
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424259, create_time=1.0, executable='/owned/llama')
+        inspector.by_pid[owned.pid] = owned
+        supervisor = ProcessSupervisor(inspector=inspector)
+        def terminate(pid, **kwargs):
+            inspector.by_pid[pid] = PermissionError('inspection denied after termination')
+            return []
+        with patch.object(supervisor, '_stop_process_tree', side_effect=terminate) as stop:
+            with self.assertRaises(ManagerError) as caught:
+                supervisor.stop(owned, timeout=0)
+            self.assertEqual(caught.exception.code, PROCESS_IDENTITY_UNPROVEN)
+            self.assertEqual(stop.call_count, 1)
+
+    def test_failed_start_cleanup_retains_even_not_yet_recorded_identity(self):
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424260, create_time=1.0, executable='/owned/llama')
+        service = self._service(inspector=inspector)
+        self._record(service, identity=None, pid=None, status=DeploymentStatus.starting)
+        starting = service.store.get_deployment('deploy_fixture')
+        with patch.object(service.processes, 'stop', side_effect=ManagerError('exit unconfirmed', code=PROCESS_STOP_FAILED)):
+            service._fail_unowned(starting, error='start failed', identity=owned)
+        stored = service.store.get_deployment('deploy_fixture')
+        self.assertEqual(stored.process_identity, owned)
+        self.assertEqual(stored.pid, owned.pid)
+        self.assertEqual(stored.status, DeploymentStatus.failed)
+        self.assertEqual([d.id for d in service.live_owned()], ['deploy_fixture'])
+
+    def test_supervisor_stop_unproven_identity_fails_without_tree_kill(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424252, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424252] = PermissionError("cannot inspect")
+        supervisor = ProcessSupervisor(inspector=inspector)
+        supervisor._stop_process_tree = (  # type: ignore[method-assign]
+            lambda *args, **kwargs: self.terminations.append(args[0] if args else -1)
+        )
+        with self.assertRaises(ManagerError) as caught:
+            supervisor.stop(owned)
+        self.assertEqual(caught.exception.code, PROCESS_IDENTITY_UNPROVEN)
+        self.assertEqual(self.terminations, [])
+
+    def test_supervisor_stop_fails_when_parent_exited_but_tree_survives(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424253, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424253] = owned
+        supervisor = ProcessSupervisor(inspector=inspector)
+        supervisor._children[owned.pid] = _ExitedChild()  # type: ignore[assignment]
+        def stop_tree(pid, *, timeout, force=False):
+            inspector.by_pid[pid] = None
+            return [42424999]
+        supervisor._stop_process_tree = stop_tree  # type: ignore[method-assign]
+        with self.assertRaises(ManagerError) as caught:
+            supervisor.stop(owned, timeout=0.0)
+        self.assertEqual(caught.exception.code, PROCESS_STOP_FAILED)
+
+    def test_stop_failure_retains_owned_identity_for_later_action(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424250, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424250] = owned
+        service = self._service(inspector=inspector)
+        service.processes._stop_process_tree = lambda *args, **kwargs: None  # type: ignore[method-assign]
+        self._record(service, identity=owned, pid=owned.pid)
+        with self.assertRaises(ManagerError) as caught:
+            service.stop("deploy_fixture")
+        self.assertEqual(caught.exception.code, PROCESS_STOP_FAILED)
+        stored = service.store.get_deployment("deploy_fixture")
+        assert stored is not None
+        self.assertEqual(stored.pid, owned.pid)
+        self.assertEqual(stored.process_identity, owned)
+        self.assertEqual(stored.status, DeploymentStatus.failed)
+        self.assertIn("still running", stored.error or "")
+
+    def test_failed_deployment_with_retained_pid_blocks_restart_and_live_owned(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424254, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424254] = PermissionError("cannot inspect")
+        service = self._service(inspector=inspector)
+        self._record(service, identity=owned, pid=owned.pid, status=DeploymentStatus.failed)
+        with self.assertRaises(ManagerError) as caught:
+            service.start("deploy_fixture")
+        self.assertEqual(caught.exception.code, "deployment_lifecycle_blocked")
+        self.assertEqual([item.id for item in service.live_owned()], ["deploy_fixture"])
+
+    def test_reconcile_unproven_running_identity_retains_failed_blocker(self) -> None:
+        inspector = ScriptedInspector()
+        owned = ProcessIdentity(pid=42424255, create_time=1.0, executable="/owned/llama")
+        inspector.by_pid[42424255] = PermissionError("cannot inspect")
+        service = self._service(inspector=inspector)
+        self._record(service, identity=owned, pid=owned.pid)
+        reconciled = service.reconcile()
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(reconciled[0].status, DeploymentStatus.failed)
+        self.assertEqual(reconciled[0].pid, owned.pid)
+        self.assertEqual(reconciled[0].process_identity, owned)
+        self.assertIn("could not be verified", reconciled[0].error or "")
+
+    def test_reconcile_starting_without_identity_fails_actionably_without_kill(self) -> None:
+        inspector = ScriptedInspector()
+        service = self._service(inspector=inspector)
+        self._record(
+            service,
+            identity=None,
+            pid=None,
+            status=DeploymentStatus.starting,
+        )
+        restarted = DeploymentService(service.store, service.runtime, processes=service.processes, probe=service.probe)
+        recovered = restarted.store.get_deployment('deploy_fixture')
+        self.assertEqual(recovered.status, DeploymentStatus.failed)
+        reconciled = restarted.reconcile()
+        self.assertEqual(self.terminations, [])
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(reconciled[0].status, DeploymentStatus.failed)
+        self.assertIsNone(reconciled[0].pid)
+        self.assertIsNone(reconciled[0].process_identity)
+        self.assertIn("without process identity", reconciled[0].error or "")
 
 
 class RuntimeOwnedLiveTests(unittest.TestCase):

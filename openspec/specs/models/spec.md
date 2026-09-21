@@ -42,6 +42,18 @@ Requested, selected, transmitted, loaded, applied, overridden, unsupported and u
 - **WHEN** a bound profile targets another bundle or an active profile is edited
 - **THEN** the mismatched launch is rejected, and the active deployment keeps its original launch snapshot.
 
+#### Scenario: Inherited values and explicit startup changes
+
+- **WHEN** a preset is selected without editing its populated controls
+- **THEN** the desktop sends its identity without turning inherited values into overrides; later preset edits remain detectable against the frozen launch snapshot.
+- **AND** deliberately selecting automatic/default behavior clears that inherited key explicitly instead of silently restoring the preset value.
+
+#### Scenario: Saved setup selected in Chat
+
+- **WHEN** Chat selects a saved deployment without a separate preset override
+- **THEN** its saved response and agent bags, including composed instructions, are inherited together with recorded profile identity.
+- **AND** selecting another preset uses that preset's current settings, while an explicit no-preset choice omits both saved response settings and instructions; none of these choices rewrites the launch snapshot.
+
 ### Requirement: MOD-004 - Track real deployments
 
 A deployment SHALL identify its live managed process or connected endpoint, ownership, URL, immutable startup configuration, health, available server properties and resource observations. The model manager SHALL own managed start, stop and reconciliation. An authorised request for a selected installed model SHALL load it on demand with visible waiting/loading/readiness and no silent model, quantisation, device or settings substitution. Unload SHALL confirm owned process exit while retaining weights, profiles and the configuration needed to restart. Readiness and actual generation success SHALL be separate observations.
@@ -57,6 +69,26 @@ Saved profiles alone MUST NOT be treated as running deployments. Connected endpo
 
 - **WHEN** an authorised turn selects an installed inactive managed model
 - **THEN** the same selected setup loads, real generation is separately verified, and a later safe unload retains the installation without inventing freed-memory measurements.
+
+#### Scenario: Exit cannot be confirmed
+
+- **WHEN** termination, kill, or failed-start cleanup cannot confirm exit
+- **THEN** the operation reports failure, retains process identity and blocks destructive lifecycle operations until exit or loss of ownership is established.
+
+#### Scenario: Interrupted start without recorded identity
+
+- **WHEN** startup recovery finds a starting deployment with neither PID nor identity
+- **THEN** it exposes an actionable interrupted-start failure with saved configuration retained, without killing an unknown process or leaving indefinite loading.
+
+#### Scenario: Disconnect during health observation
+
+- **WHEN** an endpoint is disconnected while a health observation is in progress
+- **THEN** the observation and disconnect are serialized so the old response cannot recreate the deleted connection.
+
+#### Scenario: Repeated turn on a ready model
+
+- **WHEN** another turn selects an unchanged ready managed deployment
+- **THEN** readiness does not rescan the entire weight files; full integrity verification remains required at installation, repair and launch boundaries.
 
 ### Requirement: MOD-005 - Keep the model adapter narrow and faithful
 

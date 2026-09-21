@@ -355,6 +355,12 @@ class ModelManager:
             if not deployment.endpoint:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
             return deployment
+        if (
+            deployment.status == DeploymentStatus.running
+            and deployment.endpoint
+            and (deployment.health is None or deployment.health.healthy)
+        ):
+            return self._wait_deployment_ready(deployment.id, first=deployment)
         if deployment.bundle_id:
             self._require_deployable_bundle(deployment.bundle_id)
         if deployment.status in {DeploymentStatus.stopped, DeploymentStatus.failed} or not deployment.endpoint:
@@ -452,7 +458,11 @@ class ModelManager:
         frozen = deployment.profile_snapshot or deployment.settings
         current_profile_startup = dict(profile.bags.startup.requested)
         pending_requested_startup = dict(current_profile_startup)
-        pending_requested_startup.update(deployment.startup_overrides)
+        for key, value in deployment.startup_overrides.items():
+            if value is None:
+                pending_requested_startup.pop(key, None)
+            else:
+                pending_requested_startup[key] = value
         current = resolve_bags(
             startup=pending_requested_startup,
             per_request=profile.bags.per_request.requested,
@@ -564,7 +574,7 @@ class ModelManager:
                 DeploymentStatus.starting,
                 DeploymentStatus.running,
                 DeploymentStatus.unhealthy,
-            }
+            } or (deployment.status == DeploymentStatus.failed and (deployment.pid is not None or deployment.process_identity is not None))
             consumers.append(
                 LifecycleConsumer(
                     kind="deployment",
@@ -597,7 +607,7 @@ class ModelManager:
                     DeploymentStatus.starting,
                     DeploymentStatus.running,
                     DeploymentStatus.unhealthy,
-                }
+                } or (deployment.status == DeploymentStatus.failed and (deployment.pid is not None or deployment.process_identity is not None))
                 consumers.append(
                     LifecycleConsumer(
                         kind="deployment",
@@ -736,11 +746,17 @@ class ModelManager:
                 removable = True
             unique[file.path] = DeleteFilePlan(
                 path=file.path,
-                size_bytes=file.size_bytes if path.exists() else 0,
+                size_bytes=self._current_file_size(path),
                 removable=removable,
                 reason=reason,
             )
         return list(unique.values())
+
+    def _current_file_size(self, path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
 
     def _path_key(self, path: Path) -> str:
         try:

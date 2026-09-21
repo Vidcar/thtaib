@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+const source = readFileSync(new URL('../src/renderer/deploymentSettings.ts', import.meta.url), 'utf8');
+const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText;
+const { startupPayload } = await import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
+const profile = { ctx_size: 4096, threads: 8, reasoning_effort: 'high' };
+const controls = { ctx_size: '4096', threads: '8', n_gpu_layers: '-1', flash_attn: 'on', embedding: 'off', pooling: 'last' };
+assert.deepEqual(startupPayload(controls, '{"reasoning_effort":"high"}', profile), {}, 'Selecting an untouched preset must send no overrides');
+assert.deepEqual(startupPayload({ ...controls, ctx_size: '8192' }, '{"reasoning_effort":"high"}', profile, new Set(['ctx_size'])), { ctx_size: 8192 });
+assert.deepEqual(startupPayload({ ...controls, ctx_size: '' }, '{}', profile, new Set(['ctx_size'])), { reasoning_effort: null, ctx_size: null });
+assert.equal(startupPayload(controls, '{}').ctx_size, 4096, 'Custom setup still sends its chosen values');
+console.log('Model preset request boundary checks passed.');

@@ -121,7 +121,7 @@ export function ChatPanel() {
     setConversations(newestConversationFirst(nextConversations));
     setKnowledgeEntries(nextKnowledge);
     setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments, current));
-    setProfileId((current) => (nextProfiles.some((profile) => profile.id === current) ? current : ""));
+    setProfileId((current) => (current === "!none" || nextProfiles.some((profile) => profile.id === current) ? current : ""));
     setLoadError("");
   }
 
@@ -216,7 +216,8 @@ export function ChatPanel() {
         conversation ??
         (await api.createChatConversation({
           deployment_id: deploymentId,
-          profile_id: profileId || undefined,
+          profile_id: profileId && profileId !== "!none" ? profileId : undefined,
+          inherit_deployment_settings: profileId !== "!none",
           project_path: projectPath || undefined,
           embedding_deployment_id: embeddingDeploymentId || undefined,
           ...refs,
@@ -225,7 +226,8 @@ export function ChatPanel() {
       const next = await api.startChat(created.id, {
         task: text,
         deployment_id: deploymentId,
-        profile_id: profileId || null,
+        profile_id: profileId && profileId !== "!none" ? profileId : null,
+        inherit_deployment_settings: profileId !== "!none",
         project_path: projectPath.trim() || null,
         embedding_deployment_id: embeddingDeploymentId || null,
         ...refs,
@@ -279,7 +281,7 @@ export function ChatPanel() {
                         rememberConversation(next);
                         setDeploymentId(next.deployment_id);
                         setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
-                        setProfileId(next.profile_id ?? "");
+                        setProfileId(next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
                         setProjectPath(next.project_path ?? "");
                         setSelectedKnowledgeIds([
                           ...(next.memory_version_refs ?? []),
@@ -318,7 +320,8 @@ export function ChatPanel() {
             <label>
               Preset
               <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
-                <option value="">None</option>
+                <option value="">Use saved setup settings</option>
+                <option value="!none">No preset — ignore saved response settings and instructions</option>
                 {profiles.map((profile) => (
                   <option key={profile.id} value={profile.id}>
                     {profile.display_name}
@@ -415,8 +418,8 @@ export function ChatPanel() {
 
         <div className="transcript" aria-live="polite">
           {deployments.length === 0 && !conversation ? (
-            <EmptyState title="No running model">
-              Open Models and start or connect a model. Chat needs a running model before it can reply.
+            <EmptyState title="Choose a model setup">
+              Open Models and save a setup for Chat, start a model, or connect a server. A saved local setup loads automatically when you send a message.
             </EmptyState>
           ) : !conversation && transcript.length === 0 ? (
             <EmptyState title="Start a conversation">

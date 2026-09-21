@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +23,7 @@ from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
     Deployment,
     DeploymentStatus,
+    HealthReport,
     HuggingFaceImportRequest,
     LocalImportRequest,
     ManagedDeploymentRequest,
@@ -108,6 +110,17 @@ class PropsVariantHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+class BlockingHealthProbe(OfflineProbe):
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def health(self, endpoint: str) -> HealthReport:
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return HealthReport(healthy=True, endpoint=endpoint, checked=utc_now(), detail="blocked")
 
 
 class BrokenPropsEndpointTests(unittest.TestCase):
@@ -348,6 +361,26 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue(changed.has_pending_per_request_changes)
         self.assertTrue(changed.has_pending_agent_changes)
 
+    def test_managed_startup_null_override_clears_profile_value(self) -> None:
+        profile = self.manager.create_profile(
+            ProfileWriteRequest(
+                display_name="clear-startup",
+                bundle_id=self.bundle_id,
+                startup={"ctx_size": 1024, "port": 18119},
+            )
+        )
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                profile_id=profile.id,
+                startup={"ctx_size": None},
+                auto_start=False,
+            )
+        )
+        self.assertNotIn("ctx_size", deployment.requested_startup)
+        self.assertEqual(deployment.startup_overrides["ctx_size"], None)
+        self.assertNotEqual(deployment.applied_startup.get("ctx_size"), 1024)
+
     def test_reload_uses_frozen_launch_config_after_profile_edit(self) -> None:
         profile = self.manager.create_profile(
             ProfileWriteRequest(
@@ -400,7 +433,7 @@ class DeploymentTests(unittest.TestCase):
         self.manager.deployments.probe = OfflineProbe()
         with self.assertRaises(ManagerError) as caught:
             self.manager._wait_deployment_ready(deployment.id, timeout_seconds=0.1)
-        self.assertEqual(caught.exception.code, "deployment_start_timeout")
+        self.assertEqual(caught.exception.code, "deployment_not_ready")
 
     def test_active_run_blocks_stop_and_bundle_delete(self) -> None:
         deployment = self.manager.create_managed(
@@ -652,6 +685,53 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("ctx_size", deployment.applied_startup)
         self.assertNotIn("n_gpu_layers", deployment.applied_startup)
         self.manager.detach_deployment(deployment.id)
+
+    def test_connected_health_cannot_resurrect_detached_deployment(self) -> None:
+        self.manager.deployments.probe = OfflineProbe()
+        deployment = self.manager.attach_connected(
+            ConnectedDeploymentRequest(endpoint="http://127.0.0.1:9")
+        )
+        probe = BlockingHealthProbe()
+        self.manager.deployments.probe = probe
+        errors: list[BaseException] = []
+
+        def refresh_health() -> None:
+            try:
+                self.manager.deployment_health(deployment.id)
+            except BaseException as exc:  # noqa: BLE001 - test captures worker exception
+                errors.append(exc)
+
+        thread = threading.Thread(target=refresh_health)
+        thread.start()
+        detach_lock_requested = threading.Event()
+        original_lock_for = self.manager.deployments._lock_for
+        def observed_lock_for(deployment_id):
+            detach_lock_requested.set()
+            return original_lock_for(deployment_id)
+        def disconnect():
+            try:
+                self.manager.detach_deployment(deployment.id)
+            except BaseException as exc:
+                errors.append(exc)
+        detach_thread = threading.Thread(target=disconnect)
+        try:
+            self.assertTrue(probe.entered.wait(timeout=5))
+            with patch.object(self.manager.deployments, '_lock_for', side_effect=observed_lock_for):
+                detach_thread.start()
+                self.assertTrue(detach_lock_requested.wait(timeout=5))
+                probe.release.set()
+                detach_thread.join(timeout=5)
+        finally:
+            probe.release.set()
+            thread.join(timeout=5)
+            if detach_thread.ident is not None:
+                detach_thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(detach_thread.is_alive())
+        self.assertEqual(errors, [])
+        with self.assertRaises(ManagerError) as caught:
+            self.manager.get_deployment(deployment.id)
+        self.assertEqual(caught.exception.code, "deployment_missing")
 
     def test_windows_pin_writes_manifest_and_rejects_unpinned_start(self) -> None:
         installer = FakeWindowsInstaller()

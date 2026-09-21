@@ -118,6 +118,7 @@ class ChatService:
             id=new_id("chat"),
             deployment_id=request.deployment_id,
             profile_id=profile_id,
+            inherit_deployment_settings=request.inherit_deployment_settings,
             project_path=str(project_path) if project_path is not None else None,
             workspace_id=workspace_id,
             thread_id=new_id("thread"),
@@ -180,6 +181,8 @@ class ChatService:
                 next_conversation.deployment_id = request.deployment_id
             if "profile_id" in fields_set:
                 next_conversation.profile_id = self._bind_profile(request.profile_id)
+            if "inherit_deployment_settings" in fields_set:
+                next_conversation.inherit_deployment_settings = request.inherit_deployment_settings
             if (
                 request.memory_version_refs is not None
                 or request.skill_version_refs is not None
@@ -244,6 +247,7 @@ class ChatService:
                         workspace_id=next_conversation.workspace_id,
                         project_path=next_conversation.project_path,
                         profile_id=next_conversation.profile_id,
+                        inherit_deployment_settings=next_conversation.inherit_deployment_settings,
                         source_surface="chat",
                         thread_id=next_conversation.thread_id,
                         memory_version_refs=next_conversation.memory_version_refs,

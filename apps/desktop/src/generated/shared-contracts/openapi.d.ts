@@ -4,6 +4,92 @@
  */
 
 export interface paths {
+    "/v1/agent-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Runs */
+        get: operations["list_agent_runs_v1_agent_runs_get"];
+        put?: never;
+        /** Start Agent Run */
+        post: operations["start_agent_run_v1_agent_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Run */
+        get: operations["get_agent_run_v1_agent_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Agent Run */
+        post: operations["cancel_agent_run_v1_agent_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-runs/{run_id}/interrupt-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Agent Run Interrupt */
+        post: operations["decide_agent_run_interrupt_v1_agent_runs__run_id__interrupt_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Tools */
+        get: operations["list_agent_tools_v1_agent_tools_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bundles": {
         parameters: {
             query?: never;
@@ -118,6 +204,109 @@ export interface paths {
         put?: never;
         /** Repair Bundle */
         post: operations["repair_bundle_v1_bundles__bundle_id__repair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_v1_chat_conversations_get"];
+        put?: never;
+        /** Create Conversation */
+        post: operations["create_conversation_v1_chat_conversations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Conversation */
+        get: operations["get_conversation_v1_chat_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Conversation */
+        post: operations["cancel_conversation_v1_chat_conversations__conversation_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/interrupt-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Conversation Interrupt */
+        post: operations["decide_conversation_interrupt_v1_chat_conversations__conversation_id__interrupt_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Conversation */
+        post: operations["start_conversation_v1_chat_conversations__conversation_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace Transcript */
+        put: operations["replace_transcript_v1_chat_conversations__conversation_id__transcript_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -322,6 +511,23 @@ export interface paths {
         put?: never;
         /** Stop Deployment */
         post: operations["stop_deployment_v1_deployments__deployment_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream Run Events */
+        get: operations["stream_run_events_v1_events_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -744,6 +950,190 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AgentBudgets
+         * @description Optional user-selected product budgets. Unset by default (AGT-003).
+         */
+        AgentBudgets: {
+            /** Max Steps */
+            max_steps?: number | null;
+            /** Max Tool Calls */
+            max_tool_calls?: number | null;
+        };
+        /** AgentEvent */
+        AgentEvent: {
+            /** At */
+            at: string;
+            /** Detail */
+            detail?: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+        };
+        /** AgentRun */
+        AgentRun: {
+            budgets?: components["schemas"]["AgentBudgets"] | null;
+            /** Checkpoint Ids */
+            checkpoint_ids?: string[];
+            completion?: components["schemas"]["CompletionReport"] | null;
+            /** Created At */
+            created_at: string;
+            criteria?: components["schemas"]["TaskCriteria"];
+            /** Denied Tools */
+            denied_tools?: string[];
+            /** Deployment Id */
+            deployment_id: string;
+            effective_setup?: components["schemas"]["EffectiveSetup"] | null;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /** Enabled Tools */
+            enabled_tools: string[];
+            /** Error */
+            error?: string | null;
+            /** Events */
+            events?: components["schemas"]["AgentEvent"][];
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * Harness
+             * @default deepagents
+             * @constant
+             */
+            harness: "deepagents";
+            host_shell?: components["schemas"]["HostShellFacts"];
+            /** Id */
+            id: string;
+            /**
+             * Knowledge
+             * @default none
+             * @enum {string}
+             */
+            knowledge: "none" | "application_owned";
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /** Model Requests */
+            model_requests?: components["schemas"]["ModelRequestCapture"][];
+            /**
+             * Outer Graph
+             * @default deepagents-compiled-state-graph
+             * @constant
+             */
+            outer_graph: "deepagents-compiled-state-graph";
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            pending_interrupt?: components["schemas"]["PendingInterrupt"] | null;
+            /** Presented Tools */
+            presented_tools: string[];
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Recorded Fixtures */
+            recorded_fixtures?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Recorded Is Not Live Proof
+             * @default false
+             */
+            recorded_is_not_live_proof: boolean;
+            /** Related Files */
+            related_files?: components["schemas"]["RelatedFile"][];
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Retrieved Material */
+            retrieved_material?: string[];
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /**
+             * Source Surface
+             * @default agent-run
+             * @enum {string}
+             */
+            source_surface: "agent-run" | "chat" | "lab";
+            /** Starting Snapshot Id */
+            starting_snapshot_id?: string | null;
+            /** @default queued */
+            status: components["schemas"]["RunLifecycleStatus"];
+            /** Stop Reason */
+            stop_reason?: string | null;
+            /** System Prompt */
+            system_prompt?: string | null;
+            /** Task */
+            task: string;
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Tool Invocations */
+            tool_invocations?: {
+                [key: string]: unknown;
+            }[];
+            /** @default live-tool */
+            tool_mode: components["schemas"]["ToolMode"];
+            /**
+             * Tool Mode Label
+             * @default live-tool
+             */
+            tool_mode_label: string;
+            /** Updated At */
+            updated_at: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** AgentStartRequest */
+        AgentStartRequest: {
+            budgets?: components["schemas"]["AgentBudgets"] | null;
+            criteria?: components["schemas"]["TaskCriteria"] | null;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /**
+             * Inherit Deployment Settings
+             * @default true
+             */
+            inherit_deployment_settings: boolean;
+            /** Knowledge Version Refs */
+            knowledge_version_refs?: string[];
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Presented Tools */
+            presented_tools?: string[] | null;
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Recorded Fixtures */
+            recorded_fixtures?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /**
+             * Source Surface
+             * @default agent-run
+             * @enum {string}
+             */
+            source_surface: "agent-run" | "chat" | "lab";
+            /** System Prompt */
+            system_prompt?: string | null;
+            /** Task */
+            task: string;
+            /** Thread Id */
+            thread_id?: string | null;
+            /** @default live-tool */
+            tool_mode: components["schemas"]["ToolMode"];
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
         /** BundleConfigurationOptions */
         BundleConfigurationOptions: {
             /** Bundle Id */
@@ -796,6 +1186,246 @@ export interface components {
          * @enum {string}
          */
         BundleSourceKind: "huggingface" | "local";
+        /**
+         * ChatContinuity
+         * @description Documented conversation ↔ thread ↔ run linkage (Issue #56).
+         */
+        ChatContinuity: {
+            /** Conversation Id */
+            conversation_id: string;
+            /** Current Run Id */
+            current_run_id?: string | null;
+            /**
+             * Fresh Conversation Effect
+             * @default new_thread_retain_project_and_knowledge
+             * @constant
+             */
+            fresh_conversation_effect: "new_thread_retain_project_and_knowledge";
+            /**
+             * History Edit Effect
+             * @default display_only
+             * @constant
+             */
+            history_edit_effect: "display_only";
+            /**
+             * Model Switch Effect
+             * @default same_thread_new_run
+             * @constant
+             */
+            model_switch_effect: "same_thread_new_run";
+            /**
+             * Note
+             * @default Follow-ups reuse conversation.thread_id on the embedded harness checkpointer. Displayed transcript is not the execution context. History edits do not restore or delete project files and do not rewrite the LangGraph thread. A model/profile change applies to the next run on the same thread. A fresh conversation allocates a new thread; project files and permitted durable knowledge stay.
+             */
+            note: string;
+            /** Run Ids */
+            run_ids?: string[];
+            /** Thread Id */
+            thread_id: string;
+            /**
+             * Transcript Is Harness Context
+             * @default false
+             * @constant
+             */
+            transcript_is_harness_context: false;
+        };
+        /** ChatConversationCreateRequest */
+        ChatConversationCreateRequest: {
+            /** Deployment Id */
+            deployment_id: string;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /**
+             * Inherit Deployment Settings
+             * @default true
+             */
+            inherit_deployment_settings: boolean;
+            /** Knowledge Version Refs */
+            knowledge_version_refs?: string[];
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** ChatConversationView */
+        ChatConversationView: {
+            continuity?: components["schemas"]["ChatContinuity"] | null;
+            /** Created At */
+            created_at: string;
+            current_run?: components["schemas"]["AgentRun"] | null;
+            /** Current Run Id */
+            current_run_id?: string | null;
+            deploy_health?: components["schemas"]["ChatDeployHealth"] | null;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /** Enabled Tools */
+            enabled_tools?: string[];
+            /** Events */
+            events?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Filesystem Tools Available
+             * @default false
+             */
+            filesystem_tools_available: boolean;
+            /**
+             * Harness
+             * @default deepagents
+             * @constant
+             */
+            harness: "deepagents";
+            /**
+             * History Replaced
+             * @default false
+             */
+            history_replaced: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Inherit Deployment Settings
+             * @default true
+             */
+            inherit_deployment_settings: boolean;
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /**
+             * Note
+             * @default Debug-quality Chat. The embedded Deep Agents harness owns model/tool iteration. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; this is not a durable Approvals inbox (OQ-011).
+             */
+            note: string;
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Run Ids */
+            run_ids?: string[];
+            /**
+             * Second Agent Loop
+             * @default false
+             * @constant
+             */
+            second_agent_loop: false;
+            /**
+             * Shell Tools Available
+             * @default false
+             */
+            shell_tools_available: boolean;
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /**
+             * Source Surface
+             * @default chat
+             * @constant
+             */
+            source_surface: "chat";
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Transcript */
+            transcript?: components["schemas"]["ChatMessage"][];
+            /** Updated At */
+            updated_at: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /**
+         * ChatDeployHealth
+         * @description Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces.
+         */
+        ChatDeployHealth: {
+            /** Code */
+            code?: ("deploy_unhealthy" | "deploy_unreachable" | "deploy_missing") | null;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Deployment Status */
+            deployment_status: string;
+            /** Detail */
+            detail?: string | null;
+            /** Healthy */
+            healthy?: boolean | null;
+            /** Message */
+            message?: string | null;
+            /**
+             * Note
+             * @default Live Chat completion requires a healthy managed/connected llama.cpp. Harness model_requests and thread reuse prove continuity only — not live assistant completion. David-PC UAT must check deploy health before treating a reply as live proof.
+             */
+            note: string;
+        };
+        /** ChatMessage */
+        ChatMessage: {
+            /** At */
+            at: string;
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant" | "system";
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /** ChatStartRequest */
+        ChatStartRequest: {
+            /** Deployment Id */
+            deployment_id?: string | null;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /**
+             * Inherit Deployment Settings
+             * @default true
+             */
+            inherit_deployment_settings: boolean;
+            /** Knowledge Version Refs */
+            knowledge_version_refs?: string[] | null;
+            /** Memory Version Refs */
+            memory_version_refs?: string[] | null;
+            /** Presented Tools */
+            presented_tools?: string[] | null;
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[] | null;
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[] | null;
+            /** Skill Version Refs */
+            skill_version_refs?: string[] | null;
+            /** Task */
+            task: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** ChatTranscriptReplaceRequest */
+        ChatTranscriptReplaceRequest: {
+            /** Messages */
+            messages?: components["schemas"]["ChatMessage"][];
+        };
+        /** CompletionReport */
+        CompletionReport: {
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            };
+            judgement?: components["schemas"]["ModelJudgement"];
+        };
         /** ConnectedDeploymentRequest */
         ConnectedDeploymentRequest: {
             /** Display Name */
@@ -923,6 +1553,86 @@ export interface components {
          */
         DeploymentStatus: "starting" | "running" | "unhealthy" | "stopped" | "failed";
         /**
+         * EffectiveSetup
+         * @description Inspectable selected / loaded / applied facts for one run.
+         */
+        EffectiveSetup: {
+            bags?: components["schemas"]["SettingsBags"];
+            /** Gaps */
+            gaps?: string[];
+            /**
+             * Knowledge Binding
+             * @default none
+             */
+            knowledge_binding: string;
+            /** Loaded Deployment Id */
+            loaded_deployment_id: string;
+            /** Loaded Embedding Deployment Id */
+            loaded_embedding_deployment_id?: string | null;
+            /** Loaded Embedding Endpoint */
+            loaded_embedding_endpoint?: string | null;
+            /** Loaded Knowledge */
+            loaded_knowledge?: components["schemas"]["LoadedKnowledgeFact"][];
+            /** Loaded Startup */
+            loaded_startup?: {
+                [key: string]: unknown;
+            };
+            /** Materialized Knowledge */
+            materialized_knowledge?: components["schemas"]["MaterializedKnowledgeFact"][];
+            /**
+             * Note
+             * @default Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Retrieval is presented only when embedding_deployment_id resolved to a loaded embedding endpoint.
+             */
+            note: string;
+            /** Overridden */
+            overridden?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
+            /** Retired */
+            retired?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
+            /**
+             * Retrieval Corpus Documents
+             * @default 0
+             */
+            retrieval_corpus_documents: number;
+            /**
+             * Retrieval Presented
+             * @default false
+             */
+            retrieval_presented: boolean;
+            /**
+             * Retrieval Requested
+             * @default false
+             */
+            retrieval_requested: boolean;
+            /** Selected Deployment Id */
+            selected_deployment_id: string;
+            /** Selected Embedding Deployment Id */
+            selected_embedding_deployment_id?: string | null;
+            /** Selected Memory Version Ids */
+            selected_memory_version_ids?: string[];
+            /** Selected Profile Id */
+            selected_profile_id?: string | null;
+            /** Selected Protected Instruction Version Ids */
+            selected_protected_instruction_version_ids?: string[];
+            /** Selected Skill Version Ids */
+            selected_skill_version_ids?: string[];
+            /** Startup Mismatches */
+            startup_mismatches?: components["schemas"]["StartupMismatch"][];
+            /** System Prompt */
+            system_prompt: string;
+            /** Unsupported */
+            unsupported?: {
+                [key: string]: string[];
+            };
+        };
+        /**
          * FileRole
          * @enum {string}
          */
@@ -943,6 +1653,41 @@ export interface components {
             /** Healthy */
             healthy: boolean;
             resource_usage?: components["schemas"]["ResourceUsage"] | null;
+        };
+        /**
+         * HostShellFacts
+         * @description Declared first worker environment for one run. Not WSL or Docker.
+         */
+        HostShellFacts: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Cwd */
+            cwd?: string | null;
+            /**
+             * Environment
+             * @default windows_host_shell
+             * @constant
+             */
+            environment: "windows_host_shell";
+            /**
+             * Inherit Env
+             * @default true
+             */
+            inherit_env: boolean;
+            /**
+             * Isolation
+             * @default none
+             * @constant
+             */
+            isolation: "none";
+            /**
+             * Note
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).
+             */
+            note: string;
         };
         /** HubRepository */
         HubRepository: {
@@ -1153,6 +1898,21 @@ export interface components {
             /** Tensor Type */
             tensor_type: string;
         };
+        /** InterruptDecision */
+        InterruptDecision: {
+            /** Message */
+            message?: string | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "approve" | "reject";
+        };
+        /** InterruptDecisionRequest */
+        InterruptDecisionRequest: {
+            /** Decisions */
+            decisions: components["schemas"]["InterruptDecision"][];
+        };
         /** LifecycleConsumer */
         LifecycleConsumer: {
             /** Id */
@@ -1174,6 +1934,27 @@ export interface components {
              * @default true
              */
             retained: boolean;
+        };
+        /** LoadedKnowledgeFact */
+        LoadedKnowledgeFact: {
+            /** Content Available */
+            content_available: boolean;
+            /** Content Digest */
+            content_digest: string;
+            /** Entry Id */
+            entry_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "memory" | "skill" | "protected_instruction";
+            /**
+             * Selected
+             * @default true
+             */
+            selected: boolean;
+            /** Version Id */
+            version_id: string;
         };
         /** LocalImportRequest */
         LocalImportRequest: {
@@ -1262,6 +2043,18 @@ export interface components {
          * @enum {string}
          */
         ManagementScope: "managed" | "connected";
+        /** MaterializedKnowledgeFact */
+        MaterializedKnowledgeFact: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "memory" | "skill" | "protected_instruction";
+            /** Path */
+            path: string;
+            /** Version Id */
+            version_id: string;
+        };
         /** ModelBundle */
         ModelBundle: {
             /** Companions */
@@ -1296,6 +2089,174 @@ export interface components {
             source: components["schemas"]["BundleSource"];
             /** @default complete */
             status: components["schemas"]["ImportStatus"];
+        };
+        /** ModelJudgement */
+        ModelJudgement: {
+            /** Model Review */
+            model_review?: string | null;
+            /**
+             * Note
+             * @default Model judgement, not an executable check.
+             */
+            note: string;
+            /**
+             * Source
+             * @default assistant_message
+             * @constant
+             */
+            source: "assistant_message";
+        };
+        /** ModelRequestCapture */
+        ModelRequestCapture: {
+            /** Applied Per Request */
+            applied_per_request?: {
+                [key: string]: unknown;
+            };
+            /** At */
+            at: string;
+            /** Available Tools */
+            available_tools?: string[];
+            /** Capture Gaps */
+            capture_gaps?: string[];
+            /**
+             * Discarded
+             * @default false
+             */
+            discarded: boolean;
+            /**
+             * Expired
+             * @default false
+             */
+            expired: boolean;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Failure */
+            failure?: {
+                [key: string]: unknown;
+            } | null;
+            /** Generation Settings */
+            generation_settings?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Handler Returned
+             * @default false
+             */
+            handler_returned: boolean;
+            /** Http Payload */
+            http_payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** Http Payloads */
+            http_payloads?: {
+                [key: string]: unknown;
+            }[];
+            /** Instructions */
+            instructions?: string | null;
+            /** Loaded Knowledge */
+            loaded_knowledge?: components["schemas"]["LoadedKnowledgeFact"][];
+            /** Memory Versions */
+            memory_versions?: string[];
+            /** Messages */
+            messages?: {
+                [key: string]: unknown;
+            }[];
+            /** Presented Tools */
+            presented_tools?: string[];
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Redacted Fields */
+            redacted_fields?: string[];
+            /**
+             * Redaction Mode
+             * @default redact_secrets
+             * @enum {string}
+             */
+            redaction_mode: "retain" | "redact_secrets" | "discard";
+            /**
+             * Request Prepared
+             * @default true
+             */
+            request_prepared: boolean;
+            /**
+             * Response Observed
+             * @default false
+             */
+            response_observed: boolean;
+            /**
+             * Retained
+             * @default true
+             */
+            retained: boolean;
+            /** Retention Seconds */
+            retention_seconds?: number | null;
+            /** Retrieved Material */
+            retrieved_material?: string[];
+            /** Selected Profile Id */
+            selected_profile_id?: string | null;
+            /** Skill Versions */
+            skill_versions?: string[];
+            /** Startup Mismatches */
+            startup_mismatches?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Transport Attempt Count
+             * @default 0
+             */
+            transport_attempt_count: number;
+            /**
+             * Transport Attempted
+             * @default false
+             */
+            transport_attempted: boolean;
+        };
+        /**
+         * PendingInterrupt
+         * @description Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011).
+         */
+        PendingInterrupt: {
+            /** Action Requests */
+            action_requests?: components["schemas"]["PendingInterruptAction"][];
+            /**
+             * Environment
+             * @default windows_host_shell
+             * @constant
+             */
+            environment: "windows_host_shell";
+            /**
+             * Isolation
+             * @default none
+             * @constant
+             */
+            isolation: "none";
+            /**
+             * Kind
+             * @default deepagents_interrupt_on
+             * @constant
+             */
+            kind: "deepagents_interrupt_on";
+            /**
+             * Note
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).
+             */
+            note: string;
+        };
+        /** PendingInterruptAction */
+        PendingInterruptAction: {
+            /** Allowed Decisions */
+            allowed_decisions?: string[];
+            /** Args */
+            args?: {
+                [key: string]: unknown;
+            };
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
         };
         /**
          * PinRuntimeRequest
@@ -1347,6 +2308,19 @@ export interface components {
             startup?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * RelatedFile
+         * @description A file the application associates with a run. Not a checkpointer row.
+         */
+        RelatedFile: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "project_root" | "written_file" | "artifact";
+            /** Path */
+            path: string;
         };
         /** RenameProfileRequest */
         RenameProfileRequest: {
@@ -1716,6 +2690,20 @@ export interface components {
             /** Ok */
             ok: boolean;
         };
+        /** StartupMismatch */
+        StartupMismatch: {
+            /** Key */
+            key: string;
+            /** Loaded */
+            loaded?: unknown;
+            /**
+             * Reason
+             * @default selected profile startup is not the loaded deployment startup
+             */
+            reason: string;
+            /** Selected */
+            selected?: unknown;
+        };
         /** StorageCleanupResponse */
         StorageCleanupResponse: {
             /** Removed */
@@ -1786,6 +2774,20 @@ export interface components {
              */
             staging_bytes: number;
         };
+        /** TaskCriteria */
+        TaskCriteria: {
+            /** Checks */
+            checks?: string[];
+            /** Expected Artifacts */
+            expected_artifacts?: string[];
+            /** Review Prompt */
+            review_prompt?: string | null;
+        };
+        /**
+         * ToolMode
+         * @enum {string}
+         */
+        ToolMode: "live-tool" | "recorded-tool";
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -1806,10 +2808,22 @@ export interface components {
     headers: never;
     pathItems: never;
 }
+export type SchemaAgentBudgets = components['schemas']['AgentBudgets'];
+export type SchemaAgentEvent = components['schemas']['AgentEvent'];
+export type SchemaAgentRun = components['schemas']['AgentRun'];
+export type SchemaAgentStartRequest = components['schemas']['AgentStartRequest'];
 export type SchemaBundleConfigurationOptions = components['schemas']['BundleConfigurationOptions'];
 export type SchemaBundleFile = components['schemas']['BundleFile'];
 export type SchemaBundleSource = components['schemas']['BundleSource'];
 export type SchemaBundleSourceKind = components['schemas']['BundleSourceKind'];
+export type SchemaChatContinuity = components['schemas']['ChatContinuity'];
+export type SchemaChatConversationCreateRequest = components['schemas']['ChatConversationCreateRequest'];
+export type SchemaChatConversationView = components['schemas']['ChatConversationView'];
+export type SchemaChatDeployHealth = components['schemas']['ChatDeployHealth'];
+export type SchemaChatMessage = components['schemas']['ChatMessage'];
+export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
+export type SchemaChatTranscriptReplaceRequest = components['schemas']['ChatTranscriptReplaceRequest'];
+export type SchemaCompletionReport = components['schemas']['CompletionReport'];
 export type SchemaConnectedDeploymentRequest = components['schemas']['ConnectedDeploymentRequest'];
 export type SchemaDeleteFilePlan = components['schemas']['DeleteFilePlan'];
 export type SchemaDeletePreview = components['schemas']['DeletePreview'];
@@ -1817,9 +2831,11 @@ export type SchemaDeployment = components['schemas']['Deployment'];
 export type SchemaDeploymentLogResponse = components['schemas']['DeploymentLogResponse'];
 export type SchemaDeploymentProfileChanges = components['schemas']['DeploymentProfileChanges'];
 export type SchemaDeploymentStatus = components['schemas']['DeploymentStatus'];
+export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaFileRole = components['schemas']['FileRole'];
 export type SchemaHttpValidationError = components['schemas']['HTTPValidationError'];
 export type SchemaHealthReport = components['schemas']['HealthReport'];
+export type SchemaHostShellFacts = components['schemas']['HostShellFacts'];
 export type SchemaHubRepository = components['schemas']['HubRepository'];
 export type SchemaHubSearchResult = components['schemas']['HubSearchResult'];
 export type SchemaHubVariant = components['schemas']['HubVariant'];
@@ -1831,15 +2847,24 @@ export type SchemaImportStage = components['schemas']['ImportStage'];
 export type SchemaImportStatus = components['schemas']['ImportStatus'];
 export type SchemaInspectReport = components['schemas']['InspectReport'];
 export type SchemaInspectTensor = components['schemas']['InspectTensor'];
+export type SchemaInterruptDecision = components['schemas']['InterruptDecision'];
+export type SchemaInterruptDecisionRequest = components['schemas']['InterruptDecisionRequest'];
 export type SchemaLifecycleConsumer = components['schemas']['LifecycleConsumer'];
+export type SchemaLoadedKnowledgeFact = components['schemas']['LoadedKnowledgeFact'];
 export type SchemaLocalImportRequest = components['schemas']['LocalImportRequest'];
 export type SchemaLocalSessionTrustContract = components['schemas']['LocalSessionTrustContract'];
 export type SchemaManagedDeploymentRequest = components['schemas']['ManagedDeploymentRequest'];
 export type SchemaManagementScope = components['schemas']['ManagementScope'];
+export type SchemaMaterializedKnowledgeFact = components['schemas']['MaterializedKnowledgeFact'];
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
+export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
+export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
+export type SchemaPendingInterrupt = components['schemas']['PendingInterrupt'];
+export type SchemaPendingInterruptAction = components['schemas']['PendingInterruptAction'];
 export type SchemaPinRuntimeRequest = components['schemas']['PinRuntimeRequest'];
 export type SchemaProcessIdentity = components['schemas']['ProcessIdentity'];
 export type SchemaProfileWriteRequest = components['schemas']['ProfileWriteRequest'];
+export type SchemaRelatedFile = components['schemas']['RelatedFile'];
 export type SchemaRenameProfileRequest = components['schemas']['RenameProfileRequest'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
@@ -1858,13 +2883,188 @@ export type SchemaSettingsBags = components['schemas']['SettingsBags'];
 export type SchemaSettingsPreviewRequest = components['schemas']['SettingsPreviewRequest'];
 export type SchemaSharedAgentEvent = components['schemas']['SharedAgentEvent'];
 export type SchemaSmokeResult = components['schemas']['SmokeResult'];
+export type SchemaStartupMismatch = components['schemas']['StartupMismatch'];
 export type SchemaStorageCleanupResponse = components['schemas']['StorageCleanupResponse'];
 export type SchemaStorageLocation = components['schemas']['StorageLocation'];
 export type SchemaStorageLocationRequest = components['schemas']['StorageLocationRequest'];
 export type SchemaStorageSummary = components['schemas']['StorageSummary'];
+export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
+export type SchemaToolMode = components['schemas']['ToolMode'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
 export type $defs = Record<string, never>;
 export interface operations {
+    list_agent_runs_v1_agent_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    start_agent_run_v1_agent_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_run_v1_agent_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_agent_run_v1_agent_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_agent_run_interrupt_v1_agent_runs__run_id__interrupt_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InterruptDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_tools_v1_agent_tools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string[];
+                    };
+                };
+            };
+        };
+    };
     list_bundles_v1_bundles_get: {
         parameters: {
             query?: never;
@@ -2091,6 +3291,226 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_v1_chat_conversations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"][];
+                };
+            };
+        };
+    };
+    create_conversation_v1_chat_conversations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatConversationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_conversation_v1_chat_conversations__conversation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_conversation_v1_chat_conversations__conversation_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_conversation_interrupt_v1_chat_conversations__conversation_id__interrupt_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InterruptDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_conversation_v1_chat_conversations__conversation_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_transcript_v1_chat_conversations__conversation_id__transcript_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatTranscriptReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -2456,6 +3876,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Deployment"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_run_events_v1_events_get: {
+        parameters: {
+            query?: {
+                run_id?: string | null;
+                conversation_id?: string | null;
+            };
+            header?: {
+                "Last-Event-ID"?: number | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
                 };
             };
             /** @description Validation Error */

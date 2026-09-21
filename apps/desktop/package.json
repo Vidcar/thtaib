@@ -15,7 +15,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "build": "pnpm run typecheck && node scripts/check-sse-terminal-snapshot.mjs && vite build",
+    "build": "pnpm run typecheck && node scripts/check-sse-terminal-snapshot.mjs && node scripts/check-model-settings.mjs && vite build",
     "package": "pnpm run build && electron-builder --win nsis",
     "generate:shared-contracts": "openapi-typescript ../backend/contracts/openapi.json -o src/generated/shared-contracts/openapi.d.ts --root-types"
   },
