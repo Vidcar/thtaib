@@ -10,10 +10,10 @@ context: |
   desktop (`apps/desktop`). Reuse upstream mechanisms: Hugging Face for model
   repositories, llama.cpp for inference, Deep Agents for the agent loop, LangGraph
   for durable and outer workflow execution, LangChain for model/message/tool
-  interfaces, and React Flow for workflow editing. The local interaction migration
-  adds compatible upstream frontend message/tool projections, subscriptions,
-  interrupts and scoped selectors; its active change gates replacement on a
-  published-version and real-backend proof. Frontend projections never own agent
+  interfaces, and React Flow for workflow editing. The verified local interaction
+  boundary uses compatible upstream frontend message/tool projections,
+  subscriptions, interrupts and scoped selectors through the stock HTTP adapter.
+  Frontend projections never own agent
   execution, checkpoints, authorization or durable scheduling. The application
   retains model installation/loading/settings, effective setup, project/session
   identity, permissions, admission, durable records, confirmed outcomes, retained
