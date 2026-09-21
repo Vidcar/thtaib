@@ -159,6 +159,9 @@ PER_REQUEST_KEYS: frozenset[str] = frozenset(
         "max_tokens",
         "stop",
         "seed",
+        "reasoning",
+        "reasoning_format",
+        "reasoning_effort",
     }
 )
 

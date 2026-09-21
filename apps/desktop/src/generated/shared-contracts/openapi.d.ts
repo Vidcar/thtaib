@@ -977,6 +977,9 @@ export interface components {
             /** Checkpoint Ids */
             checkpoint_ids?: string[];
             completion?: components["schemas"]["CompletionReport"] | null;
+            /** Content Blocks */
+            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
+            context_observation?: components["schemas"]["ContextObservation"] | null;
             /** Created At */
             created_at: string;
             criteria?: components["schemas"]["TaskCriteria"];
@@ -1020,6 +1023,7 @@ export interface components {
              * @constant
              */
             outer_graph: "deepagents-compiled-state-graph";
+            output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
             pending_interrupt?: components["schemas"]["PendingInterrupt"] | null;
@@ -1060,6 +1064,7 @@ export interface components {
             status: components["schemas"]["RunLifecycleStatus"];
             /** Stop Reason */
             stop_reason?: string | null;
+            structured_output?: components["schemas"]["StructuredOutputResult"] | null;
             /** System Prompt */
             system_prompt?: string | null;
             /** Task */
@@ -1085,6 +1090,8 @@ export interface components {
         /** AgentStartRequest */
         AgentStartRequest: {
             budgets?: components["schemas"]["AgentBudgets"] | null;
+            /** Content Blocks */
+            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             criteria?: components["schemas"]["TaskCriteria"] | null;
             /** Deployment Id */
             deployment_id: string;
@@ -1099,6 +1106,7 @@ export interface components {
             knowledge_version_refs?: string[];
             /** Memory Version Refs */
             memory_version_refs?: string[];
+            output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
             /** Presented Tools */
@@ -1373,6 +1381,8 @@ export interface components {
             at: string;
             /** Content */
             content: string;
+            /** Content Blocks */
+            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             /**
              * Role
              * @enum {string}
@@ -1383,6 +1393,8 @@ export interface components {
         };
         /** ChatStartRequest */
         ChatStartRequest: {
+            /** Content Blocks */
+            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             /** Deployment Id */
             deployment_id?: string | null;
             /** Embedding Deployment Id */
@@ -1396,6 +1408,7 @@ export interface components {
             knowledge_version_refs?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
+            output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Presented Tools */
             presented_tools?: string[] | null;
             /** Profile Id */
@@ -1436,6 +1449,54 @@ export interface components {
             startup?: {
                 [key: string]: unknown;
             };
+        };
+        /** ContextObservation */
+        ContextObservation: {
+            /**
+             * Capacity Source
+             * @default unknown
+             * @enum {string}
+             */
+            capacity_source: "server_props.n_ctx" | "unknown";
+            /** Capacity Tokens */
+            capacity_tokens?: number | null;
+            /**
+             * Counting Method
+             * @default UTF-8 character estimate (3 chars/token), serialized messages/tools/schema, 2048 tokens/image, 8% capacity margin; not tokenizer usage
+             */
+            counting_method: string;
+            /**
+             * Estimated Input Tokens
+             * @default 0
+             */
+            estimated_input_tokens: number;
+            /** Fits */
+            fits?: boolean | null;
+            /**
+             * Margin Tokens
+             * @default 0
+             */
+            margin_tokens: number;
+            /** Notes */
+            notes?: string[];
+            /**
+             * Output Reservation Tokens
+             * @default 512
+             */
+            output_reservation_tokens: number;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /**
+             * Summarization Path
+             * @default deepagents-upstream
+             * @constant
+             */
+            summarization_path: "deepagents-upstream";
+            /** Usable Input Tokens */
+            usable_input_tokens?: number | null;
         };
         /** DeleteFilePlan */
         DeleteFilePlan: {
@@ -1479,6 +1540,10 @@ export interface components {
             };
             /** Bundle Id */
             bundle_id?: string | null;
+            /** Capability Evidence */
+            capability_evidence?: {
+                [key: string]: unknown;
+            }[];
             /** Created At */
             created_at: string;
             /** Display Name */
@@ -1490,6 +1555,10 @@ export interface components {
             health?: components["schemas"]["HealthReport"] | null;
             /** Id */
             id: string;
+            /** Inference Identity */
+            inference_identity?: {
+                [key: string]: unknown;
+            };
             /** Pid */
             pid?: number | null;
             process_identity?: components["schemas"]["ProcessIdentity"] | null;
@@ -1758,6 +1827,26 @@ export interface components {
              * @default main
              */
             revision: string;
+        };
+        /** ImageContent */
+        ImageContent: {
+            /**
+             * Detail
+             * @default auto
+             * @enum {string}
+             */
+            detail: "auto" | "low" | "high";
+            /** Url */
+            url: string;
+        };
+        /** ImageContentBlock */
+        ImageContentBlock: {
+            image_url: components["schemas"]["ImageContent"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "image_url";
         };
         /** ImportJob */
         ImportJob: {
@@ -2118,6 +2207,7 @@ export interface components {
             available_tools?: string[];
             /** Capture Gaps */
             capture_gaps?: string[];
+            context_observation?: components["schemas"]["ContextObservation"] | null;
             /**
              * Discarded
              * @default false
@@ -2213,6 +2303,34 @@ export interface components {
              * @default false
              */
             transport_attempted: boolean;
+        };
+        /**
+         * OutputSchemaRequest
+         * @description Caller-supplied JSON schema for one run.
+         *
+         *     The schema is passed to Deep Agents' existing ``response_format`` seam.
+         *     It is not parsed out of assistant prose.
+         */
+        OutputSchemaRequest: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Schema */
+            schema?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /**
+             * Strategy
+             * @default auto
+             * @enum {string}
+             */
+            strategy: "auto" | "native" | "tool";
         };
         /**
          * PendingInterrupt
@@ -2774,6 +2892,44 @@ export interface components {
              */
             staging_bytes: number;
         };
+        /** StructuredOutputResult */
+        StructuredOutputResult: {
+            /** Error */
+            error?: string | null;
+            /**
+             * Note
+             * @default Structured output is the agent structured_response, not JSON-looking answer text. Schema validity is not factual correctness.
+             */
+            note: string;
+            /**
+             * Repair Attempts
+             * @default 0
+             */
+            repair_attempts: number;
+            /** Requested Json Schema */
+            requested_json_schema?: {
+                [key: string]: unknown;
+            };
+            /** Requested Schema Version */
+            requested_schema_version: number;
+            /** Result */
+            result?: unknown;
+            /** Schema Name */
+            schema_name: string;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /** Strategy */
+            strategy?: ("provider" | "tool") | null;
+            /**
+             * Validation Status
+             * @default not_requested
+             * @enum {string}
+             */
+            validation_status: "not_requested" | "valid" | "missing" | "invalid";
+        };
         /** TaskCriteria */
         TaskCriteria: {
             /** Checks */
@@ -2782,6 +2938,16 @@ export interface components {
             expected_artifacts?: string[];
             /** Review Prompt */
             review_prompt?: string | null;
+        };
+        /** TextContentBlock */
+        TextContentBlock: {
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "text";
         };
         /**
          * ToolMode
@@ -2825,6 +2991,7 @@ export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
 export type SchemaChatTranscriptReplaceRequest = components['schemas']['ChatTranscriptReplaceRequest'];
 export type SchemaCompletionReport = components['schemas']['CompletionReport'];
 export type SchemaConnectedDeploymentRequest = components['schemas']['ConnectedDeploymentRequest'];
+export type SchemaContextObservation = components['schemas']['ContextObservation'];
 export type SchemaDeleteFilePlan = components['schemas']['DeleteFilePlan'];
 export type SchemaDeletePreview = components['schemas']['DeletePreview'];
 export type SchemaDeployment = components['schemas']['Deployment'];
@@ -2841,6 +3008,8 @@ export type SchemaHubSearchResult = components['schemas']['HubSearchResult'];
 export type SchemaHubVariant = components['schemas']['HubVariant'];
 export type SchemaHuggingFaceImportRequest = components['schemas']['HuggingFaceImportRequest'];
 export type SchemaHuggingFaceInspectRequest = components['schemas']['HuggingFaceInspectRequest'];
+export type SchemaImageContent = components['schemas']['ImageContent'];
+export type SchemaImageContentBlock = components['schemas']['ImageContentBlock'];
 export type SchemaImportJob = components['schemas']['ImportJob'];
 export type SchemaImportProgress = components['schemas']['ImportProgress'];
 export type SchemaImportStage = components['schemas']['ImportStage'];
@@ -2859,6 +3028,7 @@ export type SchemaMaterializedKnowledgeFact = components['schemas']['Materialize
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
 export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
 export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
+export type SchemaOutputSchemaRequest = components['schemas']['OutputSchemaRequest'];
 export type SchemaPendingInterrupt = components['schemas']['PendingInterrupt'];
 export type SchemaPendingInterruptAction = components['schemas']['PendingInterruptAction'];
 export type SchemaPinRuntimeRequest = components['schemas']['PinRuntimeRequest'];
@@ -2888,7 +3058,9 @@ export type SchemaStorageCleanupResponse = components['schemas']['StorageCleanup
 export type SchemaStorageLocation = components['schemas']['StorageLocation'];
 export type SchemaStorageLocationRequest = components['schemas']['StorageLocationRequest'];
 export type SchemaStorageSummary = components['schemas']['StorageSummary'];
+export type SchemaStructuredOutputResult = components['schemas']['StructuredOutputResult'];
 export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
+export type SchemaTextContentBlock = components['schemas']['TextContentBlock'];
 export type SchemaToolMode = components['schemas']['ToolMode'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
 export type $defs = Record<string, never>;

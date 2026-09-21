@@ -257,6 +257,13 @@ h4 {
   margin: 1rem 1rem 0;
 }
 
+.chat-run-details {
+  flex: 0 1 auto;
+  min-height: 2.5rem;
+  max-height: 40vh;
+  overflow: auto;
+}
+
 .transcript {
   flex: 1;
   overflow: auto;

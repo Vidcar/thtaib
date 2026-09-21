@@ -15,14 +15,17 @@ from typing import Any
 
 import httpx
 from deepagents import create_deep_agent
+from deepagents.backends import StateBackend
+from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.evidence import build_completion
+from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
@@ -66,6 +69,7 @@ from workbench_backend.contracts.lifecycle import (
     is_run_lifecycle_live,
 )
 from workbench_backend.state.checkpointer import (
+    conversation_state,
     checkpoint_ids_from_graph,
     open_sqlite_checkpointer,
 )
@@ -78,11 +82,18 @@ from workbench_backend.agents.tools import (
     tools_for_names,
 )
 from workbench_backend.errors import HarnessError, KnowledgeError, ReplayError
+from workbench_backend.agents.structured import (
+    StructuredOutputRepairMiddleware,
+    mark_structured_failure,
+    response_format_for_run,
+    update_structured_result_from_state,
+)
 from workbench_backend.inference.adapter import (
     DEFAULT_ADAPTER_TIMEOUT,
     RecordingTransport,
     chat_model_for_deployment,
 )
+from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
     classify_connection_failure,
@@ -136,6 +147,7 @@ class HarnessService:
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._model_clients: dict[str, httpx.Client] = {}
+        self._adapter_models: dict[str, Any] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
@@ -280,16 +292,23 @@ class HarnessService:
                 )
             if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in presented:
                 presented = [*presented, SEARCH_KNOWLEDGE_TOOL_NAME]
-            if knowledge_plan.has_knowledge_routes:
+            if knowledge_plan.has_knowledge_routes and request.presented_tools != []:
                 for name in KNOWLEDGE_ROUTE_READ_TOOLS:
                     if name not in presented:
                         presented = [*presented, name]
-            if not presented:
+            if retrieval_presented and request.presented_tools == []:
                 raise HarnessError(
-                    "At least one enabled tool must remain presented (AGT-005).",
-                    code="tools_required",
+                    "Retrieval requires its search tool. Enable tools or remove the retrieval selection.",
+                    code="retrieval_tools_off",
                     status_code=400,
                 )
+            if request.content_blocks:
+                self._validate_content_capabilities(deployment, request)
+            if presented and deployment.server_props and (
+                deployment.server_props.chat_template_caps.get("supports_tools") is False
+                or deployment.server_props.chat_template_caps.get("supports_tool_calls") is False
+            ):
+                raise HarnessError("This setup reports that task tools are unsupported. Turn tools off or select a compatible setup.", code="tools_unsupported", status_code=409)
             enabled = enabled_for_project(
                 project_path is not None,
                 knowledge_routes=knowledge_plan.has_knowledge_routes,
@@ -312,6 +331,36 @@ class HarnessService:
                 materialized_knowledge=knowledge_plan.facts,
                 inherit_deployment_settings=request.inherit_deployment_settings,
             )
+            saved_state = conversation_state(self.manager.paths.checkpoints_db, request.thread_id) if request.thread_id else {}
+            retained = list(saved_state.get("messages", []))
+            # Use the installed upstream reconstruction, not a second history reducer.
+            retained = SummarizationMiddleware._apply_event_to_messages(retained, saved_state.get(SUMMARIZATION_EVENT_KEY))
+            validate_retained_messages(deployment, [SystemMessage(content=setup.system_prompt), *retained,
+                HumanMessage(content=user_message_content(request.task, request.content_blocks))])
+            context_observation = observe_context(
+                deployment=deployment,
+                per_request=setup.bags.per_request,
+                system_prompt=setup.system_prompt,
+                task=request.task,
+                content_blocks=request.content_blocks,
+                tool_count=len(presented),
+                output_schema=(
+                    request.output_schema.json_schema
+                    if request.output_schema is not None
+                    else None
+                ),
+                continuing_thread=bool(request.thread_id),
+                history=retained,
+                tools=tools_for_names(presented),
+            )
+            require_context_fit(context_observation)
+            _, structured_output = response_format_for_run(
+                output_schema=request.output_schema,
+                deployment=deployment,
+                per_request=setup.bags.per_request,
+                tools_presented=bool(presented),
+                tools_off=request.presented_tools == [],
+            )
             if request.workspace_id:
                 others = self.active_workspace_run_ids(request.workspace_id)
                 if others:
@@ -328,6 +377,7 @@ class HarnessService:
                 status=AgentRunStatus.queued,
                 deployment_id=deployment.id,
                 task=request.task,
+                content_blocks=request.content_blocks,
                 enabled_tools=enabled,
                 presented_tools=presented,
                 denied_tools=[],
@@ -362,6 +412,9 @@ class HarnessService:
                     cwd=project_path,
                     inherit_env=True,
                 ),
+                output_schema=request.output_schema,
+                structured_output=structured_output,
+                context_observation=context_observation,
             )
             # Agent-run / Lab own one thread per run. Chat follow-ups pass the
             # conversation thread so LangGraph resumes the same checkpointer state.
@@ -544,7 +597,8 @@ class HarnessService:
                 run,
                 agent,
                 cancel,
-                {"messages": [{"role": "user", "content": run.task}]},
+                {"messages": [{"role": "user", "content": user_message_content(run.task, run.content_blocks)}],
+                 **({"structured_response": None} if run.output_schema is not None else {})},
             )
         except ReplayError as exc:
             if agent is not None:
@@ -682,6 +736,25 @@ class HarnessService:
         if backend is not None:
             agent_kwargs["backend"] = backend
             materialize_onto_backend(backend, knowledge_plan)
+        observation = run.context_observation
+        usable = observation.usable_input_tokens if observation is not None else None
+        # Override provider-name defaults; only observed runtime capacity is a fact.
+        model.profile = {"max_input_tokens": usable} if usable else {}
+        if observation is not None and callable(getattr(model, "set_context_guard", None)):
+            def guard(payload: dict[str, Any]) -> None:
+                observed = observe_payload(observation, payload)
+                run.context_observation = observed
+                require_context_fit(observed)
+            model.set_context_guard(guard)
+        summarization = BudgetedSummarizationMiddleware(
+            model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
+            allowed_tools=set(run.presented_tools),
+            trigger=("tokens", max(1, int(usable * 0.75))) if usable else None,
+            keep=("tokens", max(1, int(usable * 0.15))) if usable else ("messages", 6),
+            token_counter=count_context_tokens,
+            trim_tokens_to_summarize=None,
+            truncate_args_settings=None,
+        )
         agent_kwargs.update(official_agent_kwargs(knowledge_plan))
         permissions = filesystem_permissions_for_run(run)
         if permissions:
@@ -693,11 +766,33 @@ class HarnessService:
         retrieval_tool = self._live_search_knowledge_tool(run, backend)
         if retrieval_tool is not None:
             tools = [*tools, retrieval_tool]
+        deployment = self.manager.ensure_deployment_ready(run.deployment_id)
+        per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+        response_format, structured_output = response_format_for_run(
+            output_schema=run.output_schema,
+            deployment=deployment,
+            per_request=per_request,
+            tools_presented=bool(run.presented_tools),
+            tools_off=not run.presented_tools,
+        )
+        if structured_output is not None and run.structured_output is None:
+            run.structured_output = structured_output
+            run.events.append(
+                AgentEvent(
+                    at=utc_now(),
+                    kind="structured_output_requested",
+                    detail=structured_output.model_dump(mode="json"),
+                )
+            )
         return create_deep_agent(
             model=model,
             tools=tools,
             system_prompt=run.system_prompt,
             middleware=[
+                summarization,
+                *([StructuredOutputRepairMiddleware(run.structured_output, on_event=lambda kind, detail: run.events.append(
+                    AgentEvent(at=utc_now(), kind=kind, detail=detail)
+                ))] if run.structured_output is not None else []),
                 *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
                 WorkbenchHarnessMiddleware(
                     run,
@@ -707,6 +802,7 @@ class HarnessService:
                 )
             ],
             name="workbench-embedded-harness",
+            response_format=response_format,
             checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
             **agent_kwargs,
         )
@@ -734,8 +830,12 @@ class HarnessService:
                     self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
             if pending is None:
-                run.completion = build_completion(run)
                 self._link_run(run, agent)
+                if run.structured_output is not None and run.structured_output.validation_status != "valid":
+                    run.error = run.structured_output.error or "The model did not produce a valid structured result."
+                    self._finish(run, AgentRunStatus.failed, "structured_output_invalid")
+                    return
+                run.completion = build_completion(run)
                 self._finish(run, AgentRunStatus.completed, "completed")
                 return
             self._link_run(run, agent)
@@ -764,6 +864,7 @@ class HarnessService:
                     return None
                 self._ingest_stream(run, chunk)
         except Exception as exc:  # noqa: BLE001 - interrupt may surface as GraphInterrupt
+            run.structured_output = mark_structured_failure(run.structured_output, str(exc))
             found = pending_interrupt_from_raw(exc) or pending_interrupt_from_raw(
                 getattr(exc, "interrupts", None)
             )
@@ -899,6 +1000,8 @@ class HarnessService:
                 self._persist_and_notify(run)
 
     def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str) -> bool:
+        if isinstance(message, AIMessage) and message.invalid_tool_calls:
+            raise HarnessError("The model returned malformed tool arguments. No invalid call was executed.", code="invalid_tool_call", status_code=409)
         now = utc_now()
         emitted = False
         if isinstance(message, AIMessage) and message.tool_calls:
@@ -948,18 +1051,24 @@ class HarnessService:
         )
         with self._lock:
             self._model_clients[run.id] = client
-        return chat_model_for_deployment(
+        model = chat_model_for_deployment(
             deployment,
             per_request=per_request,
             capture_sink=http_sink,
             http_client=client,
         )
+        with self._lock:
+            self._adapter_models[run.id] = model
+        return model
 
     def _close_model_client(self, run_id: str) -> None:
         with self._lock:
             client = self._model_clients.pop(run_id, None)
+            model = self._adapter_models.pop(run_id, None)
         if client is not None:
             client.close()
+        if model is not None:
+            model.close()
 
     def _live_search_knowledge_tool(self, run: AgentRun, backend: Any) -> Any:
         """Build the official search tool, or none for recorded-tool / no retrieval."""
@@ -1057,7 +1166,68 @@ class HarnessService:
         """Record checkpoint ids and related files in application records only."""
 
         run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
+        try:
+            state = agent.get_state(_invoke_config(run))
+            values = getattr(state, "values", {}) or {}
+        except Exception:
+            values = {}
+        cancel = self._cancels.get(run.id)
+        if cancel is not None and cancel.is_set():
+            pending_calls: dict[str, dict[str, Any]] = {}
+            for message in values.get("messages", []):
+                for call in getattr(message, "tool_calls", []):
+                    if call.get("id"):
+                        pending_calls[call["id"]] = call
+                if isinstance(message, ToolMessage):
+                    pending_calls.pop(message.tool_call_id, None)
+            if pending_calls:
+                # Cancellation can land after the model checkpoint but before
+                # tools run. Preserve calls and explicitly close their protocol
+                # pairs without executing or replaying any tool. An interrupted
+                # tool may have effects, so never invent a successful/no-op result.
+                results = [ToolMessage(
+                    tool_call_id=ident, name=call["name"], status="error",
+                    content="Run cancelled before a tool result was recorded. Completion is unconfirmed; inspect state before retrying any action.",
+                ) for ident, call in pending_calls.items()]
+                agent.update_state(_invoke_config(run), {"messages": results})
+                run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
+                run.events.append(AgentEvent(at=utc_now(), kind="cancelled_tool_results", detail={"tool_call_ids": list(pending_calls), "execution_confirmed": False}))
+        compaction = values.get(SUMMARIZATION_EVENT_KEY)
+        if isinstance(compaction, dict):
+            cutoff = compaction.get("cutoff_index")
+            if not any(event.kind == "context_compacted" and event.detail.get("cutoff_index") == cutoff for event in run.events):
+                run.events.append(AgentEvent(at=utc_now(), kind="context_compacted", detail={
+                    "cutoff_index": cutoff, "history_preserved_at": compaction.get("file_path"),
+                    "owner": "deepagents-upstream", "internal_summary_is_not_answer": True,
+                }))
+        if run.structured_output is not None:
+            try:
+                state = agent.get_state(_invoke_config(run))
+                values = getattr(state, "values", None)
+                run.structured_output = update_structured_result_from_state(
+                    run.structured_output,
+                    values if isinstance(values, dict) else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - state loss is diagnostic, not success.
+                run.structured_output = mark_structured_failure(run.structured_output, str(exc))
         self._collect_related_files(run)
+
+    def _validate_content_capabilities(
+        self,
+        deployment: Deployment,
+        request: AgentStartRequest,
+    ) -> None:
+        has_image = any(getattr(block, "type", None) == "image_url" for block in request.content_blocks or [])
+        if not has_image:
+            return
+        props = deployment.server_props
+        if props is not None and props.modalities.get("vision") is False:
+            raise HarnessError(
+                "This setup reports that image input is not supported.",
+                code="image_input_unavailable",
+                status_code=409,
+                details={"constraint": "server_props.modalities.vision=false"},
+            )
 
     def _collect_related_files(self, run: AgentRun) -> None:
         files = list(_initial_related_files(run.project_path))
