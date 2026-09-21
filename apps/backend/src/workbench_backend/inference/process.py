@@ -28,7 +28,7 @@ from workbench_backend.inference.schemas import (
     ServerProperties,
 )
 
-IdentityVerdict = Literal["match", "mismatch", "gone"]
+IdentityVerdict = Literal["match", "mismatch", "gone", "unproven"]
 
 CREATE_TIME_TOLERANCE_SECONDS = 0.05
 
@@ -42,6 +42,7 @@ OWNED_HEALTH_BUDGET_SECONDS = OWNED_HEALTH_ATTEMPTS * OWNED_HEALTH_DELAY_SECONDS
 
 PROCESS_IDENTITY_MISMATCH = "process_identity_mismatch"
 PROCESS_IDENTITY_UNPROVEN = "process_identity_unproven"
+PROCESS_STOP_FAILED = "process_stop_failed"
 
 
 def argv_for_host(argv: list[str]) -> list[str]:
@@ -93,9 +94,14 @@ def classify_identity(
     *,
     inspector: ProcessInspector | None = None,
 ) -> IdentityVerdict:
-    current = (inspector or PsutilInspector()).identity_of(identity.pid)
+    try:
+        current = (inspector or PsutilInspector()).identity_of(identity.pid)
+    except (PermissionError, psutil.AccessDenied):
+        return "unproven"
     if current is None:
         return "gone"
+    if current.create_time <= 0.0 or not current.executable:
+        return "unproven"
     if identities_match(identity, current):
         return "match"
     return "mismatch"
@@ -123,15 +129,19 @@ class PsutilInspector(ProcessInspector):
                 return None
             try:
                 executable = process.exe() or ""
-            except (psutil.AccessDenied, psutil.ZombieProcess):
+            except psutil.AccessDenied:
+                raise
+            except psutil.ZombieProcess:
                 executable = ""
             return ProcessIdentity(
                 pid=int(pid),
                 create_time=float(process.create_time()),
                 executable=normalize_executable(executable),
             )
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
             return None
+        except psutil.AccessDenied:
+            raise
 
     def listen_ports(self, pid: int) -> list[int] | None:
         try:
@@ -207,7 +217,10 @@ class ProcessSupervisor:
             pump.start()
         elif writer is not None:
             writer.close()
-        identity = self.inspector.identity_of(pid)
+        try:
+            identity = self.inspector.identity_of(pid)
+        except (PermissionError, psutil.AccessDenied):
+            identity = None
         if identity is None:
             return ProcessIdentity(pid=pid, create_time=0.0, executable="")
         return identity
@@ -239,6 +252,16 @@ class ProcessSupervisor:
         return int(port) in ports
 
     def stop(self, identity: ProcessIdentity, *, timeout: float = 5.0) -> None:
+        try:
+            self._stop_verified(identity, timeout=timeout)
+        except (OSError, psutil.Error, subprocess.TimeoutExpired) as exc:
+            raise ManagerError(
+                "Owned process exit could not be confirmed; ownership is retained.",
+                code=PROCESS_STOP_FAILED, status_code=409,
+                details={"pid": identity.pid},
+            ) from exc
+
+    def _stop_verified(self, identity: ProcessIdentity, *, timeout: float) -> None:
         """Terminate only the process that still matches ``identity``.
 
         Callers that replace ``runtimes/local-pin`` (``stop_first`` pin) must
@@ -253,31 +276,46 @@ class ProcessSupervisor:
                 code=PROCESS_IDENTITY_MISMATCH,
                 status_code=409,
             )
-        if verdict == "gone":
-            child = self._children.pop(identity.pid, None)
-            if child is not None:
-                try:
-                    child.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass
-            self._release_log(identity.pid)
-            return
-        child = self._children.pop(identity.pid, None)
-        if child is not None and child.poll() is None:
-            child.terminate()
+        if verdict == "unproven":
+            raise ManagerError(
+                "Refusing to terminate a process whose owned identity could not "
+                "be verified.",
+                code=PROCESS_IDENTITY_UNPROVEN,
+                status_code=409,
+                details={"pid": identity.pid},
+            )
+        survivors: list[int] = []
+        if verdict == "match":
+            # Enumerate descendants before stopping the parent. Never retry by
+            # PID once ownership became uncertain or the PID was reused.
+            survivors = self._stop_process_tree(identity.pid, timeout=timeout) or []
+            if self.classify(identity) == "match":
+                remaining = self._stop_process_tree(identity.pid, timeout=timeout, force=True) or []
+                survivors = list(set(survivors) | set(remaining))
+        if survivors:
+            raise ManagerError(
+                "Owned process tree still has survivors after terminate and kill.",
+                code=PROCESS_STOP_FAILED, status_code=409,
+                details={"pid": identity.pid, "survivors": survivors},
+            )
+        final_verdict = self.classify(identity)
+        if final_verdict in {"match", "unproven"}:
+            raise ManagerError(
+                "Owned process is still running or its exit could not be verified.",
+                code=PROCESS_STOP_FAILED if final_verdict == "match" else PROCESS_IDENTITY_UNPROVEN,
+                status_code=409, details={"pid": identity.pid},
+            )
+        child = self._children.get(identity.pid)
+        if child is not None:
             try:
                 child.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                try:
-                    child.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass
-        self._stop_process_tree(identity.pid, timeout=timeout)
-        self.wait_until_gone(identity.pid, timeout=timeout)
-        if self.classify(identity) == "match":
-            self._stop_process_tree(identity.pid, timeout=timeout, force=True)
-            self.wait_until_gone(identity.pid, timeout=timeout)
+            except (subprocess.TimeoutExpired, PermissionError, OSError) as exc:
+                raise ManagerError(
+                    "Owned child process exit could not be confirmed.",
+                    code=PROCESS_STOP_FAILED, status_code=409,
+                    details={"pid": identity.pid},
+                ) from exc
+        self._children.pop(identity.pid, None)
         self._release_log(identity.pid)
 
     def wait_until_gone(self, pid: int, *, timeout: float = 5.0) -> None:
@@ -287,22 +325,36 @@ class ProcessSupervisor:
             if not self.is_running(pid):
                 return
             time.sleep(0.05)
+        if self.is_running(pid):
+            raise ManagerError(
+                "Process is still running after the wait budget.",
+                code=PROCESS_STOP_FAILED,
+                status_code=409,
+                details={"pid": int(pid)},
+            )
 
     def is_running(self, pid: int | None) -> bool:
         if pid is None:
             return False
-        return self.inspector.identity_of(int(pid)) is not None
+        try:
+            return self.inspector.identity_of(int(pid)) is not None
+        except (PermissionError, psutil.AccessDenied):
+            return True
 
-    def _stop_process_tree(self, pid: int, *, timeout: float, force: bool = False) -> None:
+    def _stop_process_tree(self, pid: int, *, timeout: float, force: bool = False) -> list[int]:
         try:
             process = psutil.Process(pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return
+        except psutil.NoSuchProcess:
+            return []
+        except psutil.AccessDenied as exc:
+            raise ManagerError("Cannot inspect owned process tree", code=PROCESS_IDENTITY_UNPROVEN, status_code=409) from exc
         descendants: list[psutil.Process] = []
         try:
             descendants = process.children(recursive=True)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            descendants = []
+        except psutil.NoSuchProcess:
+            return []
+        except psutil.AccessDenied as exc:
+            raise ManagerError("Cannot inspect owned descendants", code=PROCESS_IDENTITY_UNPROVEN, status_code=409) from exc
         targets = [*descendants, process]
         for item in targets:
             try:
@@ -310,17 +362,27 @@ class ProcessSupervisor:
                     item.kill()
                 else:
                     item.terminate()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, OSError):
                 continue
         _gone, alive = psutil.wait_procs(targets, timeout=timeout)
         if not alive:
-            return
+            return []
         for item in alive:
             try:
                 item.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, OSError):
                 continue
-        psutil.wait_procs(alive, timeout=timeout)
+        _gone, alive = psutil.wait_procs(alive, timeout=timeout)
+        survivors: list[int] = []
+        for item in alive:
+            try:
+                if item.is_running():
+                    survivors.append(int(item.pid))
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except psutil.AccessDenied:
+                survivors.append(int(item.pid))
+        return survivors
 
     def resource_usage(self, identity: ProcessIdentity | None) -> ResourceUsage:
         if identity is None or self.classify(identity) != "match":

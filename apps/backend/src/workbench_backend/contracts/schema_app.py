@@ -34,6 +34,8 @@ workbench_local_token = APIKeyHeader(
 
 def create_shared_contract_app() -> FastAPI:
     from workbench_backend.inference.routes import router as model_manager_router
+    from workbench_backend.chat.routes import router as chat_router
+    from workbench_backend.agents.routes import router as agent_router
 
     application = FastAPI(
         title=SHARED_CONTRACT_OPENAPI_TITLE,
@@ -85,5 +87,7 @@ def create_shared_contract_app() -> FastAPI:
     # Export the same typed model-management routes consumed by the desktop.
     # This application is only used to generate OpenAPI; it is never served.
     application.include_router(model_manager_router)
+    application.include_router(chat_router)
+    application.include_router(agent_router)
 
     return application

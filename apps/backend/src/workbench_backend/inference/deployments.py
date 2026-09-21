@@ -123,7 +123,11 @@ class DeploymentService:
                     },
                 )
         requested_startup = dict(profile.bags.startup.requested) if profile else {}
-        requested_startup.update(request.startup)
+        for key, value in (request.startup or {}).items():
+            if value is None:
+                requested_startup.pop(key, None)
+            else:
+                requested_startup[key] = value
         per_request = profile.bags.per_request.requested if profile else {}
         agent = profile.bags.agent.requested if profile else {}
         bags = resolve_bags(
@@ -214,8 +218,10 @@ class DeploymentService:
     def detach(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
         with self.lifecycle.mutate("detach_deployment", deployment_ids={deployment.id}):
-            self._require_no_live_dependencies(deployment, "deployment_active")
-            return self._detach_checked(deployment)
+            with self._lock_for(deployment_id):
+                current = self._require(deployment_id)
+                self._require_no_live_dependencies(current, "deployment_active")
+                return self._detach_checked(current)
 
     def _detach_checked(self, deployment: Deployment) -> Deployment:
         if deployment.scope != ManagementScope.connected:
@@ -259,7 +265,13 @@ class DeploymentService:
         for deployment in self.store.list_deployments():
             if deployment.scope != ManagementScope.managed:
                 continue
-            if deployment.status not in _LIVE_MANAGED:
+            if deployment.status == DeploymentStatus.failed and (deployment.pid is not None or deployment.process_identity is not None):
+                blocking.append(deployment)
+                continue
+            if deployment.status not in _LIVE_MANAGED and not (
+                deployment.status == DeploymentStatus.failed
+                and (deployment.pid is not None or deployment.process_identity is not None)
+            ):
                 continue
             if self._owned_live(deployment):
                 blocking.append(deployment)
@@ -274,6 +286,16 @@ class DeploymentService:
                 "Connected endpoints cannot be started by Local AI Workbench.",
                 code="connected_no_lifecycle",
                 status_code=409,
+            )
+        if deployment.status == DeploymentStatus.failed and (
+            deployment.pid is not None or deployment.process_identity is not None
+        ):
+            raise ManagerError(
+                "Deployment has retained process identity after a failed lifecycle cleanup. "
+                "Stop or unload it before starting again.",
+                code="deployment_lifecycle_blocked",
+                status_code=409,
+                details={"deployment_id": deployment.id, "pid": deployment.pid},
             )
         deployment = self._reconcile_locked(deployment)
         if self._owned_live(deployment):
@@ -319,6 +341,7 @@ class DeploymentService:
         )
         self.store.put_deployment(starting)
         identity: ProcessIdentity | None = None
+        cleanup_deployment = starting
         try:
             identity = self.processes.start(
                 argv,
@@ -333,6 +356,7 @@ class DeploymentService:
                 }
             )
             self.store.put_deployment(recorded)
+            cleanup_deployment = recorded
             port = _endpoint_port(recorded.endpoint)
             verdict, health, owns_listen = wait_for_owned_health(
                 self.probe,
@@ -379,7 +403,7 @@ class DeploymentService:
                 )
             )
         except Exception as exc:
-            return self._fail_unowned(starting, error=str(exc), identity=identity)
+            return self._fail_unowned(cleanup_deployment, error=str(exc), identity=identity)
 
     def _stop_locked(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
@@ -408,6 +432,19 @@ class DeploymentService:
                 self.processes.stop(identity)
             except ManagerError as exc:
                 if exc.code != PROCESS_IDENTITY_MISMATCH:
+                    self.store.put_deployment(
+                        deployment.model_copy(
+                            update={
+                                "status": DeploymentStatus.failed,
+                                "error": exc.message,
+                                "resource_usage": ResourceUsage(
+                                    available=False,
+                                    reason="managed process stop failed",
+                                ),
+                                "updated_at": utc_now(),
+                            }
+                        )
+                    )
                     raise
                 self._clear_ownership(
                     deployment,
@@ -482,12 +519,23 @@ class DeploymentService:
         if deployment.scope != ManagementScope.managed:
             return deployment
         identity = deployment.process_identity
+        if deployment.status == DeploymentStatus.failed and (deployment.pid is not None or identity is not None):
+            return deployment
         if identity is None:
             if deployment.pid is not None and deployment.status in _LIVE_MANAGED:
                 return self._clear_ownership(
                     deployment,
                     status=DeploymentStatus.stopped,
                     error=LEGACY_IDENTITY_DETACHED_MESSAGE,
+                )
+            if deployment.status == DeploymentStatus.starting:
+                return self._clear_ownership(
+                    deployment,
+                    status=DeploymentStatus.failed,
+                    error=(
+                        "Deployment was starting without process identity after restart. "
+                        "No process was stopped; start it again to create a verified owned process."
+                    ),
                 )
             return deployment
         verdict = self.processes.classify(identity)
@@ -514,6 +562,25 @@ class DeploymentService:
                 status=DeploymentStatus.stopped,
                 error=PROCESS_IDENTITY_MISMATCH_DETACHED_MESSAGE,
             )
+        if verdict == "unproven":
+            return self.store.put_deployment(
+                deployment.model_copy(
+                    update={
+                        "status": DeploymentStatus.failed,
+                        "pid": identity.pid,
+                        "process_identity": identity,
+                        "resource_usage": ResourceUsage(
+                            available=False,
+                            reason="managed process identity could not be verified",
+                        ),
+                        "error": (
+                            "Deployment process identity could not be verified. "
+                            "No process was stopped; stop or unload it before starting again."
+                        ),
+                        "updated_at": utc_now(),
+                    }
+                )
+            )
         return self._clear_ownership(
             deployment,
             status=DeploymentStatus.stopped,
@@ -527,7 +594,10 @@ class DeploymentService:
         identity = deployment.process_identity
         if identity is None:
             return False
-        return self.processes.classify(identity) == "match"
+        verdict = self.processes.classify(identity)
+        if verdict == "match":
+            return True
+        return verdict == "unproven" and deployment.status in {*_LIVE_MANAGED, DeploymentStatus.failed}
 
     def _fail_unowned(
         self,
@@ -536,13 +606,26 @@ class DeploymentService:
         error: str,
         identity: ProcessIdentity | None,
     ) -> Deployment:
+        retained = deployment
+        if identity is not None and deployment.process_identity is None:
+            retained = deployment.model_copy(
+                update={"pid": identity.pid, "process_identity": identity}
+            )
         if identity is not None:
             try:
                 self.processes.stop(identity)
-            except ManagerError:
-                pass
+            except ManagerError as exc:
+                return self.store.put_deployment(
+                    retained.model_copy(
+                        update={
+                            "status": DeploymentStatus.failed,
+                            "error": f"{error}; cleanup failed: {exc.message}",
+                            "updated_at": utc_now(),
+                        }
+                    )
+                )
         return self._clear_ownership(
-            deployment,
+            retained,
             status=DeploymentStatus.failed,
             error=error,
         )

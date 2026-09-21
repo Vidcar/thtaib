@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 
 from workbench_backend.chat.schemas import (
     ChatConversationCreateRequest,
+    ChatConversationView,
     ChatInterruptDecisionRequest,
     ChatStartRequest,
     ChatTranscriptReplaceRequest,
@@ -20,22 +21,22 @@ def get_chat(request: Request) -> ChatService:
 
 
 @router.post("/conversations")
-def create_conversation(request: Request, body: ChatConversationCreateRequest) -> object:
+def create_conversation(request: Request, body: ChatConversationCreateRequest) -> ChatConversationView:
     return get_chat(request).create(body)
 
 
 @router.get("/conversations")
-def list_conversations(request: Request) -> object:
+def list_conversations(request: Request) -> list[ChatConversationView]:
     return get_chat(request).list_conversations()
 
 
 @router.get("/conversations/{conversation_id}")
-def get_conversation(request: Request, conversation_id: str) -> object:
+def get_conversation(request: Request, conversation_id: str) -> ChatConversationView:
     return get_chat(request).get(conversation_id)
 
 
 @router.post("/conversations/{conversation_id}/start")
-def start_conversation(request: Request, conversation_id: str, body: ChatStartRequest) -> object:
+def start_conversation(request: Request, conversation_id: str, body: ChatStartRequest) -> ChatConversationView:
     return get_chat(request).start(conversation_id, body)
 
 

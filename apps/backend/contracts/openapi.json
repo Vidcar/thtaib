@@ -1,6 +1,607 @@
 {
   "components": {
     "schemas": {
+      "AgentBudgets": {
+        "description": "Optional user-selected product budgets. Unset by default (AGT-003).",
+        "properties": {
+          "max_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Steps"
+          },
+          "max_tool_calls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tool Calls"
+          }
+        },
+        "title": "AgentBudgets",
+        "type": "object"
+      },
+      "AgentEvent": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "kind"
+        ],
+        "title": "AgentEvent",
+        "type": "object"
+      },
+      "AgentRun": {
+        "properties": {
+          "budgets": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentBudgets"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "checkpoint_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checkpoint Ids",
+            "type": "array"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "criteria": {
+            "$ref": "#/components/schemas/TaskCriteria"
+          },
+          "denied_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Denied Tools",
+            "type": "array"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "effective_setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveSetup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "enabled_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Tools",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AgentEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "harness": {
+            "const": "deepagents",
+            "default": "deepagents",
+            "title": "Harness",
+            "type": "string"
+          },
+          "host_shell": {
+            "$ref": "#/components/schemas/HostShellFacts"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "knowledge": {
+            "default": "none",
+            "enum": [
+              "none",
+              "application_owned"
+            ],
+            "title": "Knowledge",
+            "type": "string"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "model_requests": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRequestCapture"
+            },
+            "title": "Model Requests",
+            "type": "array"
+          },
+          "outer_graph": {
+            "const": "deepagents-compiled-state-graph",
+            "default": "deepagents-compiled-state-graph",
+            "title": "Outer Graph",
+            "type": "string"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "pending_interrupt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingInterrupt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "presented_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presented Tools",
+            "type": "array"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "recorded_fixtures": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Recorded Fixtures",
+            "type": "array"
+          },
+          "recorded_is_not_live_proof": {
+            "default": false,
+            "title": "Recorded Is Not Live Proof",
+            "type": "boolean"
+          },
+          "related_files": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedFile"
+            },
+            "title": "Related Files",
+            "type": "array"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "retrieved_material": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieved Material",
+            "type": "array"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "source_surface": {
+            "default": "agent-run",
+            "enum": [
+              "agent-run",
+              "chat",
+              "lab"
+            ],
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "starting_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Snapshot Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunLifecycleStatus",
+            "default": "queued"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "tool_invocations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tool Invocations",
+            "type": "array"
+          },
+          "tool_mode": {
+            "$ref": "#/components/schemas/ToolMode",
+            "default": "live-tool"
+          },
+          "tool_mode_label": {
+            "default": "live-tool",
+            "title": "Tool Mode Label",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "deployment_id",
+          "task",
+          "enabled_tools",
+          "presented_tools",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentRun",
+        "type": "object"
+      },
+      "AgentStartRequest": {
+        "properties": {
+          "budgets": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentBudgets"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "criteria": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskCriteria"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "inherit_deployment_settings": {
+            "default": true,
+            "title": "Inherit Deployment Settings",
+            "type": "boolean"
+          },
+          "knowledge_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Knowledge Version Refs",
+            "type": "array"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "presented_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presented Tools"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "recorded_fixtures": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded Fixtures"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "source_surface": {
+            "default": "agent-run",
+            "enum": [
+              "agent-run",
+              "chat",
+              "lab"
+            ],
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "tool_mode": {
+            "$ref": "#/components/schemas/ToolMode",
+            "default": "live-tool"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "task"
+        ],
+        "title": "AgentStartRequest",
+        "type": "object"
+      },
       "BundleConfigurationOptions": {
         "properties": {
           "bundle_id": {
@@ -150,6 +751,689 @@
         ],
         "title": "BundleSourceKind",
         "type": "string"
+      },
+      "ChatContinuity": {
+        "description": "Documented conversation \u2194 thread \u2194 run linkage (Issue #56).",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "current_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Run Id"
+          },
+          "fresh_conversation_effect": {
+            "const": "new_thread_retain_project_and_knowledge",
+            "default": "new_thread_retain_project_and_knowledge",
+            "title": "Fresh Conversation Effect",
+            "type": "string"
+          },
+          "history_edit_effect": {
+            "const": "display_only",
+            "default": "display_only",
+            "title": "History Edit Effect",
+            "type": "string"
+          },
+          "model_switch_effect": {
+            "const": "same_thread_new_run",
+            "default": "same_thread_new_run",
+            "title": "Model Switch Effect",
+            "type": "string"
+          },
+          "note": {
+            "default": "Follow-ups reuse conversation.thread_id on the embedded harness checkpointer. Displayed transcript is not the execution context. History edits do not restore or delete project files and do not rewrite the LangGraph thread. A model/profile change applies to the next run on the same thread. A fresh conversation allocates a new thread; project files and permitted durable knowledge stay.",
+            "title": "Note",
+            "type": "string"
+          },
+          "run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Run Ids",
+            "type": "array"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "transcript_is_harness_context": {
+            "const": false,
+            "default": false,
+            "title": "Transcript Is Harness Context",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "thread_id"
+        ],
+        "title": "ChatContinuity",
+        "type": "object"
+      },
+      "ChatConversationCreateRequest": {
+        "properties": {
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "inherit_deployment_settings": {
+            "default": true,
+            "title": "Inherit Deployment Settings",
+            "type": "boolean"
+          },
+          "knowledge_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Knowledge Version Refs",
+            "type": "array"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "title": "ChatConversationCreateRequest",
+        "type": "object"
+      },
+      "ChatConversationView": {
+        "properties": {
+          "continuity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatContinuity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Run Id"
+          },
+          "deploy_health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatDeployHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "enabled_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Tools",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "filesystem_tools_available": {
+            "default": false,
+            "title": "Filesystem Tools Available",
+            "type": "boolean"
+          },
+          "harness": {
+            "const": "deepagents",
+            "default": "deepagents",
+            "title": "Harness",
+            "type": "string"
+          },
+          "history_replaced": {
+            "default": false,
+            "title": "History Replaced",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inherit_deployment_settings": {
+            "default": true,
+            "title": "Inherit Deployment Settings",
+            "type": "boolean"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "note": {
+            "default": "Debug-quality Chat. The embedded Deep Agents harness owns model/tool iteration. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; this is not a durable Approvals inbox (OQ-011).",
+            "title": "Note",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Run Ids",
+            "type": "array"
+          },
+          "second_agent_loop": {
+            "const": false,
+            "default": false,
+            "title": "Second Agent Loop",
+            "type": "boolean"
+          },
+          "shell_tools_available": {
+            "default": false,
+            "title": "Shell Tools Available",
+            "type": "boolean"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "source_surface": {
+            "const": "chat",
+            "default": "chat",
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "transcript": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "title": "Transcript",
+            "type": "array"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "deployment_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatConversationView",
+        "type": "object"
+      },
+      "ChatDeployHealth": {
+        "description": "Chat-facing deploy/connection honesty (Issue #78). Not OQ-012 traces.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "deploy_unhealthy",
+                  "deploy_unreachable",
+                  "deploy_missing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "deployment_status": {
+            "title": "Deployment Status",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "healthy": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthy"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "note": {
+            "default": "Live Chat completion requires a healthy managed/connected llama.cpp. Harness model_requests and thread reuse prove continuity only \u2014 not live assistant completion. David-PC UAT must check deploy health before treating a reply as live proof.",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "deployment_status"
+        ],
+        "title": "ChatDeployHealth",
+        "type": "object"
+      },
+      "ChatMessage": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "role",
+          "content",
+          "at"
+        ],
+        "title": "ChatMessage",
+        "type": "object"
+      },
+      "ChatStartRequest": {
+        "properties": {
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "inherit_deployment_settings": {
+            "default": true,
+            "title": "Inherit Deployment Settings",
+            "type": "boolean"
+          },
+          "knowledge_version_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Version Refs"
+          },
+          "memory_version_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Version Refs"
+          },
+          "presented_tools": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presented Tools"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Version Refs"
+          },
+          "retrieval_project_paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Project Paths"
+          },
+          "skill_version_refs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Version Refs"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "title": "ChatStartRequest",
+        "type": "object"
+      },
+      "ChatTranscriptReplaceRequest": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "title": "ChatTranscriptReplaceRequest",
+        "type": "object"
+      },
+      "CompletionReport": {
+        "properties": {
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "judgement": {
+            "$ref": "#/components/schemas/ModelJudgement"
+          }
+        },
+        "title": "CompletionReport",
+        "type": "object"
       },
       "ConnectedDeploymentRequest": {
         "properties": {
@@ -504,6 +1788,188 @@
         "title": "DeploymentStatus",
         "type": "string"
       },
+      "EffectiveSetup": {
+        "description": "Inspectable selected / loaded / applied facts for one run.",
+        "properties": {
+          "bags": {
+            "$ref": "#/components/schemas/SettingsBags"
+          },
+          "gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gaps",
+            "type": "array"
+          },
+          "knowledge_binding": {
+            "default": "none",
+            "title": "Knowledge Binding",
+            "type": "string"
+          },
+          "loaded_deployment_id": {
+            "title": "Loaded Deployment Id",
+            "type": "string"
+          },
+          "loaded_embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Embedding Deployment Id"
+          },
+          "loaded_embedding_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Embedding Endpoint"
+          },
+          "loaded_knowledge": {
+            "items": {
+              "$ref": "#/components/schemas/LoadedKnowledgeFact"
+            },
+            "title": "Loaded Knowledge",
+            "type": "array"
+          },
+          "loaded_startup": {
+            "additionalProperties": true,
+            "title": "Loaded Startup",
+            "type": "object"
+          },
+          "materialized_knowledge": {
+            "items": {
+              "$ref": "#/components/schemas/MaterializedKnowledgeFact"
+            },
+            "title": "Materialized Knowledge",
+            "type": "array"
+          },
+          "note": {
+            "default": "Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Retrieval is presented only when embedding_deployment_id resolved to a loaded embedding endpoint.",
+            "title": "Note",
+            "type": "string"
+          },
+          "overridden": {
+            "additionalProperties": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "title": "Overridden",
+            "type": "object"
+          },
+          "retired": {
+            "additionalProperties": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "title": "Retired",
+            "type": "object"
+          },
+          "retrieval_corpus_documents": {
+            "default": 0,
+            "title": "Retrieval Corpus Documents",
+            "type": "integer"
+          },
+          "retrieval_presented": {
+            "default": false,
+            "title": "Retrieval Presented",
+            "type": "boolean"
+          },
+          "retrieval_requested": {
+            "default": false,
+            "title": "Retrieval Requested",
+            "type": "boolean"
+          },
+          "selected_deployment_id": {
+            "title": "Selected Deployment Id",
+            "type": "string"
+          },
+          "selected_embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Embedding Deployment Id"
+          },
+          "selected_memory_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Memory Version Ids",
+            "type": "array"
+          },
+          "selected_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Profile Id"
+          },
+          "selected_protected_instruction_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Protected Instruction Version Ids",
+            "type": "array"
+          },
+          "selected_skill_version_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Selected Skill Version Ids",
+            "type": "array"
+          },
+          "startup_mismatches": {
+            "items": {
+              "$ref": "#/components/schemas/StartupMismatch"
+            },
+            "title": "Startup Mismatches",
+            "type": "array"
+          },
+          "system_prompt": {
+            "title": "System Prompt",
+            "type": "string"
+          },
+          "unsupported": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Unsupported",
+            "type": "object"
+          }
+        },
+        "required": [
+          "selected_deployment_id",
+          "loaded_deployment_id",
+          "system_prompt"
+        ],
+        "title": "EffectiveSetup",
+        "type": "object"
+      },
       "FileRole": {
         "enum": [
           "primary_weights",
@@ -574,6 +2040,51 @@
           "checked"
         ],
         "title": "HealthReport",
+        "type": "object"
+      },
+      "HostShellFacts": {
+        "description": "Declared first worker environment for one run. Not WSL or Docker.",
+        "properties": {
+          "available": {
+            "default": false,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "environment": {
+            "const": "windows_host_shell",
+            "default": "windows_host_shell",
+            "title": "Environment",
+            "type": "string"
+          },
+          "inherit_env": {
+            "default": true,
+            "title": "Inherit Env",
+            "type": "boolean"
+          },
+          "isolation": {
+            "const": "none",
+            "default": "none",
+            "title": "Isolation",
+            "type": "string"
+          },
+          "note": {
+            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "title": "HostShellFacts",
         "type": "object"
       },
       "HubRepository": {
@@ -1253,6 +2764,50 @@
         "title": "InspectTensor",
         "type": "object"
       },
+      "InterruptDecision": {
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "type": {
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "InterruptDecision",
+        "type": "object"
+      },
+      "InterruptDecisionRequest": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/InterruptDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decisions"
+        ],
+        "title": "InterruptDecisionRequest",
+        "type": "object"
+      },
       "LifecycleConsumer": {
         "properties": {
           "id": {
@@ -1297,6 +2852,49 @@
           "id"
         ],
         "title": "LifecycleConsumer",
+        "type": "object"
+      },
+      "LoadedKnowledgeFact": {
+        "properties": {
+          "content_available": {
+            "title": "Content Available",
+            "type": "boolean"
+          },
+          "content_digest": {
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "memory",
+              "skill",
+              "protected_instruction"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "selected": {
+            "default": true,
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_id",
+          "entry_id",
+          "kind",
+          "content_digest",
+          "content_available"
+        ],
+        "title": "LoadedKnowledgeFact",
         "type": "object"
       },
       "LocalImportRequest": {
@@ -1425,6 +3023,34 @@
         "title": "ManagementScope",
         "type": "string"
       },
+      "MaterializedKnowledgeFact": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "memory",
+              "skill",
+              "protected_instruction"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_id",
+          "kind",
+          "path"
+        ],
+        "title": "MaterializedKnowledgeFact",
+        "type": "object"
+      },
       "ModelBundle": {
         "properties": {
           "companions": {
@@ -1522,6 +3148,333 @@
         "title": "ModelBundle",
         "type": "object"
       },
+      "ModelJudgement": {
+        "properties": {
+          "model_review": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Review"
+          },
+          "note": {
+            "default": "Model judgement, not an executable check.",
+            "title": "Note",
+            "type": "string"
+          },
+          "source": {
+            "const": "assistant_message",
+            "default": "assistant_message",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "ModelJudgement",
+        "type": "object"
+      },
+      "ModelRequestCapture": {
+        "properties": {
+          "applied_per_request": {
+            "additionalProperties": true,
+            "title": "Applied Per Request",
+            "type": "object"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "available_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Tools",
+            "type": "array"
+          },
+          "capture_gaps": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capture Gaps",
+            "type": "array"
+          },
+          "discarded": {
+            "default": false,
+            "title": "Discarded",
+            "type": "boolean"
+          },
+          "expired": {
+            "default": false,
+            "title": "Expired",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure"
+          },
+          "generation_settings": {
+            "additionalProperties": true,
+            "title": "Generation Settings",
+            "type": "object"
+          },
+          "handler_returned": {
+            "default": false,
+            "title": "Handler Returned",
+            "type": "boolean"
+          },
+          "http_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Http Payload"
+          },
+          "http_payloads": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Http Payloads",
+            "type": "array"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "loaded_knowledge": {
+            "items": {
+              "$ref": "#/components/schemas/LoadedKnowledgeFact"
+            },
+            "title": "Loaded Knowledge",
+            "type": "array"
+          },
+          "memory_versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Versions",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "presented_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presented Tools",
+            "type": "array"
+          },
+          "redacted": {
+            "default": false,
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "redacted_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Redacted Fields",
+            "type": "array"
+          },
+          "redaction_mode": {
+            "default": "redact_secrets",
+            "enum": [
+              "retain",
+              "redact_secrets",
+              "discard"
+            ],
+            "title": "Redaction Mode",
+            "type": "string"
+          },
+          "request_prepared": {
+            "default": true,
+            "title": "Request Prepared",
+            "type": "boolean"
+          },
+          "response_observed": {
+            "default": false,
+            "title": "Response Observed",
+            "type": "boolean"
+          },
+          "retained": {
+            "default": true,
+            "title": "Retained",
+            "type": "boolean"
+          },
+          "retention_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Seconds"
+          },
+          "retrieved_material": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieved Material",
+            "type": "array"
+          },
+          "selected_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Profile Id"
+          },
+          "skill_versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Versions",
+            "type": "array"
+          },
+          "startup_mismatches": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Startup Mismatches",
+            "type": "array"
+          },
+          "transport_attempt_count": {
+            "default": 0,
+            "title": "Transport Attempt Count",
+            "type": "integer"
+          },
+          "transport_attempted": {
+            "default": false,
+            "title": "Transport Attempted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "title": "ModelRequestCapture",
+        "type": "object"
+      },
+      "PendingInterrupt": {
+        "description": "Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011).",
+        "properties": {
+          "action_requests": {
+            "items": {
+              "$ref": "#/components/schemas/PendingInterruptAction"
+            },
+            "title": "Action Requests",
+            "type": "array"
+          },
+          "environment": {
+            "const": "windows_host_shell",
+            "default": "windows_host_shell",
+            "title": "Environment",
+            "type": "string"
+          },
+          "isolation": {
+            "const": "none",
+            "default": "none",
+            "title": "Isolation",
+            "type": "string"
+          },
+          "kind": {
+            "const": "deepagents_interrupt_on",
+            "default": "deepagents_interrupt_on",
+            "title": "Kind",
+            "type": "string"
+          },
+          "note": {
+            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "title": "PendingInterrupt",
+        "type": "object"
+      },
+      "PendingInterruptAction": {
+        "properties": {
+          "allowed_decisions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Decisions",
+            "type": "array"
+          },
+          "args": {
+            "additionalProperties": true,
+            "title": "Args",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PendingInterruptAction",
+        "type": "object"
+      },
       "PinRuntimeRequest": {
         "description": "Production pin downloads the Windows CUDA 13.4 llama-server pair.\n\n``local_executable`` pins an already-managed runtime directory (the\nexecutable plus sibling CUDA DLLs) or a test fixture. It still writes\na runtime-manifest and never uses PATH.\n\nPinning while a managed server is running is rejected unless\n``stop_first`` is true.",
         "properties": {
@@ -1606,6 +3559,30 @@
           "display_name"
         ],
         "title": "ProfileWriteRequest",
+        "type": "object"
+      },
+      "RelatedFile": {
+        "description": "A file the application associates with a run. Not a checkpointer row.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "project_root",
+              "written_file",
+              "artifact"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "title": "RelatedFile",
         "type": "object"
       },
       "RenameProfileRequest": {
@@ -2452,6 +4429,30 @@
         "title": "SmokeResult",
         "type": "object"
       },
+      "StartupMismatch": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "loaded": {
+            "title": "Loaded"
+          },
+          "reason": {
+            "default": "selected profile startup is not the loaded deployment startup",
+            "title": "Reason",
+            "type": "string"
+          },
+          "selected": {
+            "title": "Selected"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "StartupMismatch",
+        "type": "object"
+      },
       "StorageCleanupResponse": {
         "properties": {
           "removed": {
@@ -2592,6 +4593,45 @@
         "title": "StorageSummary",
         "type": "object"
       },
+      "TaskCriteria": {
+        "properties": {
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "expected_artifacts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected Artifacts",
+            "type": "array"
+          },
+          "review_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Prompt"
+          }
+        },
+        "title": "TaskCriteria",
+        "type": "object"
+      },
+      "ToolMode": {
+        "enum": [
+          "live-tool",
+          "recorded-tool"
+        ],
+        "title": "ToolMode",
+        "type": "string"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2650,6 +4690,212 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/agent-runs": {
+      "get": {
+        "operationId": "list_agent_runs_v1_agent_runs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Agent Runs V1 Agent Runs Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agent Runs"
+      },
+      "post": {
+        "operationId": "start_agent_run_v1_agent_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Agent Run V1 Agent Runs Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Agent Run"
+      }
+    },
+    "/v1/agent-runs/{run_id}": {
+      "get": {
+        "operationId": "get_agent_run_v1_agent_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Agent Run V1 Agent Runs  Run Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Run"
+      }
+    },
+    "/v1/agent-runs/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancel_agent_run_v1_agent_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Cancel Agent Run V1 Agent Runs  Run Id  Cancel Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Agent Run"
+      }
+    },
+    "/v1/agent-runs/{run_id}/interrupt-decision": {
+      "post": {
+        "operationId": "decide_agent_run_interrupt_v1_agent_runs__run_id__interrupt_decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterruptDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Decide Agent Run Interrupt V1 Agent Runs  Run Id  Interrupt Decision Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Agent Run Interrupt"
+      }
+    },
+    "/v1/agent-tools": {
+      "get": {
+        "operationId": "list_agent_tools_v1_agent_tools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "title": "Response List Agent Tools V1 Agent Tools Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agent Tools"
+      }
+    },
     "/v1/bundles": {
       "get": {
         "operationId": "list_bundles_v1_bundles_get",
@@ -2957,6 +5203,289 @@
           }
         },
         "summary": "Repair Bundle"
+      }
+    },
+    "/v1/chat/conversations": {
+      "get": {
+        "operationId": "list_conversations_v1_chat_conversations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatConversationView"
+                  },
+                  "title": "Response List Conversations V1 Chat Conversations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Conversations"
+      },
+      "post": {
+        "operationId": "create_conversation_v1_chat_conversations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatConversationCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}": {
+      "get": {
+        "operationId": "get_conversation_v1_chat_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/cancel": {
+      "post": {
+        "operationId": "cancel_conversation_v1_chat_conversations__conversation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Cancel Conversation V1 Chat Conversations  Conversation Id  Cancel Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/interrupt-decision": {
+      "post": {
+        "operationId": "decide_conversation_interrupt_v1_chat_conversations__conversation_id__interrupt_decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InterruptDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Decide Conversation Interrupt V1 Chat Conversations  Conversation Id  Interrupt Decision Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Conversation Interrupt"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/start": {
+      "post": {
+        "operationId": "start_conversation_v1_chat_conversations__conversation_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/transcript": {
+      "put": {
+        "operationId": "replace_transcript_v1_chat_conversations__conversation_id__transcript_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatTranscriptReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Replace Transcript V1 Chat Conversations  Conversation Id  Transcript Put"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Transcript"
       }
     },
     "/v1/deployments": {
@@ -3406,6 +5935,99 @@
           }
         },
         "summary": "Stop Deployment"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "stream_run_events_v1_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "retry": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Run Events"
       }
     },
     "/v1/imports": {

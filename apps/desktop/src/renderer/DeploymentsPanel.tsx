@@ -3,6 +3,7 @@ import { api, DEFAULT_EMBEDDING_STARTUP } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { Choice, Help, numberChoices, tokenLabel } from "./ModelControls";
+import { mergedStartup, startupPayload } from "./deploymentSettings";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
@@ -24,6 +25,7 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
   const formRef = useRef<HTMLFormElement>(null);
   const hydrated = useRef({ bundle: "", deployment: "" });
   const dirty = useRef(false);
+  const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -71,16 +73,24 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
     let cancelled = false;
     setMaximumContext(null); setLayers(null); setContextChoices([]); setModelInfo("Reading model limits…");
     if (shouldHydrate) {
+    changedStartup.current = new Set(Object.keys(selectedRunning?.startup_overrides ?? {}));
     hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "" };
     setProfileId(selectedRunning?.profile_id ?? "");
     const starting = { ...initialSettings };
     const extra: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(selectedRunning?.applied_startup ?? {})) {
+    const inherited = profiles.find(profile => profile.id === selectedRunning?.profile_id);
+    const formStartup = inherited
+      ? mergedStartup(inherited.bags.startup.requested, selectedRunning?.startup_overrides ?? {})
+      : selectedRunning?.applied_startup ?? {};
+    for (const [key, value] of Object.entries(formStartup)) {
       if (key in starting) starting[key] = String(value);
       else if (key !== "host") extra[key] = value;
     }
-    if (selectedRunning?.server_props?.total_slots && !("parallel" in selectedRunning.applied_startup)) starting.parallel = String(selectedRunning.server_props.total_slots);
-    if (selectedRunning?.server_props?.n_ctx && Number(starting.parallel) === 1) starting.ctx_size = String(selectedRunning.server_props.n_ctx);
+    for (const [key, value] of Object.entries(selectedRunning?.startup_overrides ?? {})) {
+      if (value === null && key in starting) starting[key] = "";
+    }
+    if (!inherited && selectedRunning?.server_props?.total_slots && !("parallel" in selectedRunning.applied_startup)) starting.parallel = String(selectedRunning.server_props.total_slots);
+    if (!inherited && selectedRunning?.server_props?.n_ctx && Number(starting.parallel) === 1) starting.ctx_size = String(selectedRunning.server_props.n_ctx);
     setSettings(starting); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
     }
     if (selectedBundleId) void api.modelConfiguration(selectedBundleId, selectedRunning?.id).then(report => {
@@ -109,8 +119,9 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
     }, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [deployments]);
-  function change(key: string, value: string) { dirty.current = true; setSettings(previous => ({ ...previous, [key]: value })); setSettingsPreview(null); setMessage(""); }
+  function change(key: string, value: string) { dirty.current = true; changedStartup.current.add(key); setSettings(previous => ({ ...previous, [key]: value })); setSettingsPreview(null); setMessage(""); }
   function selectProfile(id: string) {
+    changedStartup.current = new Set();
     setProfileId(id); dirty.current = true;
     const profile = profiles.find(item => item.id === id);
     const next = { ...initialSettings }, extra: Record<string, unknown> = {};
@@ -125,24 +136,10 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
     try { await operation(); } catch (error) { setMessage(errorMessage(error)); setMessageTone("error"); } finally { setBusy(""); }
   }
   function startup(): Record<string, unknown> {
-    let extra: Record<string, unknown> = {};
-    if (advancedStartup.trim()) {
-      const parsed: unknown = JSON.parse(advancedStartup);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Additional settings must be a JSON object.");
-      extra = parsed as Record<string, unknown>;
-      const duplicate = Object.keys(extra).find(key => key in settings);
-      if (duplicate) throw new Error(`Use the ${duplicate.replaceAll("_", " ")} control above instead of repeating it in additional settings.`);
-    }
-    const numeric = ["ctx_size", "n_gpu_layers", "threads", "threads_batch", "parallel", "port", "batch_size", "ubatch_size", "reasoning_budget"];
-    for (const [key, value] of Object.entries(settings)) {
-      if (value === "" || (key === "pooling" && settings.embedding !== "on")) continue;
-      if (value === "custom") throw new Error(`Enter a value for ${key.replaceAll("_", " ")}.`);
-      extra[key] = numeric.includes(key) && value !== "auto" ? Number(value) : value;
-    }
-    return extra;
+    return startupPayload(settings, advancedStartup, profiles.find(profile => profile.id === profileId)?.bags.startup.requested, changedStartup.current);
   }
   async function preview() {
-    const result = await api.previewSettings(startup(), {}, {}); setSettingsPreview(result);
+    const result = await api.previewSettings(mergedStartup(profiles.find(profile => profile.id === profileId)?.bags.startup.requested ?? {}, startup()), {}, {}); setSettingsPreview(result);
     if (result.startup.unsupported.length || result.startup.retired.length) throw new Error("Some settings need attention. See the details below.");
     return result;
   }

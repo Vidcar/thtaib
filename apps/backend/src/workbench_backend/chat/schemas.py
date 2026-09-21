@@ -24,6 +24,7 @@ class ChatConversationCreateRequest(BaseModel):
     project_path: str | None = None
     workspace_id: str | None = None
     profile_id: str | None = None
+    inherit_deployment_settings: bool = True
     memory_version_refs: list[str] = Field(default_factory=list)
     skill_version_refs: list[str] = Field(default_factory=list)
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
@@ -36,6 +37,7 @@ class ChatStartRequest(BaseModel):
     task: str
     deployment_id: str | None = None
     profile_id: str | None = None
+    inherit_deployment_settings: bool = True
     project_path: str | None = None
     workspace_id: str | None = None
     presented_tools: list[str] | None = None
@@ -95,6 +97,7 @@ class ChatConversation(BaseModel):
     id: str
     deployment_id: str
     profile_id: str | None = None
+    inherit_deployment_settings: bool = True
     project_path: str | None = None
     workspace_id: str | None = None
     thread_id: str | None = None

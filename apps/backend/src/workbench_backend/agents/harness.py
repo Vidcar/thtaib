@@ -310,6 +310,7 @@ class HarnessService:
                 retrieval_corpus_documents=len(retrieval_documents),
                 retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
                 materialized_knowledge=knowledge_plan.facts,
+                inherit_deployment_settings=request.inherit_deployment_settings,
             )
             if request.workspace_id:
                 others = self.active_workspace_run_ids(request.workspace_id)
@@ -337,7 +338,7 @@ class HarnessService:
                 updated_at=now,
                 workspace_id=request.workspace_id,
                 project_path=project_path,
-                profile_id=request.profile_id,
+                profile_id=setup.selected_profile_id,
                 parent_run_id=request.parent_run_id,
                 source_surface=request.source_surface,
                 tool_mode=request.tool_mode,

@@ -123,6 +123,7 @@ export interface Deployment {
   profile_id?: string | null;
   endpoint: string | null;
   applied_startup: Record<string, unknown>;
+  startup_overrides?: Record<string, unknown>;
   settings: SettingsBags;
   health: { healthy: boolean; detail: string | null } | null;
   resource_usage: { available: boolean; cpu_percent: number | null; rss_bytes: number | null; reason: string | null } | null;
@@ -415,6 +416,7 @@ export interface ChatConversation {
   id: string;
   deployment_id: string;
   profile_id: string | null;
+  inherit_deployment_settings?: boolean;
   project_path: string | null;
   workspace_id: string | null;
   thread_id: string | null;

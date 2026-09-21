@@ -180,6 +180,7 @@ export const api = {
   createChatConversation: (payload: {
     deployment_id: string;
     profile_id?: string;
+    inherit_deployment_settings?: boolean;
     project_path?: string;
     workspace_id?: string;
     memory_version_refs?: string[];
@@ -202,6 +203,7 @@ export const api = {
       presented_tools?: string[];
       deployment_id?: string;
       profile_id?: string | null;
+      inherit_deployment_settings?: boolean;
       project_path?: string | null;
       workspace_id?: string | null;
       memory_version_refs?: string[];

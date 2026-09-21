@@ -162,6 +162,7 @@ class AgentStartRequest(BaseModel):
     workspace_id: str | None = None
     project_path: str | None = None
     profile_id: str | None = None
+    inherit_deployment_settings: bool = True
     parent_run_id: str | None = None
     tool_mode: ToolMode = ToolMode.live_tool
     recorded_fixtures: list[dict[str, Any]] | None = None
