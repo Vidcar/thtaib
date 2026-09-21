@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import threading
 from typing import Any
 from uuid import uuid4, uuid5, NAMESPACE_URL
@@ -81,6 +82,7 @@ class InteractionService:
                 raise invalid("Conversation has no saved execution thread.")
             prior = self.store.get_interaction(thread_id)
             if prior:
+                self._repair_chat_projection(view, prior)
                 return {"thread_id": thread_id}
             snapshot = self._seed_chat(view)
             self.store.register_interaction(thread_id, "chat", graph_id, view.id, snapshot)
@@ -110,28 +112,165 @@ class InteractionService:
     def _seed_chat(self, view: Any) -> dict[str, Any]:
         retained = conversation_state(self.store.paths.checkpoints_db, view.thread_id)
         checkpoint_messages = archive_messages([], retained.get("messages", []))
-        claimed: set[str] = set()
-        archive = []
-        # One-time display migration: match retained identities in order; older
-        # compacted transcript entries receive deterministic display-only IDs.
+        return self._seed_chat_archive(view, checkpoint_messages)
+
+    def _seed_chat_archive(self, view: Any, checkpoint_messages: list[dict[str, Any]]) -> dict[str, Any]:
+        archive: list[dict[str, Any]] = []
+        if view.history_replaced:
+            for index, item in enumerate(view.transcript):
+                kind = {"user": "human", "assistant": "ai", "system": "system"}.get(item.role)
+                if kind is None:
+                    continue
+                archive.append({"id": item.id or str(uuid5(NAMESPACE_URL, f"{view.id}:{index}:{item.role}")),
+                                "type": kind, "content": item.content_blocks or item.content})
+            return {"messages": archive, "workbench": {"run": None, "conversation_id": view.id, "archive_seed_version": 2,
+                "display_excluded_message_ids": [m["id"] for m in checkpoint_messages],
+                "display_hidden_run_id": view.current_run_id}}
+        matches = self._align_checkpoint_suffix(view, checkpoint_messages)
+        checkpoint_cursor = 0
+        # One-time display migration: match retained identities in transcript
+        # order. Legacy rows without IDs are aligned from the retained suffix so
+        # repeated equal text does not steal a newer runtime identity.
         for index, item in enumerate(view.transcript):
             kind = {"user": "human", "assistant": "ai", "system": "system"}.get(item.role)
             if kind is None:
                 continue
-            match = next((m for m in checkpoint_messages if m["id"] not in claimed and
+            checkpoint_index = matches.get(index)
+            if checkpoint_index is None:
+                archive.append({"id": item.id or str(uuid5(NAMESPACE_URL, f"{view.id}:{index}:{item.role}")),
+                                "type": kind, "content": item.content_blocks or item.content})
+                continue
+            archive = archive_messages(archive, checkpoint_messages[checkpoint_cursor:checkpoint_index + 1])
+            checkpoint_cursor = checkpoint_index + 1
+        workbench: dict[str, Any] = {"run": None, "conversation_id": view.id, "archive_seed_version": 2}
+        if archive and checkpoint_messages and not matches:
+            # No defensible correspondence: retain the readable archive rather
+            # than duplicate or invent positions for compacted execution rows.
+            # Subsequent values must not reintroduce those ambiguous old rows.
+            workbench["display_excluded_message_ids"] = [m["id"] for m in checkpoint_messages]
+        else:
+            archive = archive_messages(archive, checkpoint_messages[checkpoint_cursor:])
+        return {"messages": archive, "workbench": workbench}
+
+    def _repair_chat_projection(self, view: Any, binding: dict[str, Any]) -> None:
+        with self._projection_lock:
+            binding = self.store.get_interaction(binding["id"]) or binding
+            if binding.get("surface") != "chat" or view.history_replaced:
+                return
+            snapshot = copy.deepcopy(binding["snapshot"])
+            workbench = snapshot.get("workbench", {})
+            if (workbench.get("archive_seed_version") == 2 or
+                    workbench.get("display_cutover_seq") or workbench.get("display_hidden_run_id") or
+                    workbench.get("display_excluded_message_ids")):
+                return
+            messages = self._repaired_archive(view, snapshot.get("messages", []))
+            if messages is None:
+                return
+            repaired = copy.deepcopy(snapshot)
+            repaired["messages"] = messages
+            repaired.setdefault("workbench", {})["archive_seed_version"] = 2
+            self.store.append_interaction(binding["id"], [event("values", repaired)], snapshot=repaired,
+                                          run_id=binding.get("run_id"))
+
+    def _repaired_archive(self, view: Any, existing: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        """Recognize the old seed's exact provenance, never a text permutation.
+
+        Display-only UUIDs identify original transcript positions. The faulty
+        algorithm placed those rows first and appended the retained checkpoint.
+        Reconstruct that algorithm using the durable projection's own complete
+        messages; require byte-equivalent public records before replacing a
+        prefix. Later rows and all metadata remain untouched. No checkpoint read
+        is needed, so compaction since registration does not destroy the proof.
+        """
+        display_ids = {
+            str(uuid5(NAMESPACE_URL, f"{view.id}:{index}:{item.role}"))
+            for index, item in enumerate(view.transcript) if not item.id
+        }
+        if not any(item.get("id") in display_ids for item in existing):
+            return None
+        boundaries = [index + 1 for index, item in enumerate(existing)
+                      if item.get("type") in {"human", "ai", "system"}
+                      and not item.get("tool_calls")]
+        for count in range(min(len(view.transcript), len(boundaries)), 1, -1):
+            size = boundaries[count - 1]
+            prefix = existing[:size]
+            retained = [item for item in prefix if item.get("id") not in display_ids]
+            source = view.model_copy(update={"transcript": view.transcript[:count]})
+            if not self._align_checkpoint_suffix(source, retained):
+                continue
+            old = self._legacy_seed_archive(source, retained)
+            if old != prefix:
+                continue
+            repaired = self._seed_chat_archive(source, retained)["messages"]
+            if repaired == prefix:
+                return None
+            # New display identities must not collide with later durable rows.
+            if {m.get("id") for m in repaired} & {m.get("id") for m in existing[size:]}:
+                continue
+            return repaired + existing[size:]
+        return None
+
+    def _legacy_seed_archive(self, view: Any, checkpoint: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fingerprint the delivered faulty algorithm solely for narrow repair."""
+        claimed: set[str] = set()
+        archive = []
+        for index, item in enumerate(view.transcript):
+            kind = {"user": "human", "assistant": "ai", "system": "system"}[item.role]
+            match = next((m for m in checkpoint if m["id"] not in claimed and
                           m["type"] == kind and self._text(m.get("content")) == item.content), None)
             ident = item.id or (match["id"] if match else str(uuid5(NAMESPACE_URL, f"{view.id}:{index}:{item.role}")))
             claimed.add(ident)
             archive.append({"id": ident, "type": kind, "content": item.content_blocks or item.content})
-        if view.history_replaced:
-            return {"messages": archive, "workbench": {"run": None, "conversation_id": view.id,
-                "display_excluded_message_ids": [m["id"] for m in checkpoint_messages],
-                "display_hidden_run_id": view.current_run_id}}
-        if checkpoint_messages:
-            checkpoint_ids = {message["id"] for message in checkpoint_messages if message.get("id")}
-            archive = [message for message in archive if message.get("id") not in checkpoint_ids]
-        archive = archive_messages(archive, checkpoint_messages)
-        return {"messages": archive, "workbench": {"run": None, "conversation_id": view.id}}
+        checkpoint_ids = {m["id"] for m in checkpoint}
+        return archive_messages([m for m in archive if m["id"] not in checkpoint_ids], checkpoint)
+
+    def _align_checkpoint_suffix(self, view: Any, checkpoint_messages: list[dict[str, Any]]) -> dict[int, int]:
+        transcript = []
+        for index, item in enumerate(view.transcript):
+            kind = {"user": "human", "assistant": "ai", "system": "system"}.get(item.role)
+            if kind is not None:
+                transcript.append((index, kind, self._content_key(item.content_blocks or item.content), item.id))
+        checkpoint = [
+            (index, message.get("type"), self._content_key(message.get("content")), message.get("id"))
+            for index, message in enumerate(checkpoint_messages)
+            if message.get("type") in {"human", "ai", "system"} and not (
+                message.get("type") == "ai" and message.get("tool_calls")
+            )
+        ]
+        # Explicit identities remain authoritative even when the retained tail
+        # is newer than the readable archive (for example during generation).
+        matches: dict[int, int] = {}
+        cursor = -1
+        for source_index, kind, _content, ident in transcript:
+            if not ident:
+                continue
+            found = next((i for i, target_kind, _target_content, target_ident in checkpoint
+                          if i > cursor and target_ident == ident and target_kind == kind), None)
+            if found is not None:
+                matches[source_index] = found
+                cursor = found
+        if not transcript or not checkpoint:
+            return matches
+        suffix: dict[int, int] = {}
+        transcript_index = len(transcript) - 1
+        checkpoint_index = len(checkpoint) - 1
+        while transcript_index >= 0 and checkpoint_index >= 0:
+            source_index, kind, content, ident = transcript[transcript_index]
+            target_index, target_kind, target_content, target_ident = checkpoint[checkpoint_index]
+            if kind != target_kind or content != target_content:
+                break
+            if ident and ident != target_ident:
+                break
+            suffix[source_index] = target_index
+            transcript_index -= 1
+            checkpoint_index -= 1
+        if checkpoint_index >= 0:
+            return matches
+        return suffix
+
+    @staticmethod
+    def _content_key(content: Any) -> str:
+        return json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
     def replace_chat_display_archive(self, view: Any) -> None:
         """Project an authorized display-only edit without changing execution."""

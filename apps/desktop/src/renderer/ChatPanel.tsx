@@ -25,6 +25,10 @@ import {
 
 interface PendingChatSubmit {
   id: string;
+  conversation_id: string;
+  thread_id: string;
+  selection_generation: number;
+  draft_revision: number;
   task: string;
   deployment_id: string;
   profile_id: string | null;
@@ -41,41 +45,86 @@ interface PendingChatSubmit {
 
 function ChatInteractionStream(props: {
   threadId: string;
+  selectionGeneration: number;
   conversation: ChatConversation;
   pendingSubmit: PendingChatSubmit | null;
-  clearPendingSubmit: () => void;
-  rememberConversation: (conversation: ChatConversation) => void;
-  setTask: (task: string) => void;
+  clearPendingSubmit: (pending: PendingChatSubmit) => void;
+  updateConversation: (conversation: ChatConversation, owner: SelectionOwner) => void;
+  updateConversationForRun: (conversation: ChatConversation, owner: SelectionOwner, runId: string) => void;
+  clearSubmittedDraft: (pending: PendingChatSubmit) => void;
   setMessage: (message: string) => void;
+  isCurrentOwner: (owner: SelectionOwner) => boolean;
 }) {
-  const { threadId, conversation, pendingSubmit, clearPendingSubmit, rememberConversation, setTask, setMessage } = props;
+  const {
+    threadId,
+    selectionGeneration,
+    conversation,
+    pendingSubmit,
+    clearPendingSubmit,
+    updateConversation,
+    updateConversationForRun,
+    clearSubmittedDraft,
+    setMessage,
+    isCurrentOwner,
+  } = props;
+  const owner = { conversationId: conversation.id, threadId, generation: selectionGeneration };
   return (
-    <InteractionStream threadId={threadId} onError={(error) => setMessage(errorMessage(error))}>
+    <InteractionStream
+      threadId={threadId}
+      onError={(error) => {
+        if (isCurrentOwner(owner)) {
+          setMessage(errorMessage(error));
+        }
+      }}
+    >
       {(stream) => (
         <ChatInteractionStreamContent
           stream={stream}
+          owner={owner}
           conversation={conversation}
           pendingSubmit={pendingSubmit}
           clearPendingSubmit={clearPendingSubmit}
-          rememberConversation={rememberConversation}
-          setTask={setTask}
+          updateConversation={updateConversation}
+          updateConversationForRun={updateConversationForRun}
+          clearSubmittedDraft={clearSubmittedDraft}
           setMessage={setMessage}
+          isCurrentOwner={isCurrentOwner}
         />
       )}
     </InteractionStream>
   );
 }
 
+interface SelectionOwner {
+  conversationId: string;
+  threadId: string;
+  generation: number;
+}
+
 function ChatInteractionStreamContent(props: {
   stream: WorkbenchStream;
+  owner: SelectionOwner;
   conversation: ChatConversation;
   pendingSubmit: PendingChatSubmit | null;
-  clearPendingSubmit: () => void;
-  rememberConversation: (conversation: ChatConversation) => void;
-  setTask: (task: string) => void;
+  clearPendingSubmit: (pending: PendingChatSubmit) => void;
+  updateConversation: (conversation: ChatConversation, owner: SelectionOwner) => void;
+  updateConversationForRun: (conversation: ChatConversation, owner: SelectionOwner, runId: string) => void;
+  clearSubmittedDraft: (pending: PendingChatSubmit) => void;
   setMessage: (message: string) => void;
+  isCurrentOwner: (owner: SelectionOwner) => boolean;
 }) {
-  const { stream, conversation, pendingSubmit, clearPendingSubmit, rememberConversation, setTask, setMessage } = props;
+  const {
+    stream,
+    owner,
+    conversation,
+    pendingSubmit,
+    clearPendingSubmit,
+    updateConversation,
+    updateConversationForRun,
+    clearSubmittedDraft,
+    setMessage,
+    isCurrentOwner,
+  } = props;
   const projection = useWorkbenchProjection(stream);
   const run = projection.run;
   const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
@@ -96,14 +145,23 @@ function ChatInteractionStreamContent(props: {
       return;
     }
     projectionSignature.current = signature;
-    rememberConversation({
+    if (
+      pendingSubmit &&
+      pendingSubmit.conversation_id === owner.conversationId &&
+      pendingSubmit.thread_id === owner.threadId &&
+      pendingSubmit.selection_generation === owner.generation &&
+      run.input_message_id === pendingSubmit.id
+    ) {
+      clearPendingSubmit(pendingSubmit);
+    }
+    updateConversation({
       ...conversation,
       current_run: run,
       current_run_id: run.id,
       run_ids: run && !conversation.run_ids.includes(run.id) ? [...conversation.run_ids, run.id] : conversation.run_ids,
       updated_at: new Date().toISOString(),
-    });
-  }, [conversation, rememberConversation, run]);
+    }, owner);
+  }, [clearPendingSubmit, conversation, owner, pendingSubmit, run, updateConversation]);
 
   useEffect(() => {
     if (!run || isAgentRunLive(run.status)) {
@@ -114,29 +172,56 @@ function ChatInteractionStreamContent(props: {
       return;
     }
     terminalRefreshKey.current = key;
-    void api.chatConversation(conversation.id).then(rememberConversation).catch((error: unknown) => {
+    const terminalRunId = run.id;
+    void api.chatConversation(conversation.id).then((next) => {
+      updateConversationForRun(next, owner, terminalRunId);
+    }).catch((error: unknown) => {
+      if (!isCurrentOwner(owner)) {
+        return;
+      }
       setMessage(errorMessage(error));
     });
-  }, [conversation.id, rememberConversation, run?.id, run?.status, setMessage]);
+  }, [conversation.id, isCurrentOwner, owner, run?.id, run?.status, setMessage, updateConversationForRun]);
 
   useEffect(() => {
     if (!pendingSubmit) {
+      return;
+    }
+    if (
+      pendingSubmit.conversation_id !== owner.conversationId ||
+      pendingSubmit.thread_id !== owner.threadId ||
+      pendingSubmit.selection_generation !== owner.generation ||
+      !isCurrentOwner(owner)
+    ) {
       return;
     }
     if (submittedIds.current.has(pendingSubmit.id)) {
       return;
     }
     submittedIds.current.add(pendingSubmit.id);
-    const { id: messageId, task: inputTask, ...workbench } = pendingSubmit;
-    clearPendingSubmit();
+    const {
+      id: messageId,
+      task: inputTask,
+      conversation_id: _conversationId,
+      thread_id: _threadId,
+      selection_generation: _selectionGeneration,
+      draft_revision: _draftRevision,
+      ...workbench
+    } = pendingSubmit;
     void stream
       .submit(
         { messages: [{ type: "human", content: inputTask, id: messageId }] },
         { multitaskStrategy: "reject", metadata: { workbench } },
       )
-      .then(() => setTask(""))
-      .catch((error: unknown) => setMessage(errorMessage(error)));
-  }, [clearPendingSubmit, pendingSubmit, setMessage, setTask, stream]);
+      .then(() => clearSubmittedDraft(pendingSubmit))
+      .catch((error: unknown) => {
+        clearPendingSubmit(pendingSubmit);
+        if (!isCurrentOwner(owner)) {
+          return;
+        }
+        setMessage(errorMessage(error));
+      });
+  }, [clearPendingSubmit, clearSubmittedDraft, isCurrentOwner, owner, pendingSubmit, setMessage, stream]);
 
   return (
     <>
@@ -151,7 +236,11 @@ function ChatInteractionStreamContent(props: {
                 { decisions: [{ type }] },
                 { interruptId: visibleInterrupt.id, namespace: visibleInterrupt.namespace },
               )
-              .catch((error: unknown) => setMessage(errorMessage(error)));
+              .catch((error: unknown) => {
+                if (isCurrentOwner(owner)) {
+                  setMessage(errorMessage(error));
+                }
+              });
           }}
         />
       ) : null}
@@ -248,16 +337,70 @@ export function ChatPanel() {
   const [sending, setSending] = useState(false);
   const [pendingSubmit, setPendingSubmit] = useState<PendingChatSubmit | null>(null);
   const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
+  const [selectionLoading, setSelectionLoading] = useState<ChatConversation | null>(null);
+  const [boundGeneration, setBoundGeneration] = useState(0);
   const transcriptEnd = useRef<HTMLDivElement | null>(null);
   const selectionRequest = useRef(0);
+  const draftRevision = useRef(0);
+  const activeOwner = useRef<{ conversationId: string | null; threadId: string | null; generation: number }>({
+    conversationId: null,
+    threadId: null,
+    generation: 0,
+  });
 
-  const rememberConversation = useCallback((next: ChatConversation): void => {
-    setConversation(next);
+  const cacheConversation = useCallback((next: ChatConversation): void => {
     setConversations((current) => {
       const others = current.filter((item) => item.id !== next.id);
       return [next, ...others];
     });
   }, []);
+
+  const isCurrentOwner = useCallback((owner: SelectionOwner): boolean => (
+    selectionRequest.current === owner.generation &&
+    activeOwner.current.conversationId === owner.conversationId &&
+    activeOwner.current.threadId === owner.threadId &&
+    activeOwner.current.generation === owner.generation
+  ), []);
+
+  const updateConversation = useCallback((next: ChatConversation, owner: SelectionOwner): void => {
+    cacheConversation(next);
+    if (isCurrentOwner(owner)) {
+      setConversation(next);
+    }
+  }, [cacheConversation, isCurrentOwner]);
+
+  const updateConversationForRun = useCallback((next: ChatConversation, owner: SelectionOwner, runId: string): void => {
+    cacheConversation(next);
+    if (isCurrentOwner(owner)) {
+      setConversation((current) => (
+        current?.id === owner.conversationId && current.current_run_id === runId
+          ? next
+          : current
+      ));
+    }
+  }, [cacheConversation, isCurrentOwner]);
+
+  const updateTask = useCallback((next: string): void => {
+    draftRevision.current += 1;
+    setTask(next);
+  }, []);
+
+  const clearPendingSubmit = useCallback((pending: PendingChatSubmit): void => {
+    setPendingSubmit((current) => (current?.id === pending.id ? null : current));
+  }, []);
+
+  const clearSubmittedDraft = useCallback((pending: PendingChatSubmit): void => {
+    const owner = {
+      conversationId: pending.conversation_id,
+      threadId: pending.thread_id,
+      generation: pending.selection_generation,
+    };
+    if (!isCurrentOwner(owner) || draftRevision.current !== pending.draft_revision) {
+      return;
+    }
+    draftRevision.current += 1;
+    setTask("");
+  }, [isCurrentOwner]);
 
   async function refresh(): Promise<void> {
     const [nextDeployments, nextProfiles, tools, nextConversations, nextKnowledge] = await Promise.all([
@@ -300,13 +443,19 @@ export function ChatPanel() {
 
   function startFresh(): void {
     selectionRequest.current += 1;
+    activeOwner.current = { conversationId: null, threadId: null, generation: selectionRequest.current };
+    setBoundGeneration(selectionRequest.current);
     setConversation(null);
     setInteractionThreadId(null);
-    setTask("");
+    setSelectionLoading(null);
+    setPendingSubmit(null);
+    setSending(false);
+    updateTask("");
     setMessage("");
   }
 
-  const runBusy = conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false;
+  const selectionBusy = Boolean(selectionLoading);
+  const runBusy = (conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false) || Boolean(pendingSubmit);
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
   const pendingInterrupt = visiblePendingInterrupt(conversation?.current_run);
   const embedderDeployments = deployments.filter((item) => isDeclaredEmbedder(item));
@@ -318,9 +467,12 @@ export function ChatPanel() {
 
   async function sendTurn(): Promise<void> {
     const text = task.trim();
-    if (!text || !selectedDeployment || sending || runBusy) {
+    if (!text || !selectedDeployment || selectionBusy || sending || runBusy) {
       return;
     }
+    const requestId = selectionRequest.current;
+    const originConversationId = conversation?.id ?? null;
+    const capturedDraftRevision = draftRevision.current;
     setSending(true);
     setMessage("");
     try {
@@ -335,16 +487,37 @@ export function ChatPanel() {
           embedding_deployment_id: embeddingDeploymentId || undefined,
           ...refs,
         }));
+      cacheConversation(created);
+      if (
+        selectionRequest.current !== requestId ||
+        (originConversationId !== null && activeOwner.current.conversationId !== originConversationId)
+      ) {
+        return;
+      }
       const threadId =
         interactionThreadId ??
         (await api.registerAgentInteractionThread({
           source_surface: "chat",
           conversation_id: created.id,
         })).thread_id;
+      if (
+        selectionRequest.current !== requestId ||
+        (originConversationId !== null && activeOwner.current.conversationId !== originConversationId)
+      ) {
+        return;
+      }
+      const generation = selectionRequest.current;
+      activeOwner.current = { conversationId: created.id, threadId, generation };
+      setBoundGeneration(generation);
       setInteractionThreadId(threadId);
-      rememberConversation(created);
+      setSelectionLoading(null);
+      setConversation(created);
       setPendingSubmit({
         id: crypto.randomUUID(),
+        conversation_id: created.id,
+        thread_id: threadId,
+        selection_generation: generation,
+        draft_revision: capturedDraftRevision,
         task: text,
         deployment_id: deploymentId,
         profile_id: profileId && profileId !== "!none" ? profileId : null,
@@ -355,9 +528,13 @@ export function ChatPanel() {
         ...refs,
       });
     } catch (error: unknown) {
-      fail(error);
+      if (selectionRequest.current === requestId) {
+        fail(error);
+      }
     } finally {
-      setSending(false);
+      if (selectionRequest.current === requestId) {
+        setSending(false);
+      }
     }
   }
 
@@ -390,17 +567,24 @@ export function ChatPanel() {
               <li key={item.id}>
                 <button
                   type="button"
-                  className={item.id === conversation?.id ? "nav-item active" : "nav-item"}
+                  className={item.id === conversation?.id || item.id === selectionLoading?.id ? "nav-item active" : "nav-item"}
                   onClick={() => {
                     const requestId = selectionRequest.current + 1;
                     selectionRequest.current = requestId;
+                    activeOwner.current = { conversationId: null, threadId: null, generation: requestId };
+                    setBoundGeneration(requestId);
+                    setConversation(null);
+                    setInteractionThreadId(null);
+                    setSelectionLoading(item);
+                    setPendingSubmit(null);
+                    setSending(false);
                     void api
                       .chatConversation(item.id)
                       .then(async (next) => {
                         if (selectionRequest.current !== requestId) {
                           return;
                         }
-                        rememberConversation(next);
+                        cacheConversation(next);
                         const registered = await api.registerAgentInteractionThread({
                           source_surface: "chat",
                           conversation_id: next.id,
@@ -408,7 +592,11 @@ export function ChatPanel() {
                         if (selectionRequest.current !== requestId) {
                           return;
                         }
+                        activeOwner.current = { conversationId: next.id, threadId: registered.thread_id, generation: requestId };
+                        setBoundGeneration(requestId);
+                        setConversation(next);
                         setInteractionThreadId(registered.thread_id);
+                        setSelectionLoading(null);
                         setDeploymentId(next.deployment_id);
                         setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
                         setProfileId(next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
@@ -420,7 +608,12 @@ export function ChatPanel() {
                         ]);
                         setMessage("");
                       })
-                      .catch(fail);
+                      .catch((error: unknown) => {
+                        if (selectionRequest.current === requestId) {
+                          setSelectionLoading(null);
+                          fail(error);
+                        }
+                      });
                   }}
                 >
                   <span className="nav-item-title">{conversationTitle(item)}</span>
@@ -551,6 +744,10 @@ export function ChatPanel() {
             <EmptyState title="Choose a model setup">
               Open Models and save a setup for Chat, start a model, or connect a server. A saved local setup loads automatically when you send a message.
             </EmptyState>
+          ) : selectionLoading ? (
+            <EmptyState title="Loading conversation">
+              Opening {conversationTitle(selectionLoading)}.
+            </EmptyState>
           ) : !conversation && transcript.length === 0 ? (
             <EmptyState title="Start a conversation">
               Send a message. A project folder is optional. Without one, the assistant can talk but
@@ -560,12 +757,15 @@ export function ChatPanel() {
             <ChatInteractionStream
               key={`${conversation.id}:${interactionThreadId}`}
               threadId={interactionThreadId}
+              selectionGeneration={boundGeneration}
               conversation={conversation}
               pendingSubmit={pendingSubmit}
-              clearPendingSubmit={() => setPendingSubmit(null)}
-              rememberConversation={rememberConversation}
-              setTask={setTask}
+              clearPendingSubmit={clearPendingSubmit}
+              updateConversation={updateConversation}
+              updateConversationForRun={updateConversationForRun}
+              clearSubmittedDraft={clearSubmittedDraft}
               setMessage={setMessage}
+              isCurrentOwner={isCurrentOwner}
             />
           ) : (
             transcript.map((item, index) => (
@@ -598,9 +798,24 @@ export function ChatPanel() {
                 if (!conversation.current_run) {
                   return;
                 }
-                void api.cancelAgentRun(conversation.current_run.id)
-                  .then((next) => rememberConversation({ ...conversation, current_run: next, current_run_id: next.id }))
-                  .catch(fail);
+                if (!interactionThreadId) {
+                  return;
+                }
+                const owner = {
+                  conversationId: conversation.id,
+                  threadId: interactionThreadId,
+                  generation: boundGeneration,
+                };
+                const cancelledRunId = conversation.current_run.id;
+                void api.cancelAgentRun(cancelledRunId)
+                  .then((next) => {
+                    updateConversationForRun({ ...conversation, current_run: next, current_run_id: next.id }, owner, cancelledRunId);
+                  })
+                  .catch((error: unknown) => {
+                    if (isCurrentOwner(owner)) {
+                      fail(error);
+                    }
+                  });
               }}
             />
           </details>
@@ -626,7 +841,7 @@ export function ChatPanel() {
             Message
             <textarea
               value={task}
-              onChange={(event) => setTask(event.target.value)}
+              onChange={(event) => updateTask(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -634,12 +849,12 @@ export function ChatPanel() {
                 }
               }}
               placeholder="Ask or give a task. Shift+Enter for a new line."
-              disabled={sending}
+              disabled={selectionBusy || sending}
             />
           </label>
           <div className="actions">
-            <button type="submit" disabled={!selectedDeployment || !task.trim() || runBusy || sending}>
-              {sending || runBusy ? "Sending…" : "Send"}
+            <button type="submit" disabled={!selectedDeployment || !task.trim() || selectionBusy || runBusy || sending}>
+              {selectionBusy || sending || runBusy ? "Sending…" : "Send"}
             </button>
             <button
               type="button"
@@ -651,9 +866,24 @@ export function ChatPanel() {
                 if (!conversation.current_run) {
                   return;
                 }
-                void api.cancelAgentRun(conversation.current_run.id)
-                  .then((next) => rememberConversation({ ...conversation, current_run: next, current_run_id: next.id }))
-                  .catch(fail);
+                if (!interactionThreadId) {
+                  return;
+                }
+                const owner = {
+                  conversationId: conversation.id,
+                  threadId: interactionThreadId,
+                  generation: boundGeneration,
+                };
+                const cancelledRunId = conversation.current_run.id;
+                void api.cancelAgentRun(cancelledRunId)
+                  .then((next) => {
+                    updateConversationForRun({ ...conversation, current_run: next, current_run_id: next.id }, owner, cancelledRunId);
+                  })
+                  .catch((error: unknown) => {
+                    if (isCurrentOwner(owner)) {
+                      fail(error);
+                    }
+                  });
               }}
             >
               Cancel

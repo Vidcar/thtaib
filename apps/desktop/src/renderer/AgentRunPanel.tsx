@@ -18,6 +18,9 @@ import {
 
 interface PendingAgentSubmit {
   id: string;
+  threadId: string;
+  generation: number;
+  draftRevision: number;
   task: string;
   deploymentId: string;
   projectPath: string;
@@ -26,41 +29,60 @@ interface PendingAgentSubmit {
 
 function AgentRunStream(props: {
   threadId: string;
+  generation: number;
   run: AgentRun | null;
   pendingSubmit: PendingAgentSubmit | null;
-  clearPendingSubmit: () => void;
-  setRun: (run: AgentRun) => void;
-  setTask: (task: string) => void;
+  clearPendingSubmit: (pending: PendingAgentSubmit) => void;
+  updateRun: (run: AgentRun, owner: AgentRunOwner) => void;
+  clearSubmittedDraft: (pending: PendingAgentSubmit) => void;
   setMessage: (message: string) => void;
+  isCurrentOwner: (owner: AgentRunOwner) => boolean;
 }) {
-  const { threadId, run, pendingSubmit, clearPendingSubmit, setRun, setTask, setMessage } = props;
+  const { threadId, generation, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
+  const owner = { threadId, generation };
   return (
-    <InteractionStream threadId={threadId} onError={(error) => setMessage(errorMessage(error))}>
+    <InteractionStream
+      threadId={threadId}
+      onError={(error) => {
+        if (isCurrentOwner(owner)) {
+          setMessage(errorMessage(error));
+        }
+      }}
+    >
       {(stream) => (
         <AgentRunStreamContent
           stream={stream}
+          owner={owner}
           run={run}
           pendingSubmit={pendingSubmit}
           clearPendingSubmit={clearPendingSubmit}
-          setRun={setRun}
-          setTask={setTask}
+          updateRun={updateRun}
+          clearSubmittedDraft={clearSubmittedDraft}
           setMessage={setMessage}
+          isCurrentOwner={isCurrentOwner}
         />
       )}
     </InteractionStream>
   );
 }
 
+interface AgentRunOwner {
+  threadId: string;
+  generation: number;
+}
+
 function AgentRunStreamContent(props: {
   stream: WorkbenchStream;
+  owner: AgentRunOwner;
   run: AgentRun | null;
   pendingSubmit: PendingAgentSubmit | null;
-  clearPendingSubmit: () => void;
-  setRun: (run: AgentRun) => void;
-  setTask: (task: string) => void;
+  clearPendingSubmit: (pending: PendingAgentSubmit) => void;
+  updateRun: (run: AgentRun, owner: AgentRunOwner) => void;
+  clearSubmittedDraft: (pending: PendingAgentSubmit) => void;
   setMessage: (message: string) => void;
+  isCurrentOwner: (owner: AgentRunOwner) => boolean;
 }) {
-  const { stream, run, pendingSubmit, clearPendingSubmit, setRun, setTask, setMessage } = props;
+  const { stream, owner, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
   const projection = useWorkbenchProjection(stream);
   const displayRun = projection.run ?? run;
   const visibleInterrupt = visibleApprovalInterrupt(stream, displayRun);
@@ -68,19 +90,29 @@ function AgentRunStreamContent(props: {
 
   useEffect(() => {
     if (projection.run) {
-      setRun(projection.run);
+      if (
+        pendingSubmit &&
+        pendingSubmit.threadId === owner.threadId &&
+        pendingSubmit.generation === owner.generation &&
+        projection.run.input_message_id === pendingSubmit.id
+      ) {
+        clearPendingSubmit(pendingSubmit);
+      }
+      updateRun(projection.run, owner);
     }
-  }, [projection.run, setRun]);
+  }, [clearPendingSubmit, owner, pendingSubmit, projection.run, updateRun]);
 
   useEffect(() => {
     if (!pendingSubmit) {
+      return;
+    }
+    if (pendingSubmit.threadId !== owner.threadId || pendingSubmit.generation !== owner.generation || !isCurrentOwner(owner)) {
       return;
     }
     if (submittedIds.current.has(pendingSubmit.id)) {
       return;
     }
     submittedIds.current.add(pendingSubmit.id);
-    clearPendingSubmit();
     void stream
       .submit(
         { messages: [{ type: "human", content: pendingSubmit.task, id: pendingSubmit.id }] },
@@ -97,9 +129,15 @@ function AgentRunStreamContent(props: {
           },
         },
       )
-      .then(() => setTask(""))
-      .catch(fail);
-  }, [clearPendingSubmit, pendingSubmit, setTask, stream]);
+      .then(() => clearSubmittedDraft(pendingSubmit))
+      .catch((error: unknown) => {
+        clearPendingSubmit(pendingSubmit);
+        if (!isCurrentOwner(owner)) {
+          return;
+        }
+        fail(error);
+      });
+  }, [clearPendingSubmit, clearSubmittedDraft, isCurrentOwner, owner, pendingSubmit, stream]);
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
@@ -116,7 +154,11 @@ function AgentRunStreamContent(props: {
                 { decisions: [{ type }] },
                 { interruptId: visibleInterrupt.id, namespace: visibleInterrupt.namespace },
               )
-              .catch(fail);
+              .catch((error: unknown) => {
+                if (isCurrentOwner(owner)) {
+                  fail(error);
+                }
+              });
           }}
         />
       ) : null}
@@ -128,7 +170,16 @@ function AgentRunStreamContent(props: {
             run={displayRun}
             title={displayRun.task}
             onCancel={() => {
-              void api.cancelAgentRun(displayRun.id).then(setRun).catch(fail);
+              const runId = displayRun.id;
+              void api.cancelAgentRun(runId).then((next) => {
+                if (next.id === runId) {
+                  updateRun(next, owner);
+                }
+              }).catch((error: unknown) => {
+                if (isCurrentOwner(owner)) {
+                  fail(error);
+                }
+              });
             }}
           />
         </div>
@@ -148,10 +199,13 @@ export function AgentRunPanel() {
   const [projectPath, setProjectPath] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [boundGeneration, setBoundGeneration] = useState(0);
   const [pendingSubmit, setPendingSubmit] = useState<PendingAgentSubmit | null>(null);
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const draftRevision = useRef(0);
+  const ownerGeneration = useRef(0);
 
   async function refresh(): Promise<void> {
     const [nextDeployments, tools] = await Promise.all([api.deployments(), api.agentTools()]);
@@ -171,6 +225,36 @@ export function AgentRunPanel() {
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
+  }
+
+  function updateTask(next: string): void {
+    draftRevision.current += 1;
+    setTask(next);
+  }
+
+  function clearPendingSubmit(pending: PendingAgentSubmit): void {
+    setPendingSubmit((current) => (current?.id === pending.id ? null : current));
+  }
+
+  function clearSubmittedDraft(pending: PendingAgentSubmit): void {
+    if (
+      draftRevision.current !== pending.draftRevision ||
+      !isCurrentOwner({ threadId: pending.threadId, generation: pending.generation })
+    ) {
+      return;
+    }
+    draftRevision.current += 1;
+    setTask("");
+  }
+
+  function isCurrentOwner(owner: AgentRunOwner): boolean {
+    return ownerGeneration.current === owner.generation && threadId === owner.threadId;
+  }
+
+  function updateRun(next: AgentRun, owner: AgentRunOwner): void {
+    if (isCurrentOwner(owner)) {
+      setRun(next);
+    }
   }
 
   if (loadError) {
@@ -196,25 +280,45 @@ export function AgentRunPanel() {
         className="card"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!deploymentId || !task.trim() || liveRunId || starting) {
+          if (!deploymentId || !task.trim() || liveRunId || pendingSubmit || starting) {
             return;
           }
+          const capturedDraftRevision = draftRevision.current;
+          const generation = ownerGeneration.current + 1;
+          ownerGeneration.current = generation;
+          setBoundGeneration(generation);
+          setThreadId(null);
+          setRun(null);
+          setPendingSubmit(null);
           setStarting(true);
           void (async () => {
             const registered = await api.registerAgentInteractionThread({ source_surface: "agent" });
+            if (ownerGeneration.current !== generation) {
+              return;
+            }
             setThreadId(registered.thread_id);
-            setRun(null);
             setMessage("");
             setPendingSubmit({
               id: crypto.randomUUID(),
+              threadId: registered.thread_id,
+              generation,
+              draftRevision: capturedDraftRevision,
               task,
               deploymentId,
               projectPath,
               embeddingDeploymentId,
             });
           })()
-            .catch(fail)
-            .finally(() => setStarting(false));
+            .catch((error: unknown) => {
+              if (ownerGeneration.current === generation) {
+                fail(error);
+              }
+            })
+            .finally(() => {
+              if (ownerGeneration.current === generation) {
+                setStarting(false);
+              }
+            });
         }}
       >
         <label>
@@ -253,11 +357,11 @@ export function AgentRunPanel() {
         </label>
         <label>
           Task
-          <textarea value={task} onChange={(event) => setTask(event.target.value)} />
+          <textarea value={task} onChange={(event) => updateTask(event.target.value)} />
         </label>
         <p className="hint">Tools: {enabledTools.length ? enabledTools.join(", ") : "none"}</p>
         <div className="actions">
-          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId) || starting}>
+          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
             Start
           </button>
         </div>
@@ -267,12 +371,14 @@ export function AgentRunPanel() {
         <AgentRunStream
           key={threadId}
           threadId={threadId}
+          generation={boundGeneration}
           run={run}
           pendingSubmit={pendingSubmit}
-          clearPendingSubmit={() => setPendingSubmit(null)}
-          setRun={setRun}
-          setTask={setTask}
+          clearPendingSubmit={clearPendingSubmit}
+          updateRun={updateRun}
+          clearSubmittedDraft={clearSubmittedDraft}
           setMessage={setMessage}
+          isCurrentOwner={isCurrentOwner}
         />
       ) : (
         <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>

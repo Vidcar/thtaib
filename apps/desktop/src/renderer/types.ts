@@ -274,6 +274,7 @@ export interface StructuredOutputResult {
 
 export interface AgentRun {
   id: string;
+  input_message_id?: string | null;
   status: AgentRunStatus;
   deployment_id: string;
   task: string;

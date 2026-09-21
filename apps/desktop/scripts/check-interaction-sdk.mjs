@@ -33,7 +33,10 @@ assert.ok(streamSource.includes("incomplete_message_ids"), "Workbench projection
 const chatSource = readFileSync(path.join(repoRoot, "apps/desktop/src/renderer/ChatPanel.tsx"), "utf8");
 assert.ok(chatSource.includes("interactionThreadId"), "Chat must keep adapter thread separate from graph thread_id");
 assert.ok(!chatSource.includes("const bound = { ...created, thread_id"), "Chat must not overwrite conversation.thread_id with interaction id");
-assert.ok(chatSource.includes("const { id: messageId, task: inputTask, ...workbench } = pendingSubmit"), "task and caller id must stay in message input, not metadata.workbench");
+assert.ok(chatSource.includes("task: inputTask"), "task must be pulled into the message input");
+assert.ok(chatSource.includes("id: messageId"), "caller id must be pulled into the message input");
+assert.ok(chatSource.includes("draft_revision: _draftRevision"), "UI-only draft ownership must stay out of metadata.workbench");
+assert.ok(chatSource.includes("selection_generation: _selectionGeneration"), "UI-only selection ownership must stay out of metadata.workbench");
 assert.ok(chatSource.includes("submittedIds.current.has(pendingSubmit.id)"), "Chat submit effect must guard StrictMode duplicate submits");
 assert.ok(chatSource.includes("terminalRefreshKey.current === key"), "Chat terminal refresh must be keyed to avoid repeat fetch loops");
 assert.ok(chatSource.includes("selectionRequest.current !== requestId"), "Chat selection load must ignore late async frames");

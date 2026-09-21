@@ -2,6 +2,8 @@
 
 ## Technical Approach
 
+Prerequisite: deliver and verify `repair-local-interaction-boundaries` before starting this packet. Retain its atomic selection/transport binding, generation-guarded hydration/cancellation/registration/command acknowledgements and draft isolation when adding the persistent queue. Preserve main-owned validated external navigation and requesting-document/frame token authorization. Retain repeated-text legacy chronology, conservative idempotent projection repair, display-edit cutovers and continuation without effect replay. This is a post-delivery repair of the completed migration, not a replacement architecture. Packet 04 still owns the coherent async transition.
+
 Extend the existing Chat schemas/store/routes, harness driver, approval records and Electron Chat surface. Keep one application run per turn on the saved LangGraph thread; do not reconstruct active context from the displayed transcript. Freeze a queued item's intended setup before dispatch and keep immutable session area identity separate from selected model/profile.
 
 After `migrate-local-agent-interaction` is implemented and verified, use its supported `@langchain/react` interaction boundary for message/tool/state projections, scoped subscriptions and interrupts. Do not extend or depend on the superseded custom `snapshot` / `run_event` / `stream_end` protocol. Keep application-owned run/thread identity, durable transcript/history, checkpoint linkage, authorization, reconnect/hydration and final reconciliation authoritative; map SDK events to those identities and ensure internal summarisation is not shown as an answer. Do not create another token transport or checkpoint database. The SDK integration does not implement the Chat features in this change.

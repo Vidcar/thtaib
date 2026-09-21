@@ -1,14 +1,17 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, session } from "electron";
+import { app, BrowserWindow } from "electron";
 
 import {
-  WORKBENCH_BACKEND_ORIGIN,
-  WORKBENCH_LOCAL_TOKEN_HEADER,
   ensureSharedSecret,
   resolveProductDataRoot,
 } from "./localTrust";
+import {
+  installLocalTrustHeader,
+  installTrustedAppWindow,
+  packagedAppDocumentUrl,
+} from "./trustBoundary";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const ownsSingleInstance = app.requestSingleInstanceLock();
@@ -48,12 +51,15 @@ function createWindow(): void {
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
+    installTrustedAppWindow(window, { appUrl: devServerUrl });
     // Vite's URL is a development bundler helper, not a product HTTP surface.
     void window.loadURL(devServerUrl);
     return;
   }
 
-  void window.loadFile(path.join(currentDir, "../dist/index.html"));
+  const indexHtmlPath = path.join(currentDir, "../dist/index.html");
+  installTrustedAppWindow(window, { appUrl: packagedAppDocumentUrl(indexHtmlPath) });
+  void window.loadFile(indexHtmlPath);
 }
 
 function focusExistingWindow(): void {
@@ -68,26 +74,16 @@ function focusExistingWindow(): void {
   window.focus();
 }
 
-function installLocalTrustHeader(): void {
+function installApplicationTrust(): void {
   const token = ensureSharedSecret(resolveProductDataRoot());
-  session.defaultSession.webRequest.onBeforeSendHeaders(
-    { urls: [`${WORKBENCH_BACKEND_ORIGIN}/*`] },
-    (details, callback) => {
-      callback({
-        requestHeaders: {
-          ...details.requestHeaders,
-          [WORKBENCH_LOCAL_TOKEN_HEADER]: token,
-        },
-      });
-    },
-  );
+  installLocalTrustHeader(token);
 }
 
 if (ownsSingleInstance) {
   app.on("second-instance", focusExistingWindow);
 
   app.whenReady().then(() => {
-    installLocalTrustHeader();
+    installApplicationTrust();
     createWindow();
 
     app.on("activate", () => {
