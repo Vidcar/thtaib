@@ -4,20 +4,21 @@ Last updated: 2026-09-21.
 
 ## Goal and current state
 
-OpenSpec 1.13.1 is the repository's sole product-specification and change-planning system. Current contracts live under `openspec/specs/`; proposals and active work live under `openspec/changes/`. Start planning with `$openspec-propose` and begin implementation only in a later request with `$openspec-apply-change`.
+OpenSpec 1.13.1 is the sole specification/change-planning system. The eight implementation-pack changes are imported under `openspec/changes/`, in order `01-complete-model-management` through `08-complete-media-voice`. Specification loading and reconciliation are complete; feature implementation is not authorized by this import. All 112 tasks remain unchecked.
 
-The legacy `specs/` and `docs/` trees, standalone product-vision document, catalogue/evidence/templates/ADR trackers, delivery map, custom spec checker and checker tests were removed after current behavioral contracts were migrated into nine OpenSpec capability specs. Their history remains recoverable in Git.
+Current contracts remain unchanged in the nine `openspec/specs/` capabilities. Legacy specification trees/trackers remain retired. The original pack and README are extracted only under `.scratch/openspec-pack-import-20260921/`.
 
 ## Important decisions and constraints
 
-- `openspec/config.yaml` carries concise product and integration context.
-- `AGENTS.md` owns engineering workflow and exact local validation commands; do not recreate a parallel documentation or tracking system.
-- Shared-contract repository discovery uses the backend and desktop package manifests, not a documentation file.
+- `openspec/config.yaml` owns product context; `AGENTS.md` owns workflow and local checks. Do not recreate parallel trackers.
 - Preserve `%LOCALAPPDATA%\LocalAIWorkbench\` user data and models. Disposable validation belongs under `.scratch/`.
 - GitHub CI remains disabled at Dave's request; applicable checks run locally.
+- Preserve order 01–08. Change 05 owns saved load/media definitions and the serial baseline; 06 owns concurrency checks; 08 owns the real media round trip. Later checks do not block earlier changes.
+- Imported tasks require checking existing behaviour first and implementing only gaps. Existing import/deployment, adapter, Chat/SSE/approval, knowledge/retrieval, Lab and compiler paths must be reused. Source review does not establish live acceptance.
+- Proposed Lab changes deliberately permit tested-profile reuse and retire one-issue-per-trait process; current specs are not yet changed.
 
 ## Validation and use
 
-Validation passed: OpenSpec 9/9 capabilities; 233 default and 109 integration backend tests; shared-contract freshness; whitespace/error checks. OpenSpec emitted informational long-requirement suggestions only. Repeat with `openspec validate --all` from the repository root when specs change.
+Import validation: `openspec validate --all --strict --no-interactive` passed 17/17 (eight changes, nine capabilities), with informational long-text suggestions only. CLI show/status/apply instructions were inspected for every change: planning complete, apply ready, zero completed tasks. Requirement names reconcile without collisions or missing modification targets. No application tests or live feature checks were run for this documentation-only import.
 
-Launch the product with root `Launch Workbench.vbs`. No application behavior or user data was intentionally changed by the documentation migration.
+No import blocker. A separate implementation request may start change 01 only. Do not sync or archive unimplemented deltas. Launch remains root `Launch Workbench.vbs`; application, configuration, generated skills and user data are unchanged.
