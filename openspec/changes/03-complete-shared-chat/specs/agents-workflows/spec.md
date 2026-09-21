@@ -4,12 +4,18 @@
 
 ### Requirement: AGT-001 - Use the embedded harness
 
-Agent tasks SHALL run through the existing Deep Agents harness using LangChain components and LangGraph. Chat SHALL call the same harness with or without a bound project; the application MUST NOT add a model/tool loop. Without a project, project-filesystem and host-shell access SHALL be absent or rejected, not assigned an invented working directory. Explicitly supplied session attachments MAY be read through their authorized content/scoped backend without granting project or host access.
+Agent tasks SHALL run through the existing Deep Agents harness using LangChain components and LangGraph. Chat SHALL call the same harness with or without a bound project; the application MUST NOT add a model/tool loop. Each run executes once; native streaming, scoped selectors and audit projections observe that invocation while preserving message/block/tool and namespace identities. Without a project, project-filesystem and host-shell access SHALL be absent or rejected, not assigned an invented working directory. Explicitly supplied session attachments MAY be read through their authorized content/scoped backend without granting project or host access.
 
 #### Scenario: Project-bound and project-free chat
 
 - **WHEN** Chat performs a real project file task and then starts a non-project conversation
 - **THEN** the shared harness owns iteration in both cases; non-project Chat has no project file/shell authority while authorized attachments remain usable.
+
+#### Scenario: Native identity projection
+
+- WHEN streamed content, a tool call and its result are observed by multiple scoped selectors
+- THEN stable message/block/call and namespace identities MUST keep each result paired with its call without extra execution
+- AND provider-reported reasoning, answer content and internal compaction output MUST remain distinct.
 
 ### Requirement: AGT-007 - Preserve Chat continuity and restart truth
 
@@ -42,6 +48,12 @@ Grants SHALL be rechecked at dispatch/resume and MUST NOT enable disabled tools,
 
 - **WHEN** a queued or paused action no longer matches a valid saved grant
 - **THEN** permission is rechecked and the action cannot proceed on stale authority.
+
+#### Scenario: Cross-run or duplicate decision
+
+- WHEN an old approval is submitted twice or against another run, thread or namespace
+- THEN it MUST fail without executing the action or reserving another continuation
+- AND the current pending approval MUST retain its authoritative identity and state; privileged decisions remain backend-owned, never automatically resolved browser tools.
 
 #### Scenario: Mixed interrupt actions
 

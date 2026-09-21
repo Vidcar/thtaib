@@ -232,12 +232,14 @@ class ChatService:
             self._ensure_thread(next_conversation)
             now = utc_now()
             next_conversation.history_replaced = False
-            next_conversation.transcript.append(ChatMessage(role="user", content=task, content_blocks=request.content_blocks, at=now))
+            next_conversation.transcript.append(ChatMessage(id=request.input_message_id, role="user", content=task,
+                content_blocks=[block.model_dump(mode="json") for block in request.content_blocks] if request.content_blocks else None, at=now))
             try:
                 started = self.harness.start(
                     AgentStartRequest(
                         deployment_id=next_conversation.deployment_id,
                         task=task,
+                        input_message_id=request.input_message_id,
                         content_blocks=request.content_blocks,
                         output_schema=request.output_schema,
                         presented_tools=request.presented_tools,
@@ -479,17 +481,10 @@ class ChatService:
             return None
         if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
             return None
-        text = _assistant_text(run)
-        if not text:
+        latest = next((event.detail for event in reversed(run.events) if event.kind == "assistant_message"), {})
+        text = latest.get("content") if isinstance(latest.get("content"), str) else ""
+        blocks = latest.get("content_blocks") or None
+        if not text and not blocks:
             return None
-        return ChatMessage(role="assistant", content=text, at=run.finished_at or utc_now(), run_id=run.id)
-
-
-def _assistant_text(run: AgentRun) -> str | None:
-    for event in reversed(run.events):
-        if event.kind != "assistant_message":
-            continue
-        content = event.detail.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return None
+        return ChatMessage(id=latest.get("message_id"), role="assistant", content=text or "", content_blocks=blocks,
+                           at=run.finished_at or utc_now(), run_id=run.id)

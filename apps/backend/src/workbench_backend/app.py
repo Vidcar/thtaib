@@ -32,6 +32,8 @@ from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.effect_routes import router as effect_router
 from workbench_backend.state.effects import EffectService
 from workbench_backend.state.migrate import open_application_store
+from workbench_backend.interaction.routes import router as interaction_router
+from workbench_backend.interaction.service import InteractionService
 
 PRODUCT_NAME = "Local AI Workbench"
 SURFACE = "managed-inference"
@@ -90,10 +92,16 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         run_lookup=_lookup_run,
     )
     application.state.knowledge = KnowledgeService(application.state.manager.paths)
+    application.state.interaction = InteractionService(
+        application.state.app_store,
+        lambda: application.state.harness,
+        lambda: application.state.chat,
+    )
     application.state.harness = HarnessService(
         lambda: application.state.manager,
         knowledge_provider=lambda: application.state.knowledge,
         app_store=application.state.app_store,
+        interaction_observer=application.state.interaction.observe,
     )
     application.state.lab = LabService(
         lambda: application.state.manager,
@@ -115,6 +123,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(lab_router)
     application.include_router(knowledge_router)
     application.include_router(chat_router)
+    application.include_router(interaction_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 
     @application.get("/health")

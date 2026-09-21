@@ -161,6 +161,7 @@ class AgentStartRequest(BaseModel):
 
     deployment_id: str
     task: str
+    input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     presented_tools: list[str] | None = None
     system_prompt: str | None = None
@@ -189,6 +190,7 @@ class AgentRun(BaseModel):
     status: AgentRunStatus = AgentRunStatus.queued
     deployment_id: str
     task: str
+    input_message_id: str | None = None
     content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]

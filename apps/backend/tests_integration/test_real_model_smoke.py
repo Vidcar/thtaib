@@ -23,7 +23,6 @@ file in the project and no reserved harness directories there.
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import subprocess
@@ -162,52 +161,6 @@ def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 
     raise TimeoutError(f"chat {conversation_id} did not finish: {body}")
 
 
-def wait_for_events(
-    client: TestClient,
-    *,
-    conversation_id: str | None = None,
-    run_id: str | None = None,
-    timeout: float = RUN_TIMEOUT,
-) -> list[dict[str, Any]]:
-    """Consume GET /v1/events until stream_end. Plumbing check for API-006."""
-
-    params: dict[str, str] = {}
-    if conversation_id:
-        params["conversation_id"] = conversation_id
-    elif run_id:
-        params["run_id"] = run_id
-    else:
-        raise ValueError("conversation_id or run_id is required")
-    collected: list[dict[str, Any]] = []
-    deadline = time.time() + timeout
-    with client.stream("GET", "/v1/events", params=params, timeout=timeout) as response:
-        if response.status_code != 200:
-            raise AssertionError(f"events HTTP {response.status_code}: {response.read()!r}")
-        buffer = ""
-        for chunk in response.iter_text():
-            buffer += chunk
-            blocks = buffer.split("\n\n")
-            if not buffer.endswith("\n\n"):
-                buffer = blocks.pop() if blocks else buffer
-            else:
-                buffer = ""
-            for block in blocks:
-                event_name = None
-                data_line = None
-                for line in block.splitlines():
-                    if line.startswith("event:"):
-                        event_name = line.split(":", 1)[1].strip()
-                    elif line.startswith("data:"):
-                        data_line = line.split(":", 1)[1].strip()
-                payload = json.loads(data_line) if data_line else None
-                collected.append({"event": event_name, "data": payload})
-                if event_name == "stream_end":
-                    return collected
-            if time.time() > deadline:
-                raise TimeoutError(f"events timed out: {collected!r}")
-    return collected
-
-
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = RUN_TIMEOUT) -> dict[str, Any]:
     deadline = time.time() + timeout
     body: dict[str, Any] = {}
@@ -217,6 +170,20 @@ def wait_for_run(client: TestClient, run_id: str, *, timeout: float = RUN_TIMEOU
             return body
         time.sleep(0.2)
     raise TimeoutError(f"run {run_id} did not finish: {body}")
+
+
+def wait_for_interaction_state(client: TestClient, thread_id: str, *, timeout: float = RUN_TIMEOUT) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = client.get(f"/v1/agent-interaction/threads/{thread_id}/state")
+        response.raise_for_status()
+        body = response.json()
+        run = body.get("values", {}).get("workbench", {}).get("run") or {}
+        if run.get("status") in {"completed", "cancelled", "failed"}:
+            return body
+        time.sleep(0.2)
+    raise TimeoutError(f"interaction thread {thread_id} did not finish: {body}")
 
 
 class RealModelSmokeTests(unittest.TestCase):
@@ -427,14 +394,20 @@ class RealModelSmokeTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 200, created.text)
         conversation = created.json()
+        registered = self.client.post(
+            "/v1/agent-interaction/threads",
+            json={"source_surface": "chat", "conversation_id": conversation["id"]},
+        )
+        self.assertEqual(registered.status_code, 200, registered.text)
+        interaction_thread_id = registered.json()["thread_id"]
         self.assertIsNone(conversation["project_path"])
         self.assertFalse(conversation["filesystem_tools_available"])
         self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos"])
 
         self._start_chat(conversation["id"], PROJECTLESS_TASK, presented_tools=["echo"])
-        streamed = wait_for_events(self.client, conversation_id=conversation["id"])
-        self.assertEqual(streamed[0]["event"], "snapshot")
-        self.assertEqual(streamed[-1]["event"], "stream_end")
+        interaction = wait_for_interaction_state(self.client, interaction_thread_id)
+        self.assertGreater(interaction["interaction_cursor"], 0)
+        self.assertTrue(any(item.get("type") == "ai" for item in interaction["values"]["messages"]))
         body = wait_for_chat(self.client, conversation["id"])
         run = body["current_run"]
         self.assertEqual(run["status"], "completed", f"{run.get('error')}\n{self.server.log_tail()}")

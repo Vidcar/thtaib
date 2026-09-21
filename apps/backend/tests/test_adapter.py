@@ -288,8 +288,14 @@ class AdapterTests(unittest.TestCase):
             result = model.invoke([HumanMessage(content="ping")])
             self.assertEqual(result.content, "pong")
             self.assertEqual(result.response_metadata["model_name"], "fake-llama")
+            self.assertNotIn("model_provider", result.response_metadata)
             self.assertEqual(result.usage_metadata["total_tokens"], 5)
             self.assertEqual(result.additional_kwargs["reasoning_content"], "because-local")
+            self.assertTrue(
+                any(block.get("type") == "reasoning" and block.get("reasoning") == "because-local"
+                    for block in result.content_blocks),
+                result.content_blocks,
+            )
             self.assertEqual(self.start_calls, 0)
             self.assertTrue(_RecordingHandler.requests)
             posted = _RecordingHandler.requests[0]
@@ -304,6 +310,33 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(model.profile, {})
         finally:
             model.close()
+
+    def test_reasoning_final_message_replays_once_after_generic_projection(self) -> None:
+        props = ServerProperties(
+            fetched=utc_now(),
+            source_url=f"{self.endpoint}/props",
+            model_alias="reasoning-model",
+            chat_template_caps={"supports_preserve_reasoning": True},
+        )
+        model = chat_model_for_deployment(
+            self._deployment(server_props=props, applied_startup={"reasoning_preserve": True})
+        )
+        try:
+            result = model.invoke([HumanMessage(content="ping")])
+            self.assertNotIn("model_provider", result.response_metadata)
+            self.assertTrue(
+                any(block.get("type") == "reasoning" and block.get("reasoning") == "because-local"
+                    for block in result.content_blocks),
+                result.content_blocks,
+            )
+            model.invoke([result, HumanMessage(content="continue")])
+        finally:
+            model.close()
+
+        replayed = _RecordingHandler.requests[-1]["body"]["messages"][0]
+        self.assertEqual(replayed["reasoning_content"], "because-local")
+        self.assertEqual(replayed["content"], "pong")
+        self.assertEqual(json.dumps(replayed).count("because-local"), 1)
 
     def test_adapter_posts_selected_request_settings_and_stream_usage(self) -> None:
         bags = resolve_bags(
@@ -856,6 +889,107 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(combined.tool_calls[1]["id"], "call_b")
         self.assertEqual(combined.tool_calls[1]["args"], {"y": 2})
         self.assertIn("reasoning_content", chunks[0].additional_kwargs)
+        self.assertNotIn("model_provider", chunks[0].response_metadata)
+        self.assertTrue(
+            any(block.get("type") == "reasoning" and block.get("reasoning") == "r1r2"
+                for block in combined.content_blocks),
+            combined.content_blocks,
+        )
+
+    def test_stream_events_expose_reasoning_deltas_before_text(self) -> None:
+        _RecordingHandler.stream_chunks = [
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "why-"}}],
+            },
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [{"index": 0, "delta": {"content": "answer"}}],
+            },
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        ]
+        model = chat_model_for_deployment(self._deployment())
+        try:
+            events = list(model.stream_events([HumanMessage(content="ping")], version="v3"))
+        finally:
+            model.close()
+
+        deltas = [event["delta"] for event in events if event.get("event") == "content-block-delta"]
+        self.assertEqual(deltas[0], {"type": "reasoning-delta", "reasoning": "why-"})
+        self.assertEqual(deltas[1], {"type": "text-delta", "text": "answer"})
+        finished = next(event for event in events if event.get("event") == "message-finish")
+        self.assertEqual(finished["additional_kwargs"]["reasoning_content"], "why-")
+        self.assertNotIn("model_provider", finished["metadata"])
+
+    def test_astream_events_expose_reasoning_deltas_before_tool_call(self) -> None:
+        _RecordingHandler.stream_chunks = [
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "plan"}}],
+            },
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_async",
+                                    "type": "function",
+                                    "function": {"name": "lookup", "arguments": "{\"q\":\"x\"}"},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+            {
+                "id": "adapter-stream",
+                "object": "chat.completion.chunk",
+                "model": "fake-llama",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            },
+        ]
+
+        async def exercise() -> list[dict[str, Any]]:
+            model = chat_model_for_deployment(self._deployment())
+            try:
+                stream = await model.astream_events([HumanMessage(content="ping")], version="v3")
+                return [event async for event in stream]
+            finally:
+                await model.aclose()
+
+        events = asyncio.run(exercise())
+
+        deltas = [event["delta"] for event in events if event.get("event") == "content-block-delta"]
+        self.assertEqual(deltas[0], {"type": "reasoning-delta", "reasoning": "plan"})
+        self.assertTrue(
+            any(
+                delta.get("type") == "block-delta"
+                and (delta.get("fields") or {}).get("type") == "tool_call_chunk"
+                and (delta.get("fields") or {}).get("id") == "call_async"
+                for delta in deltas
+            ),
+            deltas,
+        )
+        finished = next(event for event in events if event.get("event") == "message-finish")
+        self.assertEqual(finished["additional_kwargs"]["reasoning_content"], "plan")
+        self.assertNotIn("model_provider", finished["metadata"])
 
     def test_async_invoke_and_stream_match_sync_path(self) -> None:
         async def exercise() -> tuple[str, str]:

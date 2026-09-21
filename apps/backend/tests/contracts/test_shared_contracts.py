@@ -79,10 +79,9 @@ class SharedContractSurfaceTests(unittest.TestCase):
         self.assertIn("LocalSessionTrustContract", schemas)
         self.assertIn("RunLifecycleContract", schemas)
         self.assertIn("RunLifecycleStatus", schemas)
-        self.assertIn("RunStreamContract", schemas)
-        self.assertIn("RunStreamEnvelope", schemas)
-        self.assertIn("run_event", dumped)
-        self.assertIn("Last-Event-ID", dumped)
+        self.assertNotIn("RunStreamContract", schemas)
+        self.assertNotIn("RunStreamEnvelope", schemas)
+        self.assertNotIn("Last-Event-ID", dumped)
 
     def test_json_schema_export_includes_status_names(self) -> None:
         schema = build_json_schema("RunLifecycleStatus")

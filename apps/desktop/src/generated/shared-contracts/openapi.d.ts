@@ -4,6 +4,91 @@
  */
 
 export interface paths {
+    "/v1/agent-interaction/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register */
+        post: operations["register_v1_agent_interaction_threads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-interaction/threads/{thread_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command */
+        post: operations["command_v1_agent_interaction_threads__thread_id__commands_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-interaction/threads/{thread_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** History */
+        post: operations["history_v1_agent_interaction_threads__thread_id__history_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-interaction/threads/{thread_id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** State */
+        get: operations["state_v1_agent_interaction_threads__thread_id__state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agent-interaction/threads/{thread_id}/stream/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stream */
+        post: operations["stream_v1_agent_interaction_threads__thread_id__stream_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agent-runs": {
         parameters: {
             query?: never;
@@ -517,23 +602,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Stream Run Events */
-        get: operations["stream_run_events_v1_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/imports": {
         parameters: {
             query?: never;
@@ -895,40 +963,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/shared-contracts/run-stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Run/chat SSE envelope contract */
-        get: operations["run_stream_contract_v1_shared_contracts_run_stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/shared-contracts/run-stream-envelope": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Run/chat SSE JSON data envelope */
-        get: operations["run_stream_envelope_contract_v1_shared_contracts_run_stream_envelope_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/shared-contracts/session-trust": {
         parameters: {
             query?: never;
@@ -938,6 +972,23 @@ export interface paths {
         };
         /** Local session-trust header contract */
         get: operations["session_trust_contract_v1_shared_contracts_session_trust_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/shared-contracts/workbench-interaction-metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workbench native interaction metadata contract */
+        get: operations["workbench_interaction_metadata_contract_v1_shared_contracts_workbench_interaction_metadata_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1007,6 +1058,8 @@ export interface components {
             host_shell?: components["schemas"]["HostShellFacts"];
             /** Id */
             id: string;
+            /** Input Message Id */
+            input_message_id?: string | null;
             /**
              * Knowledge
              * @default none
@@ -1102,6 +1155,8 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            /** Input Message Id */
+            input_message_id?: string | null;
             /** Knowledge Version Refs */
             knowledge_version_refs?: string[];
             /** Memory Version Refs */
@@ -1382,7 +1437,11 @@ export interface components {
             /** Content */
             content: string;
             /** Content Blocks */
-            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
+            content_blocks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Id */
+            id?: string | null;
             /**
              * Role
              * @enum {string}
@@ -1404,6 +1463,8 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            /** Input Message Id */
+            input_message_id?: string | null;
             /** Knowledge Version Refs */
             knowledge_version_refs?: string[] | null;
             /** Memory Version Refs */
@@ -1987,6 +2048,33 @@ export interface components {
             /** Tensor Type */
             tensor_type: string;
         };
+        /** InteractionBinding */
+        InteractionBinding: {
+            /** Thread Id */
+            thread_id: string;
+        };
+        /** InteractionRecovery */
+        InteractionRecovery: {
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "replay_gap";
+            /** Message */
+            message: string;
+        };
+        /** InteractionRegistration */
+        InteractionRegistration: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /**
+             * Source Surface
+             * @enum {string}
+             */
+            source_surface: "chat" | "agent";
+        };
         /** InterruptDecision */
         InterruptDecision: {
             /** Message */
@@ -2509,88 +2597,6 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /**
-         * RunStreamContract
-         * @description Documented stream route, headers and event names for generated consumers.
-         */
-        RunStreamContract: {
-            /**
-             * Auth Header
-             * @default X-Workbench-Local-Token
-             * @constant
-             */
-            auth_header: "X-Workbench-Local-Token";
-            /**
-             * Disconnect Does Not End Run
-             * @default true
-             * @constant
-             */
-            disconnect_does_not_end_run: true;
-            /** Event Names */
-            event_names?: components["schemas"]["RunStreamEventType"][];
-            /**
-             * Last Event Id Header
-             * @default Last-Event-ID
-             * @constant
-             */
-            last_event_id_header: "Last-Event-ID";
-            /**
-             * Media Type
-             * @default text/event-stream
-             * @constant
-             */
-            media_type: "text/event-stream";
-            /**
-             * Method
-             * @default GET
-             * @constant
-             */
-            method: "GET";
-            /**
-             * Path
-             * @default /v1/events
-             * @constant
-             */
-            path: "/v1/events";
-            /** Query One Of */
-            query_one_of?: ("run_id" | "conversation_id")[];
-            /**
-             * Transport
-             * @default sse
-             * @constant
-             */
-            transport: "sse";
-        };
-        /**
-         * RunStreamEnvelope
-         * @description JSON `data` for each SSE message on GET /v1/events.
-         */
-        RunStreamEnvelope: {
-            /** Conversation Id */
-            conversation_id?: string | null;
-            event?: components["schemas"]["SharedAgentEvent"] | null;
-            /** Run Id */
-            run_id?: string | null;
-            /**
-             * Seq
-             * @description 1-based AgentEvent index on the run. Set on run_event; used as SSE id.
-             */
-            seq?: number | null;
-            /**
-             * Snapshot
-             * @description GET-equivalent agent-run or chat-conversation record.
-             */
-            snapshot?: {
-                [key: string]: unknown;
-            } | null;
-            status?: components["schemas"]["RunLifecycleStatus"] | null;
-            type: components["schemas"]["RunStreamEventType"];
-        };
-        /**
-         * RunStreamEventType
-         * @enum {string}
-         */
-        RunStreamEventType: "snapshot" | "run_event" | "stream_end";
         /** RuntimeControlDescriptor */
         RuntimeControlDescriptor: {
             /** Applied */
@@ -2774,20 +2780,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /**
-         * SharedAgentEvent
-         * @description One application harness event. Not a raw LangGraph stream chunk.
-         */
-        SharedAgentEvent: {
-            /** At */
-            at: string;
-            /** Detail */
-            detail?: {
-                [key: string]: unknown;
-            };
-            /** Kind */
-            kind: string;
-        };
         /** SmokeResult */
         SmokeResult: {
             /**
@@ -2967,6 +2959,20 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WorkbenchInteractionMetadata
+         * @description Workbench-owned extension under native stream values.workbench.
+         */
+        WorkbenchInteractionMetadata: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Incomplete Message Ids */
+            incomplete_message_ids?: string[];
+            /** Interrupt Run Id */
+            interrupt_run_id?: string | null;
+            recovery?: components["schemas"]["InteractionRecovery"] | null;
+            run?: components["schemas"]["AgentRun"] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -3016,6 +3022,9 @@ export type SchemaImportStage = components['schemas']['ImportStage'];
 export type SchemaImportStatus = components['schemas']['ImportStatus'];
 export type SchemaInspectReport = components['schemas']['InspectReport'];
 export type SchemaInspectTensor = components['schemas']['InspectTensor'];
+export type SchemaInteractionBinding = components['schemas']['InteractionBinding'];
+export type SchemaInteractionRecovery = components['schemas']['InteractionRecovery'];
+export type SchemaInteractionRegistration = components['schemas']['InteractionRegistration'];
 export type SchemaInterruptDecision = components['schemas']['InterruptDecision'];
 export type SchemaInterruptDecisionRequest = components['schemas']['InterruptDecisionRequest'];
 export type SchemaLifecycleConsumer = components['schemas']['LifecycleConsumer'];
@@ -3040,9 +3049,6 @@ export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
 export type SchemaRunLifecycleStatus = components['schemas']['RunLifecycleStatus'];
 export type SchemaRunProfile = components['schemas']['RunProfile'];
-export type SchemaRunStreamContract = components['schemas']['RunStreamContract'];
-export type SchemaRunStreamEnvelope = components['schemas']['RunStreamEnvelope'];
-export type SchemaRunStreamEventType = components['schemas']['RunStreamEventType'];
 export type SchemaRuntimeControlDescriptor = components['schemas']['RuntimeControlDescriptor'];
 export type SchemaRuntimeControlOption = components['schemas']['RuntimeControlOption'];
 export type SchemaRuntimeManifest = components['schemas']['RuntimeManifest'];
@@ -3051,7 +3057,6 @@ export type SchemaSettingNote = components['schemas']['SettingNote'];
 export type SchemaSettingsBag = components['schemas']['SettingsBag'];
 export type SchemaSettingsBags = components['schemas']['SettingsBags'];
 export type SchemaSettingsPreviewRequest = components['schemas']['SettingsPreviewRequest'];
-export type SchemaSharedAgentEvent = components['schemas']['SharedAgentEvent'];
 export type SchemaSmokeResult = components['schemas']['SmokeResult'];
 export type SchemaStartupMismatch = components['schemas']['StartupMismatch'];
 export type SchemaStorageCleanupResponse = components['schemas']['StorageCleanupResponse'];
@@ -3063,8 +3068,188 @@ export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
 export type SchemaTextContentBlock = components['schemas']['TextContentBlock'];
 export type SchemaToolMode = components['schemas']['ToolMode'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
+export type SchemaWorkbenchInteractionMetadata = components['schemas']['WorkbenchInteractionMetadata'];
 export type $defs = Record<string, never>;
 export interface operations {
+    register_v1_agent_interaction_threads_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InteractionRegistration"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InteractionBinding"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_v1_agent_interaction_threads__thread_id__commands_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_v1_agent_interaction_threads__thread_id__history_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_v1_agent_interaction_threads__thread_id__state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_v1_agent_interaction_threads__thread_id__stream_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_agent_runs_v1_agent_runs_get: {
         parameters: {
             query?: never;
@@ -4061,40 +4246,6 @@ export interface operations {
             };
         };
     };
-    stream_run_events_v1_events_get: {
-        parameters: {
-            query?: {
-                run_id?: string | null;
-                conversation_id?: string | null;
-            };
-            header?: {
-                "Last-Event-ID"?: number | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_imports_v1_imports_get: {
         parameters: {
             query?: never;
@@ -4818,46 +4969,6 @@ export interface operations {
             };
         };
     };
-    run_stream_contract_v1_shared_contracts_run_stream_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunStreamContract"];
-                };
-            };
-        };
-    };
-    run_stream_envelope_contract_v1_shared_contracts_run_stream_envelope_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunStreamEnvelope"];
-                };
-            };
-        };
-    };
     session_trust_contract_v1_shared_contracts_session_trust_get: {
         parameters: {
             query?: never;
@@ -4874,6 +4985,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LocalSessionTrustContract"];
+                };
+            };
+        };
+    };
+    workbench_interaction_metadata_contract_v1_shared_contracts_workbench_interaction_metadata_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkbenchInteractionMetadata"];
                 };
             };
         };

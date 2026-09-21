@@ -16,7 +16,6 @@ from workbench_backend.contracts.auth import (
     WORKBENCH_LOCAL_TOKEN_HEADER,
     LocalSessionTrustContract,
 )
-from workbench_backend.contracts.events import RunStreamContract, RunStreamEnvelope
 from workbench_backend.contracts.lifecycle import RunLifecycleContract
 
 SHARED_CONTRACT_OPENAPI_TITLE = f"{PRODUCT_NAME} shared contracts"
@@ -36,6 +35,8 @@ def create_shared_contract_app() -> FastAPI:
     from workbench_backend.inference.routes import router as model_manager_router
     from workbench_backend.chat.routes import router as chat_router
     from workbench_backend.agents.routes import router as agent_router
+    from workbench_backend.interaction.routes import router as interaction_router
+    from workbench_backend.interaction.schemas import WorkbenchInteractionMetadata
 
     application = FastAPI(
         title=SHARED_CONTRACT_OPENAPI_TITLE,
@@ -67,27 +68,19 @@ def create_shared_contract_app() -> FastAPI:
         return RunLifecycleContract()
 
     @application.get(
-        "/v1/shared-contracts/run-stream",
-        response_model=RunStreamContract,
+        "/v1/shared-contracts/workbench-interaction-metadata",
+        response_model=WorkbenchInteractionMetadata,
         tags=["shared-contracts"],
-        summary="Run/chat SSE envelope contract",
+        summary="Workbench native interaction metadata contract",
     )
-    def run_stream_contract() -> RunStreamContract:
-        return RunStreamContract()
-
-    @application.get(
-        "/v1/shared-contracts/run-stream-envelope",
-        response_model=RunStreamEnvelope,
-        tags=["shared-contracts"],
-        summary="Run/chat SSE JSON data envelope",
-    )
-    def run_stream_envelope_contract() -> RunStreamEnvelope:
-        return RunStreamEnvelope(type="stream_end")
+    def workbench_interaction_metadata_contract() -> WorkbenchInteractionMetadata:
+        return WorkbenchInteractionMetadata()
 
     # Export the same typed model-management routes consumed by the desktop.
     # This application is only used to generate OpenAPI; it is never served.
     application.include_router(model_manager_router)
     application.include_router(chat_router)
     application.include_router(agent_router)
+    application.include_router(interaction_router)
 
     return application

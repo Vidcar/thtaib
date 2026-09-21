@@ -60,4 +60,6 @@ def replace_transcript(
     conversation_id: str,
     body: ChatTranscriptReplaceRequest,
 ) -> object:
-    return get_chat(request).replace_transcript(conversation_id, body)
+    view = get_chat(request).replace_transcript(conversation_id, body)
+    request.app.state.interaction.replace_chat_display_archive(view)
+    return view

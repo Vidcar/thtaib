@@ -15,6 +15,7 @@ from workbench_backend.knowledge.diagnostics import (
 )
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
 from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
+from workbench_backend.state.interaction import INTERACTION_SCHEMA, InteractionStoreMixin
 
 SCHEMA_VERSION = "1"
 
@@ -81,7 +82,7 @@ CREATE TABLE IF NOT EXISTS external_effects (
 """
 
 
-class ApplicationStore:
+class ApplicationStore(InteractionStoreMixin):
     """Owns ``application.sqlite`` only. Never opens ``checkpoints.sqlite``."""
 
     def __init__(self, paths: WorkbenchPaths) -> None:
@@ -102,6 +103,7 @@ class ApplicationStore:
         self._conn.execute("PRAGMA foreign_keys=ON")
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._conn.executescript(INTERACTION_SCHEMA)
             self._conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
                 ("schema_version", SCHEMA_VERSION),

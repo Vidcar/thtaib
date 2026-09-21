@@ -27,6 +27,7 @@ Chat and current live-run consumers SHALL share a versioned upstream-compatible 
 - WHEN navigation or unmount disconnects an observer
 - THEN execution MUST continue under backend ownership
 - AND explicit cancellation MUST remain cancel_requested until confirmed by the worker, independently of SDK loading state.
+- AND a finished run MUST NOT have Cancel enabled.
 
 ### Requirement: API-008 - Preserve terminal Chat hydration
 

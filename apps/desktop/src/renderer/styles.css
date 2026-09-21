@@ -309,6 +309,89 @@ h4 {
   line-height: 1.45;
 }
 
+.message-state {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.message-feed {
+  display: contents;
+}
+
+.message-body {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.message-body :is(p, ul, ol, blockquote, pre, table) {
+  margin: 0;
+}
+
+.message-body ul,
+.message-body ol {
+  padding-left: 1.25rem;
+}
+
+.message-body a {
+  color: var(--accent);
+}
+
+.code-block-wrap {
+  position: relative;
+}
+
+.copy-code {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.15rem 0.4rem;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 0.75rem;
+}
+
+.code-block {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: #0b0f14;
+}
+
+.message-reasoning,
+.message-tools {
+  border-left: 2px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--muted);
+}
+
+.message-attachments {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
+.markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: auto;
+}
+
+.markdown-table th,
+.markdown-table td {
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+
 .compose {
   padding: 0.75rem 1rem 1rem;
   border-top: 1px solid var(--border);

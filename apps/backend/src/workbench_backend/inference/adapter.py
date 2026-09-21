@@ -162,6 +162,16 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     def set_context_guard(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         self._context_guard = callback
 
+    def invoke(self, *args: Any, **kwargs: Any) -> BaseMessage:
+        result = super().invoke(*args, **kwargs)
+        _clear_openai_provider_tag(result)
+        return result
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> BaseMessage:
+        result = await super().ainvoke(*args, **kwargs)
+        _clear_openai_provider_tag(result)
+        return result
+
     def close(self) -> None:
         if self._owned_http_client is not None:
             self._owned_http_client.close()
@@ -201,6 +211,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         for generation, choice in zip(result.generations, response_dict.get("choices", []), strict=False):
             message = choice.get("message") or {}
             _attach_reasoning(generation.message, message)
+            _clear_openai_provider_tag(generation.message)
             _capture_converted_message(self._capture_sink, generation, choice)
         return result
 
@@ -249,6 +260,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         if choices:
             delta = choices[0].get("delta") or {}
             _attach_reasoning(generation.message, delta)
+        _clear_openai_provider_tag(generation.message)
         _stream_chunk_count.set(_stream_chunk_count.get() + 1)
         _capture_converted_chunk(self._capture_sink, generation, chunk)
         return generation
@@ -499,6 +511,22 @@ def _attach_reasoning(message: Any, payload: dict[str, Any]) -> None:
         return
     message.additional_kwargs["reasoning_content"] = reasoning
     message.response_metadata["reasoning_content"] = reasoning
+
+
+def _clear_openai_provider_tag(message: Any) -> None:
+    """Let local OpenAI-compatible output use LangChain's generic block projection.
+
+    ChatOpenAI stamps `model_provider="openai"` on messages and chunks. That is
+    correct for OpenAI responses, but local llama.cpp-compatible servers may
+    return `reasoning_content`, which LangChain's OpenAI-specific content-block
+    translator ignores. Removing only the provider tag keeps the raw reasoning
+    metadata for replay while allowing the public generic projection to expose
+    reasoning blocks in native event streams.
+    """
+
+    metadata = getattr(message, "response_metadata", None)
+    if isinstance(metadata, dict) and metadata.get("model_provider") == "openai":
+        metadata.pop("model_provider", None)
 
 
 def _raise_for_invalid_completed_tool_calls(chunk: ChatGenerationChunk | None) -> None:

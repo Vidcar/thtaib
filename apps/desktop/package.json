@@ -15,13 +15,18 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "build": "pnpm run typecheck && node scripts/check-sse-terminal-snapshot.mjs && node scripts/check-model-settings.mjs && vite build",
+    "build": "pnpm run typecheck && node scripts/check-interaction-sdk.mjs && node scripts/check-interrupt-visibility.mjs && node scripts/check-agent-message-feed-render.mjs && node scripts/check-interaction-react-ownership.mjs && node scripts/check-model-settings.mjs && vite build",
     "package": "pnpm run build && electron-builder --win nsis",
     "generate:shared-contracts": "openapi-typescript ../backend/contracts/openapi.json -o src/generated/shared-contracts/openapi.d.ts --root-types"
   },
   "dependencies": {
+    "@langchain/core": "1.2.9",
+    "@langchain/langgraph-sdk": "1.11.1",
+    "@langchain/react": "1.1.1",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
@@ -31,6 +36,7 @@
     "electron": "44.4.3",
     "electron-builder": "26.15.3",
     "openapi-typescript": "7.13.0",
+    "react-test-renderer": "19.3.0",
     "typescript": "5.9.3",
     "vite": "8.3.0",
     "vite-plugin-electron": "1.1.2"

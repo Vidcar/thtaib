@@ -28,7 +28,7 @@ The backend SHALL own thread identities, checkpoint namespaces and displayed his
 
 ## ADDED Requirements
 
-### Requirement: STATE-009 - Recover interaction projections without replaying effects
+### Requirement: STATE-015 - Recover interaction projections without replaying effects
 
 Interaction hydration and replay SHALL provide an atomic cutover to live events with stable identities and bounded transient buffering. Thread-level cursors SHALL remain distinct from run-local native sequences. Unavailable or expired replay positions SHALL trigger explicit resynchronization from durable application records. Restart recovery SHALL preserve real partial output and actual tool outcomes; uncertain effects MUST remain unknown and MUST NOT be repeated to repair presentation. Any required application-record migration SHALL be recoverable, idempotent and verified on isolated copies before cutover.
 

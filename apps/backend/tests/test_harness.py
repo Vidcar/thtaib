@@ -145,6 +145,68 @@ class HarnessApiTests(unittest.TestCase):
         names = [item["name"] for item in body["tool_invocations"]]
         self.assertIn("echo", names)
 
+    def test_native_driver_observer_and_audit_details(self) -> None:
+        observed: list[tuple[str, str | None]] = []
+
+        def observer(run: AgentRun, event: dict[str, Any] | None) -> None:
+            method = event.get("method") if isinstance(event, dict) else None
+            observed.append((run.id, method))
+
+        self.app.state.harness.close(timeout=1.0)
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=lambda _run, _sink: ScriptedChatModel(echo_then_reply()),
+            knowledge_provider=lambda: self.app.state.knowledge,
+            interaction_observer=observer,
+        )
+        self.extra_harnesses.append(self.app.state.harness)
+
+        started = self._start()
+        body = wait_for_run(self.client, started["id"])
+
+        self.assertEqual(body["status"], "completed")
+        self.assertIn("values", [method for _run_id, method in observed])
+        self.assertIn("messages", [method for _run_id, method in observed])
+        self.assertIn(None, [method for _run_id, method in observed])
+        kinds = [event["kind"] for event in body["events"]]
+        self.assertEqual(kinds.count("tool_call"), 1)
+        self.assertEqual(kinds.count("tool_result"), 1)
+        assistant = [event for event in body["events"] if event["kind"] == "assistant_message"][-1]
+        self.assertEqual(assistant["detail"]["content"], "The echo tool returned harness-ok. Looks correct.")
+        self.assertTrue(assistant["detail"]["message_id"])
+        self.assertEqual(
+            assistant["detail"]["content_blocks"],
+            [{"type": "text", "text": "The echo tool returned harness-ok. Looks correct."}],
+        )
+
+    def test_native_values_do_not_reingest_prior_thread_messages(self) -> None:
+        thread_id = "thread-native-values-dedupe"
+        self.app.state.harness.close(timeout=1.0)
+        scripted = ScriptedChatModel([
+            AIMessage(content="first assistant"),
+            AIMessage(content="second assistant"),
+        ])
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=lambda _run, _sink: scripted,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
+        self.extra_harnesses.append(self.app.state.harness)
+
+        first = self._start(thread_id=thread_id, presented_tools=[])
+        first_body = wait_for_run(self.client, first["id"])
+        self.assertEqual(first_body["status"], "completed")
+
+        second = self._start(thread_id=thread_id, task="Continue.", presented_tools=[])
+        second_body = wait_for_run(self.client, second["id"])
+
+        assistant_events = [
+            event["detail"]["content"]
+            for event in second_body["events"]
+            if event["kind"] == "assistant_message"
+        ]
+        self.assertEqual(assistant_events, ["second assistant"])
+
     def test_actual_model_request_is_captured(self) -> None:
         started = self._start()
         body = wait_for_run(self.client, started["id"])
