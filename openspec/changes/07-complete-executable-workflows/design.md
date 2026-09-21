@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-Extend `agents/definition_compiler.py`, existing agent-run services and the React Flow surface; do not create another product or make an ordered metadata list count as execution. Persist serialisable application definitions and compile supported nodes/edges into a real LangGraph StateGraph. Registry definitions remain the common source for types, validation, controls and execution. Layout is editor metadata, not executable authority.
+Extend `agents/definition_compiler.py` and existing agent-run services, and implement a React Flow editor within the existing desktop; do not create another product or make an ordered metadata list count as execution. Persist serialisable application definitions and compile supported nodes/edges into a real LangGraph StateGraph. Registry definitions remain the common source for types, validation, controls and execution. Layout is editor metadata, not executable authority.
 
 Resolve configuration per owning node with the shared setup resolver. A normal agent node can select a reusable agent setup without seven compulsory configuration nodes. Preserve distinct configuration links and execution/data bindings, explicit empty tools, protected instructions and actual deployment context. Freeze definition/subworkflow revisions and inputs for each run.
 
@@ -15,6 +15,12 @@ Compile conditional routing, region-scoped parallel joins, deterministic reducer
 Persist root and invocation identity, including node path/iteration/attempt; use public checkpoint/interrupt APIs and exact typed resume. Side effects need adapter idempotency or reconciliation, not an exactly-once claim from checkpoints. Shared admission/project coordination, Lab exclusion, cancellation and residency apply to every node path. Preserve useful independent branches on failure while blocking missing dependent outputs.
 
 React Flow edits the same serialisable definitions and layout; only backend validation/compilation and LangGraph execute the frozen workflow graph. Use the verified shared SDK observation boundary to present scoped run/node/tool state, not to author graph logic, validate execution authority or replace LangGraph. Existing Agent run history remains accessible; the intended area name is Workflows without a broad code/data rename. Media nodes become runnable only when change 08 supplies verified adapters. No schedule/trigger activation is implied by save, import or restore.
+
+## UX presentation
+
+Follow the shared UX contract in `../03-complete-shared-chat/design.md#shared-ux-contract` for navigation, activity, approvals, Library retention and attention. Workflows must obtain Dave's approval of a deliberate editor arrangement before substantial implementation: destination entry, create/open/save controls, node palette, React Flow canvas, setup/input/output inspectors, validation focus, run controls, historical runs and preserved Agent run history access. The current Agent run screen and history remain reachable until and through the transition.
+
+The primary journey must be understandable without raw JSON, internal identifiers or backend terminology: create/save/reopen/run a workflow, fix a validation error, inspect node inputs/outputs and find historical runs. Technical graph definitions, port IDs, validation traces, event IDs and compiler diagnostics remain available in expandable details. Technical verification and Dave's UX acceptance are separate completion records. Workflows UX acceptance is currently pending, not accepted. It covers the built Windows journey at full-window and half-screen sizes, Windows display scaling, keyboard navigation, long graph/run content and at least one failure/recovery state. UX acceptance remains pending until Dave accepts the built journey or explicitly defers it.
 
 ## Integration references
 

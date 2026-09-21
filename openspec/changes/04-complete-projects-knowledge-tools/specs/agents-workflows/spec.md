@@ -22,7 +22,7 @@ At next-turn boundaries, changed/deselected versions SHALL refresh supported der
 
 ### Requirement: AGT-014 - Resolve reusable setups and composed instruction layers
 
-Reusable agent setups SHALL have stable identity/version, name/role, model/deployment/profile references, instructions, selected tools/connections/knowledge and workspace/access requirements. They SHALL be inspectable, selectable, renamable, duplicable and removable with retained historical versions and explicit missing dependencies. Primary Chat, children and workflow nodes use the same records and shared application-owned selection controls. SDK projections display selected tools and their actual call/results; they do not own setup state or authorization.
+Reusable agent setups SHALL have stable identity/version, name/role, model/deployment/profile references, instructions, selected tools/connections/knowledge and workspace/access requirements. They SHALL be inspectable, selectable, renamable, duplicable and removable with retained historical versions and explicit missing dependencies through the shared **Agents** destination and compact conversation setup controls. Primary Chat, children and workflow nodes use the same records and shared application-owned selection controls. SDK projections display selected tools and their actual call/results; they do not own setup state or authorization.
 
 Resolve application defaults, selected project defaults, selected agent setup and explicit turn/node overrides in that order. Scalar values use precedence; ordinary instruction text composes as named inspectable layers, with later ordinary instructions resolving conflicts rather than erasing all earlier text. Protected instructions/mandatory restrictions remain separate and cannot be weakened. Preserve omitted versus explicitly empty selections. Document/skill/tool text cannot grant access.
 
@@ -30,3 +30,8 @@ Resolve application defaults, selected project defaults, selected agent setup an
 
 - **WHEN** a project, agent setup and turn provide different ordinary settings/instructions
 - **THEN** the resolved setup shows each layer and precedence, preserves protected restrictions and does not silently replace missing dependencies.
+
+#### Scenario: Agents destination selection
+
+- **WHEN** a user opens Agents, edits a reusable setup and selects it from a conversation
+- **THEN** the same versioned setup identity is visible in the compact conversation controls and future submissions use the new selection without rewriting live or historical invocations.

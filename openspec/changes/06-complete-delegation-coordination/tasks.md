@@ -11,6 +11,7 @@ Prerequisites: change 05 and `migrate-local-agent-interaction` must be implement
 - [ ] 1.5 Implement explicit residency policy and durable handover transitions, verified unload/restore, saved dependent results and endpoint rebinding on the same run/thread.
 - [ ] 1.6 Complete run-tree cancellation/restart/failure handling and shared expandable activity/wait/ownership controls.
 - [ ] 1.7 Run the Lab-owned independent-session and child-load comparisons defined in change 05.
+- [ ] 1.8 Extend the shared activity panel and attention list with attributable parent/child progress, waits, approvals, typed inputs, results and cancellation-scope explanations.
 
 ## 2. Verify
 
@@ -22,5 +23,6 @@ Prerequisites: change 05 and `migrate-local-agent-interaction` must be implement
 - [ ] 2.6 Observe a real managed-model unload and exact restore around a controlled owned operation, then continue the same run with the saved result. Test each handover phase with cancellation/crash/failure fixtures and no repeated effect.
 - [ ] 2.7 Test one failed child with independent successful siblings and blocked dependent work; verify root cancellation reaches owned work without cancelling unrelated clients.
 - [ ] 2.8 Run controlled real serial/concurrent independent-session and child workloads under Lab ownership, recording correctness, queue/response/total time, throughput and available memory. Render the Windows child/activity views.
+- [ ] 2.9 Record technical verification separately from Dave's UX acceptance. Exercise the built Windows delegation/activity journey at full-window and half-screen sizes, with Windows display scaling, keyboard navigation, long child activity, simultaneous approvals/waits and one failure/recovery state; leave UX acceptance pending until Dave accepts or explicitly defers review.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.

@@ -175,11 +175,18 @@ Cancellation SHALL prevent further dispatch, remove queued owned work and propag
 
 ### Requirement: WF-011 - Make the canvas and inspectors reflect executable evidence
 
-The existing Workflows surface SHALL provide create/open/save/run, public input form, setup/node/input/output inspectors, mapping controls and actionable validation focus. React Flow SHALL edit serialisable definitions and show labelled distinct configuration and execution/data ports with stable handle IDs persisted in edges. Only backend validation/compilation and LangGraph execute the workflow; the shared SDK observation boundary presents scoped run evidence and does not execute or validate the graph. Immediate feedback reflects but does not replace backend validation. Preserve old Agent run history; non-executable placeholders and unimplemented media nodes cannot appear runnable.
+The Workflows surface SHALL be implemented within the existing desktop with React Flow for create/open/save/run, public input form, setup/node/input/output inspectors, mapping controls and actionable validation focus. This is new editor work over the current single-task Agent run baseline, not completion of an already existing React Flow editor. React Flow SHALL edit serialisable definitions and show labelled distinct configuration and execution/data ports with stable handle IDs persisted in edges. Only backend validation/compilation and LangGraph execute the workflow; the shared SDK observation boundary presents scoped run evidence and does not execute or validate the graph. Immediate feedback reflects but does not replace backend validation. Preserve old Agent run history and access to it through the transition; non-executable placeholders and unimplemented media nodes cannot appear runnable.
+
+Before substantial editor implementation, the editor layout SHALL have an approved checkpoint covering destination entry, node palette, canvas, inspectors, validation, run controls, historical runs and Agent run history access. The primary workflow journey SHALL be understandable without raw JSON, internal identifiers or backend terminology, with technical graph and compiler details available through expansion.
 
 Editor undo/redo, duplication with fresh node IDs, keyboard navigation, labelled controls and explicit unsaved handling or indicated autosave SHALL work. Undo changes drafts only, not executed effects. Import/export preserves functional mappings as well as appearance.
 
 Shared events/snapshots SHALL show actual root/invocation starts, waits, approvals, results, skips, failures and cancellations, including each loop iteration. Nested activity is not invented authored canvas nodes; configuration bindings are not running tasks. Inspect actual mapped values/provenance/schema errors under privacy controls. Stream exhaustion, job IDs or assistant text do not prove success. Reopening restores consistent evidence without duplicate/cross-run events.
+
+#### Scenario: Editor layout and validation
+
+- **WHEN** a user creates a workflow, fixes a validation error, runs it and reopens historical runs
+- **THEN** the React Flow editor, inspectors and run history support the journey without raw JSON or backend identifiers, while old Agent run history remains reachable.
 
 #### Scenario: Edit and reopen
 

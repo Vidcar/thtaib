@@ -11,6 +11,7 @@ Prerequisites: change 04 and `migrate-local-agent-interaction` must be implement
 - [ ] 1.5 Verify the existing `lab/engine.py` runner and unavailable/failure handling; extend its parsing to required structured samples, supported setting mapping and defined end-to-end/timing/memory observations without replacing the runner.
 - [ ] 1.6 Finish result history, expected-versus-actual/source views, side-by-side comparison, case lifecycle and deliberate tested-profile reuse.
 - [ ] 1.7 Save independent-session and media-handover test definitions; run the real serial baseline now and leave their later execution to changes 06 and 08.
+- [ ] 1.8 Obtain Dave's approval of the Lab layout checkpoint before substantial UI implementation, then build the choose case -> choose configurations -> run -> compare -> inspect evidence -> Use in Chat journey without raw JSON-first primary screens.
 
 ## 2. Verify
 
@@ -20,5 +21,6 @@ Prerequisites: change 04 and `migrate-local-agent-interaction` must be implement
 - [ ] 2.4 Test scorer revision history, incorrect/schema-valid-but-wrong/unassessable/error outcomes, fixture mismatch with no live fallback and secret-safe case export.
 - [ ] 2.5 Run and parse a real managed llama-bench workload; verify repetition data, failed/invalid output, benchmark/server setting differences and labelled timing/memory boundaries.
 - [ ] 2.6 Test deliberate Use in Chat against the tested snapshot and subsequent actual request, including later profile edits and unapplied startup differences. Render the changed Windows Lab views.
+- [ ] 2.7 Record technical verification separately from Dave's UX acceptance. Exercise the built Windows Lab journey at full-window and half-screen sizes, with Windows display scaling, keyboard navigation, long results/evidence and one failure/recovery state; leave UX acceptance pending until Dave accepts or explicitly defers review.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.

@@ -10,6 +10,8 @@ One retained-file/artifact contract SHALL identify origin, session/project/acces
 
 Chat SHALL support text/code picker and drag/drop, actual content/encoding/limit validation, removable staging and attachment-only turns. Sent originals are retained session-scoped by default without a project or automatic knowledge promotion. Fitting source-labelled content SHALL enter current-user input even with tools off. Larger material requires authorized scoped reading or an actionable capacity outcome, not silent truncation or tool/host authority. Copy bytes only for deliberate retention; persist attachment provenance across reopening.
 
+A shared Library SHALL browse retained attachments and verified outputs across authorized conversations/projects with scope filters and original conversation/project provenance. Inline reply entries and the on-demand Files panel SHALL use the same records and distinguish retained copies from mutable project references. Supported preview/open/save/reuse/delete actions SHALL preserve access checks and dependency-aware deletion. Library MUST NOT create a second artifact authority, grant additional access or indiscriminately catalogue project files; later project and media views extend this contract.
+
 #### Scenario: Attachment with tools off
 
 - **WHEN** a non-project turn contains only a fitting supported text/code attachment
@@ -19,6 +21,11 @@ Chat SHALL support text/code picker and drag/drop, actual content/encoding/limit
 
 - **WHEN** a write fails or a previously observed project file changes
 - **THEN** no successful artifact is invented and stale content verification is not reused.
+
+#### Scenario: Find a retained output from another conversation
+
+- **WHEN** a user filters Library by project and opens or reuses an older retained output
+- **THEN** its source conversation/project and retained-versus-mutable identity remain visible, current access is checked and reuse does not move the source session or grant project access.
 
 ### Requirement: STATE-010 - Delete deliberately while preserving shared dependencies
 

@@ -12,6 +12,7 @@ Prerequisites: change 03 and `migrate-local-agent-interaction` must be implement
 - [ ] 1.6 Complete shared catalogue and connection/credential lifecycle, then integrate one real public web search/page reader and one real MCP tool path.
 - [ ] 1.7 Migrate the common harness/saver/middleware/resume/cancel/recovery path to compatible async ownership, including non-MCP Chat and Lab.
 - [ ] 1.8 Finish existing project, Knowledge and integration UI controls; reuse shared SDK-backed message/tool/run presentation and application-owned setup/connection/selection controls; extend shared retention/backup without creating replacement stores.
+- [ ] 1.9 Complete the shared everyday workspace presentation: Agents destination for reusable setups, scoped project/Knowledge controls, right-panel file previews/diffs/proposals/activity, Settings connection management and Library-backed retained files/outputs.
 
 ## 2. Verify
 
@@ -23,5 +24,6 @@ Prerequisites: change 03 and `migrate-local-agent-interaction` must be implement
 - [ ] 2.6 Test no-MCP and MCP async continuity, saved branches/interrupts, session-dependent tools, cancellation/disconnect/restart and clean saver/client shutdown.
 - [ ] 2.7 Run a real local model through a documentation MCP tool and, separately, public web search plus an actual page read. Verify call/result identity, tool-error semantics, typed elicitation or explicit unsupported outcome and backend-only secrets.
 - [ ] 2.8 On Windows, complete a project file task, document-backed answer, memory proposal, skill resource read and connection lifecycle in the existing UI.
+- [ ] 2.9 Record technical verification separately from Dave's UX acceptance. Exercise the built Windows everyday workspace journey at full-window and half-screen sizes, with Windows display scaling, keyboard navigation, long content, one failure/recovery state and ordinary Chat after the async transition; leave UX acceptance pending until Dave accepts or explicitly defers review.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.

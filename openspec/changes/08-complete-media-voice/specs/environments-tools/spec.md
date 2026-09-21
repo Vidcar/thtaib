@@ -170,7 +170,9 @@ Every phase SHALL reconcile cancellation/failure/restart/restore failure, preser
 
 ### Requirement: ENV-022 - Expose safe media controls and require real end-to-end evidence
 
-Existing Chat, Models/runtime, progress and Workflow inspectors SHALL expose supported previews, endpoint/template/voice selections, effective settings, phases, errors and actual cancellation outcomes. Reuse the verified shared `@langchain/react` content/run presentation where suitable, while keeping media requests, engine/job lifecycle, permissions, cancellation and success evidence in application-owned adapters/services. Serve image/audio through authorised backend boundaries; never forward application trust tokens to external engines or place secrets in preview URLs. Generated HTML cannot execute as trusted UI. The shared output browser SHALL inspect/open/save elsewhere/reuse/delete with original-derived lineage and source run/engine/settings, using existing artifact storage. Text/document Chat/history remains usable with media disabled.
+Existing Chat, Models/runtime, progress and Workflow inspectors SHALL expose supported previews, endpoint/template/voice selections, effective settings, phases, errors and actual cancellation outcomes. Reuse the verified shared `@langchain/react` content/run presentation where suitable, while keeping media requests, engine/job lifecycle, permissions, cancellation and success evidence in application-owned adapters/services. Serve image/audio through authorised backend boundaries; never forward application trust tokens to external engines or place secrets in preview URLs. Generated HTML cannot execute as trusted UI. The shared output browser and Library SHALL inspect/open/save elsewhere/reuse/delete with original-derived lineage and source run/engine/settings, using existing artifact storage. Text/document Chat/history remains usable with media disabled.
+
+Media controls SHALL extend the shared composer and replies with compact attachment controls, a configured dictation entry point, editable unsent transcription, opt-in spoken replies and explicit playback controls. Endpoint/template/voice configuration SHALL use focused controls or Settings surfaces, with technical evidence available on expansion. Ordinary text Chat SHALL remain uncluttered and usable after media controls are present.
 
 Required delivery SHALL include actual image understanding/generation, dictation, spoken replies, artifact lifecycle/reuse and managed two-sided handover, with real local/endpoint and Windows microphone/playback/desktop evidence. Missing required concrete engines or an authorised workable handover blocks the affected change 08 check, not earlier changes. Execute the saved Lab round-trip case and retain actual queue/unload/media/retrieval/restore timing and output. Optional image-to-image requires authorised retained input, validated mappings/dependencies and lineage; omission remains explicitly optional/not implemented, never a working placeholder.
 
@@ -178,6 +180,11 @@ Required delivery SHALL include actual image understanding/generation, dictation
 
 - **WHEN** a generated image/audio output is inspected, saved elsewhere or reused
 - **THEN** shared access and lineage are preserved, with no secret-bearing external preview URLs or trusted execution of generated HTML.
+
+#### Scenario: Dictation draft and text-only chat
+
+- **WHEN** a user dictates a message and then sends an ordinary text-only Chat turn
+- **THEN** transcription appears first as an editable unsent draft, media controls remain compact, and the text-only journey remains usable without media setup.
 
 #### Scenario: Delivery evidence
 

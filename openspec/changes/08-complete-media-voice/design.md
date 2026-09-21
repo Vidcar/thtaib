@@ -18,6 +18,14 @@ Complete change 06's real two-sided handover with a suitable explicitly authoris
 
 Use the existing Windows UI and output browser. Leave image-to-image, voice cloning and real-time duplex optional. Missing required live engines/device/handover evidence blocks this change's affected acceptance checks, not earlier completed changes.
 
+## UX presentation
+
+Follow the shared UX contract in `../03-complete-shared-chat/design.md#shared-ux-contract` for composer controls, activity, approvals, Library retention, output reuse and attention. Media features extend the existing composer, reply previews and Library: image/audio attachment controls live beside the composer, dictation is a compact configured entry point, transcription appears as an editable unsent draft, spoken replies are opt-in, and playback has explicit play/stop/navigation controls. Endpoint/template/voice settings use focused popovers or Settings surfaces rather than permanent raw configuration panels.
+
+Media progress, previews, output lineage, reuse/delete actions and recovery states must be understandable without raw JSON, engine IDs or backend terminology. Technical template mappings, prompt IDs, event streams, endpoint capability records, conversion details and retrieval evidence remain available in expandable details. Text-only Chat remains a first-class path with media disabled or unused, and implementation must recheck ordinary text Chat for clutter after adding media controls.
+
+Technical verification and Dave's UX acceptance are separate completion records. Media UX acceptance is currently pending, not accepted. It covers the built Windows journey at full-window and half-screen sizes, Windows display scaling, keyboard navigation, long media/progress/output content, interrupted media recovery, and one text-only Chat journey after media controls are present. UX acceptance remains pending until Dave accepts the built journey or explicitly defers it.
+
 ## Integration references
 
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.

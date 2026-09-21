@@ -56,7 +56,9 @@ This change SHALL prove real managed-model unload/restore around a controlled ow
 
 ### Requirement: API-015 - Expose one attributable activity and resource-wait view
 
-Existing progress/events SHALL extend to expandable child activity and one shared activity/queue view for Chat, Lab-owned work and later Workflow/media. Show task, actual model/profile/setup, tool/access selection, approval/input state, queue owner and terminal result by invocation. Waiting SHALL distinguish inference capacity, model residency, canonical project access, user input and Lab exclusivity. Handover SHALL expose quiesce, unload, dependent work and restore phases; only operations with valid ownership are offered.
+Existing progress/events SHALL extend to expandable child activity and one shared activity/queue view for Chat, Lab-owned work and later Workflow/media. Show task, actual model/profile/setup, tool/access selection, approval/input state, queue owner and terminal result by invocation. Parent/child progress, waits, approvals, typed inputs and results SHALL be attributable in plain language, with technical trace details available on expansion. Waiting SHALL distinguish inference capacity, model residency, canonical project access, user input and Lab exclusivity. Handover SHALL expose quiesce, unload, dependent work and restore phases; only operations with valid ownership are offered.
+
+Cancellation controls SHALL describe their scope before action. Root cancellation, queued owned children, active child/tool/model calls, handover phases and preserved independent sibling results must be distinguishable. Individual-child cancellation SHALL be exposed only where execution semantics have verified support for cancelling that child path without misrepresenting parent/root effects.
 
 #### Scenario: Waiting child
 

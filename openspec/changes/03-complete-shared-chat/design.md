@@ -1,5 +1,43 @@
 # Design: Complete persistent shared-agent Chat
 
+## Shared UX contract
+
+The approved direction is conversation-led, clean and information-dense, inspired by ChatGPT's conversation structure with compact local-model controls. This section is the shared design reference for packets 04-08; enforceable presentation requirements are API-016 through API-020 in this packet's backend-desktop delta. Keep existing execution, permission and persistence owners.
+
+### Composition and navigation
+
+Use one collapsible left sidebar: New chat and cross-area search, General chats, then collapsible named projects with their conversations. Keep each conversation's immutable area visible in its header. Project-area selection opens or creates a different session, never an editable folder field that retargets the current session. Retain rename/archive/reopen and removed-project history.
+
+Provide compact destinations for Models, Agents, Knowledge, Library, Lab and Workflows, with Settings at the bottom. Introduce functional destinations in their owning packets, not empty placeholders. Existing Agent run remains accessible until Packet 07 delivers Workflows, which preserves its history. Keep conversation and composer central; open the right-hand Files/activity/detail panel on demand. Collapse secondary panels in half-screen windows rather than squeezing the composer or requiring horizontal scrolling for ordinary controls.
+
+Put the selectable model, supported reasoning level/Thinking off and active setup inside the conversation header; tools, permissions and attachments sit beside the composer. Detailed settings use focused popovers. Small visible status elements show context fill and tok/s with measurement basis on expansion. An unsupported reasoning control or unavailable measurement has an honest state; display settings do not alter model thinking. Generation speed comes from reported token counts/timing, never chunk counts; estimates and the observed interval remain labelled. Existing model profiles remain available in 03; the reusable agent setup selector and Agents destination become functional with 04.
+
+The optional Files panel distinguishes attachments, retained outputs and project references, with inline output entries beside their originating reply. Library browses retained attachments/outputs across permitted conversations/projects with origin and scope filters, using existing artifact records. Project file/diff controls arrive in 04; media previews extend these surfaces in 08. Settings contains appearance, notifications, saved permission grants and manual backup/restore in 03, with connections in 04. It does not become a second settings or storage authority.
+
+### Live interaction
+
+Answers always stream. Detailed streams default off; a small application preference remembers the choice across chats/reopening. When enabled, distinguish returned thinking, answer text, tool calls/results, file activity and other available output with labels and formatting, not colour alone. With details off, show compact progress and subtle shimmer; respect reduced motion. Section headings/chevrons independently expand or collapse outputs, overriding the global presentation for that section without interfering with selecting text or following links. Never hide pending approvals, questions or errors. Retain position-aware scrolling and durable partial results.
+
+The active composer action reads Queue, with a separate Stop control. An expandable list above it shows each queued message, attachments and intended model/setup; editing/removing remains possible. Preserve queued configuration when header selectors change and freeze resolved setup at dispatch. Only success advances the queue; failures/cancellation pause it and approval/input waits do not advance it. Distinct reply actions expose supported branches, effectful Retry task and answer-only Regenerate answer without promising rollback.
+
+Inline approval cards show the exact action/resource and the four existing choices: Approve once, Allow for this session, Always allow, Reject. Explain scope before selection; persistent grants can be inspected/revoked in Settings. Sidebar badges and a compact attention list identify work awaiting approval/input or requiring failure recovery. Windows notifications are enabled by default for those events only while the app is backgrounded, subject to OS/user notification settings; success notifications are off by default. Notifications navigate only on user activation, never steal focus or decide an interruption. In-app attention remains available if OS notifications are unavailable.
+
+Sending with a stopped installed managed model uses the existing model manager and admission path to load the selected setup, show waiting/loading/readiness and submit once ready. Preserve input on failure; explain conflicts before disruptive action and never bypass active-work protection or substitute models. Connected endpoints do not acquire managed-process authority. Preserve/refine the current Models journey rather than redesigning it without evidence.
+
+### Packet ownership and visual defaults
+
+03 owns this shell, Chat controls/telemetry, detailed-stream preference, queue/approval presentation, attention, model-start journey and initial Library. 04 adds Agents, project/Knowledge/proposal controls, files/diffs and Settings connections. 05 owns the Lab journey and exclusion presentation; 06 extends shared activity/attention for children; 07 implements the workflow editor; 08 extends the composer/previews/Library for media. Future controls appear when functional. All primary journeys use human-readable labels; JSON, internal identifiers and diagnostics are secondary expandable evidence, not a prerequisite for ordinary use.
+
+Support polished light/dark themes following Windows by default, with an explicit preference. Full and half-screen windows are both normal targets. Compact controls keep readable labels, keyboard focus, accessible names and usable click targets. Exact typography, spacing and component styling are resolved in the early visual review; detailed Lab/workflow layouts are deliberately deferred to their own approved pre-implementation checkpoints.
+
+## Shared UX acceptance protocol
+
+After the basic shell and tasks 1.1-1.3 have an exercisable layout, review it with Dave before accumulating the remaining Chat controls; record acceptance, requested revisions or explicit deferral here. Include the existing Models -> Chat journey (find/install or select, inspect settings, start, send/cancel/reopen). At completion, demonstrate the affected end-to-end journey in the built Windows application. For each packet review include full and half-screen windows, Windows display scaling, keyboard navigation, long content and at least one failure/recovery state; record the actual window sizes/scaling and outcomes. Screenshots establish layout, not successful interaction.
+
+Keep technical verification and Dave's UX acceptance separately recorded in the existing design/PR. Automated rendering or agent interaction does not confer user acceptance. UX acceptance remains pending until Dave reviews the experience or explicitly defers that review; a deferral is labelled deferred, not accepted. Required technical/live checks cannot be waived by UX deferral. Later packets apply this same protocol to their own journeys without another tracker.
+
+Current state: UX specification approved; implementation and technical verification pending. Early Chat layout review and final Chat UX acceptance are pending; no review has been deferred or visually accepted by this planning update.
+
 ## Technical Approach
 
 Prerequisite: deliver and verify `repair-local-interaction-boundaries` before starting this packet. Retain its atomic selection/transport binding, generation-guarded hydration/cancellation/registration/command acknowledgements and draft isolation when adding the persistent queue. Preserve main-owned validated external navigation and requesting-document/frame token authorization. Retain repeated-text legacy chronology, conservative idempotent projection repair, display-edit cutovers and continuation without effect replay. This is a post-delivery repair of the completed migration, not a replacement architecture. Packet 04 still owns the coherent async transition.

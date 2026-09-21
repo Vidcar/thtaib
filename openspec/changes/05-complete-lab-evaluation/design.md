@@ -18,6 +18,14 @@ This change includes reproducible load-test definitions and a real independent-s
 
 Keep trait measurements separate from task cases in the UI. Allow an explicit Use in Chat action to create/reuse a shared profile from a tested immutable snapshot with provenance; it must not modify an active deployment or silently rewrite an existing profile.
 
+## UX presentation
+
+Follow the shared UX contract in `../03-complete-shared-chat/design.md#shared-ux-contract` for navigation, compact model/setup indicators, activity, Library retention and background attention. Lab keeps its own destination, but its primary screen must guide the user through: choose case, choose configurations, run, compare, inspect evidence, and use the tested setup in Chat. Model trait testing and task-case replay/comparison stay visually distinct.
+
+Replace raw JSON-first surfaces with structured summaries, result cards/tables, expected-versus-actual/source views, side-by-side comparisons and expandable evidence details. Technical evidence remains available, including snapshots, scorer revisions, adapter captures, benchmark stdout/stderr and exact run IDs, but it is not required to understand whether a case passed, failed, was unavailable or needs recovery. Lab's exclusive reservation appears both in Lab and in any blocked Chat, Workflow, media or activity surface with a plain explanation and available action.
+
+Before substantial Lab UI implementation, obtain Dave's approval of the layout checkpoint for the case/configuration/results/evidence arrangement. Technical verification and Dave's UX acceptance are separate completion records. Lab UX acceptance is currently pending, not accepted. It covers the built Windows journey at full-window and half-screen sizes, Windows display scaling, keyboard navigation, long result/evidence content and at least one failure/recovery state. UX acceptance remains pending until Dave accepts the built journey or explicitly defers it.
+
 ## Integration references
 
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.

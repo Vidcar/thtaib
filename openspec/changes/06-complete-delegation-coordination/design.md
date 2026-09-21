@@ -14,6 +14,14 @@ Persist the frozen launch configuration and pending operation identity, then fol
 
 The first proof uses a real managed model around a controlled owned operation. Change 08 supplies actual ComfyUI/speech integration and two-sided engine release; it is not a prerequisite here. This coordinator owns resource admission/lifecycle, not a second model/tool loop or workflow scheduler.
 
+## UX presentation
+
+Follow the shared UX contract in `../03-complete-shared-chat/design.md#shared-ux-contract` for activity, approvals, queues, attention and notifications. Delegation adds parent/child attribution to the same activity panel and attention list rather than a separate monitor. Each visible item must show the owner, frozen setup, current state, wait reason, approval/input need, partial result or terminal result in plain language, with technical IDs and trace evidence available in expandable details.
+
+Cancellation controls must explain scope before action: root cancellation, owned queued children, active child/tool/model calls, handover phases and any independent sibling results that can remain. Individual-child cancellation appears only when supported by the verified execution semantics for that child path. Simultaneous approvals and questions stay inline with clear resource/action scope and use the shared attention model when the app is backgrounded.
+
+Technical verification and Dave's UX acceptance are separate completion records. Focused delegation UX acceptance is currently pending, not accepted. It covers the built Windows journey at full-window and half-screen sizes, Windows display scaling, keyboard navigation, long child/activity content, simultaneous waits/approvals and at least one failure/recovery state. UX acceptance remains pending until Dave accepts the built journey or explicitly defers it.
+
 ## Integration references
 
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.
