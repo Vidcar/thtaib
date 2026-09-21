@@ -26,8 +26,23 @@ from workbench_backend.contracts.paths import (
     DESKTOP_TYPES_RELATIVE,
     OPENAPI_RELATIVE,
     generated_relative_paths,
+    repo_root_from,
 )
 from support import close_workbench_sqlite, workbench_client
+
+
+class RepositoryPathTests(unittest.TestCase):
+    def test_repo_root_uses_application_manifests_not_documentation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "workbench"
+            nested = root / "apps" / "backend" / "src"
+            nested.mkdir(parents=True)
+            (root / "apps" / "backend" / "pyproject.toml").write_text("", encoding="utf-8")
+            desktop = root / "apps" / "desktop"
+            desktop.mkdir(parents=True)
+            (desktop / "package.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual(repo_root_from(nested), root)
 
 
 class SharedContractSurfaceTests(unittest.TestCase):

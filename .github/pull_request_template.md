@@ -8,4 +8,4 @@ Local checks actually run and results. Distinguish live/mocked and skipped check
 
 ## Decisions or follow-up (omit if unnecessary)
 
-Consequential behaviour, contract or enforcement changes; affected specification/status updates; next concrete step if unfinished. Keep rationale in its existing home rather than duplicating it here.
+Consequential behaviour, contract or enforcement changes; affected OpenSpec capability/change; next concrete step if unfinished. Keep durable rationale in OpenSpec rather than duplicating it here.

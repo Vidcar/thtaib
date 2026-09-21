@@ -4,4 +4,4 @@ JSON Schema, OpenAPI, and the generator manifest in this directory are **generat
 
 Source of truth: `apps/backend/src/workbench_backend/contracts`.
 
-Regenerate and check freshness with the commands in `specs/commands.md`.
+Regenerate and check freshness with the commands in the repository `AGENTS.md`.
