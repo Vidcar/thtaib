@@ -4,7 +4,7 @@ Last updated: 2026-09-21.
 
 ## Goal and current state
 
-Packet 01 implementation is complete in [PR #111](https://github.com/Vidcar/thtaib/pull/111), from `codex/packet-01-model-management`. The Models specification is synchronized; all ten tasks are archived at `openspec/changes/archive/2026-09-21-01-complete-model-management/`. Packets 02–08 remain planned and are not implemented.
+Packet 01 implementation is complete and merged in [PR #111](https://github.com/Vidcar/thtaib/pull/111). Local `main` contains the delivery. The Models specification is synchronized; all ten tasks are archived at `openspec/changes/archive/2026-09-21-01-complete-model-management/`. Packets 02–08 remain planned and are not implemented.
 
 ## Delivered
 
@@ -18,4 +18,4 @@ Real isolated Windows checks reused existing Qwen3.8-27B weights and llama.cpp b
 
 Launch normally with root `Launch Workbench.vbs`. User data and models are preserved. GitHub CI remains disabled; retain local gates. OpenSpec remains the only specification/change format. Preserve packet ordering and existing integration boundaries.
 
-No Packet 01 implementation work remains. Check PR #111 for merge status; begin Packet 02 only when authorized.
+No Packet 01 work remains. Begin Packet 02 only when authorized.
