@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS capability_evidence (
+    id TEXT PRIMARY KEY,
+    deployment_id TEXT NOT NULL,
+    tested_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -176,10 +183,41 @@ class RecordStore:
             self._write_list(self.profiles_path, remaining)
 
     def list_deployments(self) -> list[Deployment]:
-        return self._read_list(self.deployments_path, Deployment)
+        deployments = self._read_list(self.deployments_path, Deployment)
+        bundles = {bundle.id: bundle for bundle in self.list_bundles()}
+        runtime = self.read_runtime_manifest()
+        for deployment in deployments:
+            deployment.capability_evidence = self.list_capability_evidence(deployment.id)
+            bundle = bundles.get(deployment.bundle_id)
+            deployment.inference_identity = {
+                "runtime": ({"release": runtime.release_tag, "executable": runtime.executable, "sha256": runtime.sha256,
+                             "companion_sha256": runtime.companion_sha256} if runtime and deployment.scope.value == "managed" else None),
+                "bundle_files": ([{"path": item.path, "sha256": item.sha256, "role": item.role.value}
+                                  for item in [*bundle.files, *bundle.shards, *bundle.companions]] if bundle else []),
+            }
+            if deployment.inference_identity == {"runtime": None, "bundle_files": []}:
+                deployment.inference_identity = {}
+        return deployments
 
     def put_deployment(self, deployment: Deployment) -> Deployment:
-        return self._upsert(self.deployments_path, Deployment, deployment)
+        self._upsert(self.deployments_path, Deployment, deployment.model_copy(update={"capability_evidence": [], "inference_identity": {}}))
+        return self.get_deployment(deployment.id) or deployment
+
+    def put_capability_evidence(self, evidence: dict[str, Any]) -> None:
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO capability_evidence(id, deployment_id, tested_at, payload) VALUES (?, ?, ?, ?)",
+                (evidence["id"], evidence["deployment_id"], evidence["tested_at"], json.dumps(evidence)),
+            )
+            conn.commit()
+
+    def list_capability_evidence(self, deployment_id: str) -> list[dict[str, Any]]:
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT payload FROM capability_evidence WHERE deployment_id = ? ORDER BY tested_at, rowid",
+                (deployment_id,),
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
 
     def get_deployment(self, deployment_id: str) -> Deployment | None:
         return next(

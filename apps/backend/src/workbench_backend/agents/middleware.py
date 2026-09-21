@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
+from workbench_backend.agents.context import observe_payload, require_context_fit
 from workbench_backend.agents.harness_backend import is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
     is_knowledge_route_path,
@@ -60,6 +61,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
+        self._observe_context(filtered)
         before = len(self.http_sink)
         try:
             response = handler(filtered)
@@ -86,6 +88,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         filtered = request.override(tools=self._presented(request.tools))
+        self._observe_context(filtered)
         before = len(self.http_sink)
         try:
             response = await handler(filtered)
@@ -139,6 +142,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         """
 
         name, args, call_id = _tool_call_parts(request)
+        if self.run.structured_output is not None and self.run.structured_output.repair_attempts:
+            from workbench_backend.errors import HarnessError
+            raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
+        if not self.run.presented_tools:
+            return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
             if _allow_projectless_knowledge_tool(name, args, self.run):
                 return None
@@ -212,6 +220,15 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 selected.append(item)
         return selected
 
+    def _observe_context(self, request: ModelRequest) -> None:
+        if self.run.context_observation is None:
+            return
+        messages = ([request.system_message] if request.system_message else []) + list(request.messages)
+        self.run.context_observation = observe_payload(self.run.context_observation, {
+            "messages": messages, "tools": request.tools, "response_format": request.response_format,
+        })
+        require_context_fit(self.run.context_observation)
+
     def _capture(
         self,
         request: ModelRequest,
@@ -270,12 +287,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 handler_returned=handler_returned,
                 failure=_failure_dict(failure),
                 selected_profile_id=setup.selected_profile_id if setup is not None else self.run.profile_id,
-                applied_per_request=applied,
+                applied_per_request=applied if handler_returned else {},
                 startup_mismatches=(
                     [item.model_dump(mode="json") for item in setup.startup_mismatches]
                     if setup is not None
                     else []
                 ),
+                context_observation=self.run.context_observation,
             ),
             settings,
         )
@@ -386,9 +404,7 @@ def _tool_call_parts(request: ToolCallRequest) -> tuple[str, dict[str, Any], str
 
 
 def _payload_after(sink: list[dict[str, Any]], before: int) -> dict[str, Any] | None:
-    if len(sink) <= before:
-        return None
-    return sink[-1]
+    return next((item for item in reversed(sink[before:]) if "body" in item), None)
 
 
 def _payloads_after(sink: list[dict[str, Any]], before: int) -> list[dict[str, Any]]:
@@ -429,9 +445,23 @@ def _tool_names(tools: list[Any] | None) -> list[str]:
 
 def _message_dict(message: BaseMessage | Any) -> dict[str, Any]:
     role = getattr(message, "type", None) or getattr(message, "role", "unknown")
-    content = getattr(message, "content", "")
+    content = _diagnostic_content(getattr(message, "content", ""))
     payload: dict[str, Any] = {"role": str(role), "content": content}
     tool_calls = getattr(message, "tool_calls", None)
     if tool_calls:
         payload["tool_calls"] = tool_calls
     return payload
+
+
+def _diagnostic_content(value: Any) -> Any:
+    if isinstance(value, str):
+        if value.startswith("data:"):
+            return "<embedded-media-redacted>"
+        return value[:8192] + ("…[truncated]" if len(value) > 8192 else "")
+    if isinstance(value, list):
+        return [_diagnostic_content(item) for item in value[:64]]
+    if isinstance(value, dict):
+        if value.get("type") in {"image_url", "image", "input_audio"}:
+            return {"type": value.get("type"), "content": "<embedded-media-redacted>"}
+        return {key: _diagnostic_content(item) for key, item in value.items()}
+    return value

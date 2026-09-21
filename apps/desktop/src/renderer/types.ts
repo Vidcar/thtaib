@@ -242,11 +242,42 @@ export type RedactionMode = "retain" | "redact_secrets" | "discard";
 export type AgentRunStatus = RunLifecycleStatus;
 export const isAgentRunLive = isRunLifecycleLive;
 
+export type UserContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" } };
+
+export interface ContextObservation {
+  schema_version: number;
+  capacity_tokens: number | null;
+  capacity_source: "server_props.n_ctx" | "unknown";
+  output_reservation_tokens: number;
+  estimated_input_tokens: number;
+  margin_tokens: number;
+  fits: boolean | null;
+  counting_method: string;
+  summarization_path: "deepagents-upstream";
+  notes: string[];
+}
+
+export interface StructuredOutputResult {
+  schema_version: number;
+  requested_schema_version: number;
+  schema_name: string;
+  requested_json_schema: Record<string, unknown>;
+  strategy: "provider" | "tool" | null;
+  validation_status: "not_requested" | "valid" | "missing" | "invalid";
+  result: unknown;
+  error: string | null;
+  repair_attempts: number;
+  note: string;
+}
+
 export interface AgentRun {
   id: string;
   status: AgentRunStatus;
   deployment_id: string;
   task: string;
+  content_blocks?: UserContentBlock[] | null;
   enabled_tools: string[];
   presented_tools: string[];
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
@@ -338,6 +369,8 @@ export interface AgentRun {
   starting_snapshot_id?: string | null;
   host_shell?: HostShellFacts;
   pending_interrupt?: PendingInterrupt | null;
+  context_observation?: ContextObservation | null;
+  structured_output?: StructuredOutputResult | null;
 }
 
 export interface HostShellFacts {
@@ -386,6 +419,7 @@ export function visiblePendingInterrupt(run: AgentRun | null | undefined): Pendi
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  content_blocks?: UserContentBlock[] | null;
   at: string;
   run_id: string | null;
 }

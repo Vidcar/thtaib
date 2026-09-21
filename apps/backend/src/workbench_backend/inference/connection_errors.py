@@ -48,6 +48,9 @@ def classify_connection_failure(exc: BaseException | str) -> str | None:
     blob = f"{type_name} {exc}".lower()
     if any(marker in blob for marker in _UNREACHABLE_MARKERS):
         return DEPLOY_UNREACHABLE
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return classify_connection_failure(cause)
     return None
 
 

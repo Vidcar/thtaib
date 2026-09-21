@@ -422,6 +422,8 @@ class Deployment(BaseModel):
     health: HealthReport | None = None
     resource_usage: ResourceUsage | None = None
     server_props: ServerProperties | None = None
+    capability_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    inference_identity: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     created_at: str
     updated_at: str

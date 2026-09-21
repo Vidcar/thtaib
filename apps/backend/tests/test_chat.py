@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
@@ -19,6 +19,7 @@ from workbench_backend.app import create_app
 from workbench_backend.chat.schemas import ChatConversation, ChatConversationView, ChatMessage, ChatStartRequest
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.checkpointer import conversation_state
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run, wait_for_status
@@ -942,6 +943,28 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(body["current_run"]["status"], "cancelled")
         self.assertEqual(body["current_run"]["id"], first_run_id)
         self.assertEqual(body["current_run_id"], first_run_id)
+        self.assertEqual(body["current_run"]["tool_invocations"], [])
+        self.assertFalse((self.project / "edited.md").exists(), "cancelled model tool call must not execute")
+        messages = conversation_state(
+            self.manager.paths.checkpoints_db,
+            conversation["thread_id"],
+        ).get("messages", [])
+        calls = [
+            call
+            for message in messages
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+            if call.get("id") == "call_write"
+        ]
+        self.assertEqual(len(calls), 1, "the original model tool call remains in durable history")
+        results = [
+            message
+            for message in messages
+            if isinstance(message, ToolMessage) and message.tool_call_id == "call_write"
+        ]
+        self.assertEqual(len(results), 1, "cancelled tool call receives one durable protocol result")
+        self.assertEqual(results[0].status, "error")
+        self.assertIn("Completion is unconfirmed", results[0].content)
         follow = self._start(conversation["id"], task="Follow-up after confirmed cancel.")
         self.assertNotEqual(follow["current_run"]["id"], first_run_id)
         self.assertEqual(follow["current_run_id"], follow["current_run"]["id"])

@@ -17,6 +17,19 @@ export function RunProgress(props: {
   const live = isAgentRunLive(run.status);
   const retrieved = run.retrieved_material ?? [];
   const related = run.related_files ?? [];
+  const context = run.context_observation;
+  const structured = run.structured_output;
+  const contextFit = context?.fits === true
+    ? "Estimate fits observed capacity"
+    : context?.fits === false
+      ? "Estimate exceeds observed capacity"
+      : "Capacity fit is unknown";
+  const structuredStrategy = structured?.strategy === "provider"
+    ? "Provider strategy"
+    : structured?.strategy === "tool"
+      ? "Tool strategy"
+      : "Not selected";
+  const validationStatus = structured?.validation_status ?? "not_requested";
 
   return (
     <div className="run-progress">
@@ -53,6 +66,46 @@ export function RunProgress(props: {
             ? ` · ${run.effective_setup.retrieval_corpus_documents} documents`
             : ""}
         </p>
+      ) : null}
+      {context || structured ? (
+        <details className="run-inspection">
+          <summary>Request and model details</summary>
+          {context ? (
+            <section aria-label="Context estimate">
+              <h4>Context estimate</h4>
+              <p className="hint">
+                {context.capacity_tokens == null
+                  ? "Observed context capacity: unknown"
+                  : `Observed context capacity: ${context.capacity_tokens.toLocaleString()} tokens`}
+                {context.capacity_source === "server_props.n_ctx" ? " (reported by the running model server)" : ""}
+              </p>
+              <ul className="plain-list">
+                <li>Estimated input: {context.estimated_input_tokens.toLocaleString()} tokens</li>
+                <li>Safety margin: {context.margin_tokens.toLocaleString()} tokens</li>
+                <li>Reserved for output: {context.output_reservation_tokens.toLocaleString()} tokens</li>
+                <li>{contextFit}</li>
+              </ul>
+              <p className="hint">Estimate method: {context.counting_method}</p>
+              {context.notes.map((note, index) => <p className="hint" key={`${index}-${note}`}>{note}</p>)}
+            </section>
+          ) : null}
+          {structured ? (
+            <section aria-label="Structured output result">
+              <h4>Structured result</h4>
+              <p className="hint">
+                Schema: {structured.schema_name} · Strategy: {structuredStrategy} · Validation: {validationStatus}
+              </p>
+              <p className="hint">This value is separate from the assistant’s written reply.</p>
+              <h5>Requested schema</h5>
+              <pre>{JSON.stringify(structured.requested_json_schema, null, 2)}</pre>
+              <h5>Structured value</h5>
+              {structured.result == null
+                ? <p className="hint">No structured value was returned.</p>
+                : <pre>{JSON.stringify(structured.result, null, 2)}</pre>}
+              {structured.error ? <p className="notice notice-warn">{structured.error}</p> : null}
+            </section>
+          ) : null}
+        </details>
       ) : null}
       {run.events.length === 0 ? (
         <p className="hint">{live ? "Waiting for the first event…" : "No events recorded."}</p>

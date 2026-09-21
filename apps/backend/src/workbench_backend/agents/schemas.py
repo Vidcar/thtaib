@@ -5,10 +5,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from workbench_backend.agents.context import ContextObservation
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
+from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
+from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.knowledge.schemas import KnowledgeBinding, RedactionMode
 from workbench_backend.state.schemas import RelatedFile
 
@@ -91,6 +94,7 @@ class ModelRequestCapture(BaseModel):
     discarded: bool = False
     expired: bool = False
     redacted_fields: list[str] = Field(default_factory=list)
+    context_observation: ContextObservation | None = None
 
 
 class ToolMode(str, Enum):
@@ -153,10 +157,14 @@ class InterruptDecisionRequest(BaseModel):
 
 
 class AgentStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     deployment_id: str
     task: str
+    content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     presented_tools: list[str] | None = None
     system_prompt: str | None = None
+    output_schema: OutputSchemaRequest | None = None
     criteria: TaskCriteria | None = None
     budgets: AgentBudgets | None = None
     workspace_id: str | None = None
@@ -181,6 +189,7 @@ class AgentRun(BaseModel):
     status: AgentRunStatus = AgentRunStatus.queued
     deployment_id: str
     task: str
+    content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]
     denied_tools: list[str] = Field(default_factory=list)
@@ -191,6 +200,9 @@ class AgentRun(BaseModel):
     model_requests: list[ModelRequestCapture] = Field(default_factory=list)
     tool_invocations: list[dict[str, Any]] = Field(default_factory=list)
     completion: CompletionReport | None = None
+    output_schema: OutputSchemaRequest | None = None
+    structured_output: StructuredOutputResult | None = None
+    context_observation: ContextObservation | None = None
     stop_reason: str | None = None
     error: str | None = None
     created_at: str

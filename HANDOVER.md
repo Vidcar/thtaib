@@ -4,16 +4,14 @@ Last updated: 2026-09-21.
 
 ## Current state
 
-Packet 01 review repairs are complete in [PR #112](https://github.com/Vidcar/thtaib/pull/112), from `codex/packet-01-review-fixes`. This corrects requirements delivered in PR #111; packets 02–08 remain planned. The original packet remains archived under `openspec/changes/archive/2026-09-21-01-complete-model-management/`; clarified current behavior is in `openspec/specs/models/spec.md`.
+Packet 02 is complete in [PR #113](https://github.com/Vidcar/thtaib/pull/113), branch `codex/packet-02-inference-adapter`, based on main after PR #112. Current model contracts are synced under `openspec/specs/models/spec.md`; the completed change is archived as `2026-09-21-02-complete-inference-adapter`. Packets 03–08 remain proposed.
 
-## Repairs and decisions
+## Delivered
 
-Unconfirmed process exit retains ownership and blocks replacement, deletion and runtime repinning, including failed-start cleanup. Interrupted starts without recorded identity recover to actionable failure. Disconnect shares the health-update lock. The desktop submits only deliberate startup overrides; null explicitly clears an inherited startup key. Chat defaults to saved deployment settings (response and agent bags together), permits selecting a current preset or explicitly opting out, and preserves the immutable launch snapshot. Ready managed turns avoid full weight hashing; launch integrity checks remain. Deletion previews use current file sizes; first-use guidance includes on-demand loading.
+Shared adapter preserves actual model/settings, sync/async calls, streaming, reasoning and tool identities, with owned-client cleanup and bounded redacted diagnostics. Shared current-user blocks and versioned structured results enforce policy/capability gates and one effect-free repair. Observed context drives one upstream compaction path and saved-history preflight. Setup-specific probes persist in application SQLite. Chat cancellation durably pairs unanswered calls with explicit unconfirmed error results; no tool is replayed. Desktop details show context and validated results in a scrollable panel.
 
 ## Verification and local use
 
-All six findings were reproduced before correction. Final gates passed: 288 default backend tests, 120 integration tests, desktop typecheck/SSE/preset-payload regression/build, generated-contract check and 16 strict OpenSpec items. Targeted manager-restart regression also passed. Tests cover denied/unconfirmed exits, failed-start identity retention, delete/repin refusal, blocked health/disconnect ordering, saved prompt composition, sparse overrides and full-hash avoidance. Prompt inheritance uses scripted model execution; no new real-model capability claim.
+315 default and 142 integration tests passed; desktop build/typecheck/SSE/settings checks, generated contracts and strict OpenSpec validation passed. Real Qwen3.8-27B / b11045 CUDA checks passed for streaming, tool round trip, native/tool schema, combined tool-schema/executable tools, reasoning/replay, image recognition and tools-off compaction. Native schema plus executable tools was inconclusive on that setup; auto uses tested tool formatting. Counts are estimates; capability proof is setup-specific.
 
-The idle everyday backend was refreshed after checking zero active runs/imports/model processes. The rebuilt Windows Chat controls were inspected read-only; no synthetic records were added to everyday data. App is open, and normal launch is `Launch Workbench.vbs`. Preserve user models/data and disabled GitHub CI; commands remain in `AGENTS.md`.
-
-No repair implementation remains. PR #112 records delivery status; no later packet is authorized by this repair.
+Rebuilt desktop is open, backend healthy on :8000 with the ordinary product data root. Isolated :8127 model stopped and verified closed. Weights preserved. Scratch evidence/helpers remain under `.scratch/packet02-live/` and `.scratch/packet02_*.py` (ignored). Packet 02 has no known outstanding defects or implementation tasks. No CI was added. Verify current Git/PR state before new work.

@@ -19,6 +19,25 @@ _HOLDERS: dict[str, tuple[sqlite3.Connection, SqliteSaver]] = {}
 _LOCK = threading.Lock()
 
 
+def conversation_state(path: Path, thread_id: str) -> dict:
+    """Read retained messages through a compiled graph's public state API only.
+
+    This projection is never invoked: Deep Agents remains the execution owner.
+    Its state schema preserves upstream compaction metadata for preflight.
+    """
+    from deepagents.middleware.summarization import SummarizationState
+    from deepagents.graph import DeepAgentState
+    from langgraph.graph import StateGraph, START, END
+    class ConversationState(SummarizationState, DeepAgentState):
+        pass
+    graph = StateGraph(ConversationState)
+    graph.add_node("read_only_projection", lambda state: {})
+    graph.add_edge(START, "read_only_projection")
+    graph.add_edge("read_only_projection", END)
+    compiled = graph.compile(checkpointer=open_sqlite_checkpointer(path))
+    return dict(compiled.get_state({"configurable": {"thread_id": thread_id}}).values or {})
+
+
 def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
     """Return the LangGraph saver for ``checkpoints.sqlite``.
 

@@ -52,6 +52,18 @@ function messageRoleLabel(role: ChatMessage["role"]): string {
   }
 }
 
+function transcriptMessageContent(item: ChatMessage): string {
+  const parts = [item.content, ...(item.content_blocks ?? [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)]
+    .filter((part) => part.trim());
+  const imageCount = (item.content_blocks ?? []).filter((block) => block.type === "image_url").length;
+  if (imageCount > 0) {
+    parts.push(`📎 ${imageCount} image ${imageCount === 1 ? "attached" : "attachments"}`);
+  }
+  return parts.join("\n");
+}
+
 function isDeploymentAvailable(deployment: Deployment): boolean {
   return deployment.status === "running";
 }
@@ -433,7 +445,7 @@ export function ChatPanel() {
                   <strong>{messageRoleLabel(item.role)}</strong>
                   <time>{formatWhen(item.at)}</time>
                 </header>
-                <p>{item.content}</p>
+                <p>{transcriptMessageContent(item)}</p>
               </article>
             ))
           )}
@@ -457,7 +469,7 @@ export function ChatPanel() {
         ) : null}
 
         {conversation?.current_run ? (
-          <details className="card">
+          <details className="card chat-run-details">
             <summary>
               Run progress <StatusBadge status={conversation.current_run.status} />
             </summary>

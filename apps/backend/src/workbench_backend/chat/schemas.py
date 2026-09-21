@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from workbench_backend.inference.user_content import UserContentBlock
+from workbench_backend.agents.structured import OutputSchemaRequest
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 
@@ -15,6 +17,7 @@ ChatInterruptDecisionRequest = InterruptDecisionRequest
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
+    content_blocks: list[UserContentBlock] | None = None
     at: str
     run_id: str | None = None
 
@@ -34,7 +37,10 @@ class ChatConversationCreateRequest(BaseModel):
 
 
 class ChatStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     task: str
+    content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
+    output_schema: OutputSchemaRequest | None = None
     deployment_id: str | None = None
     profile_id: str | None = None
     inherit_deployment_settings: bool = True

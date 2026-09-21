@@ -10,8 +10,26 @@ from workbench_backend.inference.compatibility import (
     UserOverrideRequest,
 )
 from workbench_backend.inference.service import ModelManager
+from workbench_backend.inference.capabilities import CapabilityEvidence, CapabilityProbeRequest, capability_support
+from workbench_backend.inference.probes import run_capability_probe
 
 router = APIRouter(prefix="/v1/compatibility")
+
+
+@router.post("/deployments/{deployment_id}/probes", response_model=CapabilityEvidence)
+def probe(request: Request, deployment_id: str, body: CapabilityProbeRequest) -> CapabilityEvidence:
+    return run_capability_probe(get_manager(request), deployment_id, body)
+
+
+@router.get("/deployments/{deployment_id}/probes")
+def probe_evidence(request: Request, deployment_id: str) -> object:
+    deployment = get_manager(request).get_deployment(deployment_id)
+    return {
+        "evidence": deployment.capability_evidence,
+        "current_support": {name: capability_support(deployment, name) for name in (
+            "text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image"
+        )},
+    }
 
 
 def get_compatibility(request: Request) -> CompatibilityService:

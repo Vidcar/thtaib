@@ -149,7 +149,7 @@ class ChatService:
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()
-        if not task:
+        if not task and not request.content_blocks:
             raise ChatError("Compose text is required.", code="task_required", status_code=400)
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
@@ -232,12 +232,14 @@ class ChatService:
             self._ensure_thread(next_conversation)
             now = utc_now()
             next_conversation.history_replaced = False
-            next_conversation.transcript.append(ChatMessage(role="user", content=task, at=now))
+            next_conversation.transcript.append(ChatMessage(role="user", content=task, content_blocks=request.content_blocks, at=now))
             try:
                 started = self.harness.start(
                     AgentStartRequest(
                         deployment_id=next_conversation.deployment_id,
                         task=task,
+                        content_blocks=request.content_blocks,
+                        output_schema=request.output_schema,
                         presented_tools=request.presented_tools,
                         system_prompt=(
                             CHAT_SYSTEM_PROMPT

@@ -8,8 +8,8 @@
     "apps/backend/contracts/jsonschema/RunStreamEnvelope.schema.json": "9a03b7f108d26701160b23407b578f100040729f34d23766caa577479e8b7401",
     "apps/backend/contracts/jsonschema/RunStreamEventType.schema.json": "3dc6085711ba675be68e6b30f0998f32fab07233bc952664d77fdf07a7b2c512",
     "apps/backend/contracts/jsonschema/SharedAgentEvent.schema.json": "18a182e195e5ce1eac33c925cec2a12c0038f4bfb1bd4d7d0ebb814dc2a2c201",
-    "apps/backend/contracts/openapi.json": "a5b49de1449841d32f31d72418b2005a2aa48de0bcf74bb1800a4e4dd51aa66f",
-    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "ac25c5cfd3b4bb4886df8ae0fb6ee4df69551b623fdb82034e549b99859d27ba"
+    "apps/backend/contracts/openapi.json": "0414242f5561cd7ca3d901ba47abc947158baa88f076b9181c17fb7555425be3",
+    "apps/desktop/src/generated/shared-contracts/openapi.d.ts": "a0869d1709496ca7dbfa46496ef71462ca2fc50135a9dd2f46a6f70ab2009d95"
   },
   "generator": {
     "openapi_typescript": "7.13.0",
