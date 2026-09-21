@@ -1,6 +1,6 @@
 # Tasks: Complete exclusive Lab evaluation and configuration comparison
 
-Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 04 and `migrate-local-agent-interaction` must be implemented and verified first. Use shared SDK run observation for presentation; all Inspect evaluation, local case/scorer, benchmark, evidence and durable result work below remains required and unchecked. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 

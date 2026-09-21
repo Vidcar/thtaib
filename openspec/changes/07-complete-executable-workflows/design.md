@@ -14,7 +14,7 @@ Compile conditional routing, region-scoped parallel joins, deterministic reducer
 
 Persist root and invocation identity, including node path/iteration/attempt; use public checkpoint/interrupt APIs and exact typed resume. Side effects need adapter idempotency or reconciliation, not an exactly-once claim from checkpoints. Shared admission/project coordination, Lab exclusion, cancellation and residency apply to every node path. Preserve useful independent branches on failure while blocking missing dependent outputs.
 
-The canvas edits the same definitions and shows shared execution evidence. Existing Agent run history remains accessible; the intended area name is Workflows without a broad code/data rename. Media nodes become runnable only when change 08 supplies verified adapters. No schedule/trigger activation is implied by save, import or restore.
+React Flow edits the same serialisable definitions and layout; only backend validation/compilation and LangGraph execute the frozen workflow graph. Use the verified shared SDK observation boundary to present scoped run/node/tool state, not to author graph logic, validate execution authority or replace LangGraph. Existing Agent run history remains accessible; the intended area name is Workflows without a broad code/data rename. Media nodes become runnable only when change 08 supplies verified adapters. No schedule/trigger activation is implied by save, import or restore.
 
 ## Integration references
 

@@ -18,7 +18,7 @@ The proposed LAB-005 replacement deliberately retires the historical one-issue-p
 
 ## Impact
 
-Work order **05 of 08**. Change 04 must be implemented and verified first. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
+Work order **05 of 08**. Changes 04 and `migrate-local-agent-interaction` must be implemented and verified first. Consume the shared SDK run-observation boundary for live presentation, while retaining Lab-owned Inspect evaluations, case/scorer versions, measurements, durable evidence links and result history. SDK hooks or projections do not perform evaluation or establish task correctness. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals
 

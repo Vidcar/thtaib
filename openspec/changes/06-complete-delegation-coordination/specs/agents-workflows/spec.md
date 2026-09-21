@@ -20,7 +20,7 @@ Each child SHALL resolve the shared versioned setup into an immutable invocation
 
 ### Requirement: AGT-016 - Isolate child invocation state and scoped loading resources
 
-Independent delegated tasks SHALL have unique invocation identity and state under the root graph's checkpoint/recovery owner, linking root, parent, child, task call and framework namespace. A child name is not an invocation ID. Deliberately scope framework-copied/merged custom state; do not accidentally enable persistent-across-call children or a competing checkpoint store.
+Independent delegated tasks SHALL have unique invocation identity and state under the root graph's checkpoint/recovery owner, linking root, parent, child, task call and native framework namespace. Where supported, the native namespace is the canonical execution scope; map it explicitly to durable application IDs and the shared SDK's scoped selector/subscription identity. A child name or UI selector is not an invocation ID or authorization. Deliberately scope framework-copied/merged custom state; do not accidentally enable persistent-across-call children or a competing checkpoint store.
 
 Child tools, selected memory/protected instructions and full skill packages SHALL bind the child's actual versions/scopes, not parent closures or cached loading state. Materialised knowledge and scratch/offloads SHALL use stable invocation-scoped routing retained on resume. Sibling loading/cleanup must not overwrite packages, expose deselected knowledge or delete another invocation's history/results. Transfer executable resources only through the authorised environment path. Message/context isolation does not imply knowledge isolation, separate project access or a host sandbox.
 
@@ -36,7 +36,7 @@ Child tools, selected memory/protected instructions and full skill packages SHAL
 
 ### Requirement: AGT-017 - Attribute child evidence and route every interrupt exactly
 
-Shared events SHALL attribute child messages, reasoning, model/tool calls/results, approvals and artifacts to root/parent/child/call identity. Correlate concurrent captures per call, not overlapping global log slices. Child output SHALL be independently inspectable; only the actual returned child result must reach the parent, not every private child message.
+Shared run observations, including the prerequisite's SDK-scoped projections, SHALL attribute child messages, reasoning, model/tool calls/results, approvals and artifacts to root/parent/child/call identity. Correlate concurrent captures per call, not overlapping global log slices. Child output SHALL be independently inspectable; only the actual returned child result must reach the parent, not every private child message. Selectors scope observation/display and do not authorize a child or imply its completion.
 
 Represent all pending interruptions and distinguish several actions in one interrupt from several independent interrupts. Route decisions to the saved root graph/thread by exact interrupt identity and checkpoint/child association. Preserve ordered allowed tool decisions and separately validated question/elicitation values. Reject stale/duplicate decisions and recheck access before resume.
 

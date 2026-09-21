@@ -1,6 +1,6 @@
 # Tasks: Complete projects, knowledge and external tools
 
-Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 03 and `migrate-local-agent-interaction` must be implemented and verified first. Reuse the shared SDK message/tool/run presentation and application-owned configuration/selection controls; SDK integration does not satisfy packet features. This change owns the complete async driver/saver/middleware/resume/cancel/recovery transition unless the prerequisite's compatibility proof requires moving that entire foundation coherently. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 
@@ -11,7 +11,7 @@ Before changing an existing path, run its relevant acceptance checks and retain 
 - [ ] 1.5 Verify the existing opt-in `agents/retrieval.py` and harness scratch path; add local extraction/source inspection for required formats and fitting/authorized long-document use, extending derived retrieval only where needed without mandatory indexing.
 - [ ] 1.6 Complete shared catalogue and connection/credential lifecycle, then integrate one real public web search/page reader and one real MCP tool path.
 - [ ] 1.7 Migrate the common harness/saver/middleware/resume/cancel/recovery path to compatible async ownership, including non-MCP Chat and Lab.
-- [ ] 1.8 Finish existing project, Knowledge and integration UI controls and extend shared retention/backup without creating replacement stores.
+- [ ] 1.8 Finish existing project, Knowledge and integration UI controls; reuse shared SDK-backed message/tool/run presentation and application-owned setup/connection/selection controls; extend shared retention/backup without creating replacement stores.
 
 ## 2. Verify
 

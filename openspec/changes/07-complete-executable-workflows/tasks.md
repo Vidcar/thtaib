@@ -1,6 +1,6 @@
 # Tasks: Complete executable visual Workflows
 
-Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 06 and `migrate-local-agent-interaction` must be implemented and verified first. React Flow authors definitions; validated backend/LangGraph executes them; shared SDK observation is presentation only. SDK integration does not complete any workflow feature below, and all tasks remain unchecked until their own scope is verified. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 

@@ -1,6 +1,6 @@
 # Tasks: Complete local delegation and shared resource coordination
 
-Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 05 and `migrate-local-agent-interaction` must be implemented and verified first. Use supported native namespace scope mapped to root/parent/child/call application identities and shared SDK scoped observation/interrupt presentation; do not treat a selector as authorization or completed delegation. All child execution, isolation, policy, admission and recovery work below remains required and unchecked. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 

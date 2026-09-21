@@ -4,6 +4,8 @@
 
 Extend the existing Lab services/panels and shared run, snapshot, profile and artifact records. Reserve execution for the Lab batch before changing deployments or spawning benchmark processes. Wait for existing unrelated work to finish, or obtain explicit cancellation and confirmed stop; do not seize its model. Block new unrelated Chat, Workflows and media while the reservation is active. Required human input and the batch's own work remain possible.
 
+Require successful implementation and verification of `migrate-local-agent-interaction` before this change. Reuse its shared SDK run observation for live status/message/tool presentation. Lab remains the owner of Inspect orchestration, local case inputs and deterministic scorers, benchmark measurements, Lab reservations, evidence/sample/run linkage and durable result history. SDK presentation is not evaluation execution, a scorer, or proof of correctness.
+
 Use an actual Inspect evaluation with a solver that awaits the shared Deep Agents driver. Explicitly bind the intended local setup; do not let Inspect pick another model from environment defaults or invoke a separate generate loop. Link Inspect samples/epochs/logs to application runs and adapter captures through supported APIs. Start with serial evaluation and verify the locked version's cancellation and logging APIs.
 
 Restore immutable starting snapshots to owned test workspaces. Capture the source deployment's actual settings, not the latest mutable profile. A comparison override changes the next effective setup, with startup changes routed through the shared lifecycle. Recorded replay remains separate from live-tool tests and retains the existing strict fixture/no-live-fallback rules.

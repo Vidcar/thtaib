@@ -18,7 +18,7 @@ Complete project/setup management, composed instructions, reviewable file and me
 
 ## Impact
 
-Work order **04 of 08**. Change 03 must be implemented and verified first. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
+Work order **04 of 08**. Changes 03 and `migrate-local-agent-interaction` must be implemented and verified first. Consume the verified shared `@langchain/react` interaction/presentation boundary for messages, tools and scoped run observation; keep configuration, connection and selection controls in the existing application-owned shared views. This change owns the full common async harness/saver/middleware/resume/cancel/recovery transition. Only move that complete foundation into the prerequisite if its compatibility proof establishes that the public synchronous `stream_events` path cannot support the verified SDK interaction; never create competing drivers or split lifecycle ownership. SDK integration does not complete the project, knowledge, tool or MCP tasks below. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals
 

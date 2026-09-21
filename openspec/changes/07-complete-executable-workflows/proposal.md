@@ -16,7 +16,7 @@ Complete versioned definitions and public inputs, per-node setup, nested agents,
 
 ## Impact
 
-Work order **07 of 08**. Change 06 must be implemented and verified first. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
+Work order **07 of 08**. Changes 06 and `migrate-local-agent-interaction` must be implemented and verified first. React Flow remains the authoring/editor surface for serialisable application workflow definitions; the validated backend compiler and LangGraph execute them. Use the shared SDK boundary only to present scoped execution observations, never as the workflow editor, graph compiler or execution engine. SDK integration does not satisfy any workflow feature below. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals
 
