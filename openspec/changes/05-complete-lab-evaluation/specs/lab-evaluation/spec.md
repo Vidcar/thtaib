@@ -90,6 +90,8 @@ Release on confirmed completion/cancellation/failure cleanup; restart SHALL reco
 
 Task evaluation SHALL start and await the same configured Deep Agents driver as ordinary work from a real, locked-version-compatible Inspect evaluation. Explicitly select the intended local setup and avoid an unrelated environment-default model or second generation/tool loop. Preserve real Inspect logs and sample/epoch links to application runs/results through supported APIs; link adapter/harness evidence explicitly because wrapper logging does not automatically observe external calls. Existing application checks are not renamed Inspect scores.
 
+The shared `@langchain/react` run-observation boundary may present live run state and tool activity. It does not own Inspect execution, sample/scorer semantics, Lab measurements or durable result linkage; Lab SHALL preserve those application-owned records and verify actual outcomes independently.
+
 Start serially and use only supported evaluation concurrency. Cancellation, timeout and failure cleanup SHALL reach every owned harness run and release safe resources. Tool approvals and user-input interrupts retain normal identity/policy; Lab MUST NOT auto-approve to finish a test. Application termination remains distinct from unconfirmed host/remote termination.
 
 #### Scenario: Inspect-owned sample

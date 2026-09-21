@@ -175,7 +175,7 @@ Cancellation SHALL prevent further dispatch, remove queued owned work and propag
 
 ### Requirement: WF-011 - Make the canvas and inspectors reflect executable evidence
 
-The existing Workflows surface SHALL provide create/open/save/run, public input form, setup/node/input/output inspectors, mapping controls and actionable validation focus. React Flow SHALL show labelled distinct configuration and execution/data ports with stable handle IDs persisted in edges. Immediate feedback reflects but does not replace backend validation. Preserve old Agent run history; non-executable placeholders and unimplemented media nodes cannot appear runnable.
+The existing Workflows surface SHALL provide create/open/save/run, public input form, setup/node/input/output inspectors, mapping controls and actionable validation focus. React Flow SHALL edit serialisable definitions and show labelled distinct configuration and execution/data ports with stable handle IDs persisted in edges. Only backend validation/compilation and LangGraph execute the workflow; the shared SDK observation boundary presents scoped run evidence and does not execute or validate the graph. Immediate feedback reflects but does not replace backend validation. Preserve old Agent run history; non-executable placeholders and unimplemented media nodes cannot appear runnable.
 
 Editor undo/redo, duplication with fresh node IDs, keyboard navigation, labelled controls and explicit unsaved handling or indicated autosave SHALL work. Undo changes drafts only, not executed effects. Import/export preserves functional mappings as well as appearance.
 

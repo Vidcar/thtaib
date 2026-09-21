@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "./api";
 import { deploymentOptionLabel, shortId } from "./display";
+import { InteractionStream, useWorkbenchProjection, type WorkbenchStream } from "./InteractionStream";
 import {
   isAgentRunLive,
   type AgentRun,
@@ -14,6 +15,30 @@ import {
   type LabWorkspace,
 } from "./types";
 
+function LabRunObserver(props: {
+  threadId: string;
+  setRun: (run: AgentRun) => void;
+  setMessage: (message: string) => void;
+}) {
+  const { threadId, setRun, setMessage } = props;
+  return (
+    <InteractionStream threadId={threadId} onError={(error) => setMessage(error instanceof Error ? error.message : String(error))}>
+      {(stream) => <LabRunObserverContent stream={stream} setRun={setRun} />}
+    </InteractionStream>
+  );
+}
+
+function LabRunObserverContent(props: { stream: WorkbenchStream; setRun: (run: AgentRun) => void }) {
+  const { stream, setRun } = props;
+  const projection = useWorkbenchProjection(stream);
+  useEffect(() => {
+    if (projection.run) {
+      setRun(projection.run);
+    }
+  }, [projection.run, setRun]);
+  return null;
+}
+
 export function LabPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
@@ -21,6 +46,7 @@ export function LabPanel() {
   const [files, setFiles] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("original notes");
   const [run, setRun] = useState<AgentRun | null>(null);
+  const [runInteractionThreadId, setRunInteractionThreadId] = useState<string | null>(null);
   const [labCase, setLabCase] = useState<LabCase | null>(null);
   const [restore, setRestore] = useState<LabRestore | null>(null);
   const [result, setResult] = useState<LabResult | null>(null);
@@ -43,16 +69,25 @@ export function LabPanel() {
 
   useEffect(() => {
     if (!liveRunId) {
+      setRunInteractionThreadId(null);
       return;
     }
-    const controller = new AbortController();
-    void api.subscribeAgentRun(liveRunId, controller.signal, setRun).catch((error: unknown) => {
-      if (controller.signal.aborted) {
-        return;
-      }
-      setMessage(error instanceof Error ? error.message : String(error));
-    });
-    return () => controller.abort();
+    let cancelled = false;
+    void api
+      .registerAgentInteractionThread({ source_surface: "agent", run_id: liveRunId })
+      .then((binding) => {
+        if (!cancelled) {
+          setRunInteractionThreadId(binding.thread_id);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          fail(error);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [liveRunId]);
 
   useEffect(() => {
@@ -318,6 +353,10 @@ export function LabPanel() {
           <p>{engine.note}</p>
           <pre className="json">{JSON.stringify(engine, null, 2)}</pre>
         </div>
+      ) : null}
+
+      {runInteractionThreadId ? (
+        <LabRunObserver key={runInteractionThreadId} threadId={runInteractionThreadId} setRun={setRun} setMessage={setMessage} />
       ) : null}
 
       {message ? <p className="status">{message}</p> : null}

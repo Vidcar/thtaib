@@ -1,10 +1,3 @@
-import {
-  applyConversationEvent,
-  applyRunEvent,
-  fetchConversationSnapshot,
-  subscribeWorkbenchEvents,
-} from "./sse";
-import type { RunStreamEnvelope } from "./sse";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
@@ -48,7 +41,7 @@ export const DEFAULT_EMBEDDING_STARTUP = {
   pooling: "last",
 } as const;
 
-function backendUrl(): string {
+export function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
 
@@ -177,6 +170,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decisions: [{ type }] }),
     }),
+  registerAgentInteractionThread: (payload: { source_surface: "agent"; run_id?: string } | { source_surface: "chat"; conversation_id: string }) =>
+    request<{ thread_id: string }>("/v1/agent-interaction/threads", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   createChatConversation: (payload: {
     deployment_id: string;
     profile_id?: string;
@@ -298,29 +296,4 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content, source: "desktop" }),
     }),
-  subscribeAgentRun: (
-    runId: string,
-    signal: AbortSignal,
-    onRun: (run: AgentRun) => void,
-  ) =>
-    subscribeWorkbenchEvents<AgentRun>({
-      runId,
-      signal,
-      apply: applyRunEvent,
-      onRecord: onRun,
-    }),
-  subscribeChatConversation: (
-    conversationId: string,
-    signal: AbortSignal,
-    onConversation: (conversation: ChatConversation) => void,
-  ) =>
-    subscribeWorkbenchEvents<ChatConversation>({
-      conversationId,
-      signal,
-      apply: applyConversationEvent,
-      onRecord: onConversation,
-      terminalSnapshot: (terminalSignal) => fetchConversationSnapshot(conversationId, terminalSignal),
-    }),
 };
-
-export type { RunStreamEnvelope };

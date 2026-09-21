@@ -32,7 +32,7 @@ PRIVILEGED_GETS = (
     "/v1/lab/workspaces/ws_missing/files",
     "/v1/knowledge/entries",
     "/v1/agent-runs",
-    "/v1/events",
+    "/v1/agent-interaction/threads/missing/state",
     "/v1/effects",
     "/v1/deployments",
 )

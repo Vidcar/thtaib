@@ -1,19 +1,143 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
+import { AgentMessageFeed } from "./AgentMessageFeed";
 import { deploymentOptionLabel } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
+import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
 import { RunProgress } from "./RunProgress";
 import {
   isAgentRunLive,
   isDeclaredEmbedder,
-  visiblePendingInterrupt,
   type AgentRun,
   type Deployment,
 } from "./types";
+
+interface PendingAgentSubmit {
+  id: string;
+  task: string;
+  deploymentId: string;
+  projectPath: string;
+  embeddingDeploymentId: string;
+}
+
+function AgentRunStream(props: {
+  threadId: string;
+  run: AgentRun | null;
+  pendingSubmit: PendingAgentSubmit | null;
+  clearPendingSubmit: () => void;
+  setRun: (run: AgentRun) => void;
+  setTask: (task: string) => void;
+  setMessage: (message: string) => void;
+}) {
+  const { threadId, run, pendingSubmit, clearPendingSubmit, setRun, setTask, setMessage } = props;
+  return (
+    <InteractionStream threadId={threadId} onError={(error) => setMessage(errorMessage(error))}>
+      {(stream) => (
+        <AgentRunStreamContent
+          stream={stream}
+          run={run}
+          pendingSubmit={pendingSubmit}
+          clearPendingSubmit={clearPendingSubmit}
+          setRun={setRun}
+          setTask={setTask}
+          setMessage={setMessage}
+        />
+      )}
+    </InteractionStream>
+  );
+}
+
+function AgentRunStreamContent(props: {
+  stream: WorkbenchStream;
+  run: AgentRun | null;
+  pendingSubmit: PendingAgentSubmit | null;
+  clearPendingSubmit: () => void;
+  setRun: (run: AgentRun) => void;
+  setTask: (task: string) => void;
+  setMessage: (message: string) => void;
+}) {
+  const { stream, run, pendingSubmit, clearPendingSubmit, setRun, setTask, setMessage } = props;
+  const projection = useWorkbenchProjection(stream);
+  const displayRun = projection.run ?? run;
+  const visibleInterrupt = visibleApprovalInterrupt(stream, displayRun);
+  const submittedIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (projection.run) {
+      setRun(projection.run);
+    }
+  }, [projection.run, setRun]);
+
+  useEffect(() => {
+    if (!pendingSubmit) {
+      return;
+    }
+    if (submittedIds.current.has(pendingSubmit.id)) {
+      return;
+    }
+    submittedIds.current.add(pendingSubmit.id);
+    clearPendingSubmit();
+    void stream
+      .submit(
+        { messages: [{ type: "human", content: pendingSubmit.task, id: pendingSubmit.id }] },
+        {
+          multitaskStrategy: "reject",
+          metadata: {
+            workbench: {
+              deployment_id: pendingSubmit.deploymentId,
+              presented_tools: undefined,
+              workspace_id: undefined,
+              project_path: pendingSubmit.projectPath || undefined,
+              embedding_deployment_id: pendingSubmit.embeddingDeploymentId || undefined,
+            },
+          },
+        },
+      )
+      .then(() => setTask(""))
+      .catch(fail);
+  }, [clearPendingSubmit, pendingSubmit, setTask, stream]);
+
+  function fail(error: unknown): void {
+    setMessage(errorMessage(error));
+  }
+
+  return (
+    <>
+      {visibleInterrupt && displayRun ? (
+        <InterruptApproval
+          pending={visibleInterrupt.pending}
+          onDecide={(type) => {
+            void stream
+              .respond(
+                { decisions: [{ type }] },
+                { interruptId: visibleInterrupt.id, namespace: visibleInterrupt.namespace },
+              )
+              .catch(fail);
+          }}
+        />
+      ) : null}
+
+      {displayRun ? (
+        <div className="card">
+          <AgentMessageFeed messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
+          <RunProgress
+            run={displayRun}
+            title={displayRun.task}
+            onCancel={() => {
+              void api.cancelAgentRun(displayRun.id).then(setRun).catch(fail);
+            }}
+          />
+        </div>
+      ) : (
+        <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>
+      )}
+    </>
+  );
+}
 
 export function AgentRunPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -23,6 +147,9 @@ export function AgentRunPanel() {
   const [task, setTask] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [run, setRun] = useState<AgentRun | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [pendingSubmit, setPendingSubmit] = useState<PendingAgentSubmit | null>(null);
+  const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
 
@@ -41,21 +168,6 @@ export function AgentRunPanel() {
   }, []);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
-  const pendingInterrupt = visiblePendingInterrupt(run);
-
-  useEffect(() => {
-    if (!liveRunId) {
-      return;
-    }
-    const controller = new AbortController();
-    void api.subscribeAgentRun(liveRunId, controller.signal, setRun).catch((error: unknown) => {
-      if (controller.signal.aborted) {
-        return;
-      }
-      setMessage(errorMessage(error));
-    });
-    return () => controller.abort();
-  }, [liveRunId]);
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
@@ -84,20 +196,25 @@ export function AgentRunPanel() {
         className="card"
         onSubmit={(event) => {
           event.preventDefault();
-          void api
-            .startAgentRun(
-              deploymentId,
+          if (!deploymentId || !task.trim() || liveRunId || starting) {
+            return;
+          }
+          setStarting(true);
+          void (async () => {
+            const registered = await api.registerAgentInteractionThread({ source_surface: "agent" });
+            setThreadId(registered.thread_id);
+            setRun(null);
+            setMessage("");
+            setPendingSubmit({
+              id: crypto.randomUUID(),
               task,
-              undefined,
-              undefined,
-              projectPath || undefined,
-              embeddingDeploymentId || undefined,
-            )
-            .then((next) => {
-              setRun(next);
-              setMessage("");
-            })
-            .catch(fail);
+              deploymentId,
+              projectPath,
+              embeddingDeploymentId,
+            });
+          })()
+            .catch(fail)
+            .finally(() => setStarting(false));
         }}
       >
         <label>
@@ -140,31 +257,23 @@ export function AgentRunPanel() {
         </label>
         <p className="hint">Tools: {enabledTools.length ? enabledTools.join(", ") : "none"}</p>
         <div className="actions">
-          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId)}>
+          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId) || starting}>
             Start
           </button>
         </div>
       </form>
 
-      {pendingInterrupt && run ? (
-        <InterruptApproval
-          pending={pendingInterrupt}
-          onDecide={(type) => {
-            void api.decideAgentRunInterrupt(run.id, type).then(setRun).catch(fail);
-          }}
+      {threadId ? (
+        <AgentRunStream
+          key={threadId}
+          threadId={threadId}
+          run={run}
+          pendingSubmit={pendingSubmit}
+          clearPendingSubmit={() => setPendingSubmit(null)}
+          setRun={setRun}
+          setTask={setTask}
+          setMessage={setMessage}
         />
-      ) : null}
-
-      {run ? (
-        <div className="card">
-          <RunProgress
-            run={run}
-            title={run.task}
-            onCancel={() => {
-              void api.cancelAgentRun(run.id).then(setRun).catch(fail);
-            }}
-          />
-        </div>
       ) : (
         <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>
       )}

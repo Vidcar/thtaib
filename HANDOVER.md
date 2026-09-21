@@ -2,16 +2,12 @@
 
 Last updated: 2026-09-21.
 
-## Current state
+## Interaction prerequisite: validated, delivery in progress
 
-Packet 02 is complete in [PR #113](https://github.com/Vidcar/thtaib/pull/113), branch `codex/packet-02-inference-adapter`, based on main after PR #112. Current model contracts are synced under `openspec/specs/models/spec.md`; the completed change is archived as `2026-09-21-02-complete-inference-adapter`. Packets 03–08 remain proposed.
+Branch `codex/migrate-local-agent-interaction`, based on main `98c77cc` (PR #113). Implementation is complete and current specs synchronized across architecture, backend-desktop, shared-contracts, agents-workflows and state-recovery. Active change: `openspec/changes/migrate-local-agent-interaction`; final delivery task remains open until merge/local activation/archive. Packets 03–08 remain proposed; Packet 03 is next. Packet 04 retains the coherent async transition.
 
-## Delivered
+Chat, Agent-run and Lab share React SDK1.1.1 / stock HTTP adapter SDK1.11.1. Existing Python owner drives public synchronous native v3 once per run. Controlled durable projections reuse application.sqlite; checkpoints and permissions retain their existing owners. Custom browser SSE/parser/merger, old endpoints and envelope schemas are removed. Application metadata remains generated from canonical schemas. Native v3 is experimental and the tested dependencies are pinned.
 
-Shared adapter preserves actual model/settings, sync/async calls, streaming, reasoning and tool identities, with owned-client cleanup and bounded redacted diagnostics. Shared current-user blocks and versioned structured results enforce policy/capability gates and one effect-free repair. Observed context drives one upstream compaction path and saved-history preflight. Setup-specific probes persist in application SQLite. Chat cancellation durably pairs unanswered calls with explicit unconfirmed error results; no tool is replayed. Desktop details show context and validated results in a scrollable panel.
+Passed: 339 default and147 integration backend tests, generated-contract freshness, desktop build/typecheck and SDK/StrictMode/Markdown/interrupt/settings checks. Backend uses `uv run --no-sync python -m tests.run` (and integration tier) while ordinary backend locks its executable. Actual built Windows renderer with isolated Qwen3.8-27B passed incremental output, two turns, navigation/hydration, approval/denial/cancel. Real SDK reconnect/multiple observers, pending-approval backend restart, replay-gap recovery and strict structured results passed. Evidence and exact model scope in change design; vision capability is not claimed.
 
-## Verification and local use
-
-315 default and 142 integration tests passed; desktop build/typecheck/SSE/settings checks, generated contracts and strict OpenSpec validation passed. Real Qwen3.8-27B / b11045 CUDA checks passed for streaming, tool round trip, native/tool schema, combined tool-schema/executable tools, reasoning/replay, image recognition and tools-off compaction. Native schema plus executable tools was inconclusive on that setup; auto uses tested tool formatting. Counts are estimates; capability proof is setup-specific.
-
-Rebuilt desktop is open, backend healthy on :8000 with the ordinary product data root. Isolated :8127 model stopped and verified closed. Weights preserved. Scratch evidence/helpers remain under `.scratch/packet02-live/` and `.scratch/packet02_*.py` (ignored). Packet 02 has no known outstanding defects or implementation tasks. No CI was added. Verify current Git/PR state before new work.
+Next: final OpenSpec validation, commit/PR/merge, safely activate the rebuilt ordinary app, then archive and close delivery notes. Scratch helpers `.scratch/interaction-ui-proof`; owned model8127, proof backend8128, Vite5173 still need stopping. Ordinary data/weights are untouched. A read-only check of ordinary backend8000 is underway before activation.

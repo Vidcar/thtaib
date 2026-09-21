@@ -208,6 +208,17 @@
             "title": "Id",
             "type": "string"
           },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          },
           "knowledge": {
             "default": "none",
             "enum": [
@@ -533,6 +544,19 @@
             "default": true,
             "title": "Inherit Deployment Settings",
             "type": "boolean"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
           },
           "knowledge_version_refs": {
             "items": {
@@ -1324,21 +1348,8 @@
             "anyOf": [
               {
                 "items": {
-                  "discriminator": {
-                    "mapping": {
-                      "image_url": "#/components/schemas/ImageContentBlock",
-                      "text": "#/components/schemas/TextContentBlock"
-                    },
-                    "propertyName": "type"
-                  },
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/TextContentBlock"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ImageContentBlock"
-                    }
-                  ]
+                  "additionalProperties": true,
+                  "type": "object"
                 },
                 "type": "array"
               },
@@ -1347,6 +1358,17 @@
               }
             ],
             "title": "Content Blocks"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "role": {
             "enum": [
@@ -1435,6 +1457,19 @@
             "default": true,
             "title": "Inherit Deployment Settings",
             "type": "boolean"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
           },
           "knowledge_version_refs": {
             "anyOf": [
@@ -3073,6 +3108,79 @@
         "title": "InspectTensor",
         "type": "object"
       },
+      "InteractionBinding": {
+        "properties": {
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id"
+        ],
+        "title": "InteractionBinding",
+        "type": "object"
+      },
+      "InteractionRecovery": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "replay_gap",
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ],
+        "title": "InteractionRecovery",
+        "type": "object"
+      },
+      "InteractionRegistration": {
+        "additionalProperties": false,
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "source_surface": {
+            "enum": [
+              "chat",
+              "agent"
+            ],
+            "title": "Source Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_surface"
+        ],
+        "title": "InteractionRegistration",
+        "type": "object"
+      },
       "InterruptDecision": {
         "properties": {
           "message": {
@@ -4112,162 +4220,6 @@
         "title": "RunProfile",
         "type": "object"
       },
-      "RunStreamContract": {
-        "description": "Documented stream route, headers and event names for generated consumers.",
-        "properties": {
-          "auth_header": {
-            "const": "X-Workbench-Local-Token",
-            "default": "X-Workbench-Local-Token",
-            "title": "Auth Header",
-            "type": "string"
-          },
-          "disconnect_does_not_end_run": {
-            "const": true,
-            "default": true,
-            "title": "Disconnect Does Not End Run",
-            "type": "boolean"
-          },
-          "event_names": {
-            "items": {
-              "$ref": "#/components/schemas/RunStreamEventType"
-            },
-            "title": "Event Names",
-            "type": "array"
-          },
-          "last_event_id_header": {
-            "const": "Last-Event-ID",
-            "default": "Last-Event-ID",
-            "title": "Last Event Id Header",
-            "type": "string"
-          },
-          "media_type": {
-            "const": "text/event-stream",
-            "default": "text/event-stream",
-            "title": "Media Type",
-            "type": "string"
-          },
-          "method": {
-            "const": "GET",
-            "default": "GET",
-            "title": "Method",
-            "type": "string"
-          },
-          "path": {
-            "const": "/v1/events",
-            "default": "/v1/events",
-            "title": "Path",
-            "type": "string"
-          },
-          "query_one_of": {
-            "items": {
-              "enum": [
-                "run_id",
-                "conversation_id"
-              ],
-              "type": "string"
-            },
-            "title": "Query One Of",
-            "type": "array"
-          },
-          "transport": {
-            "const": "sse",
-            "default": "sse",
-            "title": "Transport",
-            "type": "string"
-          }
-        },
-        "title": "RunStreamContract",
-        "type": "object"
-      },
-      "RunStreamEnvelope": {
-        "description": "JSON `data` for each SSE message on GET /v1/events.",
-        "properties": {
-          "conversation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Conversation Id"
-          },
-          "event": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SharedAgentEvent"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "seq": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "1-based AgentEvent index on the run. Set on run_event; used as SSE id.",
-            "title": "Seq"
-          },
-          "snapshot": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "GET-equivalent agent-run or chat-conversation record.",
-            "title": "Snapshot"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RunLifecycleStatus"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "type": {
-            "$ref": "#/components/schemas/RunStreamEventType"
-          }
-        },
-        "required": [
-          "type"
-        ],
-        "title": "RunStreamEnvelope",
-        "type": "object"
-      },
-      "RunStreamEventType": {
-        "enum": [
-          "snapshot",
-          "run_event",
-          "stream_end"
-        ],
-        "title": "RunStreamEventType",
-        "type": "string"
-      },
       "RuntimeControlDescriptor": {
         "properties": {
           "applied": {
@@ -4734,30 +4686,6 @@
         "title": "SettingsPreviewRequest",
         "type": "object"
       },
-      "SharedAgentEvent": {
-        "description": "One application harness event. Not a raw LangGraph stream chunk.",
-        "properties": {
-          "at": {
-            "title": "At",
-            "type": "string"
-          },
-          "detail": {
-            "additionalProperties": true,
-            "title": "Detail",
-            "type": "object"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          }
-        },
-        "required": [
-          "at",
-          "kind"
-        ],
-        "title": "SharedAgentEvent",
-        "type": "object"
-      },
       "SmokeResult": {
         "properties": {
           "adapter": {
@@ -5140,6 +5068,62 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WorkbenchInteractionMetadata": {
+        "description": "Workbench-owned extension under native stream values.workbench.",
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "incomplete_message_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incomplete Message Ids",
+            "type": "array"
+          },
+          "interrupt_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interrupt Run Id"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InteractionRecovery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "WorkbenchInteractionMetadata",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -5159,6 +5143,239 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/agent-interaction/threads": {
+      "post": {
+        "operationId": "register_v1_agent_interaction_threads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InteractionRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InteractionBinding"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register"
+      }
+    },
+    "/v1/agent-interaction/threads/{thread_id}/commands": {
+      "post": {
+        "operationId": "command_v1_agent_interaction_threads__thread_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Command"
+      }
+    },
+    "/v1/agent-interaction/threads/{thread_id}/history": {
+      "post": {
+        "operationId": "history_v1_agent_interaction_threads__thread_id__history_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response History V1 Agent Interaction Threads  Thread Id  History Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History"
+      }
+    },
+    "/v1/agent-interaction/threads/{thread_id}/state": {
+      "get": {
+        "operationId": "state_v1_agent_interaction_threads__thread_id__state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response State V1 Agent Interaction Threads  Thread Id  State Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "State"
+      }
+    },
+    "/v1/agent-interaction/threads/{thread_id}/stream/events": {
+      "post": {
+        "operationId": "stream_v1_agent_interaction_threads__thread_id__stream_events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream"
+      }
+    },
     "/v1/agent-runs": {
       "get": {
         "operationId": "list_agent_runs_v1_agent_runs_get",
@@ -6406,99 +6623,6 @@
         "summary": "Stop Deployment"
       }
     },
-    "/v1/events": {
-      "get": {
-        "operationId": "stream_run_events_v1_events_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "run_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Run Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "conversation_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Conversation Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "Last-Event-ID",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Last-Event-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "text/event-stream": {
-                "itemSchema": {
-                  "properties": {
-                    "data": {
-                      "type": "string"
-                    },
-                    "event": {
-                      "type": "string"
-                    },
-                    "id": {
-                      "type": "string"
-                    },
-                    "retry": {
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  },
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Stream Run Events"
-      }
-    },
     "/v1/imports": {
       "get": {
         "operationId": "list_imports_v1_imports_get",
@@ -7380,48 +7504,6 @@
         ]
       }
     },
-    "/v1/shared-contracts/run-stream": {
-      "get": {
-        "operationId": "run_stream_contract_v1_shared_contracts_run_stream_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunStreamContract"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Run/chat SSE envelope contract",
-        "tags": [
-          "shared-contracts"
-        ]
-      }
-    },
-    "/v1/shared-contracts/run-stream-envelope": {
-      "get": {
-        "operationId": "run_stream_envelope_contract_v1_shared_contracts_run_stream_envelope_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunStreamEnvelope"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Run/chat SSE JSON data envelope",
-        "tags": [
-          "shared-contracts"
-        ]
-      }
-    },
     "/v1/shared-contracts/session-trust": {
       "get": {
         "operationId": "session_trust_contract_v1_shared_contracts_session_trust_get",
@@ -7443,6 +7525,27 @@
           }
         ],
         "summary": "Local session-trust header contract",
+        "tags": [
+          "shared-contracts"
+        ]
+      }
+    },
+    "/v1/shared-contracts/workbench-interaction-metadata": {
+      "get": {
+        "operationId": "workbench_interaction_metadata_contract_v1_shared_contracts_workbench_interaction_metadata_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkbenchInteractionMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workbench native interaction metadata contract",
         "tags": [
           "shared-contracts"
         ]

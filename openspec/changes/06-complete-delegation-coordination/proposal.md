@@ -18,7 +18,7 @@ Integrate awaited native delegation, child-specific setup/state/evidence, exact 
 
 ## Impact
 
-Work order **06 of 08**. Change 05 must be implemented and verified first. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
+Work order **06 of 08**. Changes 05 and `migrate-local-agent-interaction` must be implemented and verified first. Use native LangGraph/Deep Agents namespace and root/parent/child/call identity for execution scope; map it explicitly to application run identities and the shared SDK's scoped selectors/subscriptions/interrupt presentation. The SDK does not create children, define permissions or own delegation. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals
 

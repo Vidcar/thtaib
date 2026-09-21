@@ -1,6 +1,6 @@
 # Tasks: Complete image, dictation, spoken replies and media handover
 
-Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 07 and `migrate-local-agent-interaction` must be implemented and verified first. Reuse shared SDK content/run presentation where supported, but keep media execution and evidence in the application-owned adapters/services. SDK integration does not implement a media feature or pass a live check. All tasks below remain unchecked until their own implementation and required real endpoint/device evidence is verified. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 

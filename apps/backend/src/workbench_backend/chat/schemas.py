@@ -15,9 +15,12 @@ ChatInterruptDecisionRequest = InterruptDecisionRequest
 
 
 class ChatMessage(BaseModel):
+    id: str | None = None
     role: Literal["user", "assistant", "system"]
     content: str
-    content_blocks: list[UserContentBlock] | None = None
+    # Display archives also retain upstream assistant reasoning/tool blocks.
+    # Execution input remains separately validated by ChatStartRequest.
+    content_blocks: list[dict[str, Any]] | None = None
     at: str
     run_id: str | None = None
 
@@ -39,6 +42,7 @@ class ChatConversationCreateRequest(BaseModel):
 class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task: str
+    input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     output_schema: OutputSchemaRequest | None = None
     deployment_id: str | None = None

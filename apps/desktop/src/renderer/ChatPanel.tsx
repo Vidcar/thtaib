@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
+import { AgentMessageFeed } from "./AgentMessageFeed";
 import { conversationTitle, displayedTranscript, formatWhen, shortId } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
+import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
 import { InterruptApproval } from "./InterruptApproval";
 import { knowledgeKindLabel } from "./labels";
 import { Notice } from "./Notice";
@@ -20,6 +22,142 @@ import {
   type KnowledgeEntry,
   type RunProfile,
 } from "./types";
+
+interface PendingChatSubmit {
+  id: string;
+  task: string;
+  deployment_id: string;
+  profile_id: string | null;
+  inherit_deployment_settings: boolean;
+  project_path: string | null;
+  workspace_id: string | null;
+  memory_version_refs?: string[];
+  skill_version_refs?: string[];
+  protected_instruction_version_refs?: string[];
+  knowledge_version_refs?: string[];
+  embedding_deployment_id: string | null;
+  retrieval_project_paths?: string[];
+}
+
+function ChatInteractionStream(props: {
+  threadId: string;
+  conversation: ChatConversation;
+  pendingSubmit: PendingChatSubmit | null;
+  clearPendingSubmit: () => void;
+  rememberConversation: (conversation: ChatConversation) => void;
+  setTask: (task: string) => void;
+  setMessage: (message: string) => void;
+}) {
+  const { threadId, conversation, pendingSubmit, clearPendingSubmit, rememberConversation, setTask, setMessage } = props;
+  return (
+    <InteractionStream threadId={threadId} onError={(error) => setMessage(errorMessage(error))}>
+      {(stream) => (
+        <ChatInteractionStreamContent
+          stream={stream}
+          conversation={conversation}
+          pendingSubmit={pendingSubmit}
+          clearPendingSubmit={clearPendingSubmit}
+          rememberConversation={rememberConversation}
+          setTask={setTask}
+          setMessage={setMessage}
+        />
+      )}
+    </InteractionStream>
+  );
+}
+
+function ChatInteractionStreamContent(props: {
+  stream: WorkbenchStream;
+  conversation: ChatConversation;
+  pendingSubmit: PendingChatSubmit | null;
+  clearPendingSubmit: () => void;
+  rememberConversation: (conversation: ChatConversation) => void;
+  setTask: (task: string) => void;
+  setMessage: (message: string) => void;
+}) {
+  const { stream, conversation, pendingSubmit, clearPendingSubmit, rememberConversation, setTask, setMessage } = props;
+  const projection = useWorkbenchProjection(stream);
+  const run = projection.run;
+  const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
+  const projectionSignature = useRef("");
+  const terminalRefreshKey = useRef("");
+  const submittedIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!run) {
+      return;
+    }
+    const signature = JSON.stringify({
+      runId: run?.id ?? null,
+      runStatus: run?.status ?? null,
+      eventCount: run?.events.length ?? null,
+    });
+    if (projectionSignature.current === signature) {
+      return;
+    }
+    projectionSignature.current = signature;
+    rememberConversation({
+      ...conversation,
+      current_run: run,
+      current_run_id: run.id,
+      run_ids: run && !conversation.run_ids.includes(run.id) ? [...conversation.run_ids, run.id] : conversation.run_ids,
+      updated_at: new Date().toISOString(),
+    });
+  }, [conversation, rememberConversation, run]);
+
+  useEffect(() => {
+    if (!run || isAgentRunLive(run.status)) {
+      return;
+    }
+    const key = `${run.id}:${run.status}`;
+    if (terminalRefreshKey.current === key) {
+      return;
+    }
+    terminalRefreshKey.current = key;
+    void api.chatConversation(conversation.id).then(rememberConversation).catch((error: unknown) => {
+      setMessage(errorMessage(error));
+    });
+  }, [conversation.id, rememberConversation, run?.id, run?.status, setMessage]);
+
+  useEffect(() => {
+    if (!pendingSubmit) {
+      return;
+    }
+    if (submittedIds.current.has(pendingSubmit.id)) {
+      return;
+    }
+    submittedIds.current.add(pendingSubmit.id);
+    const { id: messageId, task: inputTask, ...workbench } = pendingSubmit;
+    clearPendingSubmit();
+    void stream
+      .submit(
+        { messages: [{ type: "human", content: inputTask, id: messageId }] },
+        { multitaskStrategy: "reject", metadata: { workbench } },
+      )
+      .then(() => setTask(""))
+      .catch((error: unknown) => setMessage(errorMessage(error)));
+  }, [clearPendingSubmit, pendingSubmit, setMessage, setTask, stream]);
+
+  return (
+    <>
+      <AgentMessageFeed messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
+      {visibleInterrupt ? (
+        <InterruptApproval
+          pending={visibleInterrupt.pending}
+          busy={stream.isLoading}
+          onDecide={(type) => {
+            void stream
+              .respond(
+                { decisions: [{ type }] },
+                { interruptId: visibleInterrupt.id, namespace: visibleInterrupt.namespace },
+              )
+              .catch((error: unknown) => setMessage(errorMessage(error)));
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
 
 function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[]) {
   const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
@@ -108,16 +246,18 @@ export function ChatPanel() {
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingSubmit, setPendingSubmit] = useState<PendingChatSubmit | null>(null);
+  const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
   const transcriptEnd = useRef<HTMLDivElement | null>(null);
-  const streamRef = useRef<{ key: string; controller: AbortController } | null>(null);
+  const selectionRequest = useRef(0);
 
-  function rememberConversation(next: ChatConversation): void {
+  const rememberConversation = useCallback((next: ChatConversation): void => {
     setConversation(next);
     setConversations((current) => {
       const others = current.filter((item) => item.id !== next.id);
       return [next, ...others];
     });
-  }
+  }, []);
 
   async function refresh(): Promise<void> {
     const [nextDeployments, nextProfiles, tools, nextConversations, nextKnowledge] = await Promise.all([
@@ -143,51 +283,10 @@ export function ChatPanel() {
     });
   }, []);
 
-  const conversationId = conversation?.id ?? null;
   const liveRunId =
     conversation?.current_run && isAgentRunLive(conversation.current_run.status)
       ? conversation.current_run.id
       : null;
-
-  useEffect(() => {
-    if (!conversationId || !liveRunId) {
-      return;
-    }
-    const key = `${conversationId}:${liveRunId}`;
-    if (streamRef.current?.key === key) {
-      return;
-    }
-    streamRef.current?.controller.abort();
-    const controller = new AbortController();
-    streamRef.current = { key, controller };
-    void api
-      .subscribeChatConversation(conversationId, controller.signal, (next) => {
-        rememberConversation(next);
-        if (next.deploy_health?.message) {
-          setMessage(next.deploy_health.message);
-        } else if (next.current_run?.error) {
-          setMessage(next.current_run.error);
-        }
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setMessage(errorMessage(error));
-      })
-      .finally(() => {
-        if (streamRef.current?.key === key) {
-          streamRef.current = null;
-        }
-      });
-  }, [conversationId, liveRunId]);
-
-  useEffect(() => {
-    return () => {
-      streamRef.current?.controller.abort();
-      streamRef.current = null;
-    };
-  }, [conversationId]);
 
   const transcript = conversation ? displayedTranscript(conversation) : [];
 
@@ -200,7 +299,9 @@ export function ChatPanel() {
   }
 
   function startFresh(): void {
+    selectionRequest.current += 1;
     setConversation(null);
+    setInteractionThreadId(null);
     setTask("");
     setMessage("");
   }
@@ -234,21 +335,25 @@ export function ChatPanel() {
           embedding_deployment_id: embeddingDeploymentId || undefined,
           ...refs,
         }));
+      const threadId =
+        interactionThreadId ??
+        (await api.registerAgentInteractionThread({
+          source_surface: "chat",
+          conversation_id: created.id,
+        })).thread_id;
+      setInteractionThreadId(threadId);
       rememberConversation(created);
-      const next = await api.startChat(created.id, {
+      setPendingSubmit({
+        id: crypto.randomUUID(),
         task: text,
         deployment_id: deploymentId,
         profile_id: profileId && profileId !== "!none" ? profileId : null,
         inherit_deployment_settings: profileId !== "!none",
         project_path: projectPath.trim() || null,
+        workspace_id: null,
         embedding_deployment_id: embeddingDeploymentId || null,
         ...refs,
       });
-      rememberConversation(next);
-      setTask("");
-      if (next.deploy_health?.message) {
-        setMessage(next.deploy_health.message);
-      }
     } catch (error: unknown) {
       fail(error);
     } finally {
@@ -287,10 +392,23 @@ export function ChatPanel() {
                   type="button"
                   className={item.id === conversation?.id ? "nav-item active" : "nav-item"}
                   onClick={() => {
+                    const requestId = selectionRequest.current + 1;
+                    selectionRequest.current = requestId;
                     void api
                       .chatConversation(item.id)
-                      .then((next) => {
+                      .then(async (next) => {
+                        if (selectionRequest.current !== requestId) {
+                          return;
+                        }
                         rememberConversation(next);
+                        const registered = await api.registerAgentInteractionThread({
+                          source_surface: "chat",
+                          conversation_id: next.id,
+                        });
+                        if (selectionRequest.current !== requestId) {
+                          return;
+                        }
+                        setInteractionThreadId(registered.thread_id);
                         setDeploymentId(next.deployment_id);
                         setEmbeddingDeploymentId(next.embedding_deployment_id ?? "");
                         setProfileId(next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
@@ -438,6 +556,17 @@ export function ChatPanel() {
               Send a message. A project folder is optional. Without one, the assistant can talk but
               cannot use file tools or the host shell.
             </EmptyState>
+          ) : interactionThreadId && conversation ? (
+            <ChatInteractionStream
+              key={`${conversation.id}:${interactionThreadId}`}
+              threadId={interactionThreadId}
+              conversation={conversation}
+              pendingSubmit={pendingSubmit}
+              clearPendingSubmit={() => setPendingSubmit(null)}
+              rememberConversation={rememberConversation}
+              setTask={setTask}
+              setMessage={setMessage}
+            />
           ) : (
             transcript.map((item, index) => (
               <article key={`${item.at}-${item.role}-${index}`} className={`bubble bubble-${item.role}`}>
@@ -458,16 +587,6 @@ export function ChatPanel() {
           <div ref={transcriptEnd} />
         </div>
 
-        {pendingInterrupt && conversation ? (
-          <InterruptApproval
-            pending={pendingInterrupt}
-            busy={sending}
-            onDecide={(type) => {
-              void api.decideChatInterrupt(conversation.id, type).then(rememberConversation).catch(fail);
-            }}
-          />
-        ) : null}
-
         {conversation?.current_run ? (
           <details className="card chat-run-details">
             <summary>
@@ -476,7 +595,12 @@ export function ChatPanel() {
             <RunProgress
               run={conversation.current_run}
               onCancel={() => {
-                void api.cancelChat(conversation.id).then(rememberConversation).catch(fail);
+                if (!conversation.current_run) {
+                  return;
+                }
+                void api.cancelAgentRun(conversation.current_run.id)
+                  .then((next) => rememberConversation({ ...conversation, current_run: next, current_run_id: next.id }))
+                  .catch(fail);
               }}
             />
           </details>
@@ -524,7 +648,12 @@ export function ChatPanel() {
                 if (!conversation) {
                   return;
                 }
-                void api.cancelChat(conversation.id).then(rememberConversation).catch(fail);
+                if (!conversation.current_run) {
+                  return;
+                }
+                void api.cancelAgentRun(conversation.current_run.id)
+                  .then((next) => rememberConversation({ ...conversation, current_run: next, current_run_id: next.id }))
+                  .catch(fail);
               }}
             >
               Cancel

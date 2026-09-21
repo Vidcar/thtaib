@@ -4,7 +4,7 @@
 
 Extend the existing Chat schemas/store/routes, harness driver, approval records and Electron Chat surface. Keep one application run per turn on the saved LangGraph thread; do not reconstruct active context from the displayed transcript. Freeze a queued item's intended setup before dispatch and keep immutable session area identity separate from selected model/profile.
 
-Use the existing privileged SSE snapshot/event contract. Persist incremental messages/events by run/call identity, reconcile final messages once and preserve terminal hydration. Internal summarisation output must not be promoted into answer events. Do not create another token transport or checkpoint database.
+After `migrate-local-agent-interaction` is implemented and verified, use its supported `@langchain/react` interaction boundary for message/tool/state projections, scoped subscriptions and interrupts. Do not extend or depend on the superseded custom `snapshot` / `run_event` / `stream_end` protocol. Keep application-owned run/thread identity, durable transcript/history, checkpoint linkage, authorization, reconnect/hydration and final reconciliation authoritative; map SDK events to those identities and ensure internal summarisation is not shown as an answer. Do not create another token transport or checkpoint database. The SDK integration does not implement the Chat features in this change.
 
 Expand the shared approval service into exact-action, session and persisted matching grants. Grants are backend policy records, not prompt text. Convert decisions into supported framework resume payloads; distinguish ordered actions within one interrupt from typed questions. A pending approval remains a live run with interrupt details, consistent with the existing lifecycle enum.
 

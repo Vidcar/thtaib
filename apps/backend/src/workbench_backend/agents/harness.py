@@ -20,7 +20,8 @@ from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARI
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
@@ -122,6 +123,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 ModelFactory = Callable[[AgentRun, list[dict[str, Any]]], BaseChatModel]
 EmbeddingsFactory = Callable[[Deployment], Embeddings]
+InteractionObserver = Callable[[AgentRun, dict[str, Any] | None], None]
 
 
 class HarnessService:
@@ -135,12 +137,14 @@ class HarnessService:
         knowledge_provider: Callable[[], KnowledgeService] | None = None,
         app_store: ApplicationStore | None = None,
         embeddings_factory: EmbeddingsFactory | None = None,
+        interaction_observer: InteractionObserver | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._model_factory = model_factory or self._deployment_model
         self._knowledge_provider = knowledge_provider
         self._app_store = app_store
         self._embeddings_factory = embeddings_factory or openai_embeddings_for_deployment
+        self._interaction_observer = interaction_observer
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -416,6 +420,9 @@ class HarnessService:
                 structured_output=structured_output,
                 context_observation=context_observation,
             )
+            input_message_id = getattr(request, "input_message_id", None)
+            if input_message_id and hasattr(run, "input_message_id"):
+                run.input_message_id = input_message_id
             # Agent-run / Lab own one thread per run. Chat follow-ups pass the
             # conversation thread so LangGraph resumes the same checkpointer state.
             run.thread_id = request.thread_id or run.id
@@ -593,11 +600,18 @@ class HarnessService:
                 else None
             )
             agent = self._create_compiled_agent(run, http_sink, fixture_bank)
+            user_message: dict[str, Any] = {
+                "role": "user",
+                "content": user_message_content(run.task, run.content_blocks),
+            }
+            input_message_id = getattr(run, "input_message_id", None)
+            if input_message_id:
+                user_message["id"] = input_message_id
             self._drive_until_terminal(
                 run,
                 agent,
                 cancel,
-                {"messages": [{"role": "user", "content": user_message_content(run.task, run.content_blocks)}],
+                {"messages": [user_message],
                  **({"structured_response": None} if run.output_schema is not None else {})},
             )
         except ReplayError as exc:
@@ -816,15 +830,17 @@ class HarnessService:
     ) -> None:
         config = _invoke_config(run)
         current = payload
+        seen_messages = self._seed_native_audit_seen(agent, config)
+        message_nodes: dict[str, str] = {}
         while True:
             if cancel.is_set():
                 self._link_run(run, agent)
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
-            pending = self._stream_until_pause(agent, run, current, cancel, config)
+            pending = self._stream_until_pause(agent, run, current, cancel, config, seen_messages, message_nodes)
             if cancel.is_set():
                 if pending is not None:
-                    self._resume_reject_then_stop(agent, run, pending, config)
+                    self._resume_reject_then_stop(agent, run, pending, config, message_nodes)
                 else:
                     self._link_run(run, agent)
                     self._finish(run, AgentRunStatus.cancelled, "cancelled")
@@ -842,7 +858,7 @@ class HarnessService:
             self._publish_interrupt(run, pending)
             decisions = self._wait_for_interrupt_decisions(run.id, cancel)
             if decisions is None:
-                self._resume_reject_then_stop(agent, run, pending, config)
+                self._resume_reject_then_stop(agent, run, pending, config, message_nodes)
                 return
             self._clear_pending_interrupt(run, decisions)
             current = Command(resume={"decisions": decisions})
@@ -854,15 +870,20 @@ class HarnessService:
         payload: Any,
         cancel: threading.Event,
         config: dict[str, Any],
+        seen_messages: set[tuple[str, str]],
+        message_nodes: dict[str, str],
     ) -> Any:
+        stream = None
         try:
-            for chunk in agent.stream(payload, config=config, stream_mode="updates"):
-                found = _pending_from_chunk(chunk)
+            stream = agent.stream_events(payload, config=config, version="v3")
+            for event in stream:
+                self._observe_interaction(run, event)
+                found = _pending_from_native_event(event)
                 if found is not None:
                     return found
                 if cancel.is_set():
                     return None
-                self._ingest_stream(run, chunk)
+                self._ingest_native_event(run, event, seen_messages, message_nodes)
         except Exception as exc:  # noqa: BLE001 - interrupt may surface as GraphInterrupt
             run.structured_output = mark_structured_failure(run.structured_output, str(exc))
             found = pending_interrupt_from_raw(exc) or pending_interrupt_from_raw(
@@ -871,6 +892,8 @@ class HarnessService:
             if found is not None:
                 return found
             raise
+        finally:
+            self._close_native_stream(stream)
         try:
             state = agent.get_state(config)
         except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
@@ -937,20 +960,28 @@ class HarnessService:
         run: AgentRun,
         pending: Any,
         config: dict[str, Any],
+        message_nodes: dict[str, str] | None = None,
     ) -> None:
         payloads = reject_decisions_for(pending)
         self._clear_pending_interrupt(run, payloads)
+        seen_messages = self._seed_native_audit_seen(agent, config)
+        message_nodes = message_nodes if message_nodes is not None else {}
+        stream = None
         try:
-            for chunk in agent.stream(
+            stream = agent.stream_events(
                 Command(resume={"decisions": payloads}),
                 config=config,
-                stream_mode="updates",
-            ):
-                if _pending_from_chunk(chunk) is not None:
+                version="v3",
+            )
+            for chunk in stream:
+                self._observe_interaction(run, chunk)
+                if _pending_from_native_event(chunk) is not None:
                     break
-                self._ingest_stream(run, chunk)
+                self._ingest_native_event(run, chunk, seen_messages, message_nodes)
         except Exception:  # noqa: BLE001 - cancel still wins if reject resume fails
             pass
+        finally:
+            self._close_native_stream(stream)
         self._link_run(run, agent)
         self._finish(run, AgentRunStatus.cancelled, "cancelled")
 
@@ -984,22 +1015,99 @@ class HarnessService:
             )
             self._persist_and_notify(run)
 
-    def _ingest_stream(self, run: AgentRun, chunk: Any) -> None:
-        if not isinstance(chunk, dict):
+    def _seed_native_audit_seen(self, agent: Any, config: dict[str, Any]) -> set[tuple[str, str]]:
+        try:
+            state = agent.get_state(config)
+            values = getattr(state, "values", {}) or {}
+        except Exception:
+            return set()
+        messages = values.get("messages") if isinstance(values, dict) else None
+        if not isinstance(messages, list):
+            return set()
+        return {
+            key
+            for message in messages
+            if (key := _native_message_identity(message)) is not None
+        }
+
+    def _ingest_native_event(
+        self,
+        run: AgentRun,
+        event: Any,
+        seen_messages: set[tuple[str, str]],
+        message_nodes: dict[str, str] | None = None,
+    ) -> None:
+        if not isinstance(event, dict):
+            return
+        params = event.get("params")
+        if not isinstance(params, dict) or params.get("namespace") not in ([], ()):
+            return
+        data = params.get("data")
+        metadata = params.get("metadata")
+        if isinstance(data, tuple) and len(data) == 2:
+            data, metadata = data
+        if event.get("method") == "messages":
+            if isinstance(data, dict) and data.get("event") == "message-start":
+                message_id = data.get("id")
+                node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+                node = node or params.get("node")
+                if isinstance(message_id, str) and isinstance(node, str) and node:
+                    (message_nodes if message_nodes is not None else {})[message_id] = node
+            return
+        if event.get("method") != "values":
+            return
+        if not isinstance(data, dict):
+            return
+        self._ingest_native_values(run, data, seen_messages, message_nodes or {})
+
+    def _ingest_native_values(
+        self,
+        run: AgentRun,
+        values: dict[str, Any],
+        seen_messages: set[tuple[str, str]],
+        message_nodes: dict[str, str] | None = None,
+    ) -> None:
+        messages = values.get("messages")
+        if not isinstance(messages, list):
             return
         changed = False
-        for node, update in chunk.items():
-            messages = update.get("messages") if isinstance(update, dict) else None
-            if not messages:
+        for message in messages:
+            key = _native_message_identity(message)
+            if key is None or key in seen_messages:
                 continue
-            for message in messages:
-                if self._ingest_message(run, message, str(node)):
-                    changed = True
+            seen_messages.add(key)
+            if self._is_internal_summary_message(message):
+                continue
+            message_id = getattr(message, "id", None)
+            node = message_nodes.pop(message_id, None) if message_nodes and isinstance(message_id, str) else None
+            if self._ingest_message(run, message, node):
+                changed = True
         if changed:
             with self._lock:
                 self._persist_and_notify(run)
 
-    def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str) -> bool:
+    def _is_internal_summary_message(self, message: Any) -> bool:
+        additional = getattr(message, "additional_kwargs", None)
+        return isinstance(additional, dict) and additional.get("lc_source") == "summarization"
+
+    def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None) -> None:
+        if self._interaction_observer is None:
+            return
+        safe = apply_run_diagnostic_policy(run, self._capture_settings())
+        self._interaction_observer(safe.model_copy(deep=True), event)
+
+    def _close_native_stream(self, stream: Any) -> None:
+        if stream is None:
+            return
+        abort = getattr(stream, "abort", None)
+        if callable(abort):
+            abort()
+            return
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
+
+    def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str | None) -> bool:
         if isinstance(message, AIMessage) and message.invalid_tool_calls:
             raise HarnessError("The model returned malformed tool arguments. No invalid call was executed.", code="invalid_tool_call", status_code=409)
         now = utc_now()
@@ -1009,7 +1117,9 @@ class HarnessService:
                 name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                 args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
                 call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
-                invocation = {"name": name, "args": args, "id": call_id, "node": node}
+                invocation = {"name": name, "args": args, "id": call_id}
+                if node:
+                    invocation["node"] = node
                 run.tool_invocations.append(invocation)
                 run.events.append(AgentEvent(at=now, kind="tool_call", detail=invocation))
                 emitted = True
@@ -1024,18 +1134,18 @@ class HarnessService:
                         "name": message.name,
                         "content": message.content,
                         "tool_call_id": message.tool_call_id,
-                        "node": node,
+                        **({"node": node} if node else {}),
                     },
                 )
             )
             run.updated_at = now
             return True
-        if isinstance(message, AIMessage) and message.content:
+        if isinstance(message, AIMessage) and (message.content or message.content_blocks):
             run.events.append(
                 AgentEvent(
                     at=now,
                     kind="assistant_message",
-                    detail={"content": message.content, "node": node},
+                    detail=_assistant_event_detail(message, node),
                 )
             )
             emitted = True
@@ -1185,11 +1295,31 @@ class HarnessService:
                 # tools run. Preserve calls and explicitly close their protocol
                 # pairs without executing or replaying any tool. An interrupted
                 # tool may have effects, so never invent a successful/no-op result.
-                results = [ToolMessage(
-                    tool_call_id=ident, name=call["name"], status="error",
-                    content="Run cancelled before a tool result was recorded. Completion is unconfirmed; inspect state before retrying any action.",
-                ) for ident, call in pending_calls.items()]
-                agent.update_state(_invoke_config(run), {"messages": results})
+                repaired_messages = list(values.get("messages", []))
+                existing_ids = {getattr(message, "id", None) for message in repaired_messages}
+                results = []
+                for ident, call in pending_calls.items():
+                    message_id = f"{ident}:cancelled"
+                    suffix = 1
+                    while message_id in existing_ids:
+                        suffix += 1
+                        message_id = f"{ident}:cancelled:{suffix}"
+                    existing_ids.add(message_id)
+                    results.append(ToolMessage(
+                        id=message_id,
+                        tool_call_id=ident,
+                        name=call["name"],
+                        status="error",
+                        content="Run cancelled before a tool result was recorded. Completion is unconfirmed; inspect state before retrying any action.",
+                    ))
+                # `messages` uses LangGraph's public add_messages reducer.
+                # Replace the whole channel so the synthetic tool result stays
+                # after the matching AI tool call even when abort races the
+                # native stream's final checkpoint write.
+                agent.update_state(
+                    _invoke_config(run),
+                    {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *repaired_messages, *results]},
+                )
                 run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
                 run.events.append(AgentEvent(at=utc_now(), kind="cancelled_tool_results", detail={"tool_call_ids": list(pending_calls), "execution_confirmed": False}))
         compaction = values.get(SUMMARIZATION_EVENT_KEY)
@@ -1358,6 +1488,7 @@ class HarnessService:
 
     def _persist_and_notify(self, run: AgentRun) -> None:
         self._persist(run)
+        self._observe_interaction(run, None)
         self._updates.notify_all()
 
     def _capture_settings(self) -> ContextCaptureSettings:
@@ -1432,6 +1563,64 @@ def _pending_from_chunk(chunk: Any) -> Any:
     if raw is None:
         return None
     return pending_interrupt_from_raw(raw)
+
+
+def _pending_from_native_event(event: Any) -> Any:
+    """Normalize a public v3 ``stream_events`` interrupt event."""
+
+    if not isinstance(event, dict):
+        return None
+    params = event.get("params")
+    if not isinstance(params, dict):
+        return None
+    raw = params.get("interrupts")
+    if raw is None:
+        data = params.get("data")
+        raw = data.get("__interrupt__") if isinstance(data, dict) else None
+    return pending_interrupt_from_raw(raw)
+
+
+def _native_message_identity(message: Any) -> tuple[str, str] | None:
+    tool_call_id = getattr(message, "tool_call_id", None)
+    if tool_call_id:
+        return ("tool", str(tool_call_id))
+    ident = getattr(message, "id", None)
+    if ident:
+        return ("message", str(ident))
+    if isinstance(message, AIMessage) and message.tool_calls:
+        return ("tool_calls", repr(message.tool_calls))
+    content = getattr(message, "content", None)
+    if content:
+        return ("content", repr(content))
+    return None
+
+
+def _assistant_event_detail(message: AIMessage, node: str | None) -> dict[str, Any]:
+    content = message.content
+    blocks = message.content_blocks
+    readable = _readable_assistant_content(content)
+    detail: dict[str, Any] = {"content": readable if readable else (blocks or content)}
+    if node:
+        detail["node"] = node
+    if getattr(message, "id", None):
+        detail["message_id"] = message.id
+    if blocks:
+        detail["content_blocks"] = blocks
+    elif isinstance(content, list):
+        detail["content_blocks"] = content
+    elif content:
+        detail["content_blocks"] = [{"type": "text", "text": str(content)}]
+    return detail
+
+
+def _readable_assistant_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    text_parts: list[str] = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+            text_parts.append(item["text"])
+    return "".join(text_parts) if text_parts else content
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

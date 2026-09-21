@@ -16,7 +16,7 @@ Add verified image intake/understanding, one real ComfyUI generation template, c
 
 ## Impact
 
-Work order **08 of 08**. Change 07 must be implemented and verified first. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
+Work order **08 of 08**. Changes 07 and `migrate-local-agent-interaction` must be implemented and verified first. Reuse shared SDK-backed content/run presentation and the existing shared artifact browser, while keeping media intake, engine calls, durable job lifecycle, cancellation, validation, permissions and retained outputs in application-owned media adapters/services. SDK content components do not execute media or establish whole-job success. SDK integration does not satisfy any media feature or real endpoint evidence below. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals
 

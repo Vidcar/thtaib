@@ -17,7 +17,7 @@ from collections.abc import Iterable
 INTEGRATION_TEST_IDS = {
     "tests.test_runtime.RuntimePinTests.test_pin_while_running_is_rejected_without_half_pin",
     "tests.test_runtime.RuntimePinTests.test_pin_while_running_stop_first_then_pins",
-    "tests.test_event_stream.EventStreamTests.test_live_snapshot_plus_resume_does_not_duplicate_events",
+    "tests.test_event_stream.InteractionStreamTests.test_live_loopback_stream_resume_does_not_duplicate_snapshot_values",
 }
 # Cross-service harness/replay flows, subprocesses and actual HTTP servers.
 # Default keeps Models/Chat regressions and pure permission/integrity rules.

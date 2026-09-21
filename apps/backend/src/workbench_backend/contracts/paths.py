@@ -11,13 +11,11 @@ DESKTOP_TYPES_RELATIVE = "apps/desktop/src/generated/shared-contracts/openapi.d.
 HANDWRITTEN_GENERATED_DIR_FILES = frozenset({"README.md"})
 
 JSONSCHEMA_MODELS = (
+    "InteractionRecovery",
     "LocalSessionTrustContract",
     "RunLifecycleContract",
     "RunLifecycleStatus",
-    "RunStreamContract",
-    "RunStreamEnvelope",
-    "RunStreamEventType",
-    "SharedAgentEvent",
+    "WorkbenchInteractionMetadata",
 )
 
 
