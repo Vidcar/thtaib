@@ -4,7 +4,7 @@ Last updated: 2026-09-21.
 
 ## Current state
 
-Packet 01 review repairs are complete on `codex/packet-01-review-fixes`, pending PR/merge. This corrects requirements already delivered in PR #111; packets 02–08 remain planned. The original packet remains archived under `openspec/changes/archive/2026-09-21-01-complete-model-management/`; clarified current behavior is in `openspec/specs/models/spec.md`.
+Packet 01 review repairs are complete in [PR #112](https://github.com/Vidcar/thtaib/pull/112), from `codex/packet-01-review-fixes`. This corrects requirements delivered in PR #111; packets 02–08 remain planned. The original packet remains archived under `openspec/changes/archive/2026-09-21-01-complete-model-management/`; clarified current behavior is in `openspec/specs/models/spec.md`.
 
 ## Repairs and decisions
 
@@ -16,4 +16,4 @@ All six findings were reproduced before correction. Final gates passed: 288 defa
 
 The idle everyday backend was refreshed after checking zero active runs/imports/model processes. The rebuilt Windows Chat controls were inspected read-only; no synthetic records were added to everyday data. App is open, and normal launch is `Launch Workbench.vbs`. Preserve user models/data and disabled GitHub CI; commands remain in `AGENTS.md`.
 
-Next: merge the validated repair PR; no later packet is authorized by this repair.
+No repair implementation remains. PR #112 records delivery status; no later packet is authorized by this repair.
