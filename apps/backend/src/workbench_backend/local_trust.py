@@ -1,7 +1,7 @@
-"""Same-machine desktop↔backend trust (Issue #40; partial OQ-002).
+"""Same-machine desktop-to-backend trust.
 
-Imports the Issue #41 / ADR-0002 header and bind names. This module owns
-secret-file I/O and request checks; it does not own the generator.
+Uses the shared-contract header and bind names. This module owns secret-file
+I/O and request checks; it does not own contract generation.
 """
 
 from __future__ import annotations

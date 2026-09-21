@@ -1,13 +1,24 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Local AI Workbench (thtaib) is a Windows-first, local-first desktop for using,
+  exploring and understanding models, Chat, Lab and visual Workflows. The product
+  exposes powerful capabilities with progressive disclosure and reports requested,
+  applied, observed and unverified values honestly.
+
+  The application has one FastAPI backend (`apps/backend`) and one Electron/React
+  desktop (`apps/desktop`). Reuse upstream mechanisms: Hugging Face for model
+  repositories, llama.cpp for inference, Deep Agents for the agent loop, LangGraph
+  for durable and outer workflow execution, LangChain for model/message/tool
+  interfaces, and React Flow for workflow editing. The application owns lifecycle,
+  configuration, permissions, records, integration boundaries and presentation;
+  it does not reimplement those engines.
+
+  Product data and downloaded models live outside the repository under
+  `%LOCALAPPDATA%\LocalAIWorkbench\`. Preserve user data and use repository-root
+  `.scratch/` only for disposable validation. Workflows is the intended product
+  name; Agent run and Builder remain legacy UI/code terminology until explicitly
+  changed. OpenSpec is the sole format for product specifications and change plans.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

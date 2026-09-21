@@ -1,7 +1,7 @@
 """MOD-006 compatibility records with separate provenance categories.
 
 Unverified is not incompatible and is not a supported-capability claim.
-This does not close OQ-007 and is not a catalogue verified claim.
+Compatibility records remain distinct from observed capability evidence.
 """
 
 from __future__ import annotations

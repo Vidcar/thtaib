@@ -23,7 +23,7 @@ JSONSCHEMA_MODELS = (
 
 def repo_root_from(start: Path) -> Path:
     for parent in [start, *start.parents]:
-        if (parent / "specs" / "catalog.json").is_file() and (
+        if (parent / "apps" / "backend" / "pyproject.toml").is_file() and (
             parent / "apps" / "desktop" / "package.json"
         ).is_file():
             return parent

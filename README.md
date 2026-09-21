@@ -1,6 +1,6 @@
 # Local AI Workbench
 
-The Windows-first desktop for **thtaib**, a local-first AI workspace. [David's product vision](thtaib-vision.md) defines the intended **Models**, **Chat**, **Lab** and **Workflows** experiences. **Agent run / Builder** are existing UI and legacy specification terms for Workflows; the desktop name remains Local AI Workbench. Feature status and evidence live in [the catalogue](specs/catalog.json), not the vision.
+The Windows-first desktop for **thtaib**, a local-first AI workspace for using and understanding models, Chat, Lab and Workflows. **Agent run / Builder** are existing UI terms for Workflows; the desktop name remains Local AI Workbench. Current product contracts and future changes use [OpenSpec](openspec/).
 
 ## Use the local product
 
@@ -13,28 +13,21 @@ On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It sta
 
 ## Install and run
 
-Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js ≥22 and <25 with pnpm 10+. Windows is the supported target; the real-model smoke tier also supports Linux. Validation runs locally; GitHub CI is disabled. All commands are listed in [commands](specs/commands.md).
+Requirements: Python 3.12.x with [uv](https://docs.astral.sh/uv/); Node.js 22–24 with pnpm 10+. Windows is the supported target; the real-model smoke tier also supports Linux. Validation runs locally; GitHub CI is disabled. Agent validation commands are maintained in [AGENTS.md](AGENTS.md).
 
-Agent setup: backend (in `apps/backend`): `uv sync`, then `uv run python -m workbench_backend`.
+Backend setup, from `apps/backend`: `uv sync`, then `uv run python -m workbench_backend`.
 
-Desktop (in `apps/desktop`): `pnpm install`, then `pnpm run build`. The double-click launcher uses that build; rebuild after code changes. `pnpm run dev` is the agent development mode. Launcher errors and backend startup logs live under the product `logs` directory.
+Desktop setup, from `apps/desktop`: `pnpm install`, then `pnpm run build`. The double-click launcher uses that build; rebuild after code changes. `pnpm run dev` is the development mode. Launcher errors and backend startup logs live under the product `logs` directory.
 
 ## Where data lives
 
-Product data — models, runtimes, state, cases, snapshots, knowledge, the two SQLite databases — lives under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway files belong only under `.scratch/` at the repository root, which git ignores. Model weights and secrets are never committed.
+Product data—models, runtimes, state, cases, snapshots, knowledge and the SQLite databases—lives under `%LOCALAPPDATA%\LocalAIWorkbench\`. Throwaway files belong only under `.scratch/` at the repository root, which Git ignores. Model weights and secrets are never committed.
 
 ## Entry points
 
 | Need | Open |
 | --- | --- |
 | Agent working rules | [AGENTS.md](AGENTS.md) |
-| Product intent | [thtaib-vision.md](thtaib-vision.md) |
-| Contract index and authority | [specs/README.md](specs/README.md) |
-| Architecture | [specs/architecture.md](specs/architecture.md) |
-| Status and evidence | [specs/catalog.json](specs/catalog.json) |
-| Commands | [specs/commands.md](specs/commands.md) |
-| Decisions | [specs/decisions/](specs/decisions/README.md) |
-| Open questions | [specs/open-questions.md](specs/open-questions.md) |
-| Glossary | [docs/glossary.md](docs/glossary.md) |
-| Delivery plan | [docs/delivery-feature-map.md](docs/delivery-feature-map.md) |
-| Historical source (Revision 0.5) | [specs/sources/README.md](specs/sources/README.md) |
+| Current product contracts | [OpenSpec capabilities](openspec/specs/) |
+| Proposed and active changes | [OpenSpec changes](openspec/changes/) |
+| Current delivery snapshot | [HANDOVER.md](HANDOVER.md) |

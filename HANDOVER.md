@@ -2,24 +2,22 @@
 
 Last updated: 2026-09-21.
 
-## Goal and state
+## Goal and current state
 
-The two remaining baseline races are implemented and locally validated in [PR #108](https://github.com/Vidcar/thtaib/pull/108), `codex/fix-two-baseline-races`, based on `e33b2f0` (merged PR #107). Dave subsequently requested complete removal of GitHub CI and removed merge rules. Actions are disabled, workflow/path selection removed, and required status checks removed. Local validation remains mandatory; do not restore GitHub CI unless Dave asks.
+OpenSpec 1.13.1 is the repository's sole product-specification and change-planning system. Current contracts live under `openspec/specs/`; proposals and active work live under `openspec/changes/`. Start planning with `$openspec-propose` and begin implementation only in a later request with `$openspec-apply-change`.
 
-OpenSpec CLI 1.13.1 is installed globally through npm and the repository is initialized for Codex. The tracked setup is `openspec/config.yaml` plus six generated skills under `.agents/skills/`; Codex uses skills, so zero command files is expected. Start planning with `$openspec-propose` and apply only in a later request with `$openspec-apply-change`.
+The legacy `specs/` and `docs/` trees, standalone product-vision document, catalogue/evidence/templates/ADR trackers, delivery map, custom spec checker and checker tests were removed after current behavioral contracts were migrated into nine OpenSpec capability specs. Their history remains recoverable in Git.
 
-## Changes and decisions
+## Important decisions and constraints
 
-- Chat regression forces A to complete after initial reconciliation sees it running but before B's active-run check. It reproduced loss of assistant A directly in SQLite, without GET/SSE repair. Start now reloads durable conversation state and reconciles the observed terminal run before constructing B.
-- Keep per-conversation admission and existing store completion writes. Never hold the store lock across harness calls (completion locks harness before store). Preserve display-only replacement and existing thread/configuration linkage.
-- Approval reservations now release atomically with their consumed interrupt, after worker ownership is secured. Failed restart setup also cleans its reservation. Deep Agents interrupts, policy and single-worker ownership remain unchanged.
+- `openspec/config.yaml` carries concise product and integration context.
+- `AGENTS.md` owns engineering workflow and exact local validation commands; do not recreate a parallel documentation or tracking system.
+- Shared-contract repository discovery uses the backend and desktop package manifests, not a documentation file.
+- Preserve `%LOCALAPPDATA%\LocalAIWorkbench\` user data and models. Disposable validation belongs under `.scratch/`.
+- GitHub CI remains disabled at Dave's request; applicable checks run locally.
 
-## Validation and next step
+## Validation and use
 
-Both final regressions fail against original code and pass with the corrections. Approval A is persisted through the compiled agent/SQLite saver; its original worker is stopped without modifying the checkpoint before fresh-harness restoration. B approve/reject/cancel and duplicate races verify exact append counts. Chat uses events and inspects stored history without GET/SSE repair.
+Validation passed: OpenSpec 9/9 capabilities; 233 default and 109 integration backend tests; shared-contract freshness; whitespace/error checks. OpenSpec emitted informational long-requirement suggestions only. Repeat with `openspec validate --all` from the repository root when specs change.
 
-Windows backend delivery gate: all 341 tests passed; root specification check and all 59 checker tests passed after CI removal. No wire changes. Implementation and local validation are complete; PR #108 records merge status. Disposable data and scripted models only; no new real-model or desktop end-to-end claim.
-
-OpenSpec initialization completed successfully from the repository root. No legacy OpenSpec command folders, marker blocks, or `~/.codex/prompts/opsx-*.md` files were present before initialization. Restart Codex before invoking the generated skills.
-
-Launch: root `Launch Workbench.vbs`. Checks: [commands](specs/commands.md). Previous baseline live evidence remains in `.scratch/packet02-live/`; this task does not extend its claims.
+Launch the product with root `Launch Workbench.vbs`. No application behavior or user data was intentionally changed by the documentation migration.
