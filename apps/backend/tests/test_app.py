@@ -4,23 +4,29 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
+import threading
+from types import SimpleNamespace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from workbench_backend.app import PRODUCT_NAME, SURFACE, create_app
-from workbench_backend.inference.hf_fetch import HuggingFaceDownload
+from workbench_backend.inference.hf_fetch import HuggingFaceDownload, describe_repository
 from workbench_backend.inference.schemas import PinRuntimeRequest
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
-from support import OfflineProbe, close_workbench_sqlite, workbench_client, write_tiny_gguf
+from support import OfflineProbe, close_workbench_sqlite, workbench_client, write_tiny_gguf, wait_for_import
 
 
 class FakeHF:
     def __init__(self, *, files: dict[str, bytes] | None = None, error: Exception | None = None) -> None:
         self.files = files or {}
         self.error = error
+
+    def inspect(self, *, repo_id: str, revision: str = "main"):
+        return describe_repository(repo_id, SimpleNamespace(sha="1" * 40, siblings=[SimpleNamespace(rfilename=name, size=len(payload)) for name, payload in self.files.items()]))
 
     def download(self, *, repo_id: str, revision: str, dest: Path, allow_patterns: list[str] | None):
         if self.error is not None:
@@ -102,10 +108,12 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertIn("logs", body["windows_layout"])
 
     def test_local_import_and_inspect_via_api(self) -> None:
-        job = self.client.post(
+        response = self.client.post(
             "/v1/imports/local",
             json={"source_path": str(self.gguf), "display_name": "tiny"},
-        ).json()
+        )
+        self.assertEqual(response.status_code, 202)
+        job = wait_for_import(self.client, response.json())
         self.assertEqual(job["status"], "complete")
         bundle = self.client.get(f"/v1/bundles/{job['bundle_id']}").json()
         self.assertTrue(bundle["disk_matches"])
@@ -131,11 +139,18 @@ class ModelManagerApiTests(unittest.TestCase):
         self.assertNotEqual(body["startup"]["applied"], body["per_request"]["applied"])
 
     def test_failed_hf_import_is_not_a_deployment(self) -> None:
-        self.manager.bundles.hf = FakeHF(error=RuntimeError("network down"))
-        job = self.client.post(
-            "/v1/imports/huggingface",
-            json={"repo_id": "org/missing", "revision": "abc"},
-        ).json()
+        self.manager.bundles.hf = FakeHF(files={self.gguf.name: self.gguf.read_bytes()}, error=RuntimeError("network down"))
+        # The subprocess transport itself is covered by import-worker tests.
+        # Keep this API failure check deterministic at its download boundary.
+        def failed_transfer(job, request):
+            return self.manager.bundles.import_huggingface(request, job=job)
+        with patch.object(self.manager.imports, "_run_huggingface_subprocess", side_effect=failed_transfer):
+            response = self.client.post(
+                "/v1/imports/huggingface",
+                json={"repo_id": "org/missing", "revision": "abc"},
+            )
+            self.assertEqual(response.status_code, 202)
+            job = wait_for_import(self.client, response.json())
         self.assertEqual(job["status"], "failed")
         self.assertIsNone(job["bundle_id"])
         response = self.client.post(
@@ -144,6 +159,29 @@ class ModelManagerApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["code"], "bundle_not_deployable")
+
+    def test_import_returns_durable_id_before_copy_finishes(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        original = self.manager.bundles.import_local
+        def blocked(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("Test did not release import worker")
+            return original(*args, **kwargs)
+        try:
+            with patch.object(self.manager.bundles, "import_local", side_effect=blocked):
+                response = self.client.post("/v1/imports/local", json={"source_path": str(self.gguf)})
+                self.assertEqual(response.status_code, 202)
+                self.assertTrue(entered.wait(2))
+                job = response.json()
+                durable = self.manager.store.get_job(job["id"])
+                self.assertIsNotNone(durable)
+                self.assertIn(durable.status.value, {"pending", "running"})
+                self.assertEqual(self.manager.store.list_bundles(), [])
+                release.set()
+                self.assertEqual(wait_for_import(self.client, job)["status"], "complete")
+        finally:
+            release.set()
 
     def test_connected_endpoint_rejects_stop(self) -> None:
         self.manager.deployments.probe = OfflineProbe()

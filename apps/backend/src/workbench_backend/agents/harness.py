@@ -6,6 +6,7 @@ returned by create_deep_agent — not a second Builder workflow editor.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -193,178 +194,188 @@ class HarnessService:
 
     def start(self, request: AgentStartRequest) -> AgentRun:
         self._reconcile_startup_once()
-        deployment = self.manager.get_deployment(request.deployment_id)
-        if not deployment.endpoint:
-            raise HarnessError(
-                "Deployment has no endpoint. The adapter does not start inference.",
-                code="no_endpoint",
-                status_code=409,
-            )
-        if request.tool_mode is ToolMode.recorded_tool and not request.recorded_fixtures:
-            raise HarnessError(
-                "recorded-tool mode requires fixtures; it is not a live integration.",
-                code="recorded_fixtures_required",
-                status_code=400,
-            )
-        refs = self._resolve_knowledge_refs(request)
-        versions = self._load_knowledge_versions(refs)
-        knowledge_plan = plan_knowledge_materialization(
-            versions,
-            self._knowledge_display_names(versions),
-        )
-        profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
-        project_path = _resolved_project_path(request.project_path)
-        if project_path is None and request.workspace_id:
-            stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
-            if stored is not None:
-                project_path = _resolved_project_path(stored.path)
-        presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
-            request.presented_tools,
-            project_bound=project_path is not None,
-            knowledge_routes=knowledge_plan.has_knowledge_routes,
-        )
-        retrieval_requested = bool((request.embedding_deployment_id or "").strip())
-        recorded = request.tool_mode is ToolMode.recorded_tool
-        if retrieval_requested and SEARCH_KNOWLEDGE_TOOL_NAME in denied:
-            denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
-        embedding_deployment = None
-        retrieval_documents = []
-        if retrieval_requested and not recorded:
-            embedding_deployment = resolve_embedding_deployment(
-                self.manager,
-                request.embedding_deployment_id or "",
-            )
-            retrieval_documents = load_retrieval_documents(
-                versions,
-                list(request.retrieval_project_paths),
-                project_path,
-            )
-            if not retrieval_documents:
-                raise HarnessError(
-                    "Retrieval was requested but the derived corpus is empty. "
-                    "Select knowledge versions or allowlisted project text files. "
-                    "No hits were invented.",
-                    code="retrieval_corpus_empty",
-                    status_code=409,
-                )
-        retrieval_presented = bool(
-            retrieval_requested and not recorded and embedding_deployment is not None
-        )
-        if denied:
-            raise HarnessError(
-                f"Tools are not in the enabled catalogue: {', '.join(denied)}",
-                code="tool_denied",
-                status_code=400,
-            )
-        if filesystem_blocked:
-            raise HarnessError(
-                "Filesystem tools require a bound project folder.",
-                code="filesystem_requires_project",
-                status_code=400,
-                details={"tools": filesystem_blocked},
-            )
-        if shell_blocked:
-            raise HarnessError(
-                "The host shell requires a bound project folder as cwd. "
-                "A home-directory default is not invented.",
-                code="shell_requires_project",
-                status_code=400,
-                details={"tools": shell_blocked},
-            )
-        if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in presented:
-            presented = [*presented, SEARCH_KNOWLEDGE_TOOL_NAME]
-        if knowledge_plan.has_knowledge_routes:
-            for name in KNOWLEDGE_ROUTE_READ_TOOLS:
-                if name not in presented:
-                    presented = [*presented, name]
-        if not presented:
-            raise HarnessError(
-                "At least one enabled tool must remain presented (AGT-005).",
-                code="tools_required",
-                status_code=400,
-            )
-        enabled = enabled_for_project(
-            project_path is not None,
-            knowledge_routes=knowledge_plan.has_knowledge_routes,
-        )
-        if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
-            enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
-        setup = resolve_effective_setup(
-            deployment=deployment,
-            profile=profile,
-            knowledge_refs=refs,
-            knowledge_versions=versions,
-            surface_system_prompt=request.system_prompt,
-            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
-            embedding_deployment=embedding_deployment,
-            selected_embedding_deployment_id=request.embedding_deployment_id,
-            retrieval_requested=retrieval_requested,
-            retrieval_presented=retrieval_presented,
-            retrieval_corpus_documents=len(retrieval_documents),
-            retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
-            materialized_knowledge=knowledge_plan.facts,
-        )
-        if request.workspace_id:
-            others = self.active_workspace_run_ids(request.workspace_id)
-            if others:
-                raise HarnessError(
-                    "Starting snapshot requires a quiescent workspace; live runs still writing: "
-                    f"{', '.join(others)}",
-                    code="not_quiescent",
-                    status_code=409,
-                )
-        starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
-        now = utc_now()
-        run = AgentRun(
-            id=new_id("agent"),
-            status=AgentRunStatus.queued,
-            deployment_id=deployment.id,
-            task=request.task,
-            enabled_tools=enabled,
-            presented_tools=presented,
-            denied_tools=[],
-            system_prompt=setup.system_prompt,
-            criteria=request.criteria or TaskCriteria(),
-            budgets=request.budgets,
-            created_at=now,
-            updated_at=now,
-            workspace_id=request.workspace_id,
-            project_path=project_path,
+        admission = self.manager.reserve_deployment(
+            request.deployment_id,
             profile_id=request.profile_id,
-            parent_run_id=request.parent_run_id,
-            source_surface=request.source_surface,
-            tool_mode=request.tool_mode,
-            tool_mode_label=label_for_tool_mode(request.tool_mode),
-            recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
-            recorded_fixtures=list(request.recorded_fixtures or []),
-            knowledge=refs.binding(),
-            memory_version_refs=refs.memory_version_refs,
-            skill_version_refs=refs.skill_version_refs,
-            protected_instruction_version_refs=refs.protected_instruction_version_refs,
-            embedding_deployment_id=request.embedding_deployment_id,
-            retrieval_project_paths=list(request.retrieval_project_paths),
-            thread_id=request.thread_id or None,
-            related_files=_initial_related_files(project_path),
-            effective_setup=setup,
-            starting_snapshot_id=starting_snapshot_id,
-            host_shell=HostShellFacts(
-                available=project_path is not None
-                and "execute" in presented
-                and request.tool_mode is not ToolMode.recorded_tool,
-                cwd=project_path,
-                inherit_env=True,
-            ),
         )
-        # Agent-run / Lab own one thread per run. Chat follow-ups pass the
-        # conversation thread so LangGraph resumes the same checkpointer state.
-        run.thread_id = request.thread_id or run.id
-        cancel = threading.Event()
-        with self._lock:
-            self._runs[run.id] = run
-            self._cancels[run.id] = cancel
-            self._decision_ready[run.id] = threading.Event()
-            self._pending_decisions[run.id] = None
-            self._persist_and_notify(run)
+        admission.__enter__()
+        try:
+            deployment = self.manager.ensure_deployment_ready(request.deployment_id)
+            if not deployment.endpoint:
+                raise HarnessError(
+                    "Deployment has no endpoint. The manager could not load inference.",
+                    code="no_endpoint",
+                    status_code=409,
+                )
+            if request.tool_mode is ToolMode.recorded_tool and not request.recorded_fixtures:
+                raise HarnessError(
+                    "recorded-tool mode requires fixtures; it is not a live integration.",
+                    code="recorded_fixtures_required",
+                    status_code=400,
+                )
+            refs = self._resolve_knowledge_refs(request)
+            versions = self._load_knowledge_versions(refs)
+            knowledge_plan = plan_knowledge_materialization(
+                versions,
+                self._knowledge_display_names(versions),
+            )
+            profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
+            project_path = _resolved_project_path(request.project_path)
+            if project_path is None and request.workspace_id:
+                stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
+                if stored is not None:
+                    project_path = _resolved_project_path(stored.path)
+            presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
+                request.presented_tools,
+                project_bound=project_path is not None,
+                knowledge_routes=knowledge_plan.has_knowledge_routes,
+            )
+            retrieval_requested = bool((request.embedding_deployment_id or "").strip())
+            recorded = request.tool_mode is ToolMode.recorded_tool
+            if retrieval_requested and SEARCH_KNOWLEDGE_TOOL_NAME in denied:
+                denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
+            embedding_deployment = None
+            retrieval_documents = []
+            if retrieval_requested and not recorded:
+                embedding_deployment = resolve_embedding_deployment(
+                    self.manager,
+                    request.embedding_deployment_id or "",
+                )
+                retrieval_documents = load_retrieval_documents(
+                    versions,
+                    list(request.retrieval_project_paths),
+                    project_path,
+                )
+                if not retrieval_documents:
+                    raise HarnessError(
+                        "Retrieval was requested but the derived corpus is empty. "
+                        "Select knowledge versions or allowlisted project text files. "
+                        "No hits were invented.",
+                        code="retrieval_corpus_empty",
+                        status_code=409,
+                    )
+            retrieval_presented = bool(
+                retrieval_requested and not recorded and embedding_deployment is not None
+            )
+            if denied:
+                raise HarnessError(
+                    f"Tools are not in the enabled catalogue: {', '.join(denied)}",
+                    code="tool_denied",
+                    status_code=400,
+                )
+            if filesystem_blocked:
+                raise HarnessError(
+                    "Filesystem tools require a bound project folder.",
+                    code="filesystem_requires_project",
+                    status_code=400,
+                    details={"tools": filesystem_blocked},
+                )
+            if shell_blocked:
+                raise HarnessError(
+                    "The host shell requires a bound project folder as cwd. "
+                    "A home-directory default is not invented.",
+                    code="shell_requires_project",
+                    status_code=400,
+                    details={"tools": shell_blocked},
+                )
+            if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in presented:
+                presented = [*presented, SEARCH_KNOWLEDGE_TOOL_NAME]
+            if knowledge_plan.has_knowledge_routes:
+                for name in KNOWLEDGE_ROUTE_READ_TOOLS:
+                    if name not in presented:
+                        presented = [*presented, name]
+            if not presented:
+                raise HarnessError(
+                    "At least one enabled tool must remain presented (AGT-005).",
+                    code="tools_required",
+                    status_code=400,
+                )
+            enabled = enabled_for_project(
+                project_path is not None,
+                knowledge_routes=knowledge_plan.has_knowledge_routes,
+            )
+            if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
+                enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
+            setup = resolve_effective_setup(
+                deployment=deployment,
+                profile=profile,
+                knowledge_refs=refs,
+                knowledge_versions=versions,
+                surface_system_prompt=request.system_prompt,
+                default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+                embedding_deployment=embedding_deployment,
+                selected_embedding_deployment_id=request.embedding_deployment_id,
+                retrieval_requested=retrieval_requested,
+                retrieval_presented=retrieval_presented,
+                retrieval_corpus_documents=len(retrieval_documents),
+                retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
+                materialized_knowledge=knowledge_plan.facts,
+            )
+            if request.workspace_id:
+                others = self.active_workspace_run_ids(request.workspace_id)
+                if others:
+                    raise HarnessError(
+                        "Starting snapshot requires a quiescent workspace; live runs still writing: "
+                        f"{', '.join(others)}",
+                        code="not_quiescent",
+                        status_code=409,
+                    )
+            starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
+            now = utc_now()
+            run = AgentRun(
+                id=new_id("agent"),
+                status=AgentRunStatus.queued,
+                deployment_id=deployment.id,
+                task=request.task,
+                enabled_tools=enabled,
+                presented_tools=presented,
+                denied_tools=[],
+                system_prompt=setup.system_prompt,
+                criteria=request.criteria or TaskCriteria(),
+                budgets=request.budgets,
+                created_at=now,
+                updated_at=now,
+                workspace_id=request.workspace_id,
+                project_path=project_path,
+                profile_id=request.profile_id,
+                parent_run_id=request.parent_run_id,
+                source_surface=request.source_surface,
+                tool_mode=request.tool_mode,
+                tool_mode_label=label_for_tool_mode(request.tool_mode),
+                recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
+                recorded_fixtures=list(request.recorded_fixtures or []),
+                knowledge=refs.binding(),
+                memory_version_refs=refs.memory_version_refs,
+                skill_version_refs=refs.skill_version_refs,
+                protected_instruction_version_refs=refs.protected_instruction_version_refs,
+                embedding_deployment_id=request.embedding_deployment_id,
+                retrieval_project_paths=list(request.retrieval_project_paths),
+                thread_id=request.thread_id or None,
+                related_files=_initial_related_files(project_path),
+                effective_setup=setup,
+                starting_snapshot_id=starting_snapshot_id,
+                host_shell=HostShellFacts(
+                    available=project_path is not None
+                    and "execute" in presented
+                    and request.tool_mode is not ToolMode.recorded_tool,
+                    cwd=project_path,
+                    inherit_env=True,
+                ),
+            )
+            # Agent-run / Lab own one thread per run. Chat follow-ups pass the
+            # conversation thread so LangGraph resumes the same checkpointer state.
+            run.thread_id = request.thread_id or run.id
+            cancel = threading.Event()
+            with self._lock:
+                self._runs[run.id] = run
+                self._cancels[run.id] = cancel
+                self._decision_ready[run.id] = threading.Event()
+                self._pending_decisions[run.id] = None
+                self._persist_and_notify(run)
+        except BaseException:
+            admission.__exit__(*sys.exc_info())
+            raise
+        admission.__exit__(None, None, None)
         thread = threading.Thread(target=self._execute, args=(run.id,), daemon=True)
         with self._lock:
             self._threads[run.id] = thread
@@ -928,7 +939,7 @@ class HarnessService:
         return emitted
 
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
-        deployment = self.manager.get_deployment(run.deployment_id)
+        deployment = self.manager.ensure_deployment_ready(run.deployment_id)
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
         client = httpx.Client(
             transport=RecordingTransport(http_sink),

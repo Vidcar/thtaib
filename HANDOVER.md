@@ -4,21 +4,18 @@ Last updated: 2026-09-21.
 
 ## Goal and current state
 
-OpenSpec 1.13.1 is the sole specification/change-planning system. The eight implementation-pack changes are imported under `openspec/changes/`, in order `01-complete-model-management` through `08-complete-media-voice`. Specification loading and reconciliation are complete; feature implementation is not authorized by this import. All 112 tasks remain unchecked.
+Packet 01 implementation is complete on `codex/packet-01-model-management`, ready for PR/merge. The Models specification is synchronized; all ten tasks are archived at `openspec/changes/archive/2026-09-21-01-complete-model-management/`. Packets 02–08 remain planned and are not implemented.
 
-Current contracts remain unchanged in the nine `openspec/specs/` capabilities. Legacy specification trees/trackers remain retired. The original pack and README are extracted only under `.scratch/openspec-pack-import-20260921/`.
+## Delivered
 
-## Important decisions and constraints
+Durable asynchronous imports with confirmed cancellation, retry/discard, revision-pinned repair and restart reconciliation; bounded Hub discovery; future install location and reference-aware storage cleanup; editable/duplicable profiles; coordinated deletion/load/unload/reload and Chat load on demand. Launch snapshots preserve actual startup settings after profile edits. Desktop controls and shared contracts are rebuilt.
 
-- `openspec/config.yaml` owns product context; `AGENTS.md` owns workflow and local checks. Do not recreate parallel trackers.
-- Preserve `%LOCALAPPDATA%\LocalAIWorkbench\` user data and models. Disposable validation belongs under `.scratch/`.
-- GitHub CI remains disabled at Dave's request; applicable checks run locally.
-- Preserve order 01–08. Change 05 owns saved load/media definitions and the serial baseline; 06 owns concurrency checks; 08 owns the real media round trip. Later checks do not block earlier changes.
-- Imported tasks require checking existing behaviour first and implementing only gaps. Existing import/deployment, adapter, Chat/SSE/approval, knowledge/retrieval, Lab and compiler paths must be reused. Source review does not establish live acceptance.
-- Proposed Lab changes deliberately permit tested-profile reuse and retire one-issue-per-trait process; current specs are not yet changed.
+## Verification and use
 
-## Validation and use
+Final checks passed: 272 default backend tests; 118 integration tests; desktop typecheck/build/SSE regression; generated-contract check; strict OpenSpec validation (16 items after archive). Commands remain in `AGENTS.md`.
 
-Import validation: `openspec validate --all --strict --no-interactive` passed 17/17 (eight changes, nine capabilities), with informational long-text suggestions only. CLI show/status/apply instructions were inspected for every change: planning complete, apply ready, zero completed tasks. Requirement names reconcile without collisions or missing modification targets. No application tests or live feature checks were run for this documentation-only import.
+Real isolated Windows checks reused existing Qwen3.8-27B weights and llama.cpp by path: generated text, inspected actual startup evidence, confirmed process exits, and restarted with identical settings after editing the profile. A separate real Chat run loaded the stopped deployment and replied "Hello!". Changed desktop controls were rendered and inspected. Evidence remains under `.scratch/packet01-live/`; temporary UAT backend and Electron have stopped. Hub error/transfer edge tests use deterministic external-boundary fakes.
 
-No import blocker. A separate implementation request may start change 01 only. Do not sync or archive unimplemented deltas. Launch remains root `Launch Workbench.vbs`; application, configuration, generated skills and user data are unchanged.
+Launch normally with root `Launch Workbench.vbs`. User data and models are preserved. GitHub CI remains disabled; retain local gates. OpenSpec remains the only specification/change format. Preserve packet ordering and existing integration boundaries.
+
+Next: finish validated PR/merge. After delivery no Packet 01 work remains; begin Packet 02 only when authorized.

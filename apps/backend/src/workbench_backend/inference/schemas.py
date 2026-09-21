@@ -20,10 +20,14 @@ class BundleSourceKind(str, Enum):
 
 
 class ImportStatus(str, Enum):
+    pending = "pending"
     running = "running"
+    stopping = "stopping"
+    stopped = "stopped"
     complete = "complete"
     failed = "failed"
     interrupted = "interrupted"
+    discarded = "discarded"
 
 
 class ManagementScope(str, Enum):
@@ -37,6 +41,17 @@ class DeploymentStatus(str, Enum):
     unhealthy = "unhealthy"
     stopped = "stopped"
     failed = "failed"
+
+
+class ImportStage(str, Enum):
+    queued = "queued"
+    metadata = "metadata"
+    transfer = "transfer"
+    verify = "verify"
+    install = "install"
+    repair = "repair"
+    cleanup = "cleanup"
+    done = "done"
 
 
 class BundleSource(BaseModel):
@@ -53,6 +68,7 @@ class BundleFile(BaseModel):
     path: str
     sha256: str
     size_bytes: int
+    ownership: Literal["managed", "external"] = "managed"
 
 
 class ModelBundle(BaseModel):
@@ -65,9 +81,19 @@ class ModelBundle(BaseModel):
     shards: list[BundleFile] = Field(default_factory=list)
     companions: list[BundleFile] = Field(default_factory=list)
     primary_path: str | None = None
+    managed_root: str | None = None
     created_at: str
     status: ImportStatus = ImportStatus.complete
     disk_matches: bool = True
+
+
+class ImportProgress(BaseModel):
+    stage: ImportStage = ImportStage.queued
+    message: str | None = None
+    files_done: int = 0
+    files_total: int | None = None
+    bytes_done: int = 0
+    bytes_total: int | None = None
 
 
 class ImportJob(BaseModel):
@@ -78,7 +104,45 @@ class ImportJob(BaseModel):
     bundle_id: str | None = None
     error: str | None = None
     created_at: str
+    updated_at: str | None = None
+    started_at: str | None = None
     finished_at: str | None = None
+    progress: ImportProgress = Field(default_factory=ImportProgress)
+    source_path: str | None = None
+    repo_id: str | None = None
+    requested_revision: str | None = None
+    resolved_revision: str | None = None
+    allow_patterns: list[str] | None = None
+    staging_path: str | None = None
+    install_root: str | None = None
+    owned_install_path: str | None = None
+    worker_id: str | None = None
+    transfer_pid: int | None = None
+    transfer_create_time: float | None = None
+    cancel_requested: bool = False
+    retry_of: str | None = None
+    repair_of_bundle_id: str | None = None
+
+
+class StorageLocation(BaseModel):
+    kind: Literal["managed", "staging", "cache", "metadata"]
+    path: str
+    bytes: int
+    removable: bool = False
+    reference_count: int = 0
+
+
+class StorageSummary(BaseModel):
+    install_root: str
+    future_install_root: str
+    managed_bytes: int = 0
+    staging_bytes: int = 0
+    cache_bytes: int = 0
+    metadata_bytes: int = 0
+    reclaimable_bytes: int = 0
+    capacity_bytes: int | None = None
+    available_bytes: int | None = None
+    locations: list[StorageLocation] = Field(default_factory=list)
 
 
 class HuggingFaceImportRequest(BaseModel):
@@ -107,11 +171,20 @@ class HubRepository(BaseModel):
     projectors: list[HubVariant]
     guidance_files: list[str]
     warnings: list[str]
+    file_sha256: dict[str, str | None] = Field(default_factory=dict)
+    file_sizes: dict[str, int | None] = Field(default_factory=dict)
+
+
+class HubSearchResult(BaseModel):
+    repo_id: str
+    downloads: int | None = None
+    likes: int | None = None
 
 
 class LocalImportRequest(BaseModel):
     source_path: str
     display_name: str | None = None
+    copy_files: bool = True
 
 
 class SettingNote(BaseModel):
@@ -159,6 +232,48 @@ class RunProfile(BaseModel):
     bags: SettingsBags
     created_at: str
     updated_at: str
+
+
+class RenameProfileRequest(BaseModel):
+    display_name: str
+
+
+class DuplicateProfileRequest(BaseModel):
+    display_name: str | None = None
+
+
+class LifecycleConsumer(BaseModel):
+    kind: Literal["profile", "deployment", "chat", "lab_case", "agent_run"]
+    id: str
+    label: str | None = None
+    live: bool = False
+    retained: bool = True
+
+
+class DeleteFilePlan(BaseModel):
+    path: str
+    size_bytes: int
+    removable: bool
+    reason: str | None = None
+
+
+class DeletePreview(BaseModel):
+    target_kind: Literal["profile", "bundle"]
+    target_id: str
+    blockers: list[LifecycleConsumer] = Field(default_factory=list)
+    consumers: list[LifecycleConsumer] = Field(default_factory=list)
+    files: list[DeleteFilePlan] = Field(default_factory=list)
+    removable_bytes: int = 0
+    retained: list[str] = Field(default_factory=list)
+
+
+class DeploymentProfileChanges(BaseModel):
+    deployment_id: str
+    profile_id: str | None = None
+    has_pending_startup_changes: bool = False
+    pending_startup: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    has_pending_per_request_changes: bool = False
+    has_pending_agent_changes: bool = False
 
 
 class ResourceUsage(BaseModel):
@@ -299,6 +414,8 @@ class Deployment(BaseModel):
     endpoint: str | None = None
     requested_startup: dict[str, Any] = Field(default_factory=dict)
     applied_startup: dict[str, Any] = Field(default_factory=dict)
+    startup_overrides: dict[str, Any] = Field(default_factory=dict)
+    profile_snapshot: SettingsBags | None = None
     settings: SettingsBags = Field(default_factory=SettingsBags)
     pid: int | None = None
     process_identity: ProcessIdentity | None = None

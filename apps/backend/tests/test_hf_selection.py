@@ -75,3 +75,22 @@ class HubSelectionTests(unittest.TestCase):
             api.return_value.model_info.side_effect = GatedRepoError("denied", response=httpx.Response(403, request=httpx.Request("GET", "https://huggingface.co/org/model")))
             with self.assertRaisesRegex(ManagerError, "gated"):
                 HuggingFaceFetcher().inspect(repo_id="org/model")
+
+    def test_search_returns_simple_repository_results(self):
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            api.return_value.list_models.return_value = [
+                SimpleNamespace(modelId="org/a", downloads=10, likes=2),
+                SimpleNamespace(id="org/b", downloads=None, likes=0),
+            ]
+
+            results = HuggingFaceFetcher().search("tiny llama", limit=2)
+
+        self.assertEqual([item.repo_id for item in results], ["org/a", "org/b"])
+        self.assertEqual(results[0].downloads, 10)
+        api.return_value.list_models.assert_called_once()
+
+    def test_empty_search_is_rejected_before_network(self):
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            with self.assertRaises(ManagerError):
+                HuggingFaceFetcher().search("   ")
+            api.assert_not_called()

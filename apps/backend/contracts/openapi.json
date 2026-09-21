@@ -1,6 +1,518 @@
 {
   "components": {
     "schemas": {
+      "BundleConfigurationOptions": {
+        "properties": {
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "context_size": {
+            "$ref": "#/components/schemas/RuntimeControlDescriptor"
+          },
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "gpu_layers": {
+            "$ref": "#/components/schemas/RuntimeControlDescriptor"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "startup_defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RuntimeControlDescriptor"
+            },
+            "title": "Startup Defaults",
+            "type": "object"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "context_size",
+          "gpu_layers",
+          "startup_defaults"
+        ],
+        "title": "BundleConfigurationOptions",
+        "type": "object"
+      },
+      "BundleFile": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ownership": {
+            "default": "managed",
+            "enum": [
+              "managed",
+              "external"
+            ],
+            "title": "Ownership",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/FileRole"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "name",
+          "path",
+          "sha256",
+          "size_bytes"
+        ],
+        "title": "BundleFile",
+        "type": "object"
+      },
+      "BundleSource": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/BundleSourceKind"
+          },
+          "original_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Path"
+          },
+          "repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Id"
+          },
+          "requested_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Revision"
+          },
+          "resolved_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Revision"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "BundleSource",
+        "type": "object"
+      },
+      "BundleSourceKind": {
+        "enum": [
+          "huggingface",
+          "local"
+        ],
+        "title": "BundleSourceKind",
+        "type": "string"
+      },
+      "ConnectedDeploymentRequest": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "endpoint"
+        ],
+        "title": "ConnectedDeploymentRequest",
+        "type": "object"
+      },
+      "DeleteFilePlan": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "removable": {
+            "title": "Removable",
+            "type": "boolean"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size_bytes",
+          "removable"
+        ],
+        "title": "DeleteFilePlan",
+        "type": "object"
+      },
+      "DeletePreview": {
+        "properties": {
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/LifecycleConsumer"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "consumers": {
+            "items": {
+              "$ref": "#/components/schemas/LifecycleConsumer"
+            },
+            "title": "Consumers",
+            "type": "array"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DeleteFilePlan"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "removable_bytes": {
+            "default": 0,
+            "title": "Removable Bytes",
+            "type": "integer"
+          },
+          "retained": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retained",
+            "type": "array"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "profile",
+              "bundle"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "title": "DeletePreview",
+        "type": "object"
+      },
+      "Deployment": {
+        "properties": {
+          "applied_startup": {
+            "additionalProperties": true,
+            "title": "Applied Startup",
+            "type": "object"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "health": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HealthReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "process_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "profile_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SettingsBags"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "requested_startup": {
+            "additionalProperties": true,
+            "title": "Requested Startup",
+            "type": "object"
+          },
+          "resource_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ManagementScope"
+          },
+          "server_props": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServerProperties"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsBags"
+          },
+          "startup_overrides": {
+            "additionalProperties": true,
+            "title": "Startup Overrides",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeploymentStatus"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "scope",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Deployment",
+        "type": "object"
+      },
+      "DeploymentLogResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "available",
+          "text"
+        ],
+        "title": "DeploymentLogResponse",
+        "type": "object"
+      },
+      "DeploymentProfileChanges": {
+        "properties": {
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "has_pending_agent_changes": {
+            "default": false,
+            "title": "Has Pending Agent Changes",
+            "type": "boolean"
+          },
+          "has_pending_per_request_changes": {
+            "default": false,
+            "title": "Has Pending Per Request Changes",
+            "type": "boolean"
+          },
+          "has_pending_startup_changes": {
+            "default": false,
+            "title": "Has Pending Startup Changes",
+            "type": "boolean"
+          },
+          "pending_startup": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pending Startup",
+            "type": "object"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          }
+        },
+        "required": [
+          "deployment_id"
+        ],
+        "title": "DeploymentProfileChanges",
+        "type": "object"
+      },
+      "DeploymentStatus": {
+        "enum": [
+          "starting",
+          "running",
+          "unhealthy",
+          "stopped",
+          "failed"
+        ],
+        "title": "DeploymentStatus",
+        "type": "string"
+      },
+      "FileRole": {
+        "enum": [
+          "primary_weights",
+          "shard",
+          "companion"
+        ],
+        "title": "FileRole",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -14,8 +526,86 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthReport": {
+        "properties": {
+          "checked": {
+            "title": "Checked",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "resource_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "healthy",
+          "checked"
+        ],
+        "title": "HealthReport",
+        "type": "object"
+      },
       "HubRepository": {
         "properties": {
+          "file_sha256": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "File Sha256",
+            "type": "object"
+          },
+          "file_sizes": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "File Sizes",
+            "type": "object"
+          },
           "guidance_files": {
             "items": {
               "type": "string"
@@ -64,6 +654,41 @@
         "title": "HubRepository",
         "type": "object"
       },
+      "HubSearchResult": {
+        "properties": {
+          "downloads": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Downloads"
+          },
+          "likes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Likes"
+          },
+          "repo_id": {
+            "title": "Repo Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id"
+        ],
+        "title": "HubSearchResult",
+        "type": "object"
+      },
       "HubVariant": {
         "properties": {
           "complete": {
@@ -101,6 +726,49 @@
         "title": "HubVariant",
         "type": "object"
       },
+      "HuggingFaceImportRequest": {
+        "properties": {
+          "allow_patterns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Patterns"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "repo_id": {
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "revision": {
+            "default": "main",
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id"
+        ],
+        "title": "HuggingFaceImportRequest",
+        "type": "object"
+      },
       "HuggingFaceInspectRequest": {
         "properties": {
           "repo_id": {
@@ -117,6 +785,547 @@
           "repo_id"
         ],
         "title": "HuggingFaceInspectRequest",
+        "type": "object"
+      },
+      "ImportJob": {
+        "properties": {
+          "allow_patterns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Patterns"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "cancel_requested": {
+            "default": false,
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "install_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Root"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BundleSourceKind"
+          },
+          "owned_install_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owned Install Path"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ImportProgress"
+          },
+          "repair_of_bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repair Of Bundle Id"
+          },
+          "repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Id"
+          },
+          "requested_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Revision"
+          },
+          "resolved_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Revision"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "source_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Path"
+          },
+          "staging_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Staging Path"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          },
+          "transfer_create_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Create Time"
+          },
+          "transfer_pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transfer Pid"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "ImportJob",
+        "type": "object"
+      },
+      "ImportProgress": {
+        "properties": {
+          "bytes_done": {
+            "default": 0,
+            "title": "Bytes Done",
+            "type": "integer"
+          },
+          "bytes_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes Total"
+          },
+          "files_done": {
+            "default": 0,
+            "title": "Files Done",
+            "type": "integer"
+          },
+          "files_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files Total"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ImportStage",
+            "default": "queued"
+          }
+        },
+        "title": "ImportProgress",
+        "type": "object"
+      },
+      "ImportStage": {
+        "enum": [
+          "queued",
+          "metadata",
+          "transfer",
+          "verify",
+          "install",
+          "repair",
+          "cleanup",
+          "done"
+        ],
+        "title": "ImportStage",
+        "type": "string"
+      },
+      "ImportStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "stopping",
+          "stopped",
+          "complete",
+          "failed",
+          "interrupted",
+          "discarded"
+        ],
+        "title": "ImportStatus",
+        "type": "string"
+      },
+      "InspectReport": {
+        "properties": {
+          "architecture": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Architecture"
+          },
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": true,
+            "title": "Fields",
+            "type": "object"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_type": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Type"
+          },
+          "metadata_edited": {
+            "const": false,
+            "default": false,
+            "title": "Metadata Edited",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "omitted_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Omitted Fields",
+            "type": "array"
+          },
+          "quantization_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantization Version"
+          },
+          "reader": {
+            "default": "gguf.GGUFReader",
+            "title": "Reader",
+            "type": "string"
+          },
+          "reader_mode": {
+            "const": "r",
+            "default": "r",
+            "title": "Reader Mode",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "tensors": {
+            "items": {
+              "$ref": "#/components/schemas/InspectTensor"
+            },
+            "title": "Tensors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "file_path",
+          "sha256"
+        ],
+        "title": "InspectReport",
+        "type": "object"
+      },
+      "InspectTensor": {
+        "properties": {
+          "n_bytes": {
+            "title": "N Bytes",
+            "type": "integer"
+          },
+          "n_elements": {
+            "title": "N Elements",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Shape",
+            "type": "array"
+          },
+          "tensor_type": {
+            "title": "Tensor Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "shape",
+          "n_elements",
+          "n_bytes",
+          "tensor_type"
+        ],
+        "title": "InspectTensor",
+        "type": "object"
+      },
+      "LifecycleConsumer": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "profile",
+              "deployment",
+              "chat",
+              "lab_case",
+              "agent_run"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "live": {
+            "default": false,
+            "title": "Live",
+            "type": "boolean"
+          },
+          "retained": {
+            "default": true,
+            "title": "Retained",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "LifecycleConsumer",
+        "type": "object"
+      },
+      "LocalImportRequest": {
+        "properties": {
+          "copy_files": {
+            "default": true,
+            "title": "Copy Files",
+            "type": "boolean"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_path"
+        ],
+        "title": "LocalImportRequest",
         "type": "object"
       },
       "LocalSessionTrustContract": {
@@ -174,6 +1383,290 @@
         "title": "LocalSessionTrustContract",
         "type": "object"
       },
+      "ManagedDeploymentRequest": {
+        "properties": {
+          "auto_start": {
+            "default": true,
+            "title": "Auto Start",
+            "type": "boolean"
+          },
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "bundle_id"
+        ],
+        "title": "ManagedDeploymentRequest",
+        "type": "object"
+      },
+      "ManagementScope": {
+        "enum": [
+          "managed",
+          "connected"
+        ],
+        "title": "ManagementScope",
+        "type": "string"
+      },
+      "ModelBundle": {
+        "properties": {
+          "companions": {
+            "items": {
+              "$ref": "#/components/schemas/BundleFile"
+            },
+            "title": "Companions",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "disk_matches": {
+            "default": true,
+            "title": "Disk Matches",
+            "type": "boolean"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/BundleFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "format": {
+            "const": "gguf",
+            "default": "gguf",
+            "title": "Format",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "managed_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Managed Root"
+          },
+          "primary_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Path"
+          },
+          "quantization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantization"
+          },
+          "shards": {
+            "items": {
+              "$ref": "#/components/schemas/BundleFile"
+            },
+            "title": "Shards",
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BundleSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus",
+            "default": "complete"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "source",
+          "files",
+          "created_at"
+        ],
+        "title": "ModelBundle",
+        "type": "object"
+      },
+      "PinRuntimeRequest": {
+        "description": "Production pin downloads the Windows CUDA 13.4 llama-server pair.\n\n``local_executable`` pins an already-managed runtime directory (the\nexecutable plus sibling CUDA DLLs) or a test fixture. It still writes\na runtime-manifest and never uses PATH.\n\nPinning while a managed server is running is rejected unless\n``stop_first`` is true.",
+        "properties": {
+          "local_executable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Executable"
+          },
+          "stop_first": {
+            "default": false,
+            "title": "Stop First",
+            "type": "boolean"
+          }
+        },
+        "title": "PinRuntimeRequest",
+        "type": "object"
+      },
+      "ProcessIdentity": {
+        "description": "Owned managed-process identity. PID alone is not sufficient.",
+        "properties": {
+          "create_time": {
+            "title": "Create Time",
+            "type": "number"
+          },
+          "executable": {
+            "title": "Executable",
+            "type": "string"
+          },
+          "pid": {
+            "title": "Pid",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pid",
+          "create_time",
+          "executable"
+        ],
+        "title": "ProcessIdentity",
+        "type": "object"
+      },
+      "ProfileWriteRequest": {
+        "properties": {
+          "agent": {
+            "additionalProperties": true,
+            "title": "Agent",
+            "type": "object"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "per_request": {
+            "additionalProperties": true,
+            "title": "Per Request",
+            "type": "object"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "ProfileWriteRequest",
+        "type": "object"
+      },
+      "RenameProfileRequest": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "RenameProfileRequest",
+        "type": "object"
+      },
+      "ResourceUsage": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Percent"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "rss_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rss Bytes"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "ResourceUsage",
+        "type": "object"
+      },
       "RunLifecycleContract": {
         "description": "Documented lifecycle vocabulary for generated consumers.",
         "properties": {
@@ -229,6 +1722,49 @@
         ],
         "title": "RunLifecycleStatus",
         "type": "string"
+      },
+      "RunProfile": {
+        "properties": {
+          "bags": {
+            "$ref": "#/components/schemas/SettingsBags"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "bags",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunProfile",
+        "type": "object"
       },
       "RunStreamContract": {
         "description": "Documented stream route, headers and event names for generated consumers.",
@@ -386,6 +1922,472 @@
         "title": "RunStreamEventType",
         "type": "string"
       },
+      "RuntimeControlDescriptor": {
+        "properties": {
+          "applied": {
+            "title": "Applied"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "flag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flag"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "observed": {
+            "title": "Observed"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeControlOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "recommended": {
+            "title": "Recommended"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "description",
+          "source"
+        ],
+        "title": "RuntimeControlDescriptor",
+        "type": "object"
+      },
+      "RuntimeControlOption": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "RuntimeControlOption",
+        "type": "object"
+      },
+      "RuntimeManifest": {
+        "properties": {
+          "asset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Name"
+          },
+          "companion_asset_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Companion Asset Name"
+          },
+          "companion_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Companion Sha256"
+          },
+          "component": {
+            "default": "llama-server",
+            "title": "Component",
+            "type": "string"
+          },
+          "engine": {
+            "default": "llama.cpp",
+            "title": "Engine",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "executable": {
+            "title": "Executable",
+            "type": "string"
+          },
+          "flavor": {
+            "title": "Flavor",
+            "type": "string"
+          },
+          "install_dir": {
+            "title": "Install Dir",
+            "type": "string"
+          },
+          "path_fallback": {
+            "const": "unsupported",
+            "default": "unsupported",
+            "title": "Path Fallback",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "product": {
+            "default": "Local AI Workbench",
+            "title": "Product",
+            "type": "string"
+          },
+          "release_tag": {
+            "title": "Release Tag",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "status": {
+            "default": "ready",
+            "enum": [
+              "ready",
+              "failed",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "flavor",
+          "release_tag",
+          "install_dir",
+          "executable"
+        ],
+        "title": "RuntimeManifest",
+        "type": "object"
+      },
+      "ServerProperties": {
+        "description": "What llama-server's ``GET /props`` reported once the deployment was healthy.\n\nRecorded as reported, not interpreted. This is not a compatibility\nrecord and not a capability claim (MOD-006 / OQ-007 stay open).",
+        "properties": {
+          "bos_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bos Token"
+          },
+          "build_info": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Info"
+          },
+          "chat_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Template"
+          },
+          "chat_template_caps": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Chat Template Caps",
+            "type": "object"
+          },
+          "default_generation_settings": {
+            "additionalProperties": true,
+            "title": "Default Generation Settings",
+            "type": "object"
+          },
+          "eos_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eos Token"
+          },
+          "fetched": {
+            "title": "Fetched",
+            "type": "string"
+          },
+          "modalities": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Modalities",
+            "type": "object"
+          },
+          "model_alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Alias"
+          },
+          "model_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Path"
+          },
+          "n_ctx": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "N Ctx"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "total_slots": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Slots"
+          }
+        },
+        "required": [
+          "fetched",
+          "source_url"
+        ],
+        "title": "ServerProperties",
+        "type": "object"
+      },
+      "SettingNote": {
+        "properties": {
+          "applied": {
+            "title": "Applied"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "requested": {
+            "title": "Requested"
+          }
+        },
+        "required": [
+          "key",
+          "reason"
+        ],
+        "title": "SettingNote",
+        "type": "object"
+      },
+      "SettingsBag": {
+        "properties": {
+          "applied": {
+            "additionalProperties": true,
+            "title": "Applied",
+            "type": "object"
+          },
+          "overridden": {
+            "items": {
+              "$ref": "#/components/schemas/SettingNote"
+            },
+            "title": "Overridden",
+            "type": "array"
+          },
+          "requested": {
+            "additionalProperties": true,
+            "title": "Requested",
+            "type": "object"
+          },
+          "retired": {
+            "items": {
+              "$ref": "#/components/schemas/SettingNote"
+            },
+            "title": "Retired",
+            "type": "array"
+          },
+          "unsupported": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unsupported",
+            "type": "array"
+          },
+          "unsupported_notes": {
+            "items": {
+              "$ref": "#/components/schemas/SettingNote"
+            },
+            "title": "Unsupported Notes",
+            "type": "array"
+          },
+          "unverified": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unverified",
+            "type": "array"
+          }
+        },
+        "title": "SettingsBag",
+        "type": "object"
+      },
+      "SettingsBags": {
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/SettingsBag"
+          },
+          "per_request": {
+            "$ref": "#/components/schemas/SettingsBag"
+          },
+          "startup": {
+            "$ref": "#/components/schemas/SettingsBag"
+          }
+        },
+        "title": "SettingsBags",
+        "type": "object"
+      },
+      "SettingsPreviewRequest": {
+        "properties": {
+          "agent": {
+            "additionalProperties": true,
+            "title": "Agent",
+            "type": "object"
+          },
+          "per_request": {
+            "additionalProperties": true,
+            "title": "Per Request",
+            "type": "object"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "title": "SettingsPreviewRequest",
+        "type": "object"
+      },
       "SharedAgentEvent": {
         "description": "One application harness event. Not a raw LangGraph stream chunk.",
         "properties": {
@@ -408,6 +2410,186 @@
           "kind"
         ],
         "title": "SharedAgentEvent",
+        "type": "object"
+      },
+      "SmokeResult": {
+        "properties": {
+          "adapter": {
+            "const": "openai-compatible-smoke",
+            "default": "openai-compatible-smoke",
+            "title": "Adapter",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "note": {
+            "default": "Thin OpenAI-compatible smoke only. Not a Deep Agents / LangChain adapter.",
+            "title": "Note",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "endpoint"
+        ],
+        "title": "SmokeResult",
+        "type": "object"
+      },
+      "StorageCleanupResponse": {
+        "properties": {
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Removed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "title": "StorageCleanupResponse",
+        "type": "object"
+      },
+      "StorageLocation": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "managed",
+              "staging",
+              "cache",
+              "metadata"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "reference_count": {
+            "default": 0,
+            "title": "Reference Count",
+            "type": "integer"
+          },
+          "removable": {
+            "default": false,
+            "title": "Removable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "path",
+          "bytes"
+        ],
+        "title": "StorageLocation",
+        "type": "object"
+      },
+      "StorageLocationRequest": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "StorageLocationRequest",
+        "type": "object"
+      },
+      "StorageSummary": {
+        "properties": {
+          "available_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Bytes"
+          },
+          "cache_bytes": {
+            "default": 0,
+            "title": "Cache Bytes",
+            "type": "integer"
+          },
+          "capacity_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Bytes"
+          },
+          "future_install_root": {
+            "title": "Future Install Root",
+            "type": "string"
+          },
+          "install_root": {
+            "title": "Install Root",
+            "type": "string"
+          },
+          "locations": {
+            "items": {
+              "$ref": "#/components/schemas/StorageLocation"
+            },
+            "title": "Locations",
+            "type": "array"
+          },
+          "managed_bytes": {
+            "default": 0,
+            "title": "Managed Bytes",
+            "type": "integer"
+          },
+          "metadata_bytes": {
+            "default": 0,
+            "title": "Metadata Bytes",
+            "type": "integer"
+          },
+          "reclaimable_bytes": {
+            "default": 0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "staging_bytes": {
+            "default": 0,
+            "title": "Staging Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "install_root",
+          "future_install_root"
+        ],
+        "title": "StorageSummary",
         "type": "object"
       },
       "ValidationError": {
@@ -468,9 +2650,1021 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/bundles": {
+      "get": {
+        "operationId": "list_bundles_v1_bundles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelBundle"
+                  },
+                  "title": "Response List Bundles V1 Bundles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Bundles"
+      }
+    },
+    "/v1/bundles/{bundle_id}": {
+      "delete": {
+        "operationId": "delete_bundle_v1_bundles__bundle_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Bundle"
+      },
+      "get": {
+        "operationId": "get_bundle_v1_bundles__bundle_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bundle"
+      }
+    },
+    "/v1/bundles/{bundle_id}/compatibility": {
+      "get": {
+        "operationId": "bundle_compatibility_v1_bundles__bundle_id__compatibility_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Bundle Compatibility V1 Bundles  Bundle Id  Compatibility Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bundle Compatibility"
+      }
+    },
+    "/v1/bundles/{bundle_id}/configuration-options": {
+      "get": {
+        "operationId": "bundle_configuration_options_v1_bundles__bundle_id__configuration_options_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deployment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleConfigurationOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bundle Configuration Options"
+      }
+    },
+    "/v1/bundles/{bundle_id}/delete-preview": {
+      "get": {
+        "operationId": "bundle_delete_preview_v1_bundles__bundle_id__delete_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bundle Delete Preview"
+      }
+    },
+    "/v1/bundles/{bundle_id}/inspect": {
+      "get": {
+        "operationId": "inspect_bundle_v1_bundles__bundle_id__inspect_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Inspect Bundle"
+      }
+    },
+    "/v1/bundles/{bundle_id}/repair": {
+      "post": {
+        "operationId": "repair_bundle_v1_bundles__bundle_id__repair_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Repair Bundle"
+      }
+    },
+    "/v1/deployments": {
+      "get": {
+        "operationId": "list_deployments_v1_deployments_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Deployment"
+                  },
+                  "title": "Response List Deployments V1 Deployments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Deployments"
+      }
+    },
+    "/v1/deployments/connected": {
+      "post": {
+        "operationId": "attach_connected_v1_deployments_connected_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectedDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attach Connected"
+      }
+    },
+    "/v1/deployments/managed": {
+      "post": {
+        "operationId": "create_managed_v1_deployments_managed_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Managed"
+      }
+    },
+    "/v1/deployments/{deployment_id}": {
+      "get": {
+        "operationId": "get_deployment_v1_deployments__deployment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Deployment"
+      }
+    },
+    "/v1/deployments/{deployment_id}/detach": {
+      "post": {
+        "operationId": "detach_deployment_v1_deployments__deployment_id__detach_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Detach Deployment"
+      }
+    },
+    "/v1/deployments/{deployment_id}/health": {
+      "get": {
+        "operationId": "deployment_health_v1_deployments__deployment_id__health_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deployment Health"
+      }
+    },
+    "/v1/deployments/{deployment_id}/logs": {
+      "get": {
+        "operationId": "deployment_logs_v1_deployments__deployment_id__logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentLogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deployment Logs"
+      }
+    },
+    "/v1/deployments/{deployment_id}/profile-changes": {
+      "get": {
+        "operationId": "deployment_profile_changes_v1_deployments__deployment_id__profile_changes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentProfileChanges"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deployment Profile Changes"
+      }
+    },
+    "/v1/deployments/{deployment_id}/reload": {
+      "post": {
+        "operationId": "reload_deployment_v1_deployments__deployment_id__reload_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reload Deployment"
+      }
+    },
+    "/v1/deployments/{deployment_id}/smoke": {
+      "post": {
+        "operationId": "deployment_smoke_v1_deployments__deployment_id__smoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmokeResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deployment Smoke"
+      }
+    },
+    "/v1/deployments/{deployment_id}/start": {
+      "post": {
+        "operationId": "start_deployment_v1_deployments__deployment_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Deployment"
+      }
+    },
+    "/v1/deployments/{deployment_id}/stop": {
+      "post": {
+        "operationId": "stop_deployment_v1_deployments__deployment_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Deployment"
+      }
+    },
+    "/v1/imports": {
+      "get": {
+        "operationId": "list_imports_v1_imports_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImportJob"
+                  },
+                  "title": "Response List Imports V1 Imports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Imports"
+      }
+    },
+    "/v1/imports/huggingface": {
+      "post": {
+        "operationId": "import_huggingface_v1_imports_huggingface_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HuggingFaceImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Huggingface"
+      }
+    },
+    "/v1/imports/local": {
+      "post": {
+        "operationId": "import_local_v1_imports_local_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Local"
+      }
+    },
+    "/v1/imports/{job_id}": {
+      "get": {
+        "operationId": "get_import_v1_imports__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Import"
+      }
+    },
+    "/v1/imports/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_import_v1_imports__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Import"
+      }
+    },
+    "/v1/imports/{job_id}/discard": {
+      "post": {
+        "operationId": "discard_import_v1_imports__job_id__discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discard Import"
+      }
+    },
+    "/v1/imports/{job_id}/retry": {
+      "post": {
+        "operationId": "retry_import_v1_imports__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Import"
+      }
+    },
     "/v1/models/huggingface/inspect": {
       "post": {
-        "operationId": "hub_repository_contract_v1_models_huggingface_inspect_post",
+        "operationId": "inspect_huggingface_v1_models_huggingface_inspect_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -503,7 +3697,575 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Hub Repository Contract"
+        "summary": "Inspect Huggingface"
+      }
+    },
+    "/v1/models/huggingface/search": {
+      "get": {
+        "operationId": "search_huggingface_v1_models_huggingface_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HubSearchResult"
+                  },
+                  "title": "Response Search Huggingface V1 Models Huggingface Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Huggingface"
+      }
+    },
+    "/v1/models/storage": {
+      "get": {
+        "operationId": "model_storage_v1_models_storage_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Model Storage"
+      },
+      "put": {
+        "operationId": "set_model_storage_v1_models_storage_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageLocationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Model Storage"
+      }
+    },
+    "/v1/models/storage/cleanup": {
+      "post": {
+        "operationId": "clean_model_storage_v1_models_storage_cleanup_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageCleanupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Clean Model Storage"
+      }
+    },
+    "/v1/paths": {
+      "get": {
+        "operationId": "paths_v1_paths_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Paths V1 Paths Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Paths"
+      }
+    },
+    "/v1/profiles": {
+      "get": {
+        "operationId": "list_profiles_v1_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunProfile"
+                  },
+                  "title": "Response List Profiles V1 Profiles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Profiles"
+      },
+      "post": {
+        "operationId": "create_profile_v1_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Profile"
+      }
+    },
+    "/v1/profiles/{profile_id}": {
+      "delete": {
+        "operationId": "delete_profile_v1_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Profile"
+      },
+      "get": {
+        "operationId": "get_profile_v1_profiles__profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Profile"
+      },
+      "put": {
+        "operationId": "update_profile_v1_profiles__profile_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Profile"
+      }
+    },
+    "/v1/profiles/{profile_id}/delete-preview": {
+      "get": {
+        "operationId": "profile_delete_preview_v1_profiles__profile_id__delete_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Profile Delete Preview"
+      }
+    },
+    "/v1/profiles/{profile_id}/duplicate": {
+      "post": {
+        "operationId": "duplicate_profile_v1_profiles__profile_id__duplicate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Duplicate Profile"
+      }
+    },
+    "/v1/profiles/{profile_id}/rename": {
+      "post": {
+        "operationId": "rename_profile_v1_profiles__profile_id__rename_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Profile"
+      }
+    },
+    "/v1/runtime": {
+      "get": {
+        "operationId": "get_runtime_v1_runtime_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RuntimeManifest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Runtime V1 Runtime Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Runtime"
+      }
+    },
+    "/v1/runtime/pin": {
+      "post": {
+        "operationId": "pin_runtime_v1_runtime_pin_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PinRuntimeRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeManifest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin Runtime"
+      }
+    },
+    "/v1/settings/preview": {
+      "post": {
+        "operationId": "preview_settings_v1_settings_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsBags"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Settings"
       }
     },
     "/v1/shared-contracts/run-lifecycle": {
