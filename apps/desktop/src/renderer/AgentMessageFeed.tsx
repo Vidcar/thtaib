@@ -124,12 +124,9 @@ function safeHref(href: string | undefined): string | undefined {
   if (!href) {
     return undefined;
   }
-  if (href.startsWith("#") || href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) {
-    return href;
-  }
   try {
     const parsed = new URL(href);
-    if (["http:", "https:", "mailto:"].includes(parsed.protocol)) {
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
       return href;
     }
   } catch {

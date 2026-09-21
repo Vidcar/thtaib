@@ -2,6 +2,8 @@
 
 ## ADDED Requirements
 
+All requirements below SHALL retain the verified `repair-local-interaction-boundaries` guarantees: repeated-text legacy chronology and multiplicity, stable or deterministic display identity, narrow idempotent repair, preserved later/partial/tool output and display-edit replay cutovers, with no hidden-message resurrection or execution replay. The prerequisite does not implement retained uploads, deletion or backup features.
+
 ### Requirement: STATE-009 - Retain authorized files and verify actual outputs
 
 One retained-file/artifact contract SHALL identify origin, session/project/access scope, storage ownership, content type, size/hash, observation time and source run/tool where applicable. Mutable project references SHALL be distinct from immutable retained upload/output snapshots; access and mutable identity are rechecked on open/reuse. Old path-only records remain unverified until checked. Tool arguments/model-written paths are attempted operations, not artifacts: successful result and required file observations establish outputs. Scratch/history/offloads are not project outputs.

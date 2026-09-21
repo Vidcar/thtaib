@@ -4,6 +4,8 @@ Prerequisites: change 02 and `migrate-local-agent-interaction` must be implement
 
 ## 1. Verify existing behaviour and implement gaps
 
+Additional prerequisite: `repair-local-interaction-boundaries` must be delivered and verified. Retain its actual-component deferred hydration/cancellation/registration/submission/draft tests, real Electron requesting-document/navigation checks and legacy repeated-text/repair/edit-cutover tests while implementing this packet. Repairs do not complete any feature task here; Packet 04 retains async ownership.
+
 - [ ] 1.1 Implement immutable project/non-project session binding, new/rename/archive/search/reopen and stable per-turn threads/runs with frozen setup.
 - [ ] 1.2 Persist drafts and editable queued turns, advance only after success, and revalidate setup/permissions/admission at dispatch.
 - [ ] 1.3 Integrate Chat with the prerequisite's verified `@langchain/react` message/tool/state projections, scoped subscription and interrupt boundary; reconcile incremental answers/reasoning/tool results by application run/call identity, preserve durable terminal hydration and expose observed planning/context. Verify migration compatibility and do not extend the superseded custom `snapshot` / `run_event` / `stream_end` transport.

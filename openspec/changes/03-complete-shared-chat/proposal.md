@@ -19,6 +19,8 @@ Complete fixed session scope, turn/queue continuity, streamed presentation, tool
 
 ## Impact
 
+`repair-local-interaction-boundaries` is an additional prerequisite and must be implemented and verified before this packet starts. Its delivery satisfies none of this packet's queue, upload, grant, branch, backup or tray feature work; retain its selection/draft, requesting-document trust and legacy chronology regression guarantees.
+
 Work order **03 of 08**. Both change 02 and `migrate-local-agent-interaction` must be implemented and verified before this change starts. Consume the prerequisite's supported `@langchain/react` interaction boundary for messages, tool/state projections, scoped subscriptions and interrupts; do not extend the superseded custom snapshot/event transport. SDK integration is a prerequisite only: every feature and acceptance task below remains required and unchecked until its own evidence exists. Reuse existing services and current contracts; an existing passing implementation satisfies a task without being rebuilt. The deltas specify the required end state, not a claim that every listed behaviour is absent.
 
 ## Non-goals

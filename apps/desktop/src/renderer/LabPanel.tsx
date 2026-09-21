@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
 import { deploymentOptionLabel, shortId } from "./display";
@@ -17,25 +17,34 @@ import {
 
 function LabRunObserver(props: {
   threadId: string;
+  runId: string;
+  isActive: (runId: string, threadId: string) => boolean;
   setRun: (run: AgentRun) => void;
   setMessage: (message: string) => void;
 }) {
-  const { threadId, setRun, setMessage } = props;
+  const { threadId, runId, isActive, setRun, setMessage } = props;
   return (
-    <InteractionStream threadId={threadId} onError={(error) => setMessage(error instanceof Error ? error.message : String(error))}>
-      {(stream) => <LabRunObserverContent stream={stream} setRun={setRun} />}
+    <InteractionStream
+      threadId={threadId}
+      onError={(error) => {
+        if (isActive(runId, threadId)) {
+          setMessage(error instanceof Error ? error.message : String(error));
+        }
+      }}
+    >
+      {(stream) => <LabRunObserverContent stream={stream} runId={runId} isActive={isActive} setRun={setRun} />}
     </InteractionStream>
   );
 }
 
-function LabRunObserverContent(props: { stream: WorkbenchStream; setRun: (run: AgentRun) => void }) {
-  const { stream, setRun } = props;
+function LabRunObserverContent(props: { stream: WorkbenchStream; runId: string; isActive: (runId: string, threadId: string) => boolean; setRun: (run: AgentRun) => void }) {
+  const { stream, runId, isActive, setRun } = props;
   const projection = useWorkbenchProjection(stream);
   useEffect(() => {
-    if (projection.run) {
+    if (stream.threadId && isActive(runId, stream.threadId) && projection.run && projection.run.id === runId) {
       setRun(projection.run);
     }
-  }, [projection.run, setRun]);
+  }, [isActive, projection.run, runId, setRun, stream.threadId]);
   return null;
 }
 
@@ -46,7 +55,9 @@ export function LabPanel() {
   const [files, setFiles] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("original notes");
   const [run, setRun] = useState<AgentRun | null>(null);
-  const [runInteractionThreadId, setRunInteractionThreadId] = useState<string | null>(null);
+  const [runBinding, setRunBinding] = useState<{ runId: string; threadId: string } | null>(null);
+  const runBindingRef = useRef<{ runId: string; threadId: string } | null>(null);
+  const liveRunIdRef = useRef<string | null>(null);
   const [labCase, setLabCase] = useState<LabCase | null>(null);
   const [restore, setRestore] = useState<LabRestore | null>(null);
   const [result, setResult] = useState<LabResult | null>(null);
@@ -66,18 +77,29 @@ export function LabPanel() {
   }, []);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
+  liveRunIdRef.current = liveRunId;
+
+  function updateRunBinding(next: { runId: string; threadId: string } | null): void {
+    runBindingRef.current = next;
+    setRunBinding(next);
+  }
+
+  function isActiveRunBinding(runId: string, threadId: string): boolean {
+    return liveRunIdRef.current === runId && runBindingRef.current?.runId === runId && runBindingRef.current.threadId === threadId;
+  }
 
   useEffect(() => {
     if (!liveRunId) {
-      setRunInteractionThreadId(null);
+      updateRunBinding(null);
       return;
     }
     let cancelled = false;
+    updateRunBinding(null);
     void api
       .registerAgentInteractionThread({ source_surface: "agent", run_id: liveRunId })
       .then((binding) => {
         if (!cancelled) {
-          setRunInteractionThreadId(binding.thread_id);
+          updateRunBinding({ runId: liveRunId, threadId: binding.thread_id });
         }
       })
       .catch((error: unknown) => {
@@ -355,8 +377,15 @@ export function LabPanel() {
         </div>
       ) : null}
 
-      {runInteractionThreadId ? (
-        <LabRunObserver key={runInteractionThreadId} threadId={runInteractionThreadId} setRun={setRun} setMessage={setMessage} />
+      {runBinding && liveRunId && runBinding.runId === liveRunId ? (
+        <LabRunObserver
+          key={`${runBinding.runId}:${runBinding.threadId}`}
+          threadId={runBinding.threadId}
+          runId={runBinding.runId}
+          isActive={isActiveRunBinding}
+          setRun={setRun}
+          setMessage={setMessage}
+        />
       ) : null}
 
       {message ? <p className="status">{message}</p> : null}
