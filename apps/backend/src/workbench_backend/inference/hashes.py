@@ -6,6 +6,8 @@ import hashlib
 from collections import OrderedDict
 from pathlib import Path
 from threading import RLock
+from collections.abc import Callable
+from workbench_backend.errors import ManagerError
 
 CHUNK_SIZE = 1024 * 1024
 FINGERPRINT_SIZE = 64 * 1024
@@ -38,10 +40,12 @@ def _cache_key(path: Path) -> tuple[str, int, int, int, int, int, str]:
     )
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, cancel_check: Callable[[], bool] | None = None) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while True:
+            if cancel_check is not None and cancel_check():
+                raise ManagerError("Import was stopped before it was made ready.", code="import_cancelled", status_code=409)
             chunk = handle.read(CHUNK_SIZE)
             if not chunk:
                 break

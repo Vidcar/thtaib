@@ -22,6 +22,19 @@ from workbench_backend.state.store import ApplicationStore
 TERMINAL_RUN_STATUSES = {"completed", "cancelled", "failed"}
 
 
+def wait_for_import(client: TestClient, job: dict[str, Any], timeout: float = 5) -> dict[str, Any]:
+    """Observe the durable asynchronous API job, bounded by actual terminal state."""
+    deadline = time.monotonic() + timeout
+    while job["status"] in {"pending", "running", "stopping"}:
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Import did not terminate: {job}")
+        time.sleep(0.01)
+        response = client.get(f"/v1/imports/{job['id']}")
+        response.raise_for_status()
+        job = response.json()
+    return job
+
+
 def workbench_client(application: FastAPI, *, token: str | None = None) -> TestClient:
     """Test client that presents the local shared-secret token by default."""
     headers = {}
@@ -69,6 +82,11 @@ def close_workbench_sqlite(*objects: object) -> None:
         state = getattr(obj, "state", None)
         if state is None:
             continue
+        manager = getattr(state, "manager", None)
+        runner = getattr(manager, "imports", None)
+        closer = getattr(runner, "close", None)
+        if callable(closer):
+            closer()
         store = getattr(state, "app_store", None)
         if isinstance(store, ApplicationStore):
             stores.append(store)

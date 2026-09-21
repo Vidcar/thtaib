@@ -58,7 +58,7 @@ function isDeploymentAvailable(deployment: Deployment): boolean {
 
 function chatModelLabel(deployment: Deployment): string {
   const name = deployment.display_name.replace(/^(managed|connected):/, "");
-  const status = deployment.status === "running" ? "Ready" : deployment.status;
+  const status = deployment.status === "running" ? "Ready" : deployment.scope === "managed" && deployment.status === "stopped" ? "Loads when sent" : deployment.status;
   return `${name} · ${status}`;
 }
 

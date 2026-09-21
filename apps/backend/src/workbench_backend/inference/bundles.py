@@ -8,10 +8,11 @@ import re
 import shutil
 from pathlib import Path
 from threading import RLock
+from typing import Callable
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hashes import cached_sha256_file, sha256_file
-from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
+from workbench_backend.inference.hf_fetch import HuggingFaceDownload, HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.schemas import (
     BundleFile,
@@ -20,6 +21,8 @@ from workbench_backend.inference.schemas import (
     FileRole,
     HuggingFaceImportRequest,
     ImportJob,
+    ImportProgress,
+    ImportStage,
     ImportStatus,
     LocalImportRequest,
     ModelBundle,
@@ -35,6 +38,8 @@ QUANT_RE = re.compile(
 COMPANION_HINTS = ("mmproj", "projector", "tokenizer", "chat_template")
 PROJECTOR_HINTS = ("mmproj", "projector")
 _HF_RECORD_LOCK = RLock()
+ProgressCallback = Callable[[ImportStage, str | None, int, int | None, int, int | None], None]
+CancelCheck = Callable[[], bool]
 
 
 def mmproj_companion(bundle: ModelBundle) -> BundleFile | None:
@@ -232,6 +237,45 @@ def validate_relative_path_identity(files: list[BundleFile]) -> None:
         )
 
 
+def ensure_disk_space(paths: list[tuple[Path, int]]) -> None:
+    by_volume: dict[Path, tuple[int, int]] = {}
+    for target, bytes_needed in paths:
+        if bytes_needed <= 0:
+            continue
+        volume_root = _existing_volume_root(target)
+        usage = shutil.disk_usage(volume_root)
+        expected, available = by_volume.get(volume_root, (0, usage.free))
+        by_volume[volume_root] = (expected + bytes_needed, available)
+    shortages = [
+        {"path": str(root), "expected_bytes": expected, "available_bytes": available}
+        for root, (expected, available) in by_volume.items()
+        if expected > available
+    ]
+    if shortages:
+        first = shortages[0]
+        raise ManagerError(
+            "There is not enough free disk space for this import.",
+            code="disk_space_insufficient",
+            status_code=507,
+            details={
+                "expected_bytes": first["expected_bytes"],
+                "available_bytes": first["available_bytes"],
+                "volumes": shortages,
+            },
+        )
+
+
+def _existing_volume_root(path: Path) -> Path:
+    resolved = path.resolve()
+    anchor = Path(resolved.anchor)
+    if anchor.exists():
+        return anchor
+    current = resolved
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    return current
+
+
 class BundleService:
     def __init__(
         self,
@@ -244,10 +288,20 @@ class BundleService:
         self.store = store
         self.hf = hf or HuggingFaceFetcher()
 
-    def import_local(self, request: LocalImportRequest) -> ImportJob:
-        job = self._new_job(BundleSourceKind.local, request.display_name)
+    def import_local(
+        self,
+        request: LocalImportRequest,
+        *,
+        job: ImportJob | None = None,
+        install_root: Path | None = None,
+        progress: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> ImportJob:
+        job = job or self._new_job(BundleSourceKind.local, request.display_name)
         source = Path(request.source_path).expanduser()
         try:
+            self._raise_if_cancelled(cancel_check)
+            self._progress(progress, ImportStage.metadata, "Reading local files", 0, None, 0, None)
             files = collect_source_files(source)
             if not files:
                 raise ManagerError(
@@ -263,15 +317,28 @@ class BundleService:
                     original_path=str(source.resolve()),
                 ),
                 reuse_root=source if source.is_dir() else source.parent,
+                copy_files=request.copy_files,
+                install_root=install_root,
+                job_id=job.id,
+                progress=progress,
+                cancel_check=cancel_check,
             )
         except ManagerError as exc:
-            return self._fail_job(job, exc.message, ImportStatus.failed)
+            status = ImportStatus.stopped if exc.code == "import_cancelled" else ImportStatus.failed
+            return self._fail_job(job, exc.message, status)
         except OSError as exc:
             return self._fail_job(job, str(exc), ImportStatus.interrupted)
         return self._complete_job(job, bundle)
 
-    def import_huggingface(self, request: HuggingFaceImportRequest) -> ImportJob:
-        job = self._new_job(BundleSourceKind.huggingface, request.display_name)
+    def import_huggingface(
+        self,
+        request: HuggingFaceImportRequest,
+        *,
+        job: ImportJob | None = None,
+        progress: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> ImportJob:
+        job = job or self._new_job(BundleSourceKind.huggingface, request.display_name)
         staging = stable_hf_staging_path(
             self.paths.state,
             repo_id=request.repo_id,
@@ -280,40 +347,26 @@ class BundleService:
         )
         try:
             with _HF_RECORD_LOCK:
+                self._raise_if_cancelled(cancel_check)
+                self._progress(progress, ImportStage.metadata, "Resolving repository metadata", 0, None, 0, None)
                 staging.mkdir(parents=True, exist_ok=True)
+                self._progress(progress, ImportStage.transfer, "Downloading selected files", 0, None, 0, None)
                 download = self.hf.download(
                     repo_id=request.repo_id,
                     revision=request.revision,
                     dest=staging,
                     allow_patterns=request.allow_patterns,
                 )
-                files = collect_bundle_files(download.local_dir)
-                if not files:
-                    raise ManagerError(
-                        "Hugging Face download produced no files",
-                        code="hf_empty",
-                        status_code=400,
-                    )
-                source = BundleSource(
-                    kind=BundleSourceKind.huggingface,
-                    repo_id=request.repo_id,
-                    requested_revision=request.revision,
-                    resolved_revision=download.resolved_revision,
+                self._raise_if_cancelled(cancel_check)
+                bundle = self.record_huggingface_download(
+                    request,
+                    download,
+                    progress=progress,
+                    cancel_check=cancel_check,
                 )
-                bundle = self._reuse_completed_hf_bundle(
-                    files,
-                    source=source,
-                    reuse_root=download.local_dir,
-                )
-                if bundle is None:
-                    bundle = self._record_files(
-                        files,
-                        display_name=request.display_name or request.repo_id,
-                        source=source,
-                        reuse_root=download.local_dir,
-                    )
         except ManagerError as exc:
-            return self._fail_job(job, exc.message, ImportStatus.failed)
+            status = ImportStatus.stopped if exc.code == "import_cancelled" else ImportStatus.failed
+            return self._fail_job(job, exc.message, status)
         except (OSError, InterruptedError) as exc:
             return self._fail_job(job, str(exc), ImportStatus.interrupted)
         except Exception as exc:  # huggingface_hub raises several network types
@@ -325,24 +378,67 @@ class BundleService:
             return self._fail_job(job, str(exc), status)
         return self._complete_job(job, bundle)
 
+    def record_huggingface_download(
+        self,
+        request: HuggingFaceImportRequest,
+        download: HuggingFaceDownload,
+        *,
+        install_root: Path | None = None,
+        job_id: str | None = None,
+        progress: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> ModelBundle:
+        files = collect_bundle_files(download.local_dir)
+        if not files:
+            raise ManagerError(
+                "Hugging Face download produced no files",
+                code="hf_empty",
+                status_code=400,
+            )
+        self._verify_expected_sizes(files, download.local_dir, download.expected_sizes)
+        self._verify_expected_hashes(files, download.local_dir, download.expected_sha256, cancel_check=cancel_check)
+        source = BundleSource(
+            kind=BundleSourceKind.huggingface,
+            repo_id=request.repo_id,
+            requested_revision=request.revision,
+            resolved_revision=download.resolved_revision,
+        )
+        bundle = self._reuse_completed_hf_bundle(
+            files,
+            source=source,
+            reuse_root=download.local_dir,
+            cancel_check=cancel_check,
+        )
+        if bundle is not None:
+            return bundle
+        return self._record_files(
+            files,
+            display_name=request.display_name or request.repo_id,
+            source=source,
+            reuse_root=download.local_dir,
+            install_root=install_root,
+            job_id=job_id,
+            progress=progress,
+            cancel_check=cancel_check,
+        )
+
     def verify_bundle(self, bundle: ModelBundle, *, use_cache: bool = False) -> ModelBundle:
         matches = True
         for recorded in bundle.files:
             path = Path(recorded.path)
-            if not path.is_file():
+            if not path.is_file() or path.stat().st_size != recorded.size_bytes:
                 matches = False
                 break
             digest = cached_sha256_file(path) if use_cache else sha256_file(path)
             if digest != recorded.sha256:
                 matches = False
                 break
-            if not is_under(path, self.paths.models):
-                matches = False
-                break
-        updated = bundle.model_copy(update={"disk_matches": matches})
-        if updated == bundle:
-            return bundle
-        return self.store.put_bundle(updated)
+            if not is_under(path, Path(bundle.managed_root) if bundle.managed_root else self.paths.models):
+                if recorded.ownership != "external":
+                    matches = False
+                    break
+        current = self.store.set_bundle_disk_matches(bundle.id, matches)
+        return current or bundle.model_copy(update={"disk_matches": False})
 
     def inspectable_file(self, bundle: ModelBundle) -> Path:
         if bundle.primary_path:
@@ -359,8 +455,9 @@ class BundleService:
         *,
         source: BundleSource,
         reuse_root: Path,
+        cancel_check: CancelCheck | None = None,
     ) -> ModelBundle | None:
-        selected = self._bundle_files_for_source(files, reuse_root=reuse_root)
+        selected = self._bundle_files_for_source(files, reuse_root=reuse_root, cancel_check=cancel_check)
         expected_identity = file_identity(selected)
         for bundle in self.store.list_bundles():
             if (
@@ -381,6 +478,7 @@ class BundleService:
         files: list[Path],
         *,
         reuse_root: Path,
+        cancel_check: CancelCheck | None = None,
     ) -> list[BundleFile]:
         resolved_reuse_root = reuse_root.resolve()
         recorded: list[BundleFile] = []
@@ -392,7 +490,7 @@ class BundleService:
                     role=FileRole.companion,
                     name=rel_path.as_posix(),
                     path=str(source_path),
-                    sha256=sha256_file(source_path),
+                    sha256=sha256_file(source_path, cancel_check),
                     size_bytes=source_path.stat().st_size,
                 )
             )
@@ -416,30 +514,72 @@ class BundleService:
         display_name: str,
         source: BundleSource,
         reuse_root: Path,
+        copy_files: bool = True,
+        install_root: Path | None = None,
+        job_id: str | None = None,
+        progress: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> ModelBundle:
         bundle_id = new_id("bundle")
-        dest_root = self.paths.models / bundle_id
+        managed_install_root = (install_root or self.paths.models).resolve()
+        dest_root = managed_install_root / bundle_id
         reuse_in_place = is_under(reuse_root, self.paths.models)
+        copy_into_managed = copy_files and not reuse_in_place
         resolved_reuse_root = reuse_root.resolve()
-        source_records = self._bundle_files_for_source(files, reuse_root=reuse_root)
+        self._raise_if_cancelled(cancel_check)
+        total_bytes = sum(path.stat().st_size for path in files)
+        self._progress(progress, ImportStage.verify, "Verifying selected files", 0, len(files), 0, total_bytes)
+        source_records = self._bundle_files_for_source(files, reuse_root=reuse_root, cancel_check=cancel_check)
+        expected_by_name = {item.name: item for item in source_records}
         validate_relative_path_identity(source_records)
         recorded: list[BundleFile] = []
-        for path in files:
-            source_path = path.resolve()
-            rel_path = source_path.relative_to(resolved_reuse_root)
-            target = source_path if reuse_in_place else dest_root / rel_path
-            if not reuse_in_place:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
-            recorded.append(
-                BundleFile(
-                    role=FileRole.companion,
-                    name=rel_path.as_posix(),
-                    path=str(target),
-                    sha256=sha256_file(target),
-                    size_bytes=target.stat().st_size,
+        done_files = 0
+        done_bytes = 0
+        if copy_into_managed:
+            ensure_disk_space([(dest_root, total_bytes)])
+            if job_id is not None:
+                self.store.update_job_fields(job_id, owned_install_path=str(dest_root), bundle_id=bundle_id)
+        try:
+            for path in files:
+                self._raise_if_cancelled(cancel_check)
+                source_path = path.resolve()
+                rel_path = source_path.relative_to(resolved_reuse_root)
+                target = source_path if not copy_into_managed else dest_root / rel_path
+                if copy_into_managed:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    self._copy_with_progress(
+                        path,
+                        target,
+                        copied_before=done_bytes,
+                        total_bytes=total_bytes,
+                        files_done=done_files,
+                        files_total=len(files),
+                        progress=progress,
+                        cancel_check=cancel_check,
+                    )
+                ownership = "managed" if copy_into_managed else "external"
+                digest = sha256_file(target, cancel_check)
+                expected = expected_by_name[rel_path.as_posix()]
+                if digest != expected.sha256 or target.stat().st_size != expected.size_bytes:
+                    raise ManagerError("A source file changed during import. Verify the source and retry.", code="import_source_changed", status_code=409)
+                recorded.append(
+                    BundleFile(
+                        role=FileRole.companion,
+                        name=rel_path.as_posix(),
+                        path=str(target),
+                        sha256=digest,
+                        size_bytes=target.stat().st_size,
+                        ownership=ownership,
+                    )
                 )
-            )
+                done_files += 1
+                done_bytes += target.stat().st_size
+                self._progress(progress, ImportStage.install, "Installing selected files", done_files, len(files), done_bytes, total_bytes)
+            self._raise_if_cancelled(cancel_check)
+        except Exception:
+            if copy_into_managed and dest_root.exists():
+                shutil.rmtree(dest_root)
+            raise
         roles_by_name = {item.name: item.role for item in source_records}
         by_path = {item.path: item for item in recorded}
         for item in recorded:
@@ -457,6 +597,9 @@ class BundleService:
                 code="bundle_no_gguf",
                 status_code=400,
             )
+        managed_root = None
+        if any(item.ownership == "managed" for item in files_out):
+            managed_root = str(resolved_reuse_root if reuse_in_place else dest_root)
         bundle = ModelBundle(
             id=bundle_id,
             display_name=display_name,
@@ -466,12 +609,13 @@ class BundleService:
             shards=shard_files,
             companions=companion_files,
             primary_path=primary.path,
+            managed_root=managed_root,
             created_at=utc_now(),
             status=ImportStatus.complete,
             disk_matches=True,
         )
         self.store.put_bundle(bundle)
-        return self.verify_bundle(bundle)
+        return bundle
 
     def _new_job(self, kind: BundleSourceKind, display_name: str | None) -> ImportJob:
         job = ImportJob(
@@ -480,6 +624,9 @@ class BundleService:
             status=ImportStatus.running,
             display_name=display_name,
             created_at=utc_now(),
+            updated_at=utc_now(),
+            started_at=utc_now(),
+            install_root=str(self.paths.models),
         )
         return self.store.put_job(job)
 
@@ -490,6 +637,8 @@ class BundleService:
                     "status": ImportStatus.complete,
                     "bundle_id": bundle.id,
                     "finished_at": utc_now(),
+                    "updated_at": utc_now(),
+                    "progress": ImportProgress(stage=ImportStage.done, message="Import complete"),
                     "error": None,
                 }
             )
@@ -501,13 +650,110 @@ class BundleService:
         error: str,
         status: ImportStatus,
     ) -> ImportJob:
+        current = self.store.get_job(job.id) or job
         return self.store.put_job(
-            job.model_copy(
+            current.model_copy(
                 update={
                     "status": status,
                     "bundle_id": None,
                     "error": error,
                     "finished_at": utc_now(),
+                    "updated_at": utc_now(),
                 }
             )
         )
+
+    def _verify_expected_sizes(
+        self,
+        files: list[Path],
+        root: Path,
+        expected_sizes: dict[str, int | None],
+    ) -> None:
+        by_name = {path.resolve().relative_to(root.resolve()).as_posix(): path for path in files}
+        if expected_sizes and set(by_name) != set(expected_sizes):
+            raise ManagerError("Downloaded files do not match the exact recorded selection.", code="hf_download_selection", status_code=502)
+        for name, expected in expected_sizes.items():
+            if expected is None:
+                continue
+            path = by_name.get(name)
+            if path is None:
+                raise ManagerError(
+                    f"Selected Hugging Face file is missing after download: {name}",
+                    code="hf_download_missing",
+                    status_code=502,
+                )
+            actual = path.stat().st_size
+            if actual != expected:
+                raise ManagerError(
+                    f"Downloaded file size did not match Hugging Face metadata for {name}.",
+                    code="hf_download_corrupt",
+                    status_code=502,
+                )
+
+    def _verify_expected_hashes(
+        self,
+        files: list[Path],
+        root: Path,
+        expected_sha256: dict[str, str | None],
+        *,
+        cancel_check: CancelCheck | None = None,
+    ) -> None:
+        by_name = {path.resolve().relative_to(root.resolve()).as_posix(): path for path in files}
+        for name, expected in expected_sha256.items():
+            if not expected:
+                continue
+            path = by_name.get(name)
+            if path is None:
+                raise ManagerError(
+                    f"Selected Hugging Face file is missing after download: {name}",
+                    code="hf_download_missing",
+                    status_code=502,
+                )
+            actual = sha256_file(path, cancel_check)
+            if actual.lower() != expected.lower():
+                raise ManagerError(
+                    f"Downloaded file hash did not match Hugging Face metadata for {name}.",
+                    code="hf_download_corrupt",
+                    status_code=502,
+                )
+
+    def _copy_with_progress(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        copied_before: int,
+        total_bytes: int,
+        files_done: int,
+        files_total: int,
+        progress: ProgressCallback | None,
+        cancel_check: CancelCheck | None,
+    ) -> None:
+        self._progress(progress, ImportStage.install, "Installing selected files", files_done, files_total, copied_before, total_bytes)
+        with source.open("rb") as src, target.open("wb") as dst:
+            while True:
+                self._raise_if_cancelled(cancel_check)
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                copied_before += len(chunk)
+                self._progress(progress, ImportStage.install, "Installing selected files", files_done, files_total, copied_before, total_bytes)
+        shutil.copystat(source, target)
+
+    def _raise_if_cancelled(self, cancel_check: CancelCheck | None) -> None:
+        if cancel_check is not None and cancel_check():
+            raise ManagerError("Import was stopped before it was made ready.", code="import_cancelled", status_code=409)
+
+    def _progress(
+        self,
+        progress: ProgressCallback | None,
+        stage: ImportStage,
+        message: str | None,
+        files_done: int,
+        files_total: int | None,
+        bytes_done: int,
+        bytes_total: int | None,
+    ) -> None:
+        if progress is not None:
+            progress(stage, message, files_done, files_total, bytes_done, bytes_total)

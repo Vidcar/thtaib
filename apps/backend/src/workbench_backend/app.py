@@ -45,6 +45,9 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
         closer = getattr(harness, "close", None)
         if callable(closer):
             closer()
+    manager = getattr(application.state, "manager", None)
+    if manager is not None:
+        manager.imports.close()
     store = getattr(application.state, "app_store", None)
     if store is not None:
         store.close()
@@ -71,6 +74,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     application.state.manager = manager_from_env(data_root)
+    application.state.manager.imports.reconcile_on_startup()
     application.state.local_trust_token = ensure_shared_secret(application.state.manager.paths)
     application.middleware("http")(require_local_trust)
     application.state.app_store = open_application_store(application.state.manager.paths)

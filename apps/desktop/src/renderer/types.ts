@@ -52,6 +52,24 @@ export interface ImportJob {
   status: string;
   bundle_id: string | null;
   error: string | null;
+  display_name?: string | null;
+  repo_id?: string | null;
+  requested_revision?: string | null;
+  resolved_revision?: string | null;
+  progress?: { stage: string; message: string | null; files_done: number; files_total: number | null; bytes_done: number; bytes_total: number | null };
+}
+
+export interface ModelStorageSummary {
+  install_root: string;
+  future_install_root: string;
+  managed_bytes: number;
+  staging_bytes: number;
+  cache_bytes: number;
+  metadata_bytes: number;
+  reclaimable_bytes: number;
+  capacity_bytes: number | null;
+  available_bytes: number | null;
+  locations: Array<{ kind: string; path: string; bytes: number; removable: boolean; reference_count: number }>;
 }
 
 export interface SettingsBag {
@@ -77,12 +95,32 @@ export interface RunProfile {
   bags: SettingsBags;
 }
 
+export interface DeletePreview {
+  target_kind: "profile" | "bundle";
+  target_id: string;
+  blockers: Array<{ kind: string; id: string; label: string | null; live: boolean }>;
+  consumers: Array<{ kind: string; id: string; label: string | null; live: boolean; retained: boolean }>;
+  files: Array<{ path: string; size_bytes: number; removable: boolean; reason: string | null }>;
+  removable_bytes: number;
+  retained: string[];
+}
+
+export interface DeploymentProfileChanges {
+  deployment_id: string;
+  profile_id: string | null;
+  has_pending_startup_changes: boolean;
+  pending_startup: Record<string, { active: unknown; profile: unknown }>;
+  has_pending_per_request_changes: boolean;
+  has_pending_agent_changes: boolean;
+}
+
 export interface Deployment {
   id: string;
   display_name: string;
   scope: "managed" | "connected";
   status: string;
   bundle_id: string | null;
+  profile_id?: string | null;
   endpoint: string | null;
   applied_startup: Record<string, unknown>;
   settings: SettingsBags;

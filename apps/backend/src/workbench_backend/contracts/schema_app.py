@@ -18,7 +18,6 @@ from workbench_backend.contracts.auth import (
 )
 from workbench_backend.contracts.events import RunStreamContract, RunStreamEnvelope
 from workbench_backend.contracts.lifecycle import RunLifecycleContract
-from workbench_backend.inference.schemas import HuggingFaceInspectRequest, HubRepository
 
 SHARED_CONTRACT_OPENAPI_TITLE = f"{PRODUCT_NAME} shared contracts"
 
@@ -34,6 +33,8 @@ workbench_local_token = APIKeyHeader(
 
 
 def create_shared_contract_app() -> FastAPI:
+    from workbench_backend.inference.routes import router as model_manager_router
+
     application = FastAPI(
         title=SHARED_CONTRACT_OPENAPI_TITLE,
         version=__version__,
@@ -81,8 +82,8 @@ def create_shared_contract_app() -> FastAPI:
     def run_stream_envelope_contract() -> RunStreamEnvelope:
         return RunStreamEnvelope(type="stream_end")
 
-    @application.post("/v1/models/huggingface/inspect", response_model=HubRepository)
-    def hub_repository_contract(body: HuggingFaceInspectRequest) -> HubRepository:
-        raise NotImplementedError("Schema export only")
+    # Export the same typed model-management routes consumed by the desktop.
+    # This application is only used to generate OpenAPI; it is never served.
+    application.include_router(model_manager_router)
 
     return application

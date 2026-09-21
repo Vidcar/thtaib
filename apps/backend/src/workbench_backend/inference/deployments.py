@@ -10,12 +10,13 @@ from __future__ import annotations
 import socket
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.lifecycle import LifecycleCoordinator
 from workbench_backend.inference.process import (
     PROCESS_IDENTITY_MISMATCH,
     PROCESS_IDENTITY_UNPROVEN,
@@ -70,6 +71,8 @@ class DeploymentService:
         processes: ProcessSupervisor | None = None,
         probe: HttpProbe | None = None,
         reconcile_on_init: bool = True,
+        lifecycle: LifecycleCoordinator | None = None,
+        require_no_live_dependencies: Callable[[Deployment, str], None] | None = None,
     ) -> None:
         self.store = store
         self.runtime = runtime
@@ -77,10 +80,20 @@ class DeploymentService:
         self.probe = probe or HttpProbe()
         self._guard = threading.Lock()
         self._locks: dict[str, threading.RLock] = {}
+        self.lifecycle = lifecycle or LifecycleCoordinator()
+        self.require_no_live_dependencies = require_no_live_dependencies
         if reconcile_on_init:
             self.reconcile()
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
+        with self.lifecycle.mutate(
+            "create_managed",
+            profile_ids={request.profile_id} if request.profile_id else set(),
+            bundle_ids={request.bundle_id},
+        ):
+            return self._create_managed_checked(request)
+
+    def _create_managed_checked(self, request: ManagedDeploymentRequest) -> Deployment:
         bundle = self.store.get_bundle(request.bundle_id)
         if bundle is None or bundle.status != ImportStatus.complete or not bundle.disk_matches:
             raise ManagerError(
@@ -97,6 +110,17 @@ class DeploymentService:
                     "Unknown profile",
                     code="profile_missing",
                     status_code=404,
+                )
+            if profile.bundle_id is not None and profile.bundle_id != request.bundle_id:
+                raise ManagerError(
+                    "Profile is bound to a different bundle.",
+                    code="profile_bundle_mismatch",
+                    status_code=400,
+                    details={
+                        "profile_id": profile.id,
+                        "profile_bundle_id": profile.bundle_id,
+                        "bundle_id": request.bundle_id,
+                    },
                 )
         requested_startup = dict(profile.bags.startup.requested) if profile else {}
         requested_startup.update(request.startup)
@@ -126,6 +150,8 @@ class DeploymentService:
             endpoint=f"http://{host}:{port}/v1",
             requested_startup=requested_startup,
             applied_startup=bags.startup.applied,
+            startup_overrides=dict(request.startup or {}),
+            profile_snapshot=profile.bags.model_copy(deep=True) if profile else None,
             settings=bags,
             created_at=utc_now(),
             updated_at=utc_now(),
@@ -168,23 +194,42 @@ class DeploymentService:
         return self.store.put_deployment(deployment)
 
     def start(self, deployment_id: str) -> Deployment:
-        with self._lock_for(deployment_id):
-            return self._start_locked(deployment_id)
+        deployment = self._require(deployment_id)
+        with self.lifecycle.reserve(deployment):
+            with self._lock_for(deployment_id):
+                return self._start_locked(deployment_id)
 
     def stop(self, deployment_id: str) -> Deployment:
-        with self._lock_for(deployment_id):
-            return self._stop_locked(deployment_id)
+        deployment = self._require(deployment_id)
+        with self.lifecycle.mutate(
+            "stop_deployment",
+            deployment_ids={deployment.id},
+            profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+            bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+        ):
+            self._require_no_live_dependencies(deployment, "deployment_active")
+            with self._lock_for(deployment_id):
+                return self._stop_locked(deployment_id)
 
     def detach(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
+        with self.lifecycle.mutate("detach_deployment", deployment_ids={deployment.id}):
+            self._require_no_live_dependencies(deployment, "deployment_active")
+            return self._detach_checked(deployment)
+
+    def _detach_checked(self, deployment: Deployment) -> Deployment:
         if deployment.scope != ManagementScope.connected:
             raise ManagerError(
                 "Detach applies to connected endpoints. Stop a managed deployment first.",
                 code="detach_managed",
                 status_code=409,
-            )
+        )
         self.store.delete_deployment(deployment.id)
         return deployment.model_copy(update={"status": DeploymentStatus.stopped, "updated_at": utc_now()})
+
+    def _require_no_live_dependencies(self, deployment: Deployment, code: str) -> None:
+        if self.require_no_live_dependencies is not None:
+            self.require_no_live_dependencies(deployment, code)
 
     def health(self, deployment_id: str) -> Deployment:
         with self._lock_for(deployment_id):
@@ -192,10 +237,11 @@ class DeploymentService:
 
     def smoke(self, deployment_id: str) -> SmokeResult:
         deployment = self._require(deployment_id)
-        if not deployment.endpoint:
-            raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
-        ok, detail = self.probe.smoke(deployment.endpoint)
-        return SmokeResult(ok=ok, endpoint=deployment.endpoint, detail=detail)
+        with self.lifecycle.reserve(deployment):
+            if not deployment.endpoint:
+                raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
+            ok, detail = self.probe.smoke(deployment.endpoint)
+            return SmokeResult(ok=ok, endpoint=deployment.endpoint, detail=detail)
 
     def reconcile(self) -> list[Deployment]:
         """Re-adopt matching owned processes; clear unowned records without killing."""
