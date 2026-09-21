@@ -6,9 +6,11 @@ import { formatBytes } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
-import { SettingsNotes } from "./settingsNotes";
-import { Choice, Help, numberChoices } from "./ModelControls";
-import type { Deployment, InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
+import { ProfilesPanel } from "./ProfilesPanel";
+import { ImportJobsPanel } from "./ImportJobsPanel";
+import { ModelDeletion } from "./ModelDeletion";
+import { ModelStoragePanel } from "./ModelStoragePanel";
+import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 
 export function ModelsPanel() {
@@ -20,6 +22,11 @@ export function ModelsPanel() {
   const [inspect, setInspect] = useState<InspectReport | null>(null);
   const [localPath, setLocalPath] = useState("");
   const [localName, setLocalName] = useState("");
+  const [copyLocal, setCopyLocal] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const [repoId, setRepoId] = useState("");
   const [hub, setHub] = useState<SchemaHubRepository | null>(null);
   const [variant, setVariant] = useState("");
@@ -27,30 +34,24 @@ export function ModelsPanel() {
   const [hubBusy, setHubBusy] = useState(false);
   const [hubMessage, setHubMessage] = useState("");
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [presetBusy, setPresetBusy] = useState(false);
-  const [profileName, setProfileName] = useState("Default chat");
-  const [temperature, setTemperature] = useState("");
-  const [maxTokens, setMaxTokens] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [importRevision, setImportRevision] = useState(0);
+  const [verifyBusy, setVerifyBusy] = useState(false);
 
   async function refresh(): Promise<void> {
     setLoading(true);
     try {
-      const [nextPaths, nextBundles, nextProfiles, nextDeployments] = await Promise.all([
+      const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
         api.paths(),
         api.bundles(),
         api.profiles(),
-        api.deployments(),
       ]);
       setPaths(nextPaths);
       setBundles(nextBundles);
       setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
       setProfiles(nextProfiles);
-      setDeployments(nextDeployments);
       setLoadError("");
     } finally {
       setLoading(false);
@@ -64,8 +65,6 @@ export function ModelsPanel() {
   }, []);
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
-  const currentGeneration = deployments.find(deployment => deployment.bundle_id === selectedId && deployment.health?.healthy)?.server_props?.default_generation_settings?.params;
-  const currentTemperature = typeof currentGeneration?.temperature === "number" ? currentGeneration.temperature : null;
   const selectedVariant = hub?.variants.find((item) => item.name === variant);
   const selectedProjector = hub?.projectors.find((item) => item.name === projector);
   const selectedHubFiles = [...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? [])];
@@ -106,14 +105,15 @@ export function ModelsPanel() {
             event.preventDefault();
             setLocalBusy(true);
             void api
-              .importLocal(localPath, localName || undefined)
+              .importLocal(localPath, localName || undefined, copyLocal)
               .then((job) => {
                 if (job.bundle_id) setSelectedId(job.bundle_id);
                 setMessage(
                   job.error
                     ? `Local import ${job.status}: ${job.error}`
-                    : "Model added to your library.",
+                    : job.status === "complete" ? "Model added to your library." : "Import started. Progress and recovery controls are below.",
                 );
+                setImportRevision(value => value + 1);
                 if (job.bundle_id) setView("library");
                 return refresh();
               })
@@ -134,6 +134,8 @@ export function ModelsPanel() {
             Display name (optional)
             <input value={localName} onChange={(event) => setLocalName(event.target.value)} />
           </label>
+          <label className="check-row"><input type="checkbox" checked={copyLocal} onChange={event => setCopyLocal(event.target.checked)} />Copy into managed storage</label>
+          <p className="hint">Turn this off to use your original files in place without another copy. They remain yours and are not deleted when you remove the library entry.</p>
           <button type="submit" className="primary-button" disabled={!localPath.trim() || localBusy}>
             {localBusy ? "Adding model…" : "Add model"}
           </button>
@@ -181,10 +183,11 @@ export function ModelsPanel() {
               <select value={projector} disabled={hubBusy} onChange={(event) => setProjector(event.target.value)}>
                 <option value="">Choose a projector or text-only</option>
                 <option value="text-only">Text-only — no projector</option>
-                {hub.projectors.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+                {hub.projectors.map((item) => <option key={item.name} value={item.name}>{item.name} · compatibility unverified</option>)}
               </select>
             </label> : null}
             {hub.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
+            <p className="hint">Downloads use temporary space as well as the installed copy. When both locations share a disk, allow roughly twice the selected file size, plus download metadata. Available space is checked before copying.</p>
             <p className="hint">Read the publisher’s <a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">model guide</a> for recommended settings and supported features.</p>
             <details><summary>Files and recorded revision</summary>
               <p className="hint">{hub.resolved_revision}</p>
@@ -192,10 +195,11 @@ export function ModelsPanel() {
             </details>
             <button type="button" disabled={hubBusy || !selectedVariant || !projector} onClick={() => {
               setHubBusy(true);
-              setHubMessage("Downloading selected files and checking the bundle. This can take several minutes. Retry an interrupted download to resume it.");
+              setHubMessage("Starting your selected download…");
               const exactFiles = selectedHubFiles.map((file) => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
               void api.importHf(hub.repo_id, hub.resolved_revision, exactFiles).then((job) => {
-                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : "Model added to your library.");
+                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : job.status === "complete" ? "Model added to your library." : "Download started. Progress and recovery controls are below.");
+                setImportRevision(value => value + 1);
                 if (job.bundle_id) { setSelectedId(job.bundle_id); setView("library"); setMessage("Model added to your library."); }
                 return refresh();
               }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
@@ -204,6 +208,16 @@ export function ModelsPanel() {
           {hubMessage ? <p role="status">{hubMessage}</p> : null}
         </form>
       </div>
+      <form className="card" onSubmit={event => {
+        event.preventDefault(); setSearchBusy(true); setSearchError("");
+        void api.searchHf(searchQuery).then(results => { setSearchResults(results); if (!results.length) setSearchError("No matching repositories found. Try a different name or enter a repository directly above."); }).catch(error => setSearchError(errorMessage(error))).finally(() => setSearchBusy(false));
+      }}>
+        <h3>Search model repositories</h3><p className="hint">Shows up to 20 matches. Inspect a repository’s files before choosing a GGUF variant; search results do not establish compatibility.</p>
+        <label>Model name or publisher<input value={searchQuery} maxLength={200} onChange={event => setSearchQuery(event.target.value)} placeholder="Model name, GGUF, publisher…" /></label>
+        <button disabled={searchBusy || !searchQuery.trim()}>{searchBusy ? "Searching…" : "Search Hugging Face"}</button>
+        {searchError ? <p role="status">{searchError}</p> : null}
+        <ul className="plain-list">{searchResults.map(result => <li className="entity" key={result.repo_id}><strong>{result.repo_id}</strong>{result.downloads != null ? <p className="hint">{result.downloads.toLocaleString()} reported downloads</p> : null}<button type="button" onClick={() => { setRepoId(result.repo_id); setHub(null); setHubMessage("Repository selected. Use Find model files to inspect its available variants."); }}>Select repository</button></li>)}</ul>
+      </form>
       </> : null}
       {view === "library" ? <div className="models-workspace">
       <aside className="model-library" aria-label="Your models">
@@ -266,6 +280,12 @@ export function ModelsPanel() {
             {!selected.disk_matches ? (
               <Notice tone="warn">Recorded files do not match what is on disk.</Notice>
             ) : null}
+            <ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} />
+            <div className="actions"><button type="button" disabled={verifyBusy} onClick={() => {
+              setVerifyBusy(true); void api.verifyModel(selected.id).then(result => { setMessage(result.disk_matches ? "All recorded model files match their hashes." : "Files are missing or changed. Repair the recorded installation or restore your original local files."); return refresh(); }).catch(fail).finally(() => setVerifyBusy(false));
+            }}>{verifyBusy ? "Checking files…" : "Verify installed files"}</button>
+              {selected.source.kind === "huggingface" ? <button type="button" disabled={verifyBusy} onClick={() => { setVerifyBusy(true); void api.repairModel(selected.id).then(() => { setImportRevision(value => value + 1); setMessage("Repair started using the recorded revision and exact file selection."); }).catch(fail).finally(() => setVerifyBusy(false)); }}>Repair recorded installation</button> : null}
+            </div>
             <ul className="plain-list">
               {selected.files.map((file) => (
                 <li key={file.path}>
@@ -306,73 +326,9 @@ export function ModelsPanel() {
           </details>
         ) : null}
       </div></div> : null}
-      {view === "presets" ? <div className="presets-layout">
-      <form
-        className="card"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setPresetBusy(true);
-          const perRequest: Record<string, unknown> = {};
-          if (temperature.trim()) perRequest.temperature = Number(temperature);
-          if (maxTokens.trim()) {
-            perRequest.max_tokens = Number(maxTokens);
-          }
-          void api
-            .createProfile({
-              display_name: profileName.trim() || "Untitled profile",
-              bundle_id: selectedId || undefined,
-              startup: {},
-              per_request: perRequest,
-              agent: systemPrompt.trim() ? { system_prompt: systemPrompt } : {},
-            })
-            .then((profile) => {
-              setMessage(`Saved preset ${profile.display_name}`);
-              return refresh();
-            })
-            .catch(fail).finally(() => setPresetBusy(false));
-        }}
-      >
-        <h3>Create a chat preset</h3>
-        <p className="hint">Save your preferred response style and instructions for Chat.</p>
-        <label>
-          Name
-          <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-        </label>
-        <div className="setup-grid">
-          <Choice id="preset-temperature" label="Creativity (temperature)" help="Lower values make replies more predictable; higher values encourage variety. A preset override is sent with each reply." flag="temperature" value={temperature} onChange={setTemperature} min={0} step={0.01} options={[{ value: "", label: currentTemperature !== null ? `${currentTemperature} · current model setting` : "Use model setting · not reported" }, ...numberChoices([0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.5, 2])]} />
-          <Choice id="preset-max-tokens" label="Reply length (tokens)" help="Maximum length of each generated reply. The running model’s available context may impose a smaller limit." flag="max_tokens" value={maxTokens} onChange={setMaxTokens} min={1} options={[{ value: "", label: "No preset limit" }, ...numberChoices([512, 1024, 2048, 4096, 8192, 16384, 32768])]} />
-        </div>
-        <label>
-          Instructions (optional)
-          <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} />
-        </label>
-        <button type="submit" className="primary-button" disabled={presetBusy}>{presetBusy ? "Saving…" : "Save preset"}</button>
-      </form>
-
-      <div className="card">
-        <h3>Saved presets</h3>
-        <p className="hint">Select a preset in Chat to use it.</p>
-        {profiles.length === 0 ? (
-          <EmptyState title="Make yourself at home">Save a preset for the way you like to work.</EmptyState>
-        ) : (
-          <ul className="list">
-            {profiles.map((profile) => (
-              <li key={profile.id} className="entity">
-                <div className="entity-head">
-                  <strong>{profile.display_name}</strong>
-                  <Help label={`${profile.display_name} identifier`}>Preset ID: <code>{profile.id}</code></Help>
-                </div>
-                <SettingsNotes
-                  unsupported={profile.bags.startup.unsupported}
-                  retired={profile.bags.startup.retired}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      </div> : null}
+      {view === "presets" ? <ProfilesPanel profiles={profiles} bundles={bundles} refresh={refresh} /> : null}
+      <ImportJobsPanel revision={importRevision} onCompleted={refresh} />
+      <ModelStoragePanel />
     </section>
   );
 }

@@ -2,30 +2,44 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+import time
 
+from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import BundleService
+from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import inspect_gguf_file, read_gguf_runtime_metadata
+from workbench_backend.inference.lifecycle import LifecycleCoordinator
 from workbench_backend.inference.process import HttpProbe, ProcessSupervisor
 from workbench_backend.inference.hardware import NvidiaPresent
 from workbench_backend.inference.runtime import RuntimeInstaller, RuntimeService
 from workbench_backend.inference.schemas import (
     ConnectedDeploymentRequest,
     BundleConfigurationOptions,
+    DeleteFilePlan,
+    DeletePreview,
     Deployment,
+    DeploymentProfileChanges,
+    DeploymentStatus,
+    DuplicateProfileRequest,
     HuggingFaceImportRequest,
     ImportJob,
     InspectReport,
+    LifecycleConsumer,
     LocalImportRequest,
     ManagedDeploymentRequest,
+    ManagementScope,
     ModelBundle,
     PinRuntimeRequest,
     ProfileWriteRequest,
+    RenameProfileRequest,
     RunProfile,
     RuntimeManifest,
     SettingsBags,
@@ -33,7 +47,9 @@ from workbench_backend.inference.schemas import (
 )
 from workbench_backend.inference.settings import resolve_bags
 from workbench_backend.inference.store import RecordStore
+from workbench_backend.lab.store import LabStore
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.migrate import open_application_store
 
 
 class ModelManager:
@@ -50,6 +66,14 @@ class ModelManager:
         self.paths = paths.ensure()
         self.store = RecordStore(self.paths)
         self.bundles = BundleService(self.paths, self.store, hf=hf)
+        self.lifecycle = LifecycleCoordinator()
+        self.imports = ImportJobRunner(
+            self.paths,
+            self.store,
+            self.bundles,
+            lifecycle=self.lifecycle,
+            require_repair_allowed=self._require_repair_allowed,
+        )
         self.runtime = RuntimeService(
             self.paths,
             self.store,
@@ -61,10 +85,18 @@ class ModelManager:
             self.runtime,
             processes=processes,
             probe=probe,
+            lifecycle=self.lifecycle,
+            require_no_live_dependencies=self._require_no_live_deployment_dependencies,
         )
 
     def describe_paths(self) -> dict[str, str]:
         return self.paths.as_public_dict()
+
+    def _require_repair_allowed(self, bundle_id: str) -> None:
+        self._require_no_live_runs(bundle_ids={bundle_id}, code="bundle_active")
+        for deployment in self.store.list_deployments():
+            if deployment.bundle_id == bundle_id and deployment.status in {DeploymentStatus.starting, DeploymentStatus.running, DeploymentStatus.unhealthy}:
+                raise ManagerError("Unload this model before repairing its files.", code="bundle_active", status_code=409)
 
     def import_local(self, request: LocalImportRequest) -> ImportJob:
         return self.bundles.import_local(request)
@@ -146,6 +178,7 @@ class ModelManager:
         )
 
     def create_profile(self, request: ProfileWriteRequest) -> RunProfile:
+        self._require_profile_bundle(request.bundle_id)
         now = utc_now()
         profile = RunProfile(
             id=new_id("profile"),
@@ -162,6 +195,7 @@ class ModelManager:
         return self.store.put_profile(profile)
 
     def update_profile(self, profile_id: str, request: ProfileWriteRequest) -> RunProfile:
+        self._require_profile_bundle(request.bundle_id)
         existing = self.get_profile(profile_id)
         updated = existing.model_copy(
             update={
@@ -177,6 +211,54 @@ class ModelManager:
         )
         return self.store.put_profile(updated)
 
+    def rename_profile(self, profile_id: str, request: RenameProfileRequest | str) -> RunProfile:
+        display_name = request if isinstance(request, str) else request.display_name
+        existing = self.get_profile(profile_id)
+        return self.store.put_profile(
+            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now()})
+        )
+
+    def duplicate_profile(
+        self,
+        profile_id: str,
+        request: DuplicateProfileRequest | None = None,
+    ) -> RunProfile:
+        existing = self.get_profile(profile_id)
+        now = utc_now()
+        display_name = request.display_name if request and request.display_name else f"{existing.display_name} copy"
+        duplicate = existing.model_copy(
+            update={
+                "id": new_id("profile"),
+                "display_name": display_name,
+                "created_at": now,
+                "updated_at": now,
+            },
+            deep=True,
+        )
+        return self.store.put_profile(duplicate)
+
+    def profile_delete_preview(self, profile_id: str) -> DeletePreview:
+        profile = self.get_profile(profile_id)
+        consumers = self._profile_consumers(profile.id)
+        blockers = [consumer for consumer in consumers if consumer.live]
+        return DeletePreview(
+            target_kind="profile",
+            target_id=profile.id,
+            blockers=blockers,
+            consumers=consumers,
+            retained=[
+                "Historical deployments, Chat conversations, Lab cases and runs keep their saved profile id/configuration."
+            ],
+        )
+
+    def delete_profile(self, profile_id: str) -> DeletePreview:
+        with self.lifecycle.mutate("delete_profile", profile_ids={profile_id}):
+            preview = self.profile_delete_preview(profile_id)
+            if preview.blockers:
+                raise self._blocked_error("profile_delete_blocked", preview.blockers)
+            self.store.delete_profile(profile_id)
+            return preview
+
     def resolve_preview(
         self,
         *,
@@ -191,27 +273,37 @@ class ModelManager:
 
     def pin_runtime(self, request: PinRuntimeRequest | None = None) -> RuntimeManifest:
         request = request or PinRuntimeRequest()
-        self.deployments.reconcile()
-        running = self.deployments.live_owned()
-        if running:
-            if not request.stop_first:
-                raise ManagerError(
-                    "Cannot pin the managed runtime while a managed llama-server is running. "
-                    "Stop the deployment first, or retry with stop_first. "
-                    "A half-finished pin is not recorded as success.",
-                    code="runtime_pin_busy",
-                    status_code=409,
-                )
-            for deployment in running:
-                self.deployments.stop(deployment.id)
-        return self.runtime.pin(request)
+        deployment_ids = {deployment.id for deployment in self.store.list_deployments()}
+        with self.lifecycle.mutate("pin_runtime", deployment_ids=deployment_ids):
+            self.deployments.reconcile()
+            running = self.deployments.live_owned()
+            if running:
+                if not request.stop_first:
+                    raise ManagerError(
+                        "Cannot pin the managed runtime while a managed llama-server is running. "
+                        "Stop the deployment first, or retry with stop_first. "
+                        "A half-finished pin is not recorded as success.",
+                        code="runtime_pin_busy",
+                        status_code=409,
+                    )
+                for deployment in running:
+                    self.deployments.stop(deployment.id)
+            return self.runtime.pin(request)
 
     def reconcile_deployments(self) -> list[Deployment]:
         return self.deployments.reconcile()
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
         self._require_deployable_bundle(request.bundle_id)
-        return self.deployments.create_managed(request)
+        if request.profile_id:
+            profile = self.get_profile(request.profile_id)
+            self._validate_profile_bundle(profile, request.bundle_id)
+        with self.lifecycle.mutate(
+            "create_managed",
+            profile_ids={request.profile_id} if request.profile_id else set(),
+            bundle_ids={request.bundle_id},
+        ):
+            return self.deployments.create_managed(request)
 
     def attach_connected(self, request: ConnectedDeploymentRequest) -> Deployment:
         return self.deployments.attach_connected(request)
@@ -236,16 +328,196 @@ class ModelManager:
         return self.deployments.start(deployment_id)
 
     def stop_deployment(self, deployment_id: str) -> Deployment:
-        return self.deployments.stop(deployment_id)
+        deployment = self.get_deployment(deployment_id)
+        with self.lifecycle.mutate(
+            "stop_deployment",
+            deployment_ids={deployment.id},
+            profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+            bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+        ):
+            self._require_no_live_runs(
+                deployment_ids={deployment.id},
+                profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+                bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+                code="deployment_active",
+            )
+            return self.deployments.stop(deployment_id)
 
     def detach_deployment(self, deployment_id: str) -> Deployment:
-        return self.deployments.detach(deployment_id)
+        deployment = self.get_deployment(deployment_id)
+        with self.lifecycle.mutate("detach_deployment", deployment_ids={deployment.id}):
+            self._require_no_live_runs(deployment_ids={deployment.id}, code="deployment_active")
+            return self.deployments.detach(deployment_id)
+
+    def ensure_deployment_ready(self, deployment_id: str) -> Deployment:
+        deployment = self.get_deployment(deployment_id)
+        if deployment.scope == ManagementScope.connected:
+            if not deployment.endpoint:
+                raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
+            return deployment
+        if deployment.bundle_id:
+            self._require_deployable_bundle(deployment.bundle_id)
+        if deployment.status in {DeploymentStatus.stopped, DeploymentStatus.failed} or not deployment.endpoint:
+            deployment = self.deployments.start(deployment.id)
+        return self._wait_deployment_ready(deployment.id, first=deployment)
+
+    @contextmanager
+    def reserve_deployment(
+        self,
+        deployment_id: str,
+        *,
+        profile_id: str | None = None,
+    ) -> Iterator[Deployment]:
+        deployment = self.get_deployment(deployment_id)
+        if profile_id:
+            profile = self.get_profile(profile_id)
+            if deployment.bundle_id:
+                self._validate_profile_bundle(profile, deployment.bundle_id)
+        with self.lifecycle.reserve(deployment, profile_id=profile_id):
+            yield deployment
+
+    def reload_deployment(self, deployment_id: str) -> Deployment:
+        deployment = self.get_deployment(deployment_id)
+        with self.lifecycle.mutate(
+            "reload_deployment",
+            deployment_ids={deployment.id},
+            profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+            bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+        ):
+            self._require_no_live_runs(
+                deployment_ids={deployment.id},
+                profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+                bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+                code="deployment_active",
+            )
+            if deployment.scope != ManagementScope.managed:
+                raise ManagerError(
+                    "Connected endpoints cannot be reloaded by Local AI Workbench.",
+                    code="connected_no_lifecycle",
+                    status_code=409,
+                )
+            self.deployments.stop(deployment.id)
+            return self.deployments.start(deployment.id)
 
     def deployment_health(self, deployment_id: str) -> Deployment:
         return self.deployments.health(deployment_id)
 
     def deployment_smoke(self, deployment_id: str) -> SmokeResult:
         return self.deployments.smoke(deployment_id)
+
+    def _wait_deployment_ready(
+        self,
+        deployment_id: str,
+        *,
+        first: Deployment | None = None,
+        timeout_seconds: float = 20.0,
+    ) -> Deployment:
+        deadline = time.monotonic() + timeout_seconds
+        deployment = first or self.get_deployment(deployment_id)
+        while True:
+            if deployment.scope != ManagementScope.managed:
+                return deployment
+            if deployment.status == DeploymentStatus.running and deployment.endpoint:
+                if deployment.health is None or deployment.health.healthy:
+                    return deployment
+            if deployment.status in {DeploymentStatus.failed, DeploymentStatus.stopped}:
+                raise ManagerError(
+                    "Managed deployment did not become ready.",
+                    code="deployment_not_ready",
+                    status_code=409,
+                    details={
+                        "deployment_id": deployment.id,
+                        "status": deployment.status.value,
+                        "error": deployment.error,
+                    },
+                )
+            if time.monotonic() >= deadline:
+                raise ManagerError(
+                    "Timed out waiting for managed deployment readiness.",
+                    code="deployment_start_timeout",
+                    status_code=409,
+                    details={
+                        "deployment_id": deployment.id,
+                        "status": deployment.status.value,
+                    },
+                )
+            time.sleep(0.1)
+            deployment = self.deployments.health(deployment.id)
+
+    def deployment_profile_changes(self, deployment_id: str) -> DeploymentProfileChanges:
+        deployment = self.get_deployment(deployment_id)
+        if not deployment.profile_id:
+            return DeploymentProfileChanges(deployment_id=deployment.id)
+        profile = self.get_profile(deployment.profile_id)
+        frozen = deployment.profile_snapshot or deployment.settings
+        current_profile_startup = dict(profile.bags.startup.requested)
+        pending_requested_startup = dict(current_profile_startup)
+        pending_requested_startup.update(deployment.startup_overrides)
+        current = resolve_bags(
+            startup=pending_requested_startup,
+            per_request=profile.bags.per_request.requested,
+            agent=profile.bags.agent.requested,
+            startup_overrides={
+                key: deployment.applied_startup[key]
+                for key in ("host", "port")
+                if key in deployment.applied_startup
+            },
+        )
+        pending: dict[str, dict[str, object]] = {}
+        keys = sorted(set(deployment.settings.startup.applied) | set(current.startup.applied))
+        for key in keys:
+            active = deployment.settings.startup.applied.get(key)
+            profile_value = current.startup.applied.get(key)
+            if active != profile_value:
+                pending[key] = {"active": active, "profile": profile_value}
+        return DeploymentProfileChanges(
+            deployment_id=deployment.id,
+            profile_id=profile.id,
+            has_pending_startup_changes=bool(pending),
+            pending_startup=pending,
+            has_pending_per_request_changes=profile.bags.per_request.requested
+            != frozen.per_request.requested,
+            has_pending_agent_changes=profile.bags.agent.requested != frozen.agent.requested,
+        )
+
+    def bundle_delete_preview(self, bundle_id: str) -> DeletePreview:
+        bundle = self.get_bundle(bundle_id)
+        consumers = self._bundle_consumers(bundle.id)
+        blockers = [consumer for consumer in consumers if consumer.live]
+        files = self._bundle_delete_files(bundle)
+        return DeletePreview(
+            target_kind="bundle",
+            target_id=bundle.id,
+            blockers=blockers,
+            consumers=consumers,
+            files=files,
+            removable_bytes=sum(file.size_bytes for file in files if file.removable),
+            retained=[
+                "External imported originals and shared companion paths outside the managed models directory are retained.",
+                "Historical consumers keep unavailable references instead of switching models.",
+            ],
+        )
+
+    def delete_bundle(self, bundle_id: str) -> DeletePreview:
+        initial = self.bundle_delete_preview(bundle_id)
+        bundle = self.get_bundle(bundle_id)
+        deployment_ids = {consumer.id for consumer in initial.consumers if consumer.kind == "deployment"}
+        profile_ids = {consumer.id for consumer in initial.consumers if consumer.kind == "profile"}
+        with self.lifecycle.mutate(
+            "delete_bundle",
+            deployment_ids=deployment_ids,
+            profile_ids=profile_ids,
+            bundle_ids={bundle_id},
+        ):
+            preview = self.bundle_delete_preview(bundle_id)
+            if preview.blockers:
+                raise self._blocked_error("bundle_delete_blocked", preview.blockers)
+            for file in preview.files:
+                if file.removable:
+                    Path(file.path).unlink(missing_ok=True)
+            self._cleanup_empty_managed_dirs(preview.files, bundle)
+            self.store.delete_bundle(bundle_id)
+            return preview
 
     def _require_deployable_bundle(self, bundle_id: str) -> ModelBundle:
         stored = self.store.get_bundle(bundle_id)
@@ -265,6 +537,246 @@ class ModelManager:
                 status_code=409,
             )
         return bundle
+
+    def _require_profile_bundle(self, bundle_id: str | None) -> None:
+        if bundle_id is not None and self.store.get_bundle(bundle_id) is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+
+    def _validate_profile_bundle(self, profile: RunProfile, bundle_id: str) -> None:
+        if profile.bundle_id is not None and profile.bundle_id != bundle_id:
+            raise ManagerError(
+                "Profile is bound to a different bundle.",
+                code="profile_bundle_mismatch",
+                status_code=400,
+                details={
+                    "profile_id": profile.id,
+                    "profile_bundle_id": profile.bundle_id,
+                    "bundle_id": bundle_id,
+                },
+            )
+
+    def _profile_consumers(self, profile_id: str) -> list[LifecycleConsumer]:
+        consumers: list[LifecycleConsumer] = []
+        for deployment in self.store.list_deployments():
+            if deployment.profile_id != profile_id:
+                continue
+            live = deployment.status in {
+                DeploymentStatus.starting,
+                DeploymentStatus.running,
+                DeploymentStatus.unhealthy,
+            }
+            consumers.append(
+                LifecycleConsumer(
+                    kind="deployment",
+                    id=deployment.id,
+                    label=deployment.display_name,
+                    live=live,
+                )
+            )
+        consumers.extend(self._run_consumers(profile_ids={profile_id}))
+        consumers.extend(self._chat_consumers(profile_id=profile_id))
+        consumers.extend(self._lab_consumers(profile_id=profile_id))
+        return consumers
+
+    def _bundle_consumers(self, bundle_id: str) -> list[LifecycleConsumer]:
+        consumers: list[LifecycleConsumer] = []
+        deployment_ids: set[str] = set()
+        profile_ids: set[str] = set()
+        for profile in self.store.list_profiles():
+            if profile.bundle_id == bundle_id:
+                profile_ids.add(profile.id)
+                consumers.append(
+                    LifecycleConsumer(kind="profile", id=profile.id, label=profile.display_name)
+                )
+        for deployment in self.store.list_deployments():
+            if deployment.bundle_id == bundle_id:
+                deployment_ids.add(deployment.id)
+                if deployment.profile_id:
+                    profile_ids.add(deployment.profile_id)
+                live = deployment.status in {
+                    DeploymentStatus.starting,
+                    DeploymentStatus.running,
+                    DeploymentStatus.unhealthy,
+                }
+                consumers.append(
+                    LifecycleConsumer(
+                        kind="deployment",
+                        id=deployment.id,
+                        label=deployment.display_name,
+                        live=live,
+                    )
+                )
+        consumers.extend(self._run_consumers(deployment_ids=deployment_ids, profile_ids=profile_ids))
+        consumers.extend(self._chat_consumers(profile_ids=profile_ids, deployment_ids=deployment_ids))
+        consumers.extend(self._lab_consumers(profile_ids=profile_ids, deployment_ids=deployment_ids))
+        return consumers
+
+    def _run_consumers(
+        self,
+        *,
+        deployment_ids: set[str] | None = None,
+        profile_ids: set[str] | None = None,
+    ) -> list[LifecycleConsumer]:
+        deployment_ids = deployment_ids or set()
+        profile_ids = profile_ids or set()
+        try:
+            with open_application_store(self.paths) as app_store:
+                runs = app_store.list_runs()
+        except Exception as exc:
+            raise ManagerError("Could not check active model work. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
+        consumers: list[LifecycleConsumer] = []
+        for run in runs:
+            if run.deployment_id not in deployment_ids and run.embedding_deployment_id not in deployment_ids and (run.profile_id or "") not in profile_ids:
+                continue
+            consumers.append(
+                LifecycleConsumer(
+                    kind="agent_run",
+                    id=run.id,
+                    label=run.source_surface,
+                    live=is_run_lifecycle_live(run.status),
+                )
+            )
+        return consumers
+
+    def _chat_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None) -> list[LifecycleConsumer]:
+        profiles = set(profile_ids or ()) | ({profile_id} if profile_id else set())
+        deployments = deployment_ids or set()
+        try:
+            with open_application_store(self.paths) as app_store:
+                conversations = app_store.list_conversations()
+        except Exception as exc:
+            raise ManagerError("Could not check saved conversations. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
+        return [
+            LifecycleConsumer(
+                kind="chat",
+                id=conversation.id,
+                label=conversation.thread_id,
+                live=False,
+            )
+            for conversation in conversations
+            if conversation.profile_id in profiles or conversation.deployment_id in deployments or conversation.embedding_deployment_id in deployments
+        ]
+
+    def _lab_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None) -> list[LifecycleConsumer]:
+        profiles = set(profile_ids or ()) | ({profile_id} if profile_id else set())
+        deployments = deployment_ids or set()
+        try:
+            cases = LabStore(self.paths).list_cases()
+        except Exception as exc:
+            raise ManagerError("Could not check saved Lab cases. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
+        return [
+            LifecycleConsumer(kind="lab_case", id=case.id, label=case.task[:80], live=False)
+            for case in cases
+            if case.profile_id in profiles or case.deployment_id in deployments or case.embedding_deployment_id in deployments
+        ]
+
+    def _require_no_live_runs(
+        self,
+        *,
+        deployment_ids: set[str] | None = None,
+        profile_ids: set[str] | None = None,
+        bundle_ids: set[str] | None = None,
+        code: str,
+    ) -> None:
+        deployment_ids = set(deployment_ids or set())
+        profile_ids = set(profile_ids or set())
+        for deployment in self.store.list_deployments():
+            if bundle_ids and deployment.bundle_id in bundle_ids:
+                deployment_ids.add(deployment.id)
+                if deployment.profile_id:
+                    profile_ids.add(deployment.profile_id)
+        blockers = [
+            consumer
+            for consumer in self._run_consumers(
+                deployment_ids=deployment_ids,
+                profile_ids=profile_ids,
+            )
+            if consumer.live
+        ]
+        if blockers:
+            raise self._blocked_error(code, blockers)
+
+    def _require_no_live_deployment_dependencies(self, deployment: Deployment, code: str) -> None:
+        self._require_no_live_runs(
+            deployment_ids={deployment.id},
+            profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+            bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+            code=code,
+        )
+
+    def _bundle_delete_files(self, bundle: ModelBundle) -> list[DeleteFilePlan]:
+        all_files = [*bundle.files, *bundle.shards, *bundle.companions]
+        unique: dict[str, DeleteFilePlan] = {}
+        managed_bundle_root = Path(bundle.managed_root).resolve() if bundle.managed_root else None
+        referenced_paths = {
+            self._path_key(Path(file.path))
+            for other in self.store.list_bundles()
+            if other.id != bundle.id
+            for file in [*other.files, *other.shards, *other.companions]
+        }
+        for file in all_files:
+            path = Path(file.path)
+            removable = False
+            reason = None
+            in_managed_bundle = False
+            root_is_owned_bundle = (
+                managed_bundle_root is not None and managed_bundle_root.name == bundle.id
+            )
+            if managed_bundle_root is not None:
+                try:
+                    path.resolve().relative_to(managed_bundle_root)
+                    in_managed_bundle = True
+                except ValueError:
+                    in_managed_bundle = False
+            if file.ownership != "managed" or not in_managed_bundle or not root_is_owned_bundle:
+                reason = "external_original"
+            elif self._path_key(path) in referenced_paths:
+                reason = "shared_reference"
+            else:
+                removable = True
+            unique[file.path] = DeleteFilePlan(
+                path=file.path,
+                size_bytes=file.size_bytes if path.exists() else 0,
+                removable=removable,
+                reason=reason,
+            )
+        return list(unique.values())
+
+    def _path_key(self, path: Path) -> str:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path.absolute()
+        return str(resolved).casefold()
+
+    def _cleanup_empty_managed_dirs(self, files: list[DeleteFilePlan], bundle: ModelBundle) -> None:
+        if not bundle.managed_root:
+            return
+        managed_root = Path(bundle.managed_root).resolve()
+        if managed_root.name != bundle.id:
+            return
+        for file in files:
+            if not file.removable:
+                continue
+            path = Path(file.path).parent
+            while path != managed_root:
+                try:
+                    path.resolve().relative_to(managed_root)
+                except ValueError:
+                    break
+                try:
+                    path.rmdir()
+                except OSError:
+                    break
+                path = path.parent
+
+    def _blocked_error(self, code: str, blockers: list[LifecycleConsumer]) -> ManagerError:
+        return ManagerError(
+            "Active or blocking consumers still reference this model configuration.",
+            code=code,
+            status_code=409,
+            details={"blockers": [blocker.model_dump(mode="json") for blocker in blockers]},
+        )
 
 
 def manager_from_env(data_root: Path | None = None) -> ModelManager:

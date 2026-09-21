@@ -394,9 +394,23 @@ class HttpProbe:
         }
         try:
             response = httpx.post(url, json=payload, timeout=self.timeout)
-            if response.status_code < 400:
-                return True, f"{url} -> {response.status_code}"
-            return False, f"{url} -> {response.status_code} {response.text[:200]}"
+            if response.status_code >= 400:
+                return False, f"{url} -> {response.status_code} {response.text[:200]}"
+            try:
+                result = response.json()
+            except ValueError:
+                return False, "The endpoint returned a non-JSON response, not a generated message."
+            choices = result.get("choices") if isinstance(result, dict) else None
+            message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+            if not isinstance(message, dict):
+                return False, "The endpoint did not return a generated message."
+            answer = message.get("content")
+            reasoning = message.get("reasoning_content")
+            if isinstance(answer, str) and answer.strip():
+                return True, "The endpoint returned generated answer text. This is a generation check, not a capability assessment."
+            if isinstance(reasoning, str) and reasoning.strip():
+                return True, "The endpoint returned reasoning text within the short test budget; no final answer was observed."
+            return False, "The endpoint responded but returned no generated text within the short test budget."
         except httpx.HTTPError as exc:
             return False, str(exc)
 

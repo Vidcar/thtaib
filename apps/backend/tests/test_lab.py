@@ -20,7 +20,7 @@ from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_lab_result, wait_for_run, write_tiny_gguf
+from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_lab_result, wait_for_run, wait_for_import, write_tiny_gguf
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -128,6 +128,7 @@ class LabApiTests(unittest.TestCase):
     def test_engine_measurement_parses_llama_bench_when_present(self) -> None:
         gguf = write_tiny_gguf(self.root / "incoming" / "tiny-Q4_K_M.gguf")
         job = self.client.post("/v1/imports/local", json={"source_path": str(gguf), "display_name": "tiny"}).json()
+        job = wait_for_import(self.client, job)
         pin_dir = self.root / "bench-runtime"
         pin_dir.mkdir()
         server = pin_dir / "llama-server"

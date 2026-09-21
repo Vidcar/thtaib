@@ -13,6 +13,8 @@ import type {
   ChatMessage,
   ContextCapture,
   Deployment,
+  DeletePreview,
+  DeploymentProfileChanges,
   EngineMeasurement,
   ImportJob,
   InspectReport,
@@ -28,6 +30,7 @@ import type {
   LabToolMode,
   LabWorkspace,
   ModelBundle,
+  ModelStorageSummary,
   PathsInfo,
   RedactionMode,
   RunProfile,
@@ -69,11 +72,21 @@ export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
   paths: () => request<PathsInfo>("/v1/paths"),
   bundles: () => request<ModelBundle[]>("/v1/bundles"),
-  importLocal: (source_path: string, display_name?: string) =>
+  imports: () => request<ImportJob[]>("/v1/imports"),
+  modelStorage: () => request<ModelStorageSummary>("/v1/models/storage"),
+  setModelStorage: (path: string) => request<ModelStorageSummary>("/v1/models/storage", { method: "PUT", body: JSON.stringify({ path }) }),
+  cleanupModelStorage: () => request<{ removed: string[] }>("/v1/models/storage/cleanup", { method: "POST" }),
+  verifyModel: (id: string) => request<ModelBundle>(`/v1/bundles/${id}`),
+  repairModel: (id: string) => request<ImportJob>(`/v1/bundles/${id}/repair`, { method: "POST" }),
+  cancelImport: (id: string) => request<ImportJob>(`/v1/imports/${id}/cancel`, { method: "POST" }),
+  retryImport: (id: string) => request<ImportJob>(`/v1/imports/${id}/retry`, { method: "POST" }),
+  discardImport: (id: string) => request<ImportJob>(`/v1/imports/${id}/discard`, { method: "POST" }),
+  importLocal: (source_path: string, display_name?: string, copy_files = true) =>
     request<ImportJob>("/v1/imports/local", {
       method: "POST",
-      body: JSON.stringify({ source_path, display_name }),
+      body: JSON.stringify({ source_path, display_name, copy_files }),
     }),
+  searchHf: (query: string) => request<Array<{ repo_id: string; downloads: number | null; likes: number | null }>>(`/v1/models/huggingface/search?q=${encodeURIComponent(query)}&limit=20`),
   inspectHf: (repo_id: string, revision = "main") =>
     request<SchemaHubRepository>("/v1/models/huggingface/inspect", {
       method: "POST",
@@ -103,6 +116,17 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   profiles: () => request<RunProfile[]>("/v1/profiles"),
+  deletionPreview: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview`),
+  deleteModelRecord: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}`, { method: "DELETE" }),
+  deploymentProfileChanges: (id: string) => request<DeploymentProfileChanges>(`/v1/deployments/${id}/profile-changes`),
+  updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object }) =>
+    request<RunProfile>(`/v1/profiles/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  renameProfile: (id: string, display_name: string) => request<RunProfile>(`/v1/profiles/${id}/rename`, { method: "POST", body: JSON.stringify({ display_name }) }),
+  duplicateProfile: (id: string) => request<RunProfile>(`/v1/profiles/${id}/duplicate`, { method: "POST", body: "{}" }),
+  start: (id: string) => request<Deployment>(`/v1/deployments/${id}/start`, { method: "POST" }),
+  reload: (id: string) => request<Deployment>(`/v1/deployments/${id}/reload`, { method: "POST" }),
+  smoke: (id: string) => request<{ ok: boolean; detail: string | null }>(`/v1/deployments/${id}/smoke`, { method: "POST" }),
+  deploymentLogs: (id: string) => request<{ text: string; available: boolean }>(`/v1/deployments/${id}/logs`),
   runtime: () => request<RuntimeManifest | null>("/v1/runtime"),
   pinRuntime: () => request<RuntimeManifest>("/v1/runtime/pin", { method: "POST", body: "{}" }),
   deployments: () => request<Deployment[]>("/v1/deployments"),
@@ -116,6 +140,8 @@ export const api = {
         auto_start: true,
       }),
     }),
+  prepareManaged: (bundle_id: string, profile_id: string | undefined, startup: object) =>
+    request<Deployment>("/v1/deployments/managed", { method: "POST", body: JSON.stringify({ bundle_id, profile_id, startup, auto_start: false }) }),
   attachConnected: (endpoint: string, display_name?: string, startup?: object) =>
     request<Deployment>("/v1/deployments/connected", {
       method: "POST",

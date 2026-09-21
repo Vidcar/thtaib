@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from workbench_backend.errors import ManagerError
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.inference.deployments import managed_argv
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.process import HttpProbe, ProcessIdentity, ProcessSupervisor
@@ -26,11 +27,13 @@ from workbench_backend.inference.schemas import (
     ManagedDeploymentRequest,
     ManagementScope,
     PinRuntimeRequest,
+    ProfileWriteRequest,
     ServerProperties,
     SettingsBags,
 )
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.migrate import open_application_store
 
 from support import OfflineProbe, write_tiny_gguf
 from test_app import FakeHF
@@ -234,6 +237,231 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("--mlock", argv)
         self.assertNotIn("--no-mmap", argv)
         self.manager.stop_deployment(deployment.id)
+
+    def test_bound_profile_rejects_different_bundle_and_unbound_reuses(self) -> None:
+        other_source = self.root / "incoming" / "other.gguf"
+        write_tiny_gguf(other_source, name="other")
+        other_job = self.manager.import_local(LocalImportRequest(source_path=str(other_source)))
+        other_bundle_id = other_job.bundle_id or ""
+        bound = self.manager.create_profile(
+            ProfileWriteRequest(
+                display_name="bound",
+                bundle_id=self.bundle_id,
+                startup={"port": 18110},
+            )
+        )
+        with self.assertRaises(ManagerError) as caught:
+            self.manager.create_managed(
+                ManagedDeploymentRequest(
+                    bundle_id=other_bundle_id,
+                    profile_id=bound.id,
+                    auto_start=False,
+                )
+            )
+        self.assertEqual(caught.exception.code, "profile_bundle_mismatch")
+
+        unbound = self.manager.create_profile(
+            ProfileWriteRequest(display_name="unbound", startup={"port": 18111})
+        )
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=other_bundle_id,
+                profile_id=unbound.id,
+                auto_start=False,
+            )
+        )
+        self.assertEqual(deployment.profile_id, unbound.id)
+        self.assertEqual(deployment.bundle_id, other_bundle_id)
+
+    def test_profile_edit_preserves_launch_snapshot_and_reports_pending_changes(self) -> None:
+        profile = self.manager.create_profile(
+            ProfileWriteRequest(
+                display_name="snapshot",
+                bundle_id=self.bundle_id,
+                startup={"port": 18112, "ctx_size": 1024},
+                per_request={"temperature": 0.2},
+                agent={"system_prompt": "old"},
+            )
+        )
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                profile_id=profile.id,
+                auto_start=False,
+            )
+        )
+        self.assertEqual(deployment.applied_startup["ctx_size"], 1024)
+        self.manager.update_profile(
+            profile.id,
+            ProfileWriteRequest(
+                display_name="snapshot",
+                bundle_id=self.bundle_id,
+                startup={"port": 18112, "ctx_size": 2048},
+                per_request={"temperature": 0.7},
+                agent={"system_prompt": "new"},
+            ),
+        )
+        unchanged = self.manager.get_deployment(deployment.id)
+        self.assertEqual(unchanged.applied_startup["ctx_size"], 1024)
+        changes = self.manager.deployment_profile_changes(deployment.id)
+        self.assertTrue(changes.has_pending_startup_changes)
+        self.assertEqual(changes.pending_startup["ctx_size"]["active"], 1024)
+        self.assertEqual(changes.pending_startup["ctx_size"]["profile"], 2048)
+        self.assertTrue(changes.has_pending_per_request_changes)
+        self.assertTrue(changes.has_pending_agent_changes)
+
+    def test_pending_diff_preserves_explicit_overrides_and_detects_removal(self) -> None:
+        profile = self.manager.create_profile(
+            ProfileWriteRequest(
+                display_name="override",
+                bundle_id=self.bundle_id,
+                startup={"ctx_size": 1024},
+                per_request={"temperature": 0.3},
+                agent={"system_prompt": "keep"},
+            )
+        )
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                profile_id=profile.id,
+                startup={"port": 18115, "ctx_size": 2048},
+                auto_start=False,
+            )
+        )
+        unchanged = self.manager.deployment_profile_changes(deployment.id)
+        self.assertFalse(unchanged.has_pending_startup_changes)
+        self.assertFalse(unchanged.has_pending_per_request_changes)
+        self.assertFalse(unchanged.has_pending_agent_changes)
+
+        self.manager.update_profile(
+            profile.id,
+            ProfileWriteRequest(
+                display_name="override",
+                bundle_id=self.bundle_id,
+                startup={"ctx_size": 4096},
+                per_request={},
+                agent={},
+            ),
+        )
+        changed = self.manager.deployment_profile_changes(deployment.id)
+        self.assertFalse(changed.has_pending_startup_changes)
+        self.assertTrue(changed.has_pending_per_request_changes)
+        self.assertTrue(changed.has_pending_agent_changes)
+
+    def test_reload_uses_frozen_launch_config_after_profile_edit(self) -> None:
+        profile = self.manager.create_profile(
+            ProfileWriteRequest(
+                display_name="reload-frozen",
+                bundle_id=self.bundle_id,
+                startup={"port": 18116, "ctx_size": 1024},
+            )
+        )
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, profile_id=profile.id)
+        )
+        self.manager.update_profile(
+            profile.id,
+            ProfileWriteRequest(
+                display_name="reload-frozen",
+                bundle_id=self.bundle_id,
+                startup={"port": 18116, "ctx_size": 2048},
+            ),
+        )
+        reloaded = self.manager.reload_deployment(deployment.id)
+        self.assertEqual(reloaded.applied_startup["ctx_size"], 1024)
+        launched = self.supervisor.launched[-1]
+        self.assertEqual(launched[launched.index("--ctx-size") + 1], "1024")
+        self.manager.stop_deployment(reloaded.id)
+
+    def test_ensure_deployment_ready_loads_stopped_managed_selection(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18113},
+                auto_start=False,
+            )
+        )
+        self.assertEqual(deployment.status, DeploymentStatus.stopped)
+        ready = self.manager.ensure_deployment_ready(deployment.id)
+        self.assertEqual(ready.status, DeploymentStatus.running)
+        self.assertIsNotNone(ready.process_identity)
+        self.manager.stop_deployment(ready.id)
+
+    def test_ensure_deployment_ready_refuses_unready_starting_endpoint(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18117},
+                auto_start=False,
+            )
+        )
+        starting = deployment.model_copy(update={"status": DeploymentStatus.starting})
+        self.manager.store.put_deployment(starting)
+        self.manager.deployments.probe = OfflineProbe()
+        with self.assertRaises(ManagerError) as caught:
+            self.manager._wait_deployment_ready(deployment.id, timeout_seconds=0.1)
+        self.assertEqual(caught.exception.code, "deployment_start_timeout")
+
+    def test_active_run_blocks_stop_and_bundle_delete(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18114},
+                auto_start=False,
+            )
+        )
+        now = utc_now()
+        with open_application_store(self.paths) as app_store:
+            app_store.put_run(
+                AgentRun(
+                    id="agent_live_model_dependency",
+                    status=AgentRunStatus.running,
+                    deployment_id=deployment.id,
+                    task="live",
+                    enabled_tools=["echo"],
+                    presented_tools=["echo"],
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        with self.assertRaises(ManagerError) as stop_error:
+            self.manager.stop_deployment(deployment.id)
+        self.assertEqual(stop_error.exception.code, "deployment_active")
+        with self.assertRaises(ManagerError) as direct_stop_error:
+            self.manager.deployments.stop(deployment.id)
+        self.assertEqual(direct_stop_error.exception.code, "deployment_active")
+        preview = self.manager.bundle_delete_preview(self.bundle_id)
+        self.assertTrue(any(blocker.kind == "agent_run" for blocker in preview.blockers))
+        with self.assertRaises(ManagerError) as delete_error:
+            self.manager.delete_bundle(self.bundle_id)
+        self.assertEqual(delete_error.exception.code, "bundle_delete_blocked")
+
+    def test_bundle_delete_preserves_local_original_inside_models(self) -> None:
+        local_original = write_tiny_gguf(self.paths.models / "DaveModel" / "original.gguf")
+        job = self.manager.import_local(LocalImportRequest(source_path=str(local_original)))
+        bundle_id = job.bundle_id or ""
+        preview = self.manager.bundle_delete_preview(bundle_id)
+        self.assertTrue(preview.files)
+        self.assertFalse(any(file.removable for file in preview.files))
+        deleted = self.manager.delete_bundle(bundle_id)
+        self.assertFalse(any(file.removable for file in deleted.files))
+        self.assertTrue(local_original.is_file())
+        with self.assertRaises(ManagerError) as caught:
+            self.manager.get_bundle(bundle_id)
+        self.assertEqual(caught.exception.code, "bundle_missing")
+
+    def test_lifecycle_reservation_blocks_direct_service_stop(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(
+                bundle_id=self.bundle_id,
+                startup={"port": 18118},
+                auto_start=False,
+            )
+        )
+        with self.manager.reserve_deployment(deployment.id):
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.deployments.stop(deployment.id)
+        self.assertEqual(caught.exception.code, "model_lifecycle_active")
 
     def test_invalid_saved_managed_startup_fails_closed_on_start(self) -> None:
         now = utc_now()

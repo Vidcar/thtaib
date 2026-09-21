@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from threading import RLock
 from typing import Any, TypeVar
@@ -21,6 +23,22 @@ from workbench_backend.paths import WorkbenchPaths
 
 T = TypeVar("T", bound=BaseModel)
 _STORE_LOCK = RLock()
+_IMPORT_JOB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS import_jobs (
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
 
 
 class RecordStore:
@@ -31,6 +49,9 @@ class RecordStore:
         self.profiles_path = self.paths.state / "profiles.json"
         self.deployments_path = self.paths.state / "deployments.json"
         self.runtime_manifest_path = self.paths.runtimes / "runtime-manifest.json"
+        self.application_db = self.paths.application_db
+        self._ensure_import_job_table()
+        self._migrate_json_jobs()
 
     def list_bundles(self) -> list[ModelBundle]:
         return self._read_list(self.bundles_path, ModelBundle)
@@ -41,14 +62,104 @@ class RecordStore:
     def get_bundle(self, bundle_id: str) -> ModelBundle | None:
         return next((item for item in self.list_bundles() if item.id == bundle_id), None)
 
+    def delete_bundle(self, bundle_id: str) -> None:
+        with _STORE_LOCK:
+            remaining = [item for item in self.list_bundles() if item.id != bundle_id]
+            self._write_list(self.bundles_path, remaining)
+
+    def set_bundle_disk_matches(self, bundle_id: str, matches: bool) -> ModelBundle | None:
+        """Verification may finish after deletion; never recreate that record."""
+        with _STORE_LOCK:
+            bundle = self.get_bundle(bundle_id)
+            if bundle is None:
+                return None
+            updated = bundle.model_copy(update={"disk_matches": matches})
+            return self.put_bundle(updated) if updated != bundle else bundle
+
     def list_jobs(self) -> list[ImportJob]:
-        return self._read_list(self.jobs_path, ImportJob)
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            rows = conn.execute("SELECT payload FROM import_jobs ORDER BY created_at, id").fetchall()
+        return [ImportJob.model_validate_json(str(row["payload"])) for row in rows]
 
     def put_job(self, job: ImportJob) -> ImportJob:
-        return self._upsert(self.jobs_path, ImportJob, job)
+        job = job.model_copy(update={"updated_at": getattr(job, "updated_at", None) or getattr(job, "created_at")})
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                INSERT INTO import_jobs(id, payload, status, kind, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    payload=excluded.payload,
+                    status=excluded.status,
+                    kind=excluded.kind,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    job.id,
+                    job.model_dump_json(),
+                    job.status.value,
+                    job.kind.value,
+                    job.created_at,
+                    job.updated_at or job.created_at,
+                ),
+            )
+            conn.commit()
+        return job
 
     def get_job(self, job_id: str) -> ImportJob | None:
-        return next((item for item in self.list_jobs() if item.id == job_id), None)
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM import_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ImportJob.model_validate_json(str(row["payload"]))
+
+    def delete_job(self, job_id: str) -> None:
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            conn.execute("DELETE FROM import_jobs WHERE id = ?", (job_id,))
+            conn.commit()
+
+    def update_job_fields(self, job_id: str, **fields) -> ImportJob:
+        with _STORE_LOCK:
+            current = self.get_job(job_id)
+            if current is None:
+                raise KeyError(job_id)
+            return self.put_job(current.model_copy(update=fields))
+
+    def list_active_jobs(self) -> list[ImportJob]:
+        active = {"pending", "running", "stopping"}
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            rows = conn.execute(
+                f"SELECT payload FROM import_jobs WHERE status IN ({','.join('?' for _ in active)}) ORDER BY created_at, id",
+                tuple(sorted(active)),
+            ).fetchall()
+        return [ImportJob.model_validate_json(str(row["payload"])) for row in rows]
+
+    def get_setting(self, key: str) -> str | None:
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def put_setting(self, key: str, value: str) -> None:
+        from workbench_backend.inference.ids import utc_now
+
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value=excluded.value,
+                    updated_at=excluded.updated_at
+                """,
+                (key, value, utc_now()),
+            )
+            conn.commit()
 
     def list_profiles(self) -> list[RunProfile]:
         return self._read_list(self.profiles_path, RunProfile)
@@ -58,6 +169,11 @@ class RecordStore:
 
     def get_profile(self, profile_id: str) -> RunProfile | None:
         return next((item for item in self.list_profiles() if item.id == profile_id), None)
+
+    def delete_profile(self, profile_id: str) -> None:
+        with _STORE_LOCK:
+            remaining = [item for item in self.list_profiles() if item.id != profile_id]
+            self._write_list(self.profiles_path, remaining)
 
     def list_deployments(self) -> list[Deployment]:
         return self._read_list(self.deployments_path, Deployment)
@@ -122,3 +238,25 @@ class RecordStore:
                 tmp.replace(path)
             finally:
                 tmp.unlink(missing_ok=True)
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.application_db), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _ensure_import_job_table(self) -> None:
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            conn.executescript(_IMPORT_JOB_SCHEMA)
+            conn.commit()
+
+    def _migrate_json_jobs(self) -> None:
+        if not self.jobs_path.is_file():
+            return
+        try:
+            legacy = self._read_list(self.jobs_path, ImportJob)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        for job in legacy:
+            if self.get_job(job.id) is None:
+                self.put_job(job)

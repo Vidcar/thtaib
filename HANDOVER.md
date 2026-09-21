@@ -4,20 +4,18 @@ Last updated: 2026-09-21.
 
 ## Goal and current state
 
-OpenSpec 1.13.1 is the repository's sole product-specification and change-planning system. Current contracts live under `openspec/specs/`; proposals and active work live under `openspec/changes/`. Start planning with `$openspec-propose` and begin implementation only in a later request with `$openspec-apply-change`.
+Packet 01 implementation is complete in [PR #111](https://github.com/Vidcar/thtaib/pull/111), from `codex/packet-01-model-management`. The Models specification is synchronized; all ten tasks are archived at `openspec/changes/archive/2026-09-21-01-complete-model-management/`. Packets 02–08 remain planned and are not implemented.
 
-The legacy `specs/` and `docs/` trees, standalone product-vision document, catalogue/evidence/templates/ADR trackers, delivery map, custom spec checker and checker tests were removed after current behavioral contracts were migrated into nine OpenSpec capability specs. Their history remains recoverable in Git.
+## Delivered
 
-## Important decisions and constraints
+Durable asynchronous imports with confirmed cancellation, retry/discard, revision-pinned repair and restart reconciliation; bounded Hub discovery; future install location and reference-aware storage cleanup; editable/duplicable profiles; coordinated deletion/load/unload/reload and Chat load on demand. Launch snapshots preserve actual startup settings after profile edits. Desktop controls and shared contracts are rebuilt.
 
-- `openspec/config.yaml` carries concise product and integration context.
-- `AGENTS.md` owns engineering workflow and exact local validation commands; do not recreate a parallel documentation or tracking system.
-- Shared-contract repository discovery uses the backend and desktop package manifests, not a documentation file.
-- Preserve `%LOCALAPPDATA%\LocalAIWorkbench\` user data and models. Disposable validation belongs under `.scratch/`.
-- GitHub CI remains disabled at Dave's request; applicable checks run locally.
+## Verification and use
 
-## Validation and use
+Final checks passed: 272 default backend tests; 118 integration tests; desktop typecheck/build/SSE regression; generated-contract check; strict OpenSpec validation (16 items after archive). Commands remain in `AGENTS.md`.
 
-Validation passed: OpenSpec 9/9 capabilities; 233 default and 109 integration backend tests; shared-contract freshness; whitespace/error checks. OpenSpec emitted informational long-requirement suggestions only. Repeat with `openspec validate --all` from the repository root when specs change.
+Real isolated Windows checks reused existing Qwen3.8-27B weights and llama.cpp by path: generated text, inspected actual startup evidence, confirmed process exits, and restarted with identical settings after editing the profile. A separate real Chat run loaded the stopped deployment and replied "Hello!". Changed desktop controls were rendered and inspected. Evidence remains under `.scratch/packet01-live/`; temporary UAT backend and Electron have stopped. Hub error/transfer edge tests use deterministic external-boundary fakes.
 
-Launch the product with root `Launch Workbench.vbs`. No application behavior or user data was intentionally changed by the documentation migration.
+Launch normally with root `Launch Workbench.vbs`. User data and models are preserved. GitHub CI remains disabled; retain local gates. OpenSpec remains the only specification/change format. Preserve packet ordering and existing integration boundaries.
+
+No Packet 01 implementation work remains. Check PR #111 for merge status; begin Packet 02 only when authorized.
