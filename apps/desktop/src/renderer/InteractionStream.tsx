@@ -35,7 +35,7 @@ function interruptValue(interrupt: Interrupt<WorkbenchInterrupt> | undefined): P
   if (!interrupt?.value || typeof interrupt.value !== "object") {
     return null;
   }
-  if ("kind" in interrupt.value && interrupt.value.kind === "deepagents_interrupt_on") {
+  if ("kind" in interrupt.value && (interrupt.value.kind === "deepagents_interrupt_on" || interrupt.value.kind === "ask_user")) {
     return interrupt.value as PendingInterrupt;
   }
   if ("pending_interrupt" in interrupt.value && interrupt.value.pending_interrupt) {

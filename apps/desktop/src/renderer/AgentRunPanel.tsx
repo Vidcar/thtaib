@@ -148,10 +148,10 @@ function AgentRunStreamContent(props: {
       {visibleInterrupt && displayRun ? (
         <InterruptApproval
           pending={visibleInterrupt.pending}
-          onDecide={(type) => {
+          onRespond={(payload) => {
             void stream
               .respond(
-                { decisions: [{ type }] },
+                payload,
                 { interruptId: visibleInterrupt.id, namespace: visibleInterrupt.namespace },
               )
               .catch((error: unknown) => {

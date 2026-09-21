@@ -13,6 +13,8 @@ const cacheTypes = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32"
 const choices = (values: string[]) => values.map(value => ({ value, label: value }));
 const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
 const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "-1", flash_attn: "on", fit: "on", cache_type_k: "f16", cache_type_v: "f16", threads: "", threads_batch: "", load_mode: "auto", parallel: "1", port: "8080", batch_size: "2048", ubatch_size: "512", reasoning: "auto", reasoning_format: "auto", reasoning_budget: "-1", embedding: "off", pooling: "last", spec_type: "none" };
+const EMPTY_BUNDLES: ModelBundle[] = [];
+const EMPTY_PROFILES: RunProfile[] = [];
 
 function stateOf(d: Deployment): { label: string; tone: "ok" | "warn" | "neutral" | "danger" } {
   if (d.status === "stopped") return { label: "Stopped", tone: "neutral" };
@@ -21,15 +23,23 @@ function stateOf(d: Deployment): { label: string; tone: "ok" | "warn" | "neutral
   return { label: d.status === "starting" ? "Loading" : "Not ready", tone: "warn" };
 }
 
-export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }: { selectedBundleId?: string; bundlesVersion?: string } = {}) {
+export function DeploymentsPanel({
+  selectedBundleId = "",
+  bundlesVersion = "",
+  initialBundles = EMPTY_BUNDLES,
+  initialProfiles = EMPTY_PROFILES,
+}: {
+  selectedBundleId?: string;
+  bundlesVersion?: string;
+  initialBundles?: ModelBundle[];
+  initialProfiles?: RunProfile[];
+} = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const hydrated = useRef({ bundle: "", deployment: "" });
   const dirty = useRef(false);
   const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
-  const [bundles, setBundles] = useState<ModelBundle[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [generation, setGeneration] = useState<Record<string, string>>({});
@@ -50,6 +60,8 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
   const [messageTone, setMessageTone] = useState<"info" | "error" | "ok">("info");
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState("");
+  const bundles = initialBundles;
+  const profiles = initialProfiles;
   const selected = bundles.find(b => b.id === selectedBundleId);
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
@@ -59,10 +71,11 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
   const selectedActive = current.find(d => d.bundle_id === selectedBundleId && d.scope === "managed" && d.status !== "failed");
   const connectedAlready = current.some(d => d.endpoint?.replace(/\/$/, "") === endpoint.trim().replace(/\/$/, ""));
   const engineInUse = current.some(d => d.scope === "managed" && d.status !== "failed");
+  const runtimeReady = loaded && runtime?.status === "ready";
 
   async function refresh() {
-    const [r, b, d, p] = await Promise.all([api.runtime(), api.bundles(), api.deployments(), api.profiles()]);
-    setRuntime(r); setBundles(b); setDeployments(d); setProfiles(p); setLoaded(true); setLoadError("");
+    const [r, d] = await Promise.all([api.runtime(), api.deployments()]);
+    setRuntime(r); setDeployments(d); setLoaded(true); setLoadError("");
   }
   useEffect(() => { void refresh().catch(error => setLoadError(errorMessage(error))); }, [bundlesVersion]);
   useEffect(() => {
@@ -221,10 +234,10 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
         <label htmlFor="additional-startup">Additional startup settings (JSON)</label><p className="hint">Template, batch and draft-model options. Use the named controls above for settings already shown; duplicate keys are rejected.</p>
         <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder={'{"reasoning_effort": "high"}'} />
       </details>
-      <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtime?.status === "ready" ? "status-dot ready" : "status-dot"} />{runtime?.status === "ready" ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
+      <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
         <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { await preview(); setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); }); }}>Check settings</button>
         <button type="button" disabled={Boolean(busy) || !selected.disk_matches || Boolean(selectedActive)} onClick={() => { if (formRef.current?.reportValidity()) void action("prepare", async () => { await preview(); await api.prepareManaged(selectedBundleId, profileId || undefined, startup()); dirty.current = false; await refresh(); setMessageTone("info"); setMessage("Setup saved. Select it in Chat; the model will load when you send a message."); }); }}>Save setup for Chat</button>
-        <button type="submit" className="primary-button" disabled={Boolean(busy) || runtime?.status !== "ready" || !selected.disk_matches || Boolean(selectedActive)}>{busy === "start" ? "Loading model…" : selectedActive ? "Model is active" : "Start model"}</button>
+        <button type="submit" className="primary-button" disabled={Boolean(busy) || !runtimeReady || !selected.disk_matches || Boolean(selectedActive)}>{busy === "start" ? "Loading model…" : selectedActive ? "Model is active" : "Start model"}</button>
       </div></footer>
       {settingsPreview ? <details className="technical-details" open><summary>Checked launch settings</summary><p className="hint">Applies on the next start. Final context and memory use are reported after loading.</p>{readout(settingsPreview.startup.applied)}<SettingsNotes unsupported={settingsPreview.startup.unsupported} retired={settingsPreview.startup.retired} /></details> : null}
     </form> : <div className="card"><h3>Choose a model to get started</h3><p className="hint">Select one from your library, or add a new model.</p></div>}
@@ -235,7 +248,7 @@ export function DeploymentsPanel({ selectedBundleId = "", bundlesVersion = "" }:
       <div className="setting-title"><label className="check-row"><input type="checkbox" checked={connectedEmbedder} onChange={event => setConnectedEmbedder(event.target.checked)} />Use for document search</label><Help label="Document search server" flag="--embedding --pooling last">The server must already serve embeddings with last-token pooling.</Help></div>
       <button type="submit" disabled={Boolean(busy) || connectedAlready}>{busy === "connect" ? "Connecting…" : connectedAlready ? "Already connected" : "Connect server"}</button>
     </form></details>
-    <details className="card engine-settings"><summary>Local engine <span>{runtime?.status === "ready" ? "Ready" : "Setup required"}</span></summary><p className="hint">Runs models on this computer using your NVIDIA GPU.</p>
+    <details className="card engine-settings"><summary>Local engine <span>{!loaded ? "Checking" : runtimeReady ? "Ready" : "Setup required"}</span></summary><p className="hint">Runs models on this computer using your NVIDIA GPU.</p>
       {runtime ? <dl className="model-facts"><div><dt>Engine</dt><dd>llama.cpp {runtime.release_tag}</dd></div><div><dt>Platform</dt><dd>{runtime.platform} · {runtime.flavor}</dd></div><div><dt>Executable</dt><dd><code>{runtime.executable}</code></dd></div></dl> : null}
       {runtime?.error ? <Notice tone="error">{runtime.error}</Notice> : null}
       {engineInUse ? <p className="hint">Stop your local models before changing the engine installation.</p> : null}

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
+import { installBackground, retainWindowInBackground } from "./background";
 
 import {
   ensureSharedSecret,
@@ -48,6 +49,7 @@ function createWindow(): void {
   window.once("ready-to-show", () => {
     window.show();
   });
+  retainWindowInBackground(window);
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
@@ -82,8 +84,9 @@ function installApplicationTrust(): void {
 if (ownsSingleInstance) {
   app.on("second-instance", focusExistingWindow);
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     installApplicationTrust();
+    await installBackground(focusExistingWindow);
     createWindow();
 
     app.on("activate", () => {

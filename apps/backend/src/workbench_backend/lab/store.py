@@ -31,6 +31,10 @@ class LabStore:
     def get_workspace(self, workspace_id: str) -> LabWorkspace | None:
         return next((item for item in self.list_workspaces() if item.id == workspace_id), None)
 
+    def delete_workspace_record(self, workspace_id: str) -> None:
+        """Remove a failed creation's record; never delete a workspace's files."""
+        self._write_list(self.workspaces_path, [item for item in self.list_workspaces() if item.id != workspace_id])
+
     def list_cases(self) -> list[LabCase]:
         return self._read_list(self.cases_path, LabCase)
 

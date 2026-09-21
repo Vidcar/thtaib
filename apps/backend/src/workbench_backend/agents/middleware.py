@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+import time
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import BaseMessage, ToolMessage
@@ -22,7 +23,7 @@ from workbench_backend.agents.replay import (
     FixtureBank,
     apply_recorded_reconstruction,
 )
-from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture, GenerationObservation
 from workbench_backend.agents.tools import (
     FILESYSTEM_TOOL_NAMES,
     KNOWLEDGE_ROUTE_READ_TOOLS,
@@ -60,9 +61,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
         before = len(self.http_sink)
+        started = time.perf_counter()
         try:
             response = handler(filtered)
         except Exception as exc:
@@ -80,6 +83,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             http_payloads=_payloads_after(self.http_sink, before),
             handler_returned=True,
         )
+        self._observe_generation(response, time.perf_counter() - started)
         return response
 
     async def awrap_model_call(
@@ -87,9 +91,11 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
         before = len(self.http_sink)
+        started = time.perf_counter()
         try:
             response = await handler(filtered)
         except Exception as exc:
@@ -107,13 +113,29 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             http_payloads=_payloads_after(self.http_sink, before),
             handler_returned=True,
         )
+        self._observe_generation(response, time.perf_counter() - started)
         return response
+
+    def _observe_generation(self, response: ModelResponse, elapsed: float) -> None:
+        usages = [getattr(message, "usage_metadata", None) for message in response.result]
+        reported = [usage.get("output_tokens") for usage in usages if isinstance(usage, dict)]
+        tokens = sum(reported) if reported and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in reported) else None
+        inputs = [usage.get("input_tokens") for usage in usages if isinstance(usage, dict)]
+        input_tokens = sum(inputs) if inputs and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in inputs) else None
+        limit = self.run.effective_setup.bags.startup.applied.get("ctx_size") if self.run.effective_setup else None
+        if self.run.effective_setup and "ctx_size" in self.run.effective_setup.bags.startup.unverified:
+            limit = None
+        self.run.generation_observation = GenerationObservation(output_tokens=tokens,
+            input_tokens=input_tokens, context_limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None,
+            elapsed_seconds=elapsed, tokens_per_second=tokens / elapsed if tokens is not None and elapsed > 0 else None,
+            measured_at=utc_now())
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
+        self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
@@ -126,12 +148,18 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
+        self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
         if self.fixture_bank is None:
             return await handler(request)
         return self._replay_tool_call(request)
+
+    def _require_dispatch_allowed(self) -> None:
+        if self.run.status in {"cancel_requested", "cancelled"}:
+            from workbench_backend.errors import HarnessError
+            raise HarnessError("This run is stopping; no further model or tool call was dispatched.", code="run_cancelling", status_code=409)
 
     def _reject_projectless_privileged_tool(self, request: ToolCallRequest) -> ToolMessage | None:
         """File and host-shell tools need a project; execute must also be presented.

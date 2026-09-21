@@ -7,7 +7,14 @@ import { errorMessage } from "./errors";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
 import { ModelsPanel } from "./ModelsPanel";
-import type { WorkbenchSurface, WorkbenchTab } from "./types";
+import type { PresentationSettings, PresentationTheme, WorkbenchSurface, WorkbenchTab } from "./types";
+
+const fallbackPresentation: PresentationSettings = {
+  theme: "system",
+  detailed_streams: false,
+  attention_notifications: true,
+  success_notifications: false,
+};
 
 function surfaceLabel(surface: WorkbenchSurface): string {
   switch (surface) {
@@ -45,6 +52,13 @@ export function App() {
   const [tab, setTab] = useState<WorkbenchTab>("chat");
   const [backendStatus, setBackendStatus] = useState("Checking local services…");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
+  const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = presentation.theme;
+  }, [presentation.theme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,10 +88,58 @@ export function App() {
     };
   }, [surface]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void api.presentationSettings()
+      .then((next) => {
+        if (!cancelled) {
+          setPresentation(next);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPresentation(fallbackPresentation);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.workbench?.onAttention?.((conversationId) => {
+      setTab("chat");
+      setAttentionConversationId(conversationId);
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  function updateTheme(theme: PresentationTheme): void {
+    const previous = presentation;
+    const next = { ...presentation, theme };
+    setPresentation(next);
+    void api.updatePresentationSettings(next).then(setPresentation).catch(() => {
+      setPresentation(previous);
+    });
+  }
+
   function renderTab(current: WorkbenchTab) {
     switch (current) {
       case "chat":
-        return <ChatPanel />;
+        return (
+          <ChatPanel
+            activeTab={tab}
+            backendOk={backendOk}
+            backendStatus={backendStatus}
+            attentionConversationId={attentionConversationId}
+            onThemeChange={updateTheme}
+            onNavigate={setTab}
+            presentation={presentation}
+            productName={productName}
+          />
+        );
       case "models":
         return <ModelsPanel />;
       case "knowledge":
@@ -96,24 +158,41 @@ export function App() {
   const tabs: WorkbenchTab[] = ["chat", "models", "knowledge", "agent-run", "lab"];
 
   return (
-    <div className="app">
-      <aside className="app-nav" aria-label="Workbench">
-        <p className="eyebrow">Local AI Workbench</p>
-        <h1>{productName}</h1>
-        <nav className="side-tabs">
-          {tabs.map((item) => (
+    <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`}>
+      {tab === "chat" ? null : (
+        <aside className="app-nav" aria-label="Workbench">
+          <div className="app-nav-head">
+            <div>
+              <p className="eyebrow">Local AI Workbench</p>
+              <h1>{productName}</h1>
+            </div>
             <button
-              key={item}
               type="button"
-              className={item === tab ? "tab active" : "tab"}
-              onClick={() => setTab(item)}
+              className="nav-collapse"
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!sidebarCollapsed}
+              onClick={() => setSidebarCollapsed((value) => !value)}
             >
-              {tabLabel(item)}
+              {sidebarCollapsed ? "›" : "‹"}
             </button>
-          ))}
-        </nav>
-        <p className={backendOk === false ? "notice notice-error" : "hint"}>{backendStatus}</p>
-      </aside>
+          </div>
+          <nav className="side-tabs">
+            {tabs.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={item === tab ? "tab active" : "tab"}
+                aria-label={tabLabel(item)}
+                title={tabLabel(item)}
+                onClick={() => setTab(item)}
+              >
+                {sidebarCollapsed ? tabLabel(item).slice(0, 1) : tabLabel(item)}
+              </button>
+            ))}
+          </nav>
+          <p className={backendOk === false ? "notice notice-error" : "hint"}>{backendStatus}</p>
+        </aside>
+      )}
       <main className="app-main">{renderTab(tab)}</main>
     </div>
   );

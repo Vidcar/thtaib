@@ -42,19 +42,22 @@ export function ModelsPanel() {
 
   async function refresh(): Promise<void> {
     setLoading(true);
+    let bundlesLoaded = false;
     try {
-      const [nextPaths, nextBundles, nextProfiles] = await Promise.all([
+      const nextBundles = await api.bundles();
+      setBundles(nextBundles);
+      setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
+      bundlesLoaded = true;
+      setLoading(false);
+      const [nextPaths, nextProfiles] = await Promise.all([
         api.paths(),
-        api.bundles(),
         api.profiles(),
       ]);
       setPaths(nextPaths);
-      setBundles(nextBundles);
-      setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
       setProfiles(nextProfiles);
       setLoadError("");
     } finally {
-      setLoading(false);
+      if (!bundlesLoaded) setLoading(false);
     }
   }
 
@@ -256,7 +259,7 @@ export function ModelsPanel() {
         {paths ? <details className="library-storage"><summary>Storage location</summary><code>{paths.models}</code></details> : null}
       </aside>
       <div className="model-detail">
-      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} />
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} initialBundles={bundles} initialProfiles={profiles} />
       {selected ? (
           <details className="card technical-details"><summary>Model files &amp; technical details</summary>
             <p className="hint">Model ID: <code>{selected.id}</code></p>

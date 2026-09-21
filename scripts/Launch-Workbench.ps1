@@ -20,6 +20,15 @@ function Get-ProductDataRoot {
 }
 
 $dataRoot = Get-ProductDataRoot
+$visitedRoots = @{}
+while (Test-Path -LiteralPath (Join-Path $dataRoot 'state\active-data-root.json')) {
+  if ($visitedRoots.ContainsKey($dataRoot) -or $visitedRoots.Count -ge 8) { throw 'Invalid restored application root chain.' }
+  $visitedRoots[$dataRoot] = $true
+  $activation = Get-Content -LiteralPath (Join-Path $dataRoot 'state\active-data-root.json') -Raw | ConvertFrom-Json
+  if ($activation.version -ne 1 -or -not [System.IO.Path]::IsPathRooted($activation.destination_root) -or -not (Test-Path -LiteralPath (Join-Path $activation.destination_root 'application.sqlite'))) { throw 'The activated restore is unavailable.' }
+  $dataRoot = $activation.destination_root
+}
+$env:WORKBENCH_DATA_ROOT = $dataRoot
 $logRoot = Join-Path $dataRoot "logs"
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 $launcherLog = Join-Path $logRoot "workbench-launcher.log"

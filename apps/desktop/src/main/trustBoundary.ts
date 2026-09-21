@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 
-import type { BrowserWindow, Event as ElectronEvent, OnBeforeSendHeadersListenerDetails } from "electron";
+import type { BrowserWindow, Event as ElectronEvent, IpcMainInvokeEvent, OnBeforeSendHeadersListenerDetails } from "electron";
 import { shell, session } from "electron";
 
 import { WORKBENCH_BACKEND_ORIGIN, WORKBENCH_LOCAL_TOKEN_HEADER } from "./localTrust";
@@ -20,6 +20,17 @@ interface TrustedWindowRecord {
 
 const trustedWindows = new Map<number, TrustedWindowRecord>();
 let headerInstalled = false;
+
+export function requireTrustedIpc(event: IpcMainInvokeEvent): void {
+  const record = trustedWindows.get(event.sender.id);
+  const frame = event.senderFrame;
+  if (!record || record.window.isDestroyed() || event.sender.isDestroyed() ||
+      event.sender !== record.window.webContents || !frame || frame.isDestroyed() || frame.detached ||
+      frame !== event.sender.mainFrame || frame.parent !== null ||
+      !isTrustedApplicationUrl(event.sender.getURL(), record.appUrl) || !isTrustedApplicationUrl(frame.url, record.appUrl)) {
+    throw new Error("This document cannot use desktop actions.");
+  }
+}
 
 export function packagedAppDocumentUrl(indexHtmlPath: string): string {
   return pathToFileURL(indexHtmlPath).toString();

@@ -25,12 +25,26 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(2) from exc
-    uvicorn.run(
-        "workbench_backend.app:app",
-        host=host,
-        port=args.port,
-        reload=False,
-    )
+    from workbench_backend.app import app, create_app
+    application = app
+    while True:
+        server = uvicorn.Server(uvicorn.Config(application, host=host, port=args.port, reload=False))
+        restart_requested = False
+
+        def restart_backend():
+            nonlocal restart_requested
+            restart_requested = True
+            server.should_exit = True
+
+        def shutdown_backend():
+            server.should_exit = True
+
+        application.state.restart_backend = restart_backend
+        application.state.shutdown_backend = shutdown_backend
+        server.run()
+        if not restart_requested:
+            break
+        application = create_app()
 
 
 if __name__ == "__main__":

@@ -60,6 +60,7 @@ from workbench_backend.agents.schemas import (
     AgentStartRequest,
     HostShellFacts,
     InterruptDecisionRequest,
+    UserAnswerRequest,
     PendingInterrupt,
     TaskCriteria,
     ToolMode,
@@ -152,6 +153,7 @@ class HarnessService:
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
+        self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
@@ -207,6 +209,28 @@ class HarnessService:
             for run in stored.values()
             if run.workspace_id == workspace_id and is_run_lifecycle_live(run.status)
         ]
+
+    def checkpoint_state_for_run(self, run: AgentRun, checkpoint_id: str) -> dict[str, Any]:
+        agent = self._create_compiled_agent(run, [], None)
+        snapshot = _graph_checkpoint_snapshot(agent, run.thread_id, checkpoint_id)
+        return {"values": dict(snapshot.values), "next": tuple(snapshot.next)}
+
+    def register_start_cancel_guard(
+        self,
+        thread_id: str | None,
+        input_message_id: str | None,
+        cancel_event: threading.Event,
+    ) -> None:
+        with self._lock:
+            self._start_cancel_guards[(thread_id, input_message_id)] = cancel_event
+
+    def clear_start_cancel_guard(
+        self,
+        thread_id: str | None,
+        input_message_id: str | None,
+    ) -> None:
+        with self._lock:
+            self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
     def start(self, request: AgentStartRequest) -> AgentRun:
         self._reconcile_startup_once()
@@ -306,6 +330,19 @@ class HarnessService:
                     code="retrieval_tools_off",
                     status_code=400,
                 )
+            if request.resume_checkpoint_id:
+                if request.source_surface != "chat" or not request.thread_id:
+                    raise HarnessError(
+                        "Checkpoint resume is only supported for internal Chat branch regeneration.",
+                        code="checkpoint_resume_internal_only",
+                        status_code=400,
+                    )
+                if request.presented_tools != []:
+                    raise HarnessError(
+                        "Checkpoint resume requires tools to be explicitly off.",
+                        code="checkpoint_resume_tools_forbidden",
+                        status_code=400,
+                    )
             if request.content_blocks:
                 self._validate_content_capabilities(deployment, request)
             if presented and deployment.server_props and (
@@ -322,6 +359,7 @@ class HarnessService:
             setup = resolve_effective_setup(
                 deployment=deployment,
                 profile=profile,
+                per_request_overrides=request.per_request_overrides,
                 knowledge_refs=refs,
                 knowledge_versions=versions,
                 surface_system_prompt=request.system_prompt,
@@ -335,18 +373,77 @@ class HarnessService:
                 materialized_knowledge=knowledge_plan.facts,
                 inherit_deployment_settings=request.inherit_deployment_settings,
             )
-            saved_state = conversation_state(self.manager.paths.checkpoints_db, request.thread_id) if request.thread_id else {}
+            _, structured_output = response_format_for_run(
+                output_schema=request.output_schema,
+                deployment=deployment,
+                per_request=setup.bags.per_request,
+                tools_presented=bool(presented),
+                tools_off=request.presented_tools == [],
+            )
+            if request.resume_checkpoint_id:
+                now = utc_now()
+                validation_run = AgentRun(
+                    id=new_id("agent_validation"),
+                    status=AgentRunStatus.queued,
+                    deployment_id=deployment.id,
+                    task=request.task,
+                    content_blocks=request.content_blocks,
+                    enabled_tools=enabled,
+                    presented_tools=presented,
+                    denied_tools=[],
+                    system_prompt=setup.system_prompt,
+                    criteria=request.criteria or TaskCriteria(),
+                    budgets=request.budgets,
+                    created_at=now,
+                    updated_at=now,
+                    workspace_id=request.workspace_id,
+                    project_path=project_path,
+                    profile_id=setup.selected_profile_id,
+                    parent_run_id=request.parent_run_id,
+                    source_surface=request.source_surface,
+                    tool_mode=request.tool_mode,
+                    tool_mode_label=label_for_tool_mode(request.tool_mode),
+                    recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
+                    recorded_fixtures=list(request.recorded_fixtures or []),
+                    knowledge=refs.binding(),
+                    memory_version_refs=refs.memory_version_refs,
+                    skill_version_refs=refs.skill_version_refs,
+                    protected_instruction_version_refs=refs.protected_instruction_version_refs,
+                    embedding_deployment_id=request.embedding_deployment_id,
+                    retrieval_project_paths=list(request.retrieval_project_paths),
+                    thread_id=request.thread_id,
+                    resume_checkpoint_id=request.resume_checkpoint_id,
+                    related_files=_initial_related_files(project_path),
+                    effective_setup=setup,
+                    host_shell=HostShellFacts(
+                        available=False,
+                        cwd=project_path,
+                    ),
+                    output_schema=request.output_schema,
+                    structured_output=structured_output,
+                )
+                validation_agent = self._create_compiled_agent(validation_run, [], None)
+                snapshot = _graph_checkpoint_snapshot(
+                    validation_agent,
+                    request.thread_id,
+                    request.resume_checkpoint_id,
+                )
+                saved_state = dict(snapshot.values)
+            else:
+                saved_state = conversation_state(self.manager.paths.checkpoints_db, request.thread_id) if request.thread_id else {}
             retained = list(saved_state.get("messages", []))
             # Use the installed upstream reconstruction, not a second history reducer.
             retained = SummarizationMiddleware._apply_event_to_messages(retained, saved_state.get(SUMMARIZATION_EVENT_KEY))
-            validate_retained_messages(deployment, [SystemMessage(content=setup.system_prompt), *retained,
-                HumanMessage(content=user_message_content(request.task, request.content_blocks))])
+            validation_messages = [SystemMessage(content=setup.system_prompt), *retained]
+            if not request.resume_checkpoint_id:
+                validation_messages.append(HumanMessage(content=user_message_content(request.task, request.content_blocks)))
+            validate_retained_messages(deployment, validation_messages)
             context_observation = observe_context(
                 deployment=deployment,
                 per_request=setup.bags.per_request,
                 system_prompt=setup.system_prompt,
-                task=request.task,
-                content_blocks=request.content_blocks,
+                task="" if request.resume_checkpoint_id else request.task,
+                content_blocks=None if request.resume_checkpoint_id else request.content_blocks,
                 tool_count=len(presented),
                 output_schema=(
                     request.output_schema.json_schema
@@ -358,13 +455,6 @@ class HarnessService:
                 tools=tools_for_names(presented),
             )
             require_context_fit(context_observation)
-            _, structured_output = response_format_for_run(
-                output_schema=request.output_schema,
-                deployment=deployment,
-                per_request=setup.bags.per_request,
-                tools_presented=bool(presented),
-                tools_off=request.presented_tools == [],
-            )
             if request.workspace_id:
                 others = self.active_workspace_run_ids(request.workspace_id)
                 if others:
@@ -374,6 +464,11 @@ class HarnessService:
                         code="not_quiescent",
                         status_code=409,
                     )
+            if project_path:
+                blockers = [other.id for other in self.list_runs() if is_run_lifecycle_live(other.status)
+                    and other.project_path and Path(other.project_path).resolve() == Path(project_path).resolve()]
+                if blockers:
+                    raise HarnessError("Another run is using this project. Wait for it to finish before capturing the next consistent state.", code="not_quiescent", status_code=409)
             starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
             now = utc_now()
             run = AgentRun(
@@ -406,6 +501,7 @@ class HarnessService:
                 embedding_deployment_id=request.embedding_deployment_id,
                 retrieval_project_paths=list(request.retrieval_project_paths),
                 thread_id=request.thread_id or None,
+                resume_checkpoint_id=request.resume_checkpoint_id,
                 related_files=_initial_related_files(project_path),
                 effective_setup=setup,
                 starting_snapshot_id=starting_snapshot_id,
@@ -426,8 +522,18 @@ class HarnessService:
             # Agent-run / Lab own one thread per run. Chat follow-ups pass the
             # conversation thread so LangGraph resumes the same checkpointer state.
             run.thread_id = request.thread_id or run.id
-            cancel = threading.Event()
             with self._lock:
+                cancel = self._start_cancel_guards.get((request.thread_id, input_message_id)) or threading.Event()
+                if cancel.is_set():
+                    run.status = AgentRunStatus.cancel_requested
+                    run.events.append(
+                        AgentEvent(
+                            at=utc_now(),
+                            kind="cancel_requested",
+                            detail={"requested": True, "confirmed": False},
+                        )
+                    )
+                    run.updated_at = utc_now()
                 self._runs[run.id] = run
                 self._cancels[run.id] = cancel
                 self._decision_ready[run.id] = threading.Event()
@@ -512,7 +618,13 @@ class HarnessService:
         with self._lock:
             return run.model_copy(deep=True)
 
-    def resume_interrupt(self, run_id: str, request: InterruptDecisionRequest) -> AgentRun:
+    def resume_interrupt(
+        self,
+        run_id: str,
+        request: InterruptDecisionRequest | UserAnswerRequest,
+        *,
+        require_interrupt_identity: bool = False,
+    ) -> AgentRun:
         """Apply Deep Agents HITL decisions. Does not invent a durable inbox."""
 
         self._reconcile_startup_once()
@@ -543,8 +655,42 @@ class HarnessService:
                     code="interrupt_decision_pending",
                     status_code=409,
                 )
+            if require_interrupt_identity:
+                requested_id = getattr(request, "interrupt_id", None)
+                requested_namespace = list(getattr(request, "namespace", []) or [])
+                if (
+                    not pending.interrupt_id
+                    or requested_id != pending.interrupt_id
+                    or requested_namespace != pending.namespace
+                ):
+                    raise HarnessError(
+                        "This approval is stale or belongs to another run.",
+                        code="stale_interrupt",
+                        status_code=409,
+                    )
             try:
-                payloads = validated_decision_payloads(pending, request.decisions)
+                if isinstance(request, UserAnswerRequest):
+                    question = pending.question
+                    if pending.kind != "ask_user" or question is None:
+                        raise ValueError("interrupt_answer_type")
+                    if request.cancelled:
+                        if request.answer:
+                            raise ValueError("Cancelled answers must not include answer text")
+                        payloads = [{"type": "user_answer", "cancelled": True}]
+                    elif not request.answer.strip():
+                        raise ValueError("An answer is required")
+                    else:
+                        if question.answer_type == "choice" and request.answer not in question.choices:
+                            raise ValueError("Choose one of the offered answers")
+                        if question.answer_type in {"file", "folder"}:
+                            chosen = Path(request.answer).expanduser()
+                            if not chosen.is_absolute() or not (chosen.is_file() if question.answer_type == "file" else chosen.is_dir()):
+                                raise ValueError("Select an existing absolute file or folder path")
+                        payloads = [{"type": "user_answer", "answer": request.answer}]
+                else:
+                    if pending.kind != "deepagents_interrupt_on":
+                        raise ValueError("interrupt_answer_type")
+                    payloads = validated_decision_payloads(pending, request.decisions)
             except ValueError as exc:
                 code = str(exc)
                 if code not in {"interrupt_decision_count", "interrupt_decision_not_allowed"}:
@@ -554,6 +700,19 @@ class HarnessService:
                     code=code,
                     status_code=400,
                 ) from exc
+            from workbench_backend.state.preferences import PreferenceStore
+            grants = PreferenceStore(self.store)
+            for action, decision in zip(pending.action_requests, getattr(request, "decisions", []), strict=True):
+                if decision.type != "approve":
+                    continue
+                if action.name not in run.enabled_tools or action.name not in run.presented_tools:
+                    raise HarnessError(
+                        "This tool is no longer available for the run.",
+                        code="interrupt_tool_unavailable",
+                        status_code=409,
+                    )
+                if decision.scope != "once":
+                    grants.allow(run, action, decision.scope)
             thread = self._threads.get(run_id)
             if thread is not None and thread.is_alive():
                 self._pending_decisions[run_id] = payloads
@@ -600,20 +759,19 @@ class HarnessService:
                 else None
             )
             agent = self._create_compiled_agent(run, http_sink, fixture_bank)
-            user_message: dict[str, Any] = {
-                "role": "user",
-                "content": user_message_content(run.task, run.content_blocks),
-            }
-            input_message_id = getattr(run, "input_message_id", None)
-            if input_message_id:
-                user_message["id"] = input_message_id
-            self._drive_until_terminal(
-                run,
-                agent,
-                cancel,
-                {"messages": [user_message],
-                 **({"structured_response": None} if run.output_schema is not None else {})},
-            )
+            if run.resume_checkpoint_id:
+                payload: Any = None
+            else:
+                user_message: dict[str, Any] = {
+                    "role": "user",
+                    "content": user_message_content(run.task, run.content_blocks),
+                }
+                input_message_id = getattr(run, "input_message_id", None)
+                if input_message_id:
+                    user_message["id"] = input_message_id
+                payload = {"messages": [user_message],
+                    **({"structured_response": None} if run.output_schema is not None else {})}
+            self._drive_until_terminal(run, agent, cancel, payload)
         except ReplayError as exc:
             if agent is not None:
                 self._link_run(run, agent)
@@ -670,7 +828,7 @@ class HarnessService:
                 run,
                 agent,
                 cancel,
-                Command(resume={"decisions": decisions}),
+                Command(resume=_resume_value(decisions)),
             )
         except ReplayError as exc:
             if agent is not None:
@@ -773,7 +931,8 @@ class HarnessService:
         permissions = filesystem_permissions_for_run(run)
         if permissions:
             agent_kwargs["permissions"] = permissions
-        interrupt_on = interrupt_on_for_run(run)
+        from workbench_backend.state.preferences import PreferenceStore
+        interrupt_on = interrupt_on_for_run(run, PreferenceStore(self.store))
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
         tools = tools_for_names(run.presented_tools)
@@ -861,7 +1020,7 @@ class HarnessService:
                 self._resume_reject_then_stop(agent, run, pending, config, message_nodes)
                 return
             self._clear_pending_interrupt(run, decisions)
-            current = Command(resume={"decisions": decisions})
+            current = Command(resume=_resume_value(decisions))
 
     def _stream_until_pause(
         self,
@@ -901,6 +1060,8 @@ class HarnessService:
         return pending_interrupt_from_raw(getattr(state, "interrupts", None))
 
     def _publish_interrupt(self, run: AgentRun, pending: Any) -> None:
+        if isinstance(pending, PendingInterrupt) and not pending.interrupt_id:
+            pending = pending.model_copy(update={"interrupt_id": _fallback_interrupt_id(run)})
         with self._lock:
             run.pending_interrupt = pending
             run.updated_at = utc_now()
@@ -969,7 +1130,7 @@ class HarnessService:
         stream = None
         try:
             stream = agent.stream_events(
-                Command(resume={"decisions": payloads}),
+                Command(resume=_resume_value(payloads)),
                 config=config,
                 version="v3",
             )
@@ -994,6 +1155,14 @@ class HarnessService:
                     run.updated_at = run.finished_at
                     self._persist_and_notify(run)
                 return
+            if run.project_path and run.final_snapshot_id is None:
+                try:
+                    manifest = capture_project_snapshot(self.manager.paths, workspace_id=run.workspace_id or "unbound",
+                        project_root=Path(run.project_path), kind="final")
+                    run.final_snapshot_id = manifest.id
+                except Exception as exc:
+                    run.events.append(AgentEvent(at=utc_now(), kind="branch_snapshot_unavailable",
+                        detail={"message": str(exc)}))
             run.status = status
             run.stop_reason = stop_reason
             run.finished_at = utc_now()
@@ -1464,22 +1633,23 @@ class HarnessService:
         if not thread_id or not run.checkpoint_ids:
             return False
         saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
-        for checkpoint_id in run.checkpoint_ids:
-            if not checkpoint_id:
-                continue
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_ns": "",
-                    "checkpoint_id": checkpoint_id,
-                }
-            }
-            try:
-                if saver.get_tuple(config) is not None:
-                    return True
-            except Exception:  # noqa: BLE001 - missing/unreadable checkpoint is not resumable
-                return False
-        return False
+        try:
+            latest = next(
+                saver.list(
+                    {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+                    limit=1,
+                ),
+                None,
+            )
+        except Exception:  # noqa: BLE001 - missing/unreadable checkpoint is not resumable
+            return False
+        if latest is None:
+            return False
+        configurable = latest.config.get("configurable") if isinstance(latest.config, dict) else None
+        checkpoint_id = configurable.get("checkpoint_id") if isinstance(configurable, dict) else None
+        if not checkpoint_id or checkpoint_id not in run.checkpoint_ids:
+            return False
+        return any(channel == "__interrupt__" for _task, channel, _value in latest.pending_writes or [])
 
     def _persist(self, run: AgentRun) -> None:
         sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
@@ -1577,7 +1747,11 @@ def _pending_from_native_event(event: Any) -> Any:
     if raw is None:
         data = params.get("data")
         raw = data.get("__interrupt__") if isinstance(data, dict) else None
-    return pending_interrupt_from_raw(raw)
+    pending = pending_interrupt_from_raw(raw)
+    if pending is None:
+        return None
+    namespace = params.get("namespace")
+    return _pending_with_identity(pending, raw, namespace if isinstance(namespace, list) else [])
 
 
 def _native_message_identity(message: Any) -> tuple[str, str] | None:
@@ -1623,10 +1797,85 @@ def _readable_assistant_content(content: Any) -> Any:
     return "".join(text_parts) if text_parts else content
 
 
+def _pending_with_identity(pending: PendingInterrupt, raw: Any, namespace: list[Any]) -> PendingInterrupt:
+    ident = _interrupt_id_from_raw(raw)
+    clean_namespace = [item for item in namespace if isinstance(item, str)]
+    if ident or clean_namespace:
+        return pending.model_copy(update={"interrupt_id": ident or pending.interrupt_id, "namespace": clean_namespace})
+    return pending
+
+
+def _interrupt_id_from_raw(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            found = _interrupt_id_from_raw(item)
+            if found:
+                return found
+        return None
+    ident = raw.get("id") if isinstance(raw, dict) else getattr(raw, "id", None)
+    if ident is None:
+        return None
+    text = str(ident).strip()
+    return text or None
+
+
+def _fallback_interrupt_id(run: AgentRun) -> str:
+    count = sum(1 for event in run.events if event.kind == "interrupt") + 1
+    return f"{run.id}:interrupt:{count}"
+
+
+def _resume_value(decisions: list[dict[str, str]]) -> dict[str, Any]:
+    if len(decisions) == 1 and decisions[0].get("type") == "user_answer":
+        return {key: value for key, value in decisions[0].items() if key != "type"}
+    return {"decisions": decisions}
+
+
+def _graph_checkpoint_snapshot(agent: Any, thread_id: str | None, checkpoint_id: str | None) -> Any:
+    if not thread_id or not checkpoint_id:
+        raise HarnessError(
+            "The requested checkpoint identity is incomplete.",
+            code="checkpoint_resume_missing",
+            status_code=409,
+        )
+    try:
+        snapshot = agent.get_state(
+            {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "checkpoint_ns": "",
+                    "checkpoint_id": checkpoint_id,
+                }
+            }
+        )
+    except Exception as exc:
+        raise HarnessError(
+            "The requested checkpoint could not be reconstructed by the agent graph.",
+            code="checkpoint_resume_invalid",
+            status_code=409,
+        ) from exc
+    if snapshot is None:
+        raise HarnessError(
+            "The requested checkpoint is unavailable.",
+            code="checkpoint_resume_missing",
+            status_code=409,
+        )
+    if getattr(snapshot, "values", None) is None:
+        raise HarnessError(
+            "The requested checkpoint has no reconstructed graph state.",
+            code="checkpoint_resume_invalid",
+            status_code=409,
+        )
+    return snapshot
+
+
 def _invoke_config(run: AgentRun) -> dict[str, Any]:
     """Thread id is required so LangGraph can write checkpoints.sqlite."""
 
     config: dict[str, Any] = {"configurable": {"thread_id": run.thread_id or run.id}}
+    if run.resume_checkpoint_id:
+        config["configurable"]["checkpoint_id"] = run.resume_checkpoint_id
     if run.budgets is not None and run.budgets.max_steps is not None:
         config["recursion_limit"] = run.budgets.max_steps
     return config

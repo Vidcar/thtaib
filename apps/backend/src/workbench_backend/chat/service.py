@@ -4,18 +4,30 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import threading
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
-from workbench_backend.agents.tools import enabled_for_project
+from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
+from workbench_backend.assets.schemas import RetainedAssetReuseRequest
+from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
     ChatDeployHealth,
+    ChatCancelRequest,
     ChatContinuity,
     ChatConversation,
     ChatConversationCreateRequest,
+    ChatConversationArchiveRequest,
+    ChatConversationUpdateRequest,
     ChatConversationView,
+    ChatDraft,
+    ChatDraftUpdateRequest,
     ChatMessage,
+    ChatQueueItem,
+    ChatQueueItemUpdateRequest,
+    ChatQueueResumeRequest,
+    ChatSearchResult,
     ChatStartRequest,
     ChatTranscriptReplaceRequest,
 )
@@ -28,6 +40,7 @@ from workbench_backend.knowledge.schemas import KnowledgeRefs
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.service import LabService
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.checkpointer import open_sqlite_checkpointer
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.state.store import ApplicationStore
 
@@ -60,12 +73,17 @@ class ChatService:
         lab_provider: Callable[[], LabService],
         app_store: ApplicationStore | None = None,
         knowledge_provider: Callable[[], KnowledgeService] | None = None,
+        assets_provider: Callable[[], RetainedAssetService] | None = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._harness_provider = harness_provider
         self._lab_provider = lab_provider
         self._app_store = app_store
         self._knowledge_provider = knowledge_provider
+        self._assets_provider = assets_provider
+        self._asset_service: RetainedAssetService | None = None
+        self._submission_cancel_lock = threading.RLock()
+        self._submission_cancel_events: dict[tuple[str, str | None, str], threading.Event] = {}
 
     @property
     def manager(self) -> ModelManager:
@@ -88,6 +106,14 @@ class ChatService:
                 status_code=409,
             )
         return self._knowledge_provider()
+
+    @property
+    def assets(self) -> RetainedAssetService:
+        if self._assets_provider is not None:
+            return self._assets_provider()
+        if self._asset_service is None:
+            self._asset_service = RetainedAssetService(self.app_store)
+        return self._asset_service
 
     @property
     def paths(self) -> WorkbenchPaths:
@@ -114,12 +140,19 @@ class ChatService:
             knowledge_version_refs=request.knowledge_version_refs,
         )
         now = utc_now()
+        project_text = str(project_path) if project_path is not None else None
         conversation = ChatConversation(
             id=new_id("chat"),
+            title=request.title,
+            area_kind="project" if project_text else "general",
+            area_id=workspace_id or project_text or "general",
+            area_label=project_path.name if project_path is not None else "General",
+            area_project_path=project_text,
+            area_workspace_id=workspace_id,
             deployment_id=request.deployment_id,
             profile_id=profile_id,
             inherit_deployment_settings=request.inherit_deployment_settings,
-            project_path=str(project_path) if project_path is not None else None,
+            project_path=project_text,
             workspace_id=workspace_id,
             thread_id=new_id("thread"),
             memory_version_refs=refs.memory_version_refs,
@@ -132,14 +165,20 @@ class ChatService:
         )
         return self._view(self.store.put(conversation))
 
-    def list_conversations(self) -> list[ChatConversationView]:
+    def list_conversations(self, *, include_archived: bool = False) -> list[ChatConversationView]:
         views: list[ChatConversationView] = []
-        for item in self.store.list_conversations():
+        for item in self.store.list_conversations(include_archived=include_archived):
             with self.store.conversation_lock(item.id):
                 fresh = self._require(item.id)
                 self._persist_thread_if_missing(fresh)
             views.append(self._view(fresh, persist=True))
         return views
+
+    def search(self, query: str, *, include_archived: bool = False) -> list[ChatSearchResult]:
+        return [
+            ChatSearchResult(conversation=conversation, matched_messages=messages)
+            for conversation, messages in self.store.search(query, include_archived=include_archived)
+        ]
 
     def get(self, conversation_id: str) -> ChatConversationView:
         with self.store.conversation_lock(conversation_id):
@@ -149,11 +188,11 @@ class ChatService:
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()
-        if not task and not request.content_blocks:
+        if not task and not request.content_blocks and not request.attachment_ids:
             raise ChatError("Compose text is required.", code="task_required", status_code=400)
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
-            conversation = self._reconcile_terminal_assistant(conversation)
+            conversation, _terminal = self._reconcile_terminal_assistant(conversation)
             if conversation.current_run_id:
                 try:
                     current = self.harness.get_run(conversation.current_run_id)
@@ -172,105 +211,219 @@ class ChatService:
                 # takes the harness lock before the store lock.
                 conversation = self._require(conversation_id)
                 if current is not None:
-                    conversation = self._reconcile_terminal_assistant(conversation, current)
+                    if conversation.history_replaced:
+                        updated = conversation.model_copy(deep=True)
+                        updated.current_run_id = None
+                        updated.updated_at = utc_now()
+                        conversation = self.store.put(updated)
+                    else:
+                        conversation, _terminal = self._reconcile_terminal_assistant(conversation, current)
+            return self._view(self._dispatch_request(conversation, request))
 
-            next_conversation = conversation.model_copy(deep=True)
-            fields_set = request.model_fields_set
-            if request.deployment_id:
-                self.manager.get_deployment(request.deployment_id)
-                next_conversation.deployment_id = request.deployment_id
-            if "profile_id" in fields_set:
-                next_conversation.profile_id = self._bind_profile(request.profile_id)
-            if "inherit_deployment_settings" in fields_set:
-                next_conversation.inherit_deployment_settings = request.inherit_deployment_settings
-            if (
-                request.memory_version_refs is not None
-                or request.skill_version_refs is not None
-                or request.protected_instruction_version_refs is not None
-                or request.knowledge_version_refs is not None
-            ):
-                refs = self._bind_knowledge(
-                    memory_version_refs=request.memory_version_refs
-                    if request.memory_version_refs is not None
-                    else next_conversation.memory_version_refs,
-                    skill_version_refs=request.skill_version_refs
-                    if request.skill_version_refs is not None
-                    else next_conversation.skill_version_refs,
-                    protected_instruction_version_refs=(
-                        request.protected_instruction_version_refs
-                        if request.protected_instruction_version_refs is not None
-                        else next_conversation.protected_instruction_version_refs
-                    ),
-                    knowledge_version_refs=request.knowledge_version_refs or [],
+    def enqueue(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
+        task = request.task.strip()
+        if not task and not request.content_blocks and not request.attachment_ids:
+            raise ChatError("Compose text is required.", code="task_required", status_code=400)
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            queued = self._append_queue_item(conversation, request)
+            return self._view(queued)
+
+    def resume_queue(
+        self,
+        conversation_id: str,
+        request: ChatQueueResumeRequest,
+    ) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            conversation = self._recover_dispatching_queue(conversation)
+            if request.resume_paused:
+                conversation = self._unpause_queue(conversation, request)
+            return self._view(self._dispatch_next_queued(conversation))
+
+    def rename(self, conversation_id: str, request: ChatConversationUpdateRequest) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id).model_copy(deep=True)
+            conversation.title = request.title.strip()
+            return self._view(self.app_store.update_conversation(conversation))
+
+    def archive(
+        self,
+        conversation_id: str,
+        request: ChatConversationArchiveRequest,
+    ) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id).model_copy(deep=True)
+            conversation.archived = request.archived
+            conversation.archived_at = utc_now() if request.archived else None
+            return self._view(self.app_store.update_conversation(conversation))
+
+    def update_draft(self, conversation_id: str, request: ChatDraftUpdateRequest) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            with self.app_store._lock:
+                conversation = self._require(conversation_id).model_copy(deep=True)
+                self.assets.require_active_assets(
+                    list(request.attachment_ids),
+                    session_id=conversation.id,
+                    project_path=conversation.project_path,
                 )
-                next_conversation.memory_version_refs = refs.memory_version_refs
-                next_conversation.skill_version_refs = refs.skill_version_refs
-                next_conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
-            if "embedding_deployment_id" in fields_set:
-                next_conversation.embedding_deployment_id = request.embedding_deployment_id
-            if "retrieval_project_paths" in fields_set:
-                next_conversation.retrieval_project_paths = list(request.retrieval_project_paths or [])
-            project_access_changed = "project_path" in fields_set or "workspace_id" in fields_set
-            if project_access_changed:
-                workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
-                next_conversation.workspace_id = workspace_id
-                next_conversation.project_path = str(project_path) if project_path is not None else None
-                if project_path is None and "retrieval_project_paths" not in fields_set:
-                    next_conversation.retrieval_project_paths = []
-            try:
-                self.manager.get_deployment(next_conversation.deployment_id)
-            except ManagerError as exc:
-                if exc.code != "deployment_missing":
-                    raise
-                raise ChatError(
-                    "The Chat conversation is bound to a deployment that is no longer available. "
-                    "Select a deployment to continue.",
-                    code="deploy_missing",
-                    status_code=409,
-                    details={"deployment_id": next_conversation.deployment_id},
-                ) from exc
-            self._ensure_thread(next_conversation)
-            now = utc_now()
-            next_conversation.history_replaced = False
-            next_conversation.transcript.append(ChatMessage(id=request.input_message_id, role="user", content=task,
-                content_blocks=[block.model_dump(mode="json") for block in request.content_blocks] if request.content_blocks else None, at=now))
-            try:
-                started = self.harness.start(
-                    AgentStartRequest(
-                        deployment_id=next_conversation.deployment_id,
-                        task=task,
-                        input_message_id=request.input_message_id,
-                        content_blocks=request.content_blocks,
-                        output_schema=request.output_schema,
-                        presented_tools=request.presented_tools,
-                        system_prompt=(
-                            CHAT_SYSTEM_PROMPT
-                            if next_conversation.project_path
-                            else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
-                        ),
-                        workspace_id=next_conversation.workspace_id,
-                        project_path=next_conversation.project_path,
-                        profile_id=next_conversation.profile_id,
-                        inherit_deployment_settings=next_conversation.inherit_deployment_settings,
-                        source_surface="chat",
-                        thread_id=next_conversation.thread_id,
-                        memory_version_refs=next_conversation.memory_version_refs,
-                        skill_version_refs=next_conversation.skill_version_refs,
-                        protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
-                        embedding_deployment_id=next_conversation.embedding_deployment_id,
-                        retrieval_project_paths=list(next_conversation.retrieval_project_paths),
+                current_revision = conversation.draft.revision if conversation.draft else 0
+                if request.expected_revision is not None and request.expected_revision != current_revision:
+                    raise ChatError(
+                        "The Chat draft changed before this update.",
+                        code="draft_revision_conflict",
+                        status_code=409,
                     )
+                conversation.draft = ChatDraft(
+                    content=request.content,
+                    content_blocks=request.content_blocks,
+                    attachment_ids=list(request.attachment_ids),
+                    intended_config=dict(request.intended_config),
+                    revision=current_revision + 1,
+                    updated_at=utc_now(),
                 )
-            except HarnessError:
-                raise
-            next_conversation.transcript[-1].run_id = started.id
-            next_conversation.current_run_id = started.id
-            next_conversation.run_ids.append(started.id)
-            next_conversation.updated_at = utc_now()
-            self.store.put(next_conversation)
-            return self._view(next_conversation)
+                updated = self.app_store.update_conversation(conversation)
+            return self._view(updated)
 
-    def cancel(self, conversation_id: str) -> ChatConversationView:
+    def update_queue_item(
+        self,
+        conversation_id: str,
+        item_id: str,
+        request: ChatQueueItemUpdateRequest,
+    ) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            with self.app_store._lock:
+                conversation = self._require(conversation_id).model_copy(deep=True)
+                if request.attachment_ids is not None:
+                    self.assets.require_active_assets(
+                        list(request.attachment_ids),
+                        session_id=conversation.id,
+                        project_path=conversation.project_path,
+                    )
+                item = next((entry for entry in conversation.queue if entry.id == item_id), None)
+                if item is None:
+                    raise ChatError("Unknown queued Chat turn.", code="queue_item_missing", status_code=404)
+                if item.status == "dispatching":
+                    raise ChatError("A dispatching Chat turn cannot be edited.", code="queue_item_dispatching", status_code=409)
+                if request.task is not None:
+                    item.task = request.task
+                if request.input_message_id is not None:
+                    item.input_message_id = request.input_message_id
+                if request.content_blocks is not None:
+                    item.content_blocks = request.content_blocks
+                if request.attachment_ids is not None:
+                    item.attachment_ids = list(request.attachment_ids)
+                if request.output_schema is not None:
+                    item.output_schema = request.output_schema
+                if request.intended_config is not None:
+                    item.intended_config = dict(request.intended_config)
+                item.updated_at = utc_now()
+                updated = self.app_store.update_conversation(conversation)
+            return self._view(updated)
+
+    def remove_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id).model_copy(deep=True)
+            queue = [item for item in conversation.queue if item.id != item_id]
+            if len(queue) == len(conversation.queue):
+                raise ChatError("Unknown queued Chat turn.", code="queue_item_missing", status_code=404)
+            conversation.queue = queue
+            return self._view(self.app_store.update_conversation(conversation))
+
+    def observe_terminal_run(self, run: AgentRun) -> None:
+        """Reconcile terminal Chat output and advance/pause queued work.
+
+        Call this from an app-level coordinator after the harness releases its
+        run lock. It intentionally does not run from inside harness persistence.
+        """
+
+        if run.source_surface != "chat" or run.status.value not in {"completed", "failed", "cancelled"}:
+            return
+        for item in self.store.list_conversations(include_archived=True):
+            if item.current_run_id != run.id:
+                continue
+            with self.store.conversation_lock(item.id):
+                conversation = self._require(item.id)
+                if conversation.current_run_id != run.id:
+                    return
+                conversation = self._accept_dispatching_run(conversation, run)
+                conversation, terminal = self._reconcile_terminal_assistant(conversation, run)
+                if terminal == "completed":
+                    conversation = self._complete_queue_item(conversation, run.id)
+                    self._dispatch_next_queued(conversation)
+                elif terminal in {"failed", "cancelled"}:
+                    conversation = self._complete_queue_item(conversation, run.id)
+                    self._pause_queue(conversation, terminal)
+            return
+
+    def reconcile_saved_queue_on_startup(self) -> int:
+        """Reconcile saved Chat queues without replaying uncertain work."""
+
+        reconciled = 0
+        for item in self.store.list_conversations(include_archived=True):
+            with self.store.conversation_lock(item.id):
+                conversation = self._require(item.id)
+                before = conversation.model_dump_json()
+                conversation = self._recover_dispatching_queue(conversation)
+                conversation = self._resolve_orphan_pending_cancellations(conversation)
+                if conversation.current_run_id:
+                    try:
+                        current = self.harness.get_run(conversation.current_run_id)
+                    except HarnessError:
+                        current = None
+                    if current is not None and current.status.value in {"completed", "failed", "cancelled"}:
+                        conversation = self._accept_dispatching_run(conversation, current)
+                        conversation, terminal = self._reconcile_terminal_assistant(conversation, current)
+                        conversation = self._complete_queue_item(conversation, current.id)
+                        if terminal in {"failed", "cancelled"}:
+                            conversation = self._pause_queue(conversation, terminal)
+                if conversation.model_dump_json() != before:
+                    reconciled += 1
+        return reconciled
+
+    def dispatch_idle_queued(self, conversation_id: str | None = None) -> int:
+        """Dispatch queued work for idle conversations when the app coordinator allows it."""
+
+        candidates = (
+            [self._require(conversation_id)]
+            if conversation_id is not None
+            else self.store.list_conversations(include_archived=True)
+        )
+        dispatched = 0
+        for item in candidates:
+            with self.store.conversation_lock(item.id):
+                conversation = self._require(item.id)
+                before_run_ids = set(conversation.run_ids)
+                conversation = self._recover_dispatching_queue(conversation)
+                updated = self._dispatch_next_queued(conversation)
+                if set(updated.run_ids) != before_run_ids:
+                    dispatched += 1
+        return dispatched
+
+    def cancel(
+        self,
+        conversation_id: str,
+        request: ChatCancelRequest | None = None,
+    ) -> ChatConversationView:
+        input_message_id = request.input_message_id if request is not None else None
+        if input_message_id:
+            conversation = self._require(conversation_id)
+            self._request_submission_cancel(conversation, input_message_id)
+            conversation = self._require(conversation_id)
+            matched_run_id: str | None = None
+            for message in reversed(conversation.transcript):
+                if message.role == "user" and message.id == input_message_id:
+                    matched_run_id = message.run_id
+                    break
+            if matched_run_id is not None:
+                self.app_store.request_chat_submission_cancel(
+                    conversation_id,
+                    input_message_id,
+                    run_id=matched_run_id,
+                )
+                self.harness.cancel(matched_run_id)
+            updated = self._pause_matching_dispatch(conversation.id, input_message_id) or conversation
+            return self._view(updated)
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
             if not conversation.current_run_id:
@@ -292,7 +445,11 @@ class ChatService:
                     code="chat_run_missing",
                     status_code=409,
                 )
-            self.harness.resume_interrupt(conversation.current_run_id, request)
+            self.harness.resume_interrupt(
+                conversation.current_run_id,
+                request,
+                require_interrupt_identity=True,
+            )
             fresh = self._require(conversation_id)
         return self._view(fresh, persist=True)
 
@@ -315,6 +472,656 @@ class ChatService:
             conversation.history_replaced = True
             conversation.updated_at = utc_now()
             return self._view(self.store.put(conversation))
+
+    def _submission_cancel_key(
+        self,
+        conversation_id: str,
+        thread_id: str | None,
+        input_message_id: str,
+    ) -> tuple[str, str | None, str]:
+        return (conversation_id, thread_id, input_message_id)
+
+    def _register_submission_cancel_event(
+        self,
+        conversation_id: str,
+        thread_id: str | None,
+        input_message_id: str,
+    ) -> threading.Event:
+        key = self._submission_cancel_key(conversation_id, thread_id, input_message_id)
+        with self._submission_cancel_lock:
+            event = self._submission_cancel_events.get(key)
+            if event is None:
+                event = threading.Event()
+                self._submission_cancel_events[key] = event
+            if self.app_store.chat_submission_cancel_known(conversation_id, input_message_id):
+                event.set()
+            return event
+
+    def _request_submission_cancel(
+        self,
+        conversation: ChatConversation,
+        input_message_id: str,
+    ) -> None:
+        key = self._submission_cancel_key(conversation.id, conversation.thread_id, input_message_id)
+        with self._submission_cancel_lock:
+            self.app_store.request_chat_submission_cancel(conversation.id, input_message_id)
+            event = self._submission_cancel_events.get(key)
+            if event is not None:
+                event.set()
+
+    def _clear_submission_cancel_event(
+        self,
+        conversation_id: str,
+        thread_id: str | None,
+        input_message_id: str,
+    ) -> None:
+        key = self._submission_cancel_key(conversation_id, thread_id, input_message_id)
+        with self._submission_cancel_lock:
+            self._submission_cancel_events.pop(key, None)
+
+    def _dispatch_request(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        *,
+        queue_item: ChatQueueItem | None = None,
+    ) -> ChatConversation:
+        next_conversation = conversation.model_copy(deep=True)
+        self._reject_session_area_change(next_conversation, request)
+        self._apply_start_configuration(next_conversation, request)
+        self._preflight_start_request(next_conversation, request)
+        self._ensure_thread(next_conversation)
+        now = utc_now()
+        next_conversation.history_replaced = False
+        input_message_id = self._dispatch_input_message_id(request, queue_item)
+        content_blocks = self._content_blocks_with_attachments(next_conversation, request)
+        submission = self._submission_record(next_conversation, request, content_blocks)
+        existing_message = next(
+            (message for message in next_conversation.transcript if message.role == "user" and message.id == input_message_id),
+            None,
+        )
+        if existing_message is not None:
+            if self._message_submission_record(existing_message) != submission:
+                raise ChatError(
+                    "This input identity already belongs to a different Chat submission. Generate a new input id for edited work.",
+                    code="submission_identity_conflict",
+                    status_code=409,
+                )
+        else:
+            transcript_blocks = [block.model_dump(mode="json") for block in content_blocks] if content_blocks else []
+            transcript_blocks.append({"type": "workbench_submission", "submission": submission})
+            next_conversation.transcript.append(
+                ChatMessage(
+                    id=input_message_id,
+                    role="user",
+                    content=request.task.strip(),
+                    content_blocks=transcript_blocks,
+                    attachment_ids=list(request.attachment_ids),
+                    at=now,
+                )
+            )
+        if queue_item is not None:
+            for item in next_conversation.queue:
+                if item.id == queue_item.id:
+                    item.status = "dispatching"
+                    item.pause_reason = None
+                    item.pause_error_code = None
+                    item.pause_error = None
+                    item.input_message_id = input_message_id
+                    item.frozen_config = self._resolved_config(next_conversation, request)
+                    item.updated_at = now
+                    break
+        next_conversation.updated_at = now
+        next_conversation = self.store.put(next_conversation)
+
+        accepted = self._find_chat_run_by_input(next_conversation, input_message_id)
+        if accepted is None:
+            cancel_event = self._register_submission_cancel_event(
+                next_conversation.id,
+                next_conversation.thread_id,
+                input_message_id,
+            )
+            try:
+                self.harness.register_start_cancel_guard(
+                    next_conversation.thread_id,
+                    input_message_id,
+                    cancel_event,
+                )
+                accepted = self.harness.start(
+                    AgentStartRequest(
+                        deployment_id=next_conversation.deployment_id,
+                        task=request.task.strip(),
+                        input_message_id=input_message_id,
+                        content_blocks=content_blocks or None,
+                        output_schema=request.output_schema,
+                        presented_tools=request.presented_tools,
+                        system_prompt=(
+                            CHAT_SYSTEM_PROMPT
+                            if next_conversation.project_path
+                            else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
+                        ),
+                        workspace_id=next_conversation.workspace_id,
+                        project_path=next_conversation.project_path,
+                        profile_id=next_conversation.profile_id,
+                        inherit_deployment_settings=next_conversation.inherit_deployment_settings,
+                        per_request_overrides=request.per_request_overrides,
+                        source_surface="chat",
+                        thread_id=next_conversation.thread_id,
+                        memory_version_refs=next_conversation.memory_version_refs,
+                        skill_version_refs=next_conversation.skill_version_refs,
+                        protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
+                        embedding_deployment_id=next_conversation.embedding_deployment_id,
+                        retrieval_project_paths=list(next_conversation.retrieval_project_paths),
+                    )
+                )
+            except (HarnessError, ManagerError) as exc:
+                recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
+                if recovered is not None:
+                    accepted = recovered
+                elif queue_item is not None:
+                    self.app_store.resolve_chat_submission_cancel(next_conversation.id, input_message_id)
+                    return self._pause_dispatching_item(
+                        next_conversation,
+                        queue_item.id,
+                        "failed",
+                        error_code=getattr(exc, "code", None),
+                        error=str(exc),
+                    )
+                else:
+                    self.app_store.resolve_chat_submission_cancel(next_conversation.id, input_message_id)
+                    raise
+            except Exception:
+                recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
+                if recovered is not None:
+                    accepted = recovered
+                elif queue_item is not None:
+                    return self._pause_dispatching_item(
+                        next_conversation,
+                        queue_item.id,
+                        "dispatch_uncertain",
+                        error_code="dispatch_uncertain",
+                        error="Dispatch failed before Chat could confirm whether a run was accepted.",
+                    )
+                else:
+                    raise
+            finally:
+                self.harness.clear_start_cancel_guard(next_conversation.thread_id, input_message_id)
+                if accepted is not None:
+                    # Keep the Event registered until the accepted run has
+                    # been durably linked below. Stop may still arrive in the
+                    # acceptance commit window before the transcript has a
+                    # run_id to cancel by.
+                    pass
+                else:
+                    self._clear_submission_cancel_event(
+                        next_conversation.id,
+                        next_conversation.thread_id,
+                        input_message_id,
+                    )
+        assert accepted is not None
+        next_conversation = self._accept_dispatched_run(next_conversation, accepted, input_message_id)
+        if self.app_store.chat_submission_cancel_requested(next_conversation.id, input_message_id):
+            self.app_store.request_chat_submission_cancel(
+                next_conversation.id,
+                input_message_id,
+                run_id=accepted.id,
+            )
+            self.harness.cancel(accepted.id)
+        self._clear_submission_cancel_event(
+            next_conversation.id,
+            next_conversation.thread_id,
+            input_message_id,
+        )
+        return next_conversation
+
+    def _append_queue_item(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+    ) -> ChatConversation:
+        with self.app_store._lock:
+            queued = conversation.model_copy(deep=True)
+            self.assets.require_active_assets(
+                list(request.attachment_ids),
+                session_id=queued.id,
+                project_path=queued.project_path,
+            )
+            self._reject_session_area_change(queued, request)
+            now = utc_now()
+            content_blocks = [
+                block.model_dump(mode="json") for block in request.content_blocks
+            ] if request.content_blocks else None
+            output_schema = request.output_schema.model_dump(mode="json") if request.output_schema else None
+            intended_config = self._intended_config(queued, request)
+            existing_input_id = request.input_message_id.strip() if request.input_message_id else None
+            if existing_input_id:
+                for existing in queued.queue:
+                    if existing.input_message_id != existing_input_id:
+                        continue
+                    if self._queue_submission_matches(existing, request, content_blocks, output_schema, intended_config):
+                        return self.store.put(queued)
+                    raise ChatError(
+                        "This input identity already belongs to a different queued Chat submission. Generate a new input id for edited work.",
+                        code="submission_identity_conflict",
+                        status_code=409,
+                    )
+            item = ChatQueueItem(
+                id=new_id("queue"),
+                task=request.task.strip(),
+                input_message_id=request.input_message_id,
+                content_blocks=content_blocks,
+                attachment_ids=list(request.attachment_ids),
+                output_schema=output_schema,
+                intended_config=intended_config,
+                created_at=now,
+                updated_at=now,
+            )
+            queued.queue.append(item)
+            queued.updated_at = now
+            return self.store.put(queued)
+
+    def _dispatch_next_queued(self, conversation: ChatConversation) -> ChatConversation:
+        if conversation.current_run_id:
+            try:
+                current = self.harness.get_run(conversation.current_run_id)
+            except HarnessError:
+                current = None
+            if current is not None and is_run_lifecycle_live(current.status):
+                return conversation
+        if not conversation.queue or conversation.queue[0].status != "queued":
+            return conversation
+        next_item = conversation.queue[0]
+        request = self._request_from_queue_item(next_item)
+        return self._dispatch_request(conversation, request, queue_item=next_item)
+
+    def _recover_dispatching_queue(self, conversation: ChatConversation) -> ChatConversation:
+        dispatching = next((item for item in conversation.queue if item.status == "dispatching"), None)
+        if dispatching is None:
+            return conversation
+        if dispatching.run_id:
+            try:
+                run = self.harness.get_run(dispatching.run_id)
+            except HarnessError:
+                run = None
+            if run is not None:
+                recovered = self._accept_dispatching_run(conversation, run)
+                if is_run_lifecycle_live(run.status):
+                    return recovered
+                recovered, terminal = self._reconcile_terminal_assistant(recovered, run)
+                recovered = self._complete_queue_item(recovered, run.id)
+                if terminal in {"failed", "cancelled"}:
+                    return self._pause_queue(recovered, terminal)
+                return recovered
+        if dispatching.input_message_id:
+            run = self._find_chat_run_by_input(conversation, dispatching.input_message_id)
+            if run is not None:
+                recovered = self._accept_dispatched_run(conversation, run, dispatching.input_message_id)
+                if is_run_lifecycle_live(run.status):
+                    return recovered
+                recovered, terminal = self._reconcile_terminal_assistant(recovered, run)
+                recovered = self._complete_queue_item(recovered, run.id)
+                if terminal in {"failed", "cancelled"}:
+                    return self._pause_queue(recovered, terminal)
+                return recovered
+        uncertain = conversation.model_copy(deep=True)
+        dispatching = next((item for item in uncertain.queue if item.status == "dispatching"), None)
+        if dispatching is None:
+            return conversation
+        dispatching.status = "paused"
+        dispatching.pause_reason = "dispatch_uncertain"
+        dispatching.pause_error_code = "dispatch_uncertain"
+        dispatching.pause_error = "Chat could not confirm whether the queued turn was accepted before restart."
+        dispatching.updated_at = utc_now()
+        uncertain.updated_at = utc_now()
+        return self.store.put(uncertain)
+
+    def _resolve_orphan_pending_cancellations(self, conversation: ChatConversation) -> ChatConversation:
+        for input_message_id in self.app_store.pending_chat_submission_cancels(conversation.id):
+            run = self._find_chat_run_by_input(conversation, input_message_id)
+            if run is not None and is_run_lifecycle_live(run.status):
+                continue
+            self.app_store.resolve_chat_submission_cancel(conversation.id, input_message_id)
+        return self._require(conversation.id)
+
+    def _accept_dispatching_run(self, conversation: ChatConversation, run: AgentRun) -> ChatConversation:
+        dispatching = next(
+            (item for item in conversation.queue if item.status == "dispatching" and item.run_id == run.id),
+            None,
+        )
+        if dispatching is None:
+            return conversation
+        accepted = conversation.model_copy(deep=True)
+        if run.id not in accepted.run_ids:
+            accepted.run_ids.append(run.id)
+        accepted.current_run_id = run.id
+        for message in reversed(accepted.transcript):
+            if message.role == "user" and message.id == dispatching.input_message_id and message.run_id is None:
+                message.run_id = run.id
+                break
+        accepted.updated_at = utc_now()
+        return self.store.put(accepted)
+
+    def _accept_dispatched_run(
+        self,
+        conversation: ChatConversation,
+        run: AgentRun,
+        input_message_id: str | None,
+    ) -> ChatConversation:
+        accepted = self.app_store.accept_chat_dispatched_run(
+            conversation.id,
+            run.id,
+            input_message_id,
+        )
+        return accepted or conversation
+
+    def _pause_dispatching_item(
+        self,
+        conversation: ChatConversation,
+        item_id: str,
+        reason: str,
+        *,
+        error_code: str | None = None,
+        error: str | None = None,
+    ) -> ChatConversation:
+        paused = conversation.model_copy(deep=True)
+        for item in paused.queue:
+            if item.id == item_id and item.status == "dispatching":
+                item.status = "paused"
+                item.pause_reason = reason  # type: ignore[assignment]
+                item.pause_error_code = error_code
+                item.pause_error = error
+                item.updated_at = utc_now()
+                break
+        paused.updated_at = utc_now()
+        return self.store.put(paused)
+
+    def _pause_matching_dispatch(
+        self,
+        conversation_id: str,
+        input_message_id: str,
+    ) -> ChatConversation | None:
+        return self.app_store.pause_chat_submission_queue_item(conversation_id, input_message_id)
+
+    def _dispatch_input_message_id(
+        self,
+        request: ChatStartRequest,
+        queue_item: ChatQueueItem | None,
+    ) -> str:
+        if request.input_message_id:
+            return request.input_message_id
+        if queue_item is not None:
+            return queue_item.input_message_id or f"{queue_item.id}:input"
+        return new_id("msg")
+
+    def _submission_record(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        content_blocks: list[object],
+    ) -> dict[str, object]:
+        return {
+            "task": request.task.strip(),
+            "content_blocks": [block.model_dump(mode="json") for block in content_blocks] if content_blocks else None,
+            "attachment_ids": list(request.attachment_ids),
+            "output_schema": request.output_schema.model_dump(mode="json") if request.output_schema else None,
+            "intended_config": self._resolved_config(conversation, request),
+        }
+
+    def _message_submission_record(self, message: ChatMessage) -> dict[str, object]:
+        blocks = message.content_blocks or []
+        for block in reversed(blocks):
+            if isinstance(block, dict) and block.get("type") == "workbench_submission":
+                submission = block.get("submission")
+                if isinstance(submission, dict):
+                    return submission
+        return {
+            "task": message.content,
+            "content_blocks": message.content_blocks,
+            "attachment_ids": list(message.attachment_ids),
+            "output_schema": None,
+            "intended_config": {},
+        }
+
+    def _queue_submission_matches(
+        self,
+        item: ChatQueueItem,
+        request: ChatStartRequest,
+        content_blocks: list[dict[str, object]] | None,
+        output_schema: dict[str, object] | None,
+        intended_config: dict[str, object],
+    ) -> bool:
+        return (
+            item.task == request.task.strip()
+            and (item.content_blocks or None) == content_blocks
+            and item.attachment_ids == list(request.attachment_ids)
+            and item.output_schema == output_schema
+            and item.intended_config == intended_config
+        )
+
+    def _preflight_start_request(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+    ) -> None:
+        try:
+            self.manager.get_deployment(conversation.deployment_id)
+        except ManagerError as exc:
+            if exc.code != "deployment_missing":
+                raise
+            raise ChatError(
+                "The Chat conversation is bound to a deployment that is no longer available. "
+                "Select a deployment to continue.",
+                code="deploy_missing",
+                status_code=409,
+                details={"deployment_id": conversation.deployment_id},
+            ) from exc
+        _presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
+            request.presented_tools,
+            project_bound=conversation.project_path is not None,
+            knowledge_routes=bool(
+                conversation.memory_version_refs
+                or conversation.skill_version_refs
+                or conversation.protected_instruction_version_refs
+            ),
+        )
+        if denied:
+            raise ChatError(
+                f"Tools are not in the enabled catalogue: {', '.join(denied)}",
+                code="tool_denied",
+                status_code=400,
+                details={"tools": denied},
+            )
+        if filesystem_blocked:
+            raise ChatError(
+                "Filesystem tools require a bound project folder.",
+                code="filesystem_requires_project",
+                status_code=400,
+                details={"tools": filesystem_blocked},
+            )
+        if shell_blocked:
+            raise ChatError(
+                "The host shell requires a bound project folder as cwd. A home-directory default is not invented.",
+                code="shell_requires_project",
+                status_code=400,
+                details={"tools": shell_blocked},
+            )
+
+    def _find_chat_run_by_input(
+        self,
+        conversation: ChatConversation,
+        input_message_id: str | None,
+    ) -> AgentRun | None:
+        if not input_message_id or not conversation.thread_id:
+            return None
+        for run in self.harness.list_runs():
+            if (
+                run.source_surface == "chat"
+                and run.thread_id == conversation.thread_id
+                and run.input_message_id == input_message_id
+            ):
+                return run
+        return None
+
+    def _complete_queue_item(self, conversation: ChatConversation, run_id: str) -> ChatConversation:
+        if not any(item.run_id == run_id for item in conversation.queue):
+            return conversation
+        completed = conversation.model_copy(deep=True)
+        completed.queue = [item for item in completed.queue if item.run_id != run_id]
+        completed.updated_at = utc_now()
+        return self.store.put(completed)
+
+    def _unpause_queue(
+        self,
+        conversation: ChatConversation,
+        request: ChatQueueResumeRequest,
+    ) -> ChatConversation:
+        if not any(item.status == "paused" for item in conversation.queue):
+            return conversation
+        uncertain = [
+            item
+            for item in conversation.queue
+            if item.status == "paused" and item.pause_reason == "dispatch_uncertain"
+        ]
+        if uncertain and not request.acknowledge_uncertain_effects:
+            raise ChatError(
+                "A queued turn paused because Chat could not confirm whether it already ran. "
+                "Review it, then retry with acknowledge_uncertain_effects=true if you accept the repeat-effects risk.",
+                code="queue_uncertain_ack_required",
+                status_code=409,
+                details={"queue_item_ids": [item.id for item in uncertain]},
+            )
+        resumed = conversation.model_copy(deep=True)
+        for item in resumed.queue:
+            if item.status == "paused":
+                item.status = "queued"
+                item.pause_reason = None
+                item.pause_error_code = None
+                item.pause_error = None
+                item.updated_at = utc_now()
+        resumed.updated_at = utc_now()
+        return self.store.put(resumed)
+
+    def _request_from_queue_item(self, item: ChatQueueItem) -> ChatStartRequest:
+        payload = {"task": item.task, **item.intended_config}
+        if item.input_message_id is not None:
+            payload["input_message_id"] = item.input_message_id
+        if item.content_blocks is not None:
+            payload["content_blocks"] = item.content_blocks
+        if item.attachment_ids:
+            payload["attachment_ids"] = item.attachment_ids
+        if item.output_schema is not None:
+            payload["output_schema"] = item.output_schema
+        return ChatStartRequest.model_validate(payload)
+
+    def _content_blocks_with_attachments(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+    ) -> list[object]:
+        blocks: list[object] = list(request.content_blocks or [])
+        if request.attachment_ids:
+            asset_blocks = self.assets.current_user_content(
+                RetainedAssetReuseRequest(
+                    asset_ids=list(request.attachment_ids),
+                    session_id=conversation.id,
+                    project_path=conversation.project_path,
+                )
+            )
+            blocks.extend(asset_blocks)
+        if len(blocks) > 32:
+            raise ChatError(
+                "Current-user content is limited to 32 blocks. Remove attachments or content blocks.",
+                code="content_block_limit",
+                status_code=413,
+            )
+        return blocks
+
+    def _apply_start_configuration(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+    ) -> None:
+        fields_set = request.model_fields_set
+        if request.deployment_id:
+            self.manager.get_deployment(request.deployment_id)
+            conversation.deployment_id = request.deployment_id
+        if "profile_id" in fields_set:
+            conversation.profile_id = self._bind_profile(request.profile_id)
+        if "inherit_deployment_settings" in fields_set:
+            conversation.inherit_deployment_settings = request.inherit_deployment_settings
+        if (
+            request.memory_version_refs is not None
+            or request.skill_version_refs is not None
+            or request.protected_instruction_version_refs is not None
+            or request.knowledge_version_refs is not None
+        ):
+            refs = self._bind_knowledge(
+                memory_version_refs=request.memory_version_refs
+                if request.memory_version_refs is not None
+                else conversation.memory_version_refs,
+                skill_version_refs=request.skill_version_refs
+                if request.skill_version_refs is not None
+                else conversation.skill_version_refs,
+                protected_instruction_version_refs=(
+                    request.protected_instruction_version_refs
+                    if request.protected_instruction_version_refs is not None
+                    else conversation.protected_instruction_version_refs
+                ),
+                knowledge_version_refs=request.knowledge_version_refs or [],
+            )
+            conversation.memory_version_refs = refs.memory_version_refs
+            conversation.skill_version_refs = refs.skill_version_refs
+            conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
+        if "embedding_deployment_id" in fields_set:
+            conversation.embedding_deployment_id = request.embedding_deployment_id
+        if "retrieval_project_paths" in fields_set:
+            conversation.retrieval_project_paths = list(request.retrieval_project_paths or [])
+
+    def _reject_session_area_change(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+    ) -> None:
+        fields_set = request.model_fields_set
+        if "project_path" not in fields_set and "workspace_id" not in fields_set:
+            return
+        workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
+        project_text = str(project_path) if project_path is not None else None
+        if project_text != conversation.project_path or workspace_id != conversation.workspace_id:
+            raise ChatError(
+                "A Chat conversation cannot be moved between General and project areas. Start a new chat in the target area.",
+                code="session_area_immutable",
+                status_code=409,
+                details={
+                    "area_kind": conversation.area_kind,
+                    "area_project_path": conversation.area_project_path,
+                    "area_workspace_id": conversation.area_workspace_id,
+                    "project_path": conversation.project_path,
+                    "workspace_id": conversation.workspace_id,
+                },
+            )
+
+    def _intended_config(self, conversation: ChatConversation, request: ChatStartRequest) -> dict[str, object]:
+        return self._resolved_config(conversation, request)
+
+    def _resolved_config(self, conversation: ChatConversation, request: ChatStartRequest) -> dict[str, object]:
+        clone = conversation.model_copy(deep=True)
+        self._apply_start_configuration(clone, request)
+        return {
+            "deployment_id": clone.deployment_id,
+            "profile_id": clone.profile_id,
+            "inherit_deployment_settings": clone.inherit_deployment_settings,
+            "per_request_overrides": request.per_request_overrides,
+            "project_path": clone.project_path,
+            "workspace_id": clone.workspace_id,
+            "presented_tools": request.presented_tools,
+            "attachment_ids": list(request.attachment_ids),
+            "memory_version_refs": list(clone.memory_version_refs),
+            "skill_version_refs": list(clone.skill_version_refs),
+            "protected_instruction_version_refs": list(clone.protected_instruction_version_refs),
+            "embedding_deployment_id": clone.embedding_deployment_id,
+            "retrieval_project_paths": list(clone.retrieval_project_paths),
+        }
 
     def _require(self, conversation_id: str) -> ChatConversation:
         conversation = self.store.get(conversation_id)
@@ -411,7 +1218,7 @@ class ChatService:
             if current is not None:
                 events = [event.model_dump(mode="json") for event in current.events]
                 if persist:
-                    conversation = self._reconcile_terminal_assistant(conversation, current)
+                    conversation, _terminal = self._reconcile_terminal_assistant(conversation, current)
                     if conversation.current_run_id != current_run_id:
                         current = None
                         events = []
@@ -444,6 +1251,7 @@ class ChatService:
             **conversation.model_dump(),
             current_run=current,
             events=events,
+            pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),
             continuity=ChatContinuity(
                 conversation_id=conversation.id,
                 thread_id=thread_id,
@@ -460,19 +1268,63 @@ class ChatService:
         self,
         conversation: ChatConversation,
         run: AgentRun | None = None,
-    ) -> ChatConversation:
+    ) -> tuple[ChatConversation, str | None]:
         if not conversation.current_run_id:
-            return conversation
+            return conversation, None
         if run is None:
             try:
                 run = self.harness.get_run(conversation.current_run_id)
             except HarnessError:
-                return conversation
+                return conversation, None
+        if run.status.value not in {"completed", "failed", "cancelled"}:
+            return conversation, None
+        input_message_id = getattr(run, "input_message_id", None)
+        if input_message_id:
+            self.app_store.resolve_chat_submission_cancel(
+                conversation.id,
+                input_message_id,
+                run_id=run.id,
+            )
+        conversation = self._update_branch_head(conversation, run)
         message = self._assistant_message(conversation, run)
         if message is None:
-            return conversation
+            return conversation, run.status.value
         updated = self.store.append_message_once(conversation.id, message, run_id=run.id)
-        return updated or conversation
+        return updated or conversation, run.status.value
+
+    def _update_branch_head(self, conversation: ChatConversation, run: AgentRun) -> ChatConversation:
+        checkpoint_id = self._latest_retained_checkpoint_id(run)
+        if not checkpoint_id or conversation.branch_head_checkpoint_id == checkpoint_id:
+            return conversation
+        updated = conversation.model_copy(deep=True)
+        updated.branch_head_checkpoint_id = checkpoint_id
+        updated.updated_at = utc_now()
+        return self.store.put(updated)
+
+    def _latest_retained_checkpoint_id(self, run: AgentRun) -> str | None:
+        retained = set(run.checkpoint_ids)
+        if not run.thread_id or not retained:
+            return None
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        for saved in saver.list({"configurable": {"thread_id": run.thread_id, "checkpoint_ns": ""}}):
+            ident = saved.config["configurable"]["checkpoint_id"]
+            if ident in retained:
+                return ident
+        return None
+
+    def _pause_queue(self, conversation: ChatConversation, reason: str) -> ChatConversation:
+        if not any(item.status == "queued" for item in conversation.queue):
+            return conversation
+        paused = conversation.model_copy(deep=True)
+        for item in paused.queue:
+                if item.status == "queued":
+                    item.status = "paused"
+                    item.pause_reason = "failed" if reason == "failed" else "cancelled"
+                    item.pause_error_code = reason
+                    item.pause_error = f"Queue paused because the previous turn {reason}."
+                    item.updated_at = utc_now()
+        paused.updated_at = utc_now()
+        return self.store.put(paused)
 
     def _assistant_message(self, conversation: ChatConversation, run: AgentRun) -> ChatMessage | None:
         if conversation.history_replaced:

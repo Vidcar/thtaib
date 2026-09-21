@@ -12,8 +12,11 @@ class ChatStore:
     def __init__(self, app_store: ApplicationStore) -> None:
         self.app_store = app_store
 
-    def list_conversations(self) -> list[ChatConversation]:
-        return self.app_store.list_conversations()
+    def list_conversations(self, *, include_archived: bool = False) -> list[ChatConversation]:
+        return self.app_store.list_conversations(include_archived=include_archived)
+
+    def search(self, query: str, *, include_archived: bool = False) -> list[tuple[ChatConversation, list[ChatMessage]]]:
+        return self.app_store.search_conversations(query, include_archived=include_archived)
 
     def get(self, conversation_id: str) -> ChatConversation | None:
         return self.app_store.get_conversation(conversation_id)

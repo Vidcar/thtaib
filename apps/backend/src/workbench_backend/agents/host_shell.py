@@ -301,15 +301,22 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
     return rules or None
 
 
-def interrupt_on_for_run(run: AgentRun) -> dict[str, bool | dict[str, Any]] | None:
+def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for ``execute`` whenever LocalShellBackend is attached."""
 
     if not host_shell_requested(run):
         return None
+    def requires_approval(request: ToolCallRequest) -> bool:
+        call = request.tool_call
+        args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+        if grants is not None and grants.matches(run, "execute", args):
+            return False
+        return execute_requires_approval(request)
+
     return {
         "execute": {
             "allowed_decisions": ["approve", "reject"],
-            "when": execute_requires_approval,
+            "when": requires_approval,
             "description": (
                 "Host shell command (no isolation). Approve to run on this machine "
                 "in the bound project working directory."
@@ -324,6 +331,8 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     value = _interrupt_value(raw)
     if value is None:
         return None
+    if value.get("kind") == "ask_user":
+        return PendingInterrupt(kind="ask_user", question=value.get("question"), note="A user answer is required. This is not a permission approval.")
     requests = value.get("action_requests")
     reviews = value.get("review_configs")
     if not isinstance(requests, list) or not requests:
@@ -360,6 +369,8 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
 
 
 def reject_decisions_for(pending: PendingInterrupt) -> list[dict[str, str]]:
+    if pending.kind == "ask_user":
+        return [{"type": "user_answer", "cancelled": "true"}]
     return [
         {
             "type": "reject",
@@ -401,6 +412,6 @@ def _interrupt_value(raw: Any) -> dict[str, Any] | None:
                 return found
         return None
     value = getattr(raw, "value", raw)
-    if isinstance(value, dict) and value.get("action_requests"):
+    if isinstance(value, dict) and (value.get("action_requests") or value.get("kind") == "ask_user"):
         return value
     return None

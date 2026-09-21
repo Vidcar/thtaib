@@ -184,6 +184,17 @@
             "title": "Events",
             "type": "array"
           },
+          "final_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Snapshot Id"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -194,6 +205,16 @@
               }
             ],
             "title": "Finished At"
+          },
+          "generation_observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "harness": {
             "const": "deepagents",
@@ -334,6 +355,17 @@
             },
             "title": "Related Files",
             "type": "array"
+          },
+          "resume_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Checkpoint Id"
           },
           "retrieval_project_paths": {
             "items": {
@@ -593,6 +625,18 @@
             ],
             "title": "Parent Run Id"
           },
+          "per_request_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Request Overrides"
+          },
           "presented_tools": {
             "anyOf": [
               {
@@ -650,6 +694,19 @@
               }
             ],
             "title": "Recorded Fixtures"
+          },
+          "resume_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Checkpoint Id"
           },
           "retrieval_project_paths": {
             "items": {
@@ -874,6 +931,25 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "ChatCancelRequest": {
+        "properties": {
+          "input_message_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          }
+        },
+        "title": "ChatCancelRequest",
+        "type": "object"
+      },
       "ChatContinuity": {
         "description": "Documented conversation \u2194 thread \u2194 run linkage (Issue #56).",
         "properties": {
@@ -938,6 +1014,322 @@
           "thread_id"
         ],
         "title": "ChatContinuity",
+        "type": "object"
+      },
+      "ChatConversation": {
+        "properties": {
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "area_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Id"
+          },
+          "area_kind": {
+            "default": "general",
+            "enum": [
+              "general",
+              "project"
+            ],
+            "title": "Area Kind",
+            "type": "string"
+          },
+          "area_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Label"
+          },
+          "area_project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Project Path"
+          },
+          "area_workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Workspace Id"
+          },
+          "branch_head_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Head Checkpoint Id"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Run Id"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "harness": {
+            "const": "deepagents",
+            "default": "deepagents",
+            "title": "Harness",
+            "type": "string"
+          },
+          "history_replaced": {
+            "default": false,
+            "title": "History Replaced",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "inherit_deployment_settings": {
+            "default": true,
+            "title": "Inherit Deployment Settings",
+            "type": "boolean"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/ChatQueueItem"
+            },
+            "title": "Queue",
+            "type": "array"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "run_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Run Ids",
+            "type": "array"
+          },
+          "second_agent_loop": {
+            "const": false,
+            "default": false,
+            "title": "Second Agent Loop",
+            "type": "boolean"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "source_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checkpoint Id"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
+          "source_surface": {
+            "const": "chat",
+            "default": "chat",
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "transcript": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "title": "Transcript",
+            "type": "array"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "deployment_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatConversation",
+        "type": "object"
+      },
+      "ChatConversationArchiveRequest": {
+        "properties": {
+          "archived": {
+            "default": true,
+            "title": "Archived",
+            "type": "boolean"
+          }
+        },
+        "title": "ChatConversationArchiveRequest",
         "type": "object"
       },
       "ChatConversationCreateRequest": {
@@ -1019,6 +1411,19 @@
             "title": "Skill Version Refs",
             "type": "array"
           },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
           "workspace_id": {
             "anyOf": [
               {
@@ -1037,8 +1442,103 @@
         "title": "ChatConversationCreateRequest",
         "type": "object"
       },
+      "ChatConversationUpdateRequest": {
+        "properties": {
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "ChatConversationUpdateRequest",
+        "type": "object"
+      },
       "ChatConversationView": {
         "properties": {
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "area_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Id"
+          },
+          "area_kind": {
+            "default": "general",
+            "enum": [
+              "general",
+              "project"
+            ],
+            "title": "Area Kind",
+            "type": "string"
+          },
+          "area_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Label"
+          },
+          "area_project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Project Path"
+          },
+          "area_workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area Workspace Id"
+          },
+          "branch_head_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Head Checkpoint Id"
+          },
           "continuity": {
             "anyOf": [
               {
@@ -1087,6 +1587,16 @@
           "deployment_id": {
             "title": "Deployment Id",
             "type": "string"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "embedding_deployment_id": {
             "anyOf": [
@@ -1151,6 +1661,13 @@
             "title": "Note",
             "type": "string"
           },
+          "pending_cancel_input_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending Cancel Input Ids",
+            "type": "array"
+          },
           "profile_id": {
             "anyOf": [
               {
@@ -1178,6 +1695,13 @@
               "type": "string"
             },
             "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/ChatQueueItem"
+            },
+            "title": "Queue",
             "type": "array"
           },
           "retrieval_project_paths": {
@@ -1212,6 +1736,39 @@
             "title": "Skill Version Refs",
             "type": "array"
           },
+          "source_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Checkpoint Id"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "source_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Run Id"
+          },
           "source_surface": {
             "const": "chat",
             "default": "chat",
@@ -1228,6 +1785,17 @@
               }
             ],
             "title": "Thread Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
           },
           "transcript": {
             "items": {
@@ -1334,11 +1902,119 @@
         "title": "ChatDeployHealth",
         "type": "object"
       },
+      "ChatDraft": {
+        "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "content_blocks": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
+          "intended_config": {
+            "additionalProperties": true,
+            "title": "Intended Config",
+            "type": "object"
+          },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "updated_at"
+        ],
+        "title": "ChatDraft",
+        "type": "object"
+      },
+      "ChatDraftUpdateRequest": {
+        "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "content": {
+            "default": "",
+            "title": "Content",
+            "type": "string"
+          },
+          "content_blocks": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "intended_config": {
+            "additionalProperties": true,
+            "title": "Intended Config",
+            "type": "object"
+          }
+        },
+        "title": "ChatDraftUpdateRequest",
+        "type": "object"
+      },
       "ChatMessage": {
         "properties": {
           "at": {
             "title": "At",
             "type": "string"
+          },
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
           },
           "content": {
             "title": "Content",
@@ -1399,9 +2075,284 @@
         "title": "ChatMessage",
         "type": "object"
       },
+      "ChatQueueItem": {
+        "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "content_blocks": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "frozen_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frozen Config"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          },
+          "intended_config": {
+            "additionalProperties": true,
+            "title": "Intended Config",
+            "type": "object"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Schema"
+          },
+          "pause_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Error"
+          },
+          "pause_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Error Code"
+          },
+          "pause_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "failed",
+                  "cancelled",
+                  "dispatch_uncertain"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pause Reason"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "status": {
+            "default": "queued",
+            "enum": [
+              "queued",
+              "dispatching",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "task",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChatQueueItem",
+        "type": "object"
+      },
+      "ChatQueueItemUpdateRequest": {
+        "properties": {
+          "attachment_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachment Ids"
+          },
+          "content_blocks": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          },
+          "intended_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intended Config"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Schema"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task"
+          }
+        },
+        "title": "ChatQueueItemUpdateRequest",
+        "type": "object"
+      },
+      "ChatQueueResumeRequest": {
+        "properties": {
+          "acknowledge_uncertain_effects": {
+            "default": false,
+            "title": "Acknowledge Uncertain Effects",
+            "type": "boolean"
+          },
+          "resume_paused": {
+            "default": false,
+            "title": "Resume Paused",
+            "type": "boolean"
+          }
+        },
+        "title": "ChatQueueResumeRequest",
+        "type": "object"
+      },
+      "ChatSearchResult": {
+        "properties": {
+          "conversation": {
+            "$ref": "#/components/schemas/ChatConversation"
+          },
+          "matched_messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "title": "Matched Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "title": "ChatSearchResult",
+        "type": "object"
+      },
       "ChatStartRequest": {
         "additionalProperties": false,
         "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Attachment Ids",
+            "type": "array"
+          },
           "content_blocks": {
             "anyOf": [
               {
@@ -1508,6 +2459,18 @@
                 "type": "null"
               }
             ]
+          },
+          "per_request_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Request Overrides"
           },
           "presented_tools": {
             "anyOf": [
@@ -2278,6 +3241,80 @@
         ],
         "title": "FileRole",
         "type": "string"
+      },
+      "GenerationObservation": {
+        "properties": {
+          "basis": {
+            "const": "reported_tokens_model_call_wall_time",
+            "default": "reported_tokens_model_call_wall_time",
+            "title": "Basis",
+            "type": "string"
+          },
+          "context_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Limit"
+          },
+          "elapsed_seconds": {
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "interval": {
+            "const": "last_completed_model_call_including_prompt_processing",
+            "default": "last_completed_model_call_including_prompt_processing",
+            "title": "Interval",
+            "type": "string"
+          },
+          "measured_at": {
+            "title": "Measured At",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "elapsed_seconds",
+          "measured_at"
+        ],
+        "title": "GenerationObservation",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3182,6 +4219,7 @@
         "type": "object"
       },
       "InterruptDecision": {
+        "additionalProperties": false,
         "properties": {
           "message": {
             "anyOf": [
@@ -3193,6 +4231,16 @@
               }
             ],
             "title": "Message"
+          },
+          "scope": {
+            "default": "once",
+            "enum": [
+              "once",
+              "session",
+              "always"
+            ],
+            "title": "Scope",
+            "type": "string"
           },
           "type": {
             "enum": [
@@ -3210,12 +4258,34 @@
         "type": "object"
       },
       "InterruptDecisionRequest": {
+        "additionalProperties": false,
         "properties": {
           "decisions": {
             "items": {
               "$ref": "#/components/schemas/InterruptDecision"
             },
             "title": "Decisions",
+            "type": "array"
+          },
+          "interrupt_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interrupt Id"
+          },
+          "namespace": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Namespace",
             "type": "array"
           }
         },
@@ -3895,6 +4965,17 @@
             "title": "Environment",
             "type": "string"
           },
+          "interrupt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interrupt Id"
+          },
           "isolation": {
             "const": "none",
             "default": "none",
@@ -3902,15 +4983,35 @@
             "type": "string"
           },
           "kind": {
-            "const": "deepagents_interrupt_on",
             "default": "deepagents_interrupt_on",
+            "enum": [
+              "deepagents_interrupt_on",
+              "ask_user"
+            ],
             "title": "Kind",
             "type": "string"
+          },
+          "namespace": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespace",
+            "type": "array"
           },
           "note": {
             "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
             "title": "Note",
             "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "PendingInterrupt",
@@ -5029,6 +6130,41 @@
         "title": "ToolMode",
         "type": "string"
       },
+      "UserQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_type": {
+            "default": "text",
+            "enum": [
+              "text",
+              "choice",
+              "file",
+              "folder"
+            ],
+            "title": "Answer Type",
+            "type": "string"
+          },
+          "choices": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Choices",
+            "type": "array"
+          },
+          "prompt": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "UserQuestion",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -5894,6 +7030,18 @@
     "/v1/chat/conversations": {
       "get": {
         "operationId": "list_conversations_v1_chat_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5908,6 +7056,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Conversations"
@@ -5949,6 +7107,59 @@
         "summary": "Create Conversation"
       }
     },
+    "/v1/chat/conversations/search": {
+      "get": {
+        "operationId": "search_conversations_v1_chat_conversations_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatSearchResult"
+                  },
+                  "title": "Response Search Conversations V1 Chat Conversations Search Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Conversations"
+      }
+    },
     "/v1/chat/conversations/{conversation_id}": {
       "get": {
         "operationId": "get_conversation_v1_chat_conversations__conversation_id__get",
@@ -5986,6 +7197,102 @@
           }
         },
         "summary": "Get Conversation"
+      },
+      "patch": {
+        "operationId": "rename_conversation_v1_chat_conversations__conversation_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatConversationUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/archive": {
+      "post": {
+        "operationId": "archive_conversation_v1_chat_conversations__conversation_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatConversationArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Conversation"
       }
     },
     "/v1/chat/conversations/{conversation_id}/cancel": {
@@ -6002,6 +7309,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ChatCancelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -6025,6 +7349,55 @@
           }
         },
         "summary": "Cancel Conversation"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/draft": {
+      "put": {
+        "operationId": "update_conversation_draft_v1_chat_conversations__conversation_id__draft_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDraftUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Conversation Draft"
       }
     },
     "/v1/chat/conversations/{conversation_id}/interrupt-decision": {
@@ -6074,6 +7447,254 @@
           }
         },
         "summary": "Decide Conversation Interrupt"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/queue": {
+      "post": {
+        "operationId": "enqueue_conversation_turn_v1_chat_conversations__conversation_id__queue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Conversation Turn"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/queue/resume": {
+      "post": {
+        "operationId": "resume_conversation_queue_v1_chat_conversations__conversation_id__queue_resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ChatQueueResumeRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Conversation Queue"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/queue/{item_id}": {
+      "delete": {
+        "operationId": "remove_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Conversation Queue Item"
+      },
+      "patch": {
+        "operationId": "update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatQueueItemUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Conversation Queue Item"
+      }
+    },
+    "/v1/chat/conversations/{conversation_id}/reopen": {
+      "post": {
+        "operationId": "reopen_conversation_v1_chat_conversations__conversation_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reopen Conversation"
       }
     },
     "/v1/chat/conversations/{conversation_id}/start": {

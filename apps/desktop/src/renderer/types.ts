@@ -1,4 +1,9 @@
 import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
+import type {
+  SchemaChatDraft,
+  SchemaChatQueueItem,
+  SchemaChatSearchResult,
+} from "../generated/shared-contracts/openapi";
 
 export type WorkbenchSurface = "managed-inference";
 
@@ -86,6 +91,15 @@ export interface SettingsBags {
   startup: SettingsBag;
   per_request: SettingsBag;
   agent: SettingsBag;
+}
+
+export type PresentationTheme = "system" | "light" | "dark";
+
+export interface PresentationSettings {
+  theme: PresentationTheme;
+  detailed_streams: boolean;
+  attention_notifications: boolean;
+  success_notifications: boolean;
 }
 
 export interface RunProfile {
@@ -390,12 +404,22 @@ export interface PendingInterruptAction {
   allowed_decisions: string[];
 }
 
+export interface UserQuestion {
+  prompt: string;
+  answer_type: "text" | "choice" | "file" | "folder";
+  choices: string[];
+}
+
 export interface PendingInterrupt {
-  kind: "deepagents_interrupt_on";
+  interrupt_id?: string | null;
+  namespace?: string[];
+  identity?: string | null;
+  kind: "deepagents_interrupt_on" | "ask_user";
   environment: "windows_host_shell";
   isolation: "none";
   note: string;
   action_requests: PendingInterruptAction[];
+  question?: UserQuestion | null;
 }
 
 export function visiblePendingInterrupt(run: AgentRun | null | undefined): PendingInterrupt | null {
@@ -447,8 +471,20 @@ export interface ChatContinuity {
   note: string;
 }
 
+export type ChatDraft = SchemaChatDraft;
+export type ChatQueueItem = SchemaChatQueueItem;
+export type ChatSearchResult = SchemaChatSearchResult;
+
 export interface ChatConversation {
   id: string;
+  title?: string | null;
+  archived?: boolean;
+  archived_at?: string | null;
+  area_kind?: "general" | "project";
+  area_id?: string | null;
+  area_label?: string | null;
+  area_project_path?: string | null;
+  area_workspace_id?: string | null;
   deployment_id: string;
   profile_id: string | null;
   inherit_deployment_settings?: boolean;
@@ -468,6 +504,9 @@ export interface ChatConversation {
   embedding_deployment_id?: string | null;
   retrieval_project_paths?: string[];
   current_run: AgentRun | null;
+  pending_cancel_input_ids?: string[];
+  draft?: ChatDraft | null;
+  queue?: ChatQueueItem[];
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;
   deploy_health?: ChatDeployHealth | null;

@@ -16,7 +16,8 @@ FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute",)
 PLANNING_TOOL_NAMES = ("write_todos",)
-ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES)
+INPUT_TOOL_NAMES = ("ask_user",)
+ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES)
 
 
 @tool("echo")
@@ -33,9 +34,24 @@ def time_now_tool() -> str:
     return utc_now()
 
 
+@tool("ask_user")
+def ask_user_tool(prompt: str, answer_type: str = "text", choices: list[str] | None = None) -> str:
+    """Ask the user for text, a choice, or an explicitly selected file/folder. Never request credentials. A path answer does not grant tools new access."""
+    from langgraph.types import interrupt
+    from workbench_backend.agents.schemas import UserQuestion
+    question = UserQuestion(prompt=prompt, answer_type=answer_type, choices=choices or [])
+    if question.answer_type == "choice" and not question.choices:
+        return "A choice question requires choices."
+    response = interrupt({"kind": "ask_user", "question": question.model_dump(mode="json")})
+    if isinstance(response, dict) and response.get("cancelled"):
+        return "The user cancelled this question. Do not repeat it unless asked."
+    return str(response.get("answer", "")) if isinstance(response, dict) else str(response)
+
+
 ENABLED_TOOLS: dict[str, BaseTool] = {
     "echo": echo_tool,
     "time_now": time_now_tool,
+    "ask_user": ask_user_tool,
 }
 
 
@@ -59,7 +75,7 @@ def enabled_for_project(
 
     if project_bound:
         return list(ENABLED_TOOL_NAMES)
-    enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES]
+    enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES]
     if knowledge_routes:
         enabled.extend(KNOWLEDGE_ROUTE_READ_TOOLS)
     return enabled

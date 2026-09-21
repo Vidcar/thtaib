@@ -79,6 +79,47 @@ def close_all_sqlite_checkpointers() -> None:
         _close_holder(key)
 
 
+def copy_checkpoints_for_backup(source: Path, destination: Path) -> None:
+    """Copy ``checkpoints.sqlite`` through sqlite backup without private-table SQL."""
+
+    resolved = source.expanduser().resolve()
+    if resolved.name != CHECKPOINTS_DB_NAME:
+        raise ValueError("Checkpointer backup source must be checkpoints.sqlite.")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with _LOCK:
+        holder = _HOLDERS.get(str(resolved))
+        if holder is not None:
+            src_conn = holder[0]
+            dest_conn = sqlite3.connect(str(destination))
+            try:
+                src_conn.backup(dest_conn)
+                dest_conn.commit()
+            finally:
+                dest_conn.close()
+            return
+    if not resolved.exists():
+        return
+    src_conn = sqlite3.connect(str(resolved))
+    dest_conn = sqlite3.connect(str(destination))
+    try:
+        src_conn.backup(dest_conn)
+        dest_conn.commit()
+    finally:
+        dest_conn.close()
+        src_conn.close()
+
+
+def delete_checkpoint_thread(path: Path, thread_id: str) -> bool:
+    """Delete one LangGraph thread through the saver API when supported."""
+
+    saver = open_sqlite_checkpointer(path)
+    delete_thread = getattr(saver, "delete_thread", None)
+    if not callable(delete_thread):
+        return False
+    delete_thread(thread_id)
+    return True
+
+
 def _close_holder(key: str) -> None:
     with _LOCK:
         holder = _HOLDERS.pop(key, None)

@@ -22,10 +22,11 @@ const scratch = path.join(repoRoot, ".scratch/electron-trust-boundary");
 mkdirSync(scratch, { recursive: true });
 const compiledTrustBoundary = compileMainModule("trustBoundary.ts");
 compileMainModule("localTrust.ts");
+const compiledBackground = compileMainModule("background.ts");
 const markdownHtml = await renderMarkdownFixtureHtml();
 
 const fixtureMain = path.join(scratch, "fixture-main.mjs");
-writeFileSync(fixtureMain, fixtureSource(compiledTrustBoundary, markdownHtml), "utf8");
+writeFileSync(fixtureMain, fixtureSource(compiledTrustBoundary, compiledBackground, markdownHtml), "utf8");
 writeFileSync(path.join(scratch, "package.json"), JSON.stringify({ type: "module", main: "fixture-main.mjs" }), "utf8");
 
 const vulnerable = await runFixture("vulnerable");
@@ -51,6 +52,13 @@ for (const mode of ["dev", "file"]) {
   assert.equal(fixed.openWindowCounts[mode], 0, `${mode} external Markdown link should not create an in-app BrowserWindow`);
   assert.deepEqual(fixed.blockedLinks[mode].sort(), ["custom", "file", "protocol", "relative"].sort(), `${mode} unsafe link forms should not be rendered as anchors`);
 }
+assert.equal(fixed.bridge.invalidSelectPath, "Unsupported selection", "selectPath should reject invalid kind before native dialog");
+assert.equal(fixed.bridge.invalidSaveAsset, "Invalid file scope", "saveAsset should reject invalid payload before backend/native dialog");
+assert.equal(fixed.bridge.invalidActivateRestore, "Invalid restored location", "activateRestore should reject invalid destination before backend call");
+assert.equal(fixed.bridge.selectPathNavigation, "This document cannot use desktop actions.", "selectPath should reject if requester navigates while dialog is pending");
+assert.equal(fixed.bridge.saveAssetBackendNavigation, "This document cannot use desktop actions.", "saveAsset should reject if requester navigates while backend content fetch is pending");
+assert.equal(fixed.bridge.saveAssetDialogNavigation, "no write after requester navigation", "saveAsset should not write after requester navigation while save dialog is pending");
+assert.equal(fixed.bridge.activateRestoreNavigation, "no reload after requester navigation", "activateRestore should not reload windows after requester navigation while backend activation is pending");
 
 console.log("Electron trust-boundary fixture passed");
 console.log("Vulnerable reproduction:", JSON.stringify({
@@ -131,14 +139,16 @@ async function runFixture(boundaryMode) {
   return JSON.parse(resultLine.slice("TRUST_BOUNDARY_RESULT ".length));
 }
 
-function fixtureSource(trustBoundaryPath, renderedMarkdownHtml) {
+function fixtureSource(trustBoundaryPath, backgroundPath, renderedMarkdownHtml) {
   const trustBoundaryUrl = pathToFileURL(trustBoundaryPath).toString();
+  const backgroundUrl = pathToFileURL(backgroundPath).toString();
   return `
-import { writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { app, BrowserWindow, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
+import { installBackground } from ${JSON.stringify(backgroundUrl)};
 import {
   installLocalTrustHeader,
   installTrustedAppWindow,
@@ -147,6 +157,12 @@ import {
 } from ${JSON.stringify(trustBoundaryUrl)};
 
 console.log("fixture boot", process.env.WORKBENCH_BOUNDARY_MODE);
+function failFixture(error) {
+  console.error(error && error.stack ? error.stack : error);
+  app.exit(1);
+}
+process.on("uncaughtException", failFixture);
+process.on("unhandledRejection", failFixture);
 const TOKEN = "electron-boundary-token";
 const boundaryMode = process.env.WORKBENCH_BOUNDARY_MODE ?? "fixed";
 const markdownHtml = ${JSON.stringify(renderedMarkdownHtml)};
@@ -159,6 +175,7 @@ const openWindowCounts = {};
 const blockedLinks = {};
 const redirectUrls = {};
 const replacedUrls = {};
+const bridge = {};
 let activeMode = "dev";
 
 app.commandLine.appendSwitch("disable-gpu");
@@ -189,6 +206,49 @@ async function main() {
 
   const backend = await listen((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname.startsWith("/v1/assets/") && url.pathname.endsWith("/content")) {
+      bridge.contentRequested = true;
+      const sendContent = () => {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({
+        text: "retained bridge text",
+        filename: "retained.txt",
+        sha256: "befb4c67fb75c7b924330157fc898beaa1348ee678ca841ada4fa96430efc66b",
+        size_bytes: 20,
+        }));
+      };
+      if (bridge.contentDeferred) {
+        bridge.contentDeferred.promise.then(sendContent).catch((error) => {
+          response.statusCode = 500;
+          response.end(String(error));
+        });
+      } else {
+        sendContent();
+      }
+      return;
+    }
+    if (url.pathname === "/v1/desktop/work") {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ active_run_ids: [], active_import_ids: [] }));
+      return;
+    }
+    if (url.pathname === "/v1/backups/activate") {
+      bridge.activateRequested = true;
+      const pending = bridge.activateDeferred;
+      if (pending) {
+        pending.promise.then(() => {
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ activated: true }));
+        }).catch((error) => {
+          response.statusCode = 500;
+          response.end(String(error));
+        });
+        return;
+      }
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ activated: true }));
+      return;
+    }
     if (url.pathname === "/redirect-token") {
       response.statusCode = 302;
       response.setHeader("Location", externalOrigin + "/capture?case=" + encodeURIComponent(url.searchParams.get("case") ?? "redirect"));
@@ -222,6 +282,15 @@ async function main() {
     externalOpens[activeMode].push(url);
     return "";
   };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    const raw = typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
+    if (typeof raw === "string" && raw.startsWith("http://127.0.0.1:8000/")) {
+      const redirected = backendOrigin + raw.slice("http://127.0.0.1:8000".length);
+      return originalFetch(redirected, init);
+    }
+    return originalFetch(url, init);
+  };
 
   if (boundaryMode === "fixed") {
     installLocalTrustHeader(TOKEN, backendOrigin);
@@ -234,6 +303,7 @@ async function main() {
   try {
     await runMode("dev", appOrigin + "/", appOrigin + "/replacement", false);
     if (boundaryMode === "fixed") {
+      await runBridgeTests(appOrigin + "/", appOrigin + "/replacement");
       const filePath = path.join(process.cwd(), "trusted-file.html");
       const replacementPath = path.join(process.cwd(), "replacement-file.html");
       writeFileSync(filePath, "<!doctype html><title>trusted-file</title><main>trusted file</main>", "utf8");
@@ -250,8 +320,9 @@ async function main() {
       blockedLinks,
       redirectUrls,
       replacedUrls,
+      bridge,
     }));
-    app.quit();
+    app.exit(0);
   } catch (error) {
     console.error(error);
     app.exit(1);
@@ -328,6 +399,126 @@ async function runMode(mode, appUrl, replacementUrl, useProtocolRelativeExternal
   }
 }
 
+async function runBridgeTests(appUrl, replacementUrl) {
+  writeFileSync(path.join(process.cwd(), "bridge-preload.cjs"), [
+    "const { contextBridge, ipcRenderer } = require('electron');",
+    "contextBridge.exposeInMainWorld('bridgeTest', { invoke: (channel, value) => ipcRenderer.invoke(channel, value) });",
+  ].join("\\n"), "utf8");
+  const originalOpenDialog = dialog.showOpenDialog;
+  const originalSaveDialog = dialog.showSaveDialog;
+  let openDialogDeferred = null;
+  let saveDialogDeferred = null;
+  dialog.showOpenDialog = async () => {
+    openDialogDeferred = createDeferred();
+    return await openDialogDeferred.promise;
+  };
+  dialog.showSaveDialog = async () => {
+    saveDialogDeferred = createDeferred();
+    return await saveDialogDeferred.promise;
+  };
+  bridge.handlerResults = {};
+  const originalHandle = ipcMain.handle;
+  ipcMain.handle = (channel, handler) => originalHandle.call(ipcMain, channel, async (event, ...args) => {
+    try {
+      const value = await handler(event, ...args);
+      bridge.handlerResults[channel] = { status: "resolved", value };
+      return value;
+    } catch (error) {
+      bridge.handlerResults[channel] = { status: "rejected", message: String(error && error.message || error) };
+      throw error;
+    }
+  });
+  await installBackground(() => {});
+  try {
+    const trusted = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+        preload: path.join(process.cwd(), "bridge-preload.cjs"),
+      },
+    });
+    installTrustedAppWindow(trusted, { appUrl, backendOrigin });
+    await trusted.loadURL(appUrl);
+
+    bridge.invalidSelectPath = await invokeBridgeExpectError(trusted, "workbench:select-path", "drive");
+    bridge.invalidSaveAsset = await invokeBridgeExpectError(trusted, "workbench:save-asset", { assetId: "../bad" });
+    bridge.invalidActivateRestore = await invokeBridgeExpectError(trusted, "workbench:activate-restore", "");
+
+    delete bridge.handlerResults["workbench:select-path"];
+    void fireBridgeInvoke(trusted, "workbench:select-path", "file");
+    await waitFor(() => Boolean(openDialogDeferred), "open dialog pending");
+    await trusted.loadURL(replacementUrl);
+    openDialogDeferred.resolve({ canceled: true, filePaths: [] });
+    bridge.selectPathNavigation = (await waitForHandler("workbench:select-path")).message;
+
+    await trusted.loadURL(appUrl);
+    bridge.contentDeferred = createDeferred();
+    bridge.contentRequested = false;
+    delete bridge.handlerResults["workbench:save-asset"];
+    void fireBridgeInvoke(trusted, "workbench:save-asset", { assetId: "asset_bridge", sessionId: "chat_1" });
+    await waitFor(() => bridge.contentRequested === true, "asset content pending");
+    await trusted.loadURL(replacementUrl);
+    bridge.contentDeferred.resolve();
+    bridge.saveAssetBackendNavigation = (await waitForHandler("workbench:save-asset")).message;
+    delete bridge.contentDeferred;
+
+    await trusted.loadURL(appUrl);
+    const savedPath = path.join(process.cwd(), "saved-after-navigation.txt");
+    try { rmSync(savedPath); } catch {}
+    saveDialogDeferred = null;
+    delete bridge.handlerResults["workbench:save-asset"];
+    void fireBridgeInvoke(trusted, "workbench:save-asset", { assetId: "asset_bridge", sessionId: "chat_1" });
+    await waitFor(() => Boolean(saveDialogDeferred), "save dialog pending");
+    await trusted.loadURL(replacementUrl);
+    saveDialogDeferred.resolve({ canceled: false, filePath: savedPath });
+    await waitForHandler("workbench:save-asset");
+    bridge.saveAssetDialogNavigation = existsSync(savedPath) ? "wrote after requester navigation" : "no write after requester navigation";
+
+    await trusted.loadURL(appUrl);
+    bridge.activateDeferred = createDeferred();
+    bridge.activateRequested = false;
+    bridge.reloadCount = 0;
+    delete bridge.handlerResults["workbench:activate-restore"];
+    const originalReload = trusted.reload.bind(trusted);
+    trusted.reload = () => {
+      bridge.reloadCount += 1;
+      return originalReload();
+    };
+    void fireBridgeInvoke(trusted, "workbench:activate-restore", "D:\\\\RestoredWorkbench");
+    await waitFor(() => bridge.activateRequested === true, "activate backend pending");
+    await trusted.loadURL(replacementUrl);
+    bridge.activateDeferred.resolve();
+    await waitForHandler("workbench:activate-restore");
+    bridge.activateRestoreNavigation = bridge.reloadCount === 0 ? "no reload after requester navigation" : "reloaded after requester navigation";
+    delete bridge.activateDeferred;
+    trusted.destroy();
+  } finally {
+    dialog.showOpenDialog = originalOpenDialog;
+    dialog.showSaveDialog = originalSaveDialog;
+    ipcMain.handle = originalHandle;
+  }
+}
+
+async function invokeBridgeExpectError(window, channel, value) {
+  return await window.webContents.executeJavaScript(
+    "window.bridgeTest.invoke(" + JSON.stringify(channel) + ", " + JSON.stringify(value) + ")"
+      + ".then(() => 'resolved', (error) => String(error && error.message || error).replace(/^Error invoking remote method '[^']+': Error: /, ''))",
+  );
+}
+
+async function fireBridgeInvoke(window, channel, value) {
+  await window.webContents.executeJavaScript(
+    "void window.bridgeTest.invoke(" + JSON.stringify(channel) + ", " + JSON.stringify(value) + ").catch(() => undefined)",
+  );
+}
+
+async function waitForHandler(channel) {
+  await waitFor(() => Boolean(bridge.handlerResults[channel]), channel + " handler result");
+  return bridge.handlerResults[channel];
+}
+
 async function installMarkdownAndActivateLinks(window, useProtocolRelativeExternal) {
   await window.webContents.executeJavaScript("document.body.innerHTML = " + JSON.stringify(markdownHtml));
   const anchors = await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('a')).map((anchor) => ({ text: anchor.textContent, href: anchor.getAttribute('href'), target: anchor.getAttribute('target') }))");
@@ -389,6 +580,20 @@ async function waitFor(predicate, label) {
   }
   throw new Error("Timed out waiting for " + label);
 }
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject };
+}
 `;
 }
 
@@ -397,6 +602,8 @@ function compileMainModule(fileName) {
   let source = readFileSync(sourcePath, "utf8");
   source = source.replaceAll('from "./localTrust"', 'from "./localTrust.mjs"');
   source = source.replaceAll('from "./localTrust";', 'from "./localTrust.mjs";');
+  source = source.replaceAll('from "./trustBoundary"', 'from "./trustBoundary.mjs"');
+  source = source.replaceAll('from "./trustBoundary";', 'from "./trustBoundary.mjs";');
   const output = ts.transpileModule(source, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,

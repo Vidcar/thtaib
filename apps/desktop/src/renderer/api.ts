@@ -25,10 +25,12 @@ import type {
   ModelBundle,
   ModelStorageSummary,
   PathsInfo,
+  PresentationSettings,
   RedactionMode,
   RunProfile,
   RuntimeManifest,
   SettingsBags,
+  ChatSearchResult,
 } from "./types";
 
 export const DEFAULT_GPU_STARTUP = {
@@ -63,6 +65,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
+  presentationSettings: () => request<PresentationSettings>("/v1/settings/presentation"),
+  updatePresentationSettings: (payload: PresentationSettings) =>
+    request<PresentationSettings>("/v1/settings/presentation", { method: "PUT", body: JSON.stringify(payload) }),
   paths: () => request<PathsInfo>("/v1/paths"),
   bundles: () => request<ModelBundle[]>("/v1/bundles"),
   imports: () => request<ImportJob[]>("/v1/imports"),
@@ -192,8 +197,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  chatConversations: () => request<ChatConversation[]>("/v1/chat/conversations"),
+  chatConversations: (includeArchived = false) => request<ChatConversation[]>(`/v1/chat/conversations?include_archived=${includeArchived ? "true" : "false"}`),
+  searchChatConversations: (query: string, includeArchived = false) =>
+    request<ChatSearchResult[]>(`/v1/chat/conversations/search?q=${encodeURIComponent(query)}&include_archived=${includeArchived ? "true" : "false"}`),
   chatConversation: (id: string) => request<ChatConversation>(`/v1/chat/conversations/${id}`),
+  renameChatConversation: (id: string, title: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  archiveChatConversation: (id: string, archived = true) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
+  reopenChatConversation: (id: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/reopen`, { method: "POST", body: "{}" }),
+  updateChatDraft: (id: string, payload: { content: string; expected_revision?: number | null; intended_config?: Record<string, unknown> }) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/draft`, { method: "PUT", body: JSON.stringify(payload) }),
+  updateChatQueueItem: (conversationId: string, itemId: string, payload: { task?: string | null; intended_config?: Record<string, unknown> | null }) =>
+    request<ChatConversation>(`/v1/chat/conversations/${conversationId}/queue/${itemId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  removeChatQueueItem: (conversationId: string, itemId: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${conversationId}/queue/${itemId}`, { method: "DELETE" }),
   startChat: (
     id: string,
     payload: {
@@ -216,8 +235,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  cancelChat: (id: string) =>
-    request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, { method: "POST" }),
+  enqueueChatTurn: (
+    id: string,
+    payload: {
+      task: string;
+      presented_tools?: string[];
+      deployment_id?: string;
+      profile_id?: string | null;
+      inherit_deployment_settings?: boolean;
+      project_path?: string | null;
+      workspace_id?: string | null;
+      memory_version_refs?: string[];
+      skill_version_refs?: string[];
+      protected_instruction_version_refs?: string[];
+      knowledge_version_refs?: string[];
+      embedding_deployment_id?: string | null;
+      retrieval_project_paths?: string[];
+    },
+  ) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/queue`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelChat: (id: string, inputMessageId?: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, {
+      method: "POST",
+      body: inputMessageId ? JSON.stringify({ input_message_id: inputMessageId }) : undefined,
+    }),
   decideChatInterrupt: (id: string, type: "approve" | "reject") =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/interrupt-decision`, {
       method: "POST",

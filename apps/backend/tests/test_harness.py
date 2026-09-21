@@ -101,6 +101,23 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIsInstance(checkpoint_id, str)
         return checkpoint_id
 
+    def _put_pending_interrupt_checkpoint(self, thread_id: str) -> str:
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        saved = saver.put(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {"source": "test", "step": 0, "writes": {}, "parents": {}},
+            {},
+        )
+        saver.put_writes(
+            saved,
+            [("__interrupt__", [{"id": f"{thread_id}:interrupt", "value": {"action_requests": [{"name": "execute", "args": {}}]}}])],
+            "test_interrupt_task",
+        )
+        checkpoint_id = saved["configurable"]["checkpoint_id"]
+        self.assertIsInstance(checkpoint_id, str)
+        return checkpoint_id
+
     def _start(self, **extra: Any) -> dict[str, Any]:
         payload = {
             "deployment_id": self.deployment_id,
@@ -318,13 +335,14 @@ class HarnessApiTests(unittest.TestCase):
                 "grep",
                 "execute",
                 "write_todos",
+                "ask_user",
             ],
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos"])
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user"])
         self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])
         project = self.root / "agt-005-project"
         project.mkdir()
@@ -587,6 +605,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_restart_preserves_pending_interrupt_for_resume(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_pending_interrupt:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -606,7 +625,7 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_pending_interrupt",
-            checkpoint_ids=[self._put_checkpoint("thread_pending_interrupt")],
+            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_pending_interrupt")],
         )
         self.app.state.harness.store.put_run(run)
 
@@ -617,9 +636,50 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIsNotNone(observed.pending_interrupt)
         self.assertEqual(observed.pending_interrupt.action_requests[0].name, "execute")
 
+    def test_restart_fails_pending_interrupt_with_historical_only_checkpoint(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            interrupt_id="historical-only:interrupt",
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_historical_only_interrupt",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="approval paused",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_historical_only_interrupt",
+            checkpoint_ids=[self._put_checkpoint("thread_historical_only_interrupt")],
+        )
+        # A later non-interrupted checkpoint makes the saved interrupt checkpoint
+        # historical. Restart must not resume from the old approval boundary.
+        self._put_checkpoint("thread_historical_only_interrupt")
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertEqual(
+            observed.events[-1].detail["code"],
+            "pending_interrupt_checkpoint_missing",
+        )
+
     def test_restart_fails_pending_interrupt_without_checkpoint_linkage(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -684,6 +744,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_restart_cancel_requested_pending_checkpoint_is_terminal_no_worker(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -730,6 +791,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_resume_after_restart_reserves_once_before_worker_runs(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -749,12 +811,12 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_resume_reserved",
-            checkpoint_ids=[self._put_checkpoint("thread_resume_reserved")],
+            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_resume_reserved")],
         )
         harness = self.app.state.harness
         harness.store.put_run(run)
 
-        request = {"decisions": [{"type": "reject"}]}
+        request = {"interrupt_id": pending.interrupt_id, "namespace": [], "decisions": [{"type": "reject"}]}
         entered = threading.Event()
         release = threading.Event()
 

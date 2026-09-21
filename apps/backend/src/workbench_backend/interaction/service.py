@@ -10,7 +10,7 @@ from uuid import uuid4, uuid5, NAMESPACE_URL
 from pydantic import ValidationError
 from langchain_protocol import Command, EventStreamRequest
 
-from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
+from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest, UserAnswerRequest
 from workbench_backend.chat.schemas import ChatStartRequest
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import WorkbenchError
@@ -439,7 +439,7 @@ class InteractionService:
             raise invalid("Unknown local assistant.")
         metadata = fields(params.get("metadata", {}), {"workbench"}, "metadata")
         setup = dict(metadata.get("workbench", {}))
-        if {"task", "thread_id", "source_surface", "input_message_id"} & set(setup):
+        if {"task", "thread_id", "source_surface", "input_message_id", "resume_checkpoint_id"} & set(setup):
             raise invalid("Thread ownership and message identity are assigned by the local binding.")
         input_value = fields(params.get("input"), {"messages"}, "input")
         messages = input_value.get("messages")
@@ -489,11 +489,20 @@ class InteractionService:
         selected = next((item for item in interrupts if item["id"] == params.get("interrupt_id") and item.get("namespace", []) == params.get("namespace", [])), None)
         if not selected or snapshot.get("workbench", {}).get("interrupt_run_id") != binding["run_id"]:
             raise invalid("This approval is stale or belongs to another run.", "stale_interrupt", 409)
-        response = fields(params.get("response"), {"decisions"}, "interrupt decision")
+        response = fields(params.get("response"), {"decisions", "answer", "cancelled"}, "interrupt response")
         for decision in response.get("decisions", []):
-            fields(decision, {"type", "message"}, "interrupt decision")
-        request = InterruptDecisionRequest.model_validate(response)
-        run = self.harness.resume_interrupt(binding["run_id"], request)
+            fields(decision, {"type", "message", "scope"}, "interrupt decision")
+        identified_response = {
+            **response,
+            "interrupt_id": params.get("interrupt_id"),
+            "namespace": params.get("namespace", []),
+        }
+        request = (
+            UserAnswerRequest.model_validate(identified_response)
+            if "answer" in response or "cancelled" in response
+            else InterruptDecisionRequest.model_validate(identified_response)
+        )
+        run = self.harness.resume_interrupt(binding["run_id"], request, require_interrupt_identity=True)
         return {"run_id": run.id, "applied_through_seq": binding["seq"]}
 
     @staticmethod

@@ -193,6 +193,18 @@
           "title": "Events",
           "type": "array"
         },
+        "final_snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Final Snapshot Id"
+        },
         "finished_at": {
           "anyOf": [
             {
@@ -204,6 +216,17 @@
           ],
           "default": null,
           "title": "Finished At"
+        },
+        "generation_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenerationObservation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "harness": {
           "const": "deepagents",
@@ -350,6 +373,18 @@
           },
           "title": "Related Files",
           "type": "array"
+        },
+        "resume_checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resume Checkpoint Id"
         },
         "retrieval_project_paths": {
           "items": {
@@ -782,6 +817,84 @@
         "system_prompt"
       ],
       "title": "EffectiveSetup",
+      "type": "object"
+    },
+    "GenerationObservation": {
+      "properties": {
+        "basis": {
+          "const": "reported_tokens_model_call_wall_time",
+          "default": "reported_tokens_model_call_wall_time",
+          "title": "Basis",
+          "type": "string"
+        },
+        "context_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Limit"
+        },
+        "elapsed_seconds": {
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "interval": {
+          "const": "last_completed_model_call_including_prompt_processing",
+          "default": "last_completed_model_call_including_prompt_processing",
+          "title": "Interval",
+          "type": "string"
+        },
+        "measured_at": {
+          "title": "Measured At",
+          "type": "string"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "tokens_per_second": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tokens Per Second"
+        }
+      },
+      "required": [
+        "elapsed_seconds",
+        "measured_at"
+      ],
+      "title": "GenerationObservation",
       "type": "object"
     },
     "HostShellFacts": {
@@ -1304,6 +1417,18 @@
           "title": "Environment",
           "type": "string"
         },
+        "interrupt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interrupt Id"
+        },
         "isolation": {
           "const": "none",
           "default": "none",
@@ -1311,15 +1436,36 @@
           "type": "string"
         },
         "kind": {
-          "const": "deepagents_interrupt_on",
           "default": "deepagents_interrupt_on",
+          "enum": [
+            "deepagents_interrupt_on",
+            "ask_user"
+          ],
           "title": "Kind",
           "type": "string"
+        },
+        "namespace": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Namespace",
+          "type": "array"
         },
         "note": {
           "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
           "title": "Note",
           "type": "string"
+        },
+        "question": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserQuestion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "title": "PendingInterrupt",
@@ -1659,6 +1805,41 @@
       ],
       "title": "ToolMode",
       "type": "string"
+    },
+    "UserQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "answer_type": {
+          "default": "text",
+          "enum": [
+            "text",
+            "choice",
+            "file",
+            "folder"
+          ],
+          "title": "Answer Type",
+          "type": "string"
+        },
+        "choices": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 30,
+          "title": "Choices",
+          "type": "array"
+        },
+        "prompt": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "title": "UserQuestion",
+      "type": "object"
     }
   },
   "description": "Workbench-owned extension under native stream values.workbench.",

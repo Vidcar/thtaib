@@ -313,6 +313,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/chat/conversations/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Conversations */
+        get: operations["search_conversations_v1_chat_conversations_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations/{conversation_id}": {
         parameters: {
             query?: never;
@@ -324,6 +341,24 @@ export interface paths {
         get: operations["get_conversation_v1_chat_conversations__conversation_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename Conversation */
+        patch: operations["rename_conversation_v1_chat_conversations__conversation_id__patch"];
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Conversation */
+        post: operations["archive_conversation_v1_chat_conversations__conversation_id__archive_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -347,6 +382,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/chat/conversations/{conversation_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Conversation Draft */
+        put: operations["update_conversation_draft_v1_chat_conversations__conversation_id__draft_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations/{conversation_id}/interrupt-decision": {
         parameters: {
             query?: never;
@@ -358,6 +410,75 @@ export interface paths {
         put?: never;
         /** Decide Conversation Interrupt */
         post: operations["decide_conversation_interrupt_v1_chat_conversations__conversation_id__interrupt_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue Conversation Turn */
+        post: operations["enqueue_conversation_turn_v1_chat_conversations__conversation_id__queue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/queue/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Conversation Queue */
+        post: operations["resume_conversation_queue_v1_chat_conversations__conversation_id__queue_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/queue/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Conversation Queue Item */
+        delete: operations["remove_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Conversation Queue Item */
+        patch: operations["update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch"];
+        trace?: never;
+    };
+    "/v1/chat/conversations/{conversation_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Conversation */
+        post: operations["reopen_conversation_v1_chat_conversations__conversation_id__reopen_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1047,8 +1168,11 @@ export interface components {
             error?: string | null;
             /** Events */
             events?: components["schemas"]["AgentEvent"][];
+            /** Final Snapshot Id */
+            final_snapshot_id?: string | null;
             /** Finished At */
             finished_at?: string | null;
+            generation_observation?: components["schemas"]["GenerationObservation"] | null;
             /**
              * Harness
              * @default deepagents
@@ -1099,6 +1223,8 @@ export interface components {
             recorded_is_not_live_proof: boolean;
             /** Related Files */
             related_files?: components["schemas"]["RelatedFile"][];
+            /** Resume Checkpoint Id */
+            resume_checkpoint_id?: string | null;
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
             /** Retrieved Material */
@@ -1164,6 +1290,10 @@ export interface components {
             output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            /** Per Request Overrides */
+            per_request_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Presented Tools */
             presented_tools?: string[] | null;
             /** Profile Id */
@@ -1176,6 +1306,8 @@ export interface components {
             recorded_fixtures?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Resume Checkpoint Id */
+            resume_checkpoint_id?: string | null;
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
             /** Skill Version Refs */
@@ -1249,6 +1381,11 @@ export interface components {
          * @enum {string}
          */
         BundleSourceKind: "huggingface" | "local";
+        /** ChatCancelRequest */
+        ChatCancelRequest: {
+            /** Input Message Id */
+            input_message_id?: string | null;
+        };
         /**
          * ChatContinuity
          * @description Documented conversation ↔ thread ↔ run linkage (Issue #56).
@@ -1292,6 +1429,111 @@ export interface components {
              */
             transcript_is_harness_context: false;
         };
+        /** ChatConversation */
+        ChatConversation: {
+            /**
+             * Archived
+             * @default false
+             */
+            archived: boolean;
+            /** Archived At */
+            archived_at?: string | null;
+            /** Area Id */
+            area_id?: string | null;
+            /**
+             * Area Kind
+             * @default general
+             * @enum {string}
+             */
+            area_kind: "general" | "project";
+            /** Area Label */
+            area_label?: string | null;
+            /** Area Project Path */
+            area_project_path?: string | null;
+            /** Area Workspace Id */
+            area_workspace_id?: string | null;
+            /** Branch Head Checkpoint Id */
+            branch_head_checkpoint_id?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Current Run Id */
+            current_run_id?: string | null;
+            /** Deployment Id */
+            deployment_id: string;
+            draft?: components["schemas"]["ChatDraft"] | null;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /**
+             * Harness
+             * @default deepagents
+             * @constant
+             */
+            harness: "deepagents";
+            /**
+             * History Replaced
+             * @default false
+             */
+            history_replaced: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Inherit Deployment Settings
+             * @default true
+             */
+            inherit_deployment_settings: boolean;
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Queue */
+            queue?: components["schemas"]["ChatQueueItem"][];
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Run Ids */
+            run_ids?: string[];
+            /**
+             * Second Agent Loop
+             * @default false
+             * @constant
+             */
+            second_agent_loop: false;
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /** Source Checkpoint Id */
+            source_checkpoint_id?: string | null;
+            /** Source Conversation Id */
+            source_conversation_id?: string | null;
+            /** Source Run Id */
+            source_run_id?: string | null;
+            /**
+             * Source Surface
+             * @default chat
+             * @constant
+             */
+            source_surface: "chat";
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Transcript */
+            transcript?: components["schemas"]["ChatMessage"][];
+            /** Updated At */
+            updated_at: string;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /** ChatConversationArchiveRequest */
+        ChatConversationArchiveRequest: {
+            /**
+             * Archived
+             * @default true
+             */
+            archived: boolean;
+        };
         /** ChatConversationCreateRequest */
         ChatConversationCreateRequest: {
             /** Deployment Id */
@@ -1317,11 +1559,41 @@ export interface components {
             retrieval_project_paths?: string[];
             /** Skill Version Refs */
             skill_version_refs?: string[];
+            /** Title */
+            title?: string | null;
             /** Workspace Id */
             workspace_id?: string | null;
         };
+        /** ChatConversationUpdateRequest */
+        ChatConversationUpdateRequest: {
+            /** Title */
+            title: string;
+        };
         /** ChatConversationView */
         ChatConversationView: {
+            /**
+             * Archived
+             * @default false
+             */
+            archived: boolean;
+            /** Archived At */
+            archived_at?: string | null;
+            /** Area Id */
+            area_id?: string | null;
+            /**
+             * Area Kind
+             * @default general
+             * @enum {string}
+             */
+            area_kind: "general" | "project";
+            /** Area Label */
+            area_label?: string | null;
+            /** Area Project Path */
+            area_project_path?: string | null;
+            /** Area Workspace Id */
+            area_workspace_id?: string | null;
+            /** Branch Head Checkpoint Id */
+            branch_head_checkpoint_id?: string | null;
             continuity?: components["schemas"]["ChatContinuity"] | null;
             /** Created At */
             created_at: string;
@@ -1331,6 +1603,7 @@ export interface components {
             deploy_health?: components["schemas"]["ChatDeployHealth"] | null;
             /** Deployment Id */
             deployment_id: string;
+            draft?: components["schemas"]["ChatDraft"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
             /** Enabled Tools */
@@ -1369,12 +1642,16 @@ export interface components {
              * @default Debug-quality Chat. The embedded Deep Agents harness owns model/tool iteration. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; this is not a durable Approvals inbox (OQ-011).
              */
             note: string;
+            /** Pending Cancel Input Ids */
+            pending_cancel_input_ids?: string[];
             /** Profile Id */
             profile_id?: string | null;
             /** Project Path */
             project_path?: string | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[];
+            /** Queue */
+            queue?: components["schemas"]["ChatQueueItem"][];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
             /** Run Ids */
@@ -1392,6 +1669,12 @@ export interface components {
             shell_tools_available: boolean;
             /** Skill Version Refs */
             skill_version_refs?: string[];
+            /** Source Checkpoint Id */
+            source_checkpoint_id?: string | null;
+            /** Source Conversation Id */
+            source_conversation_id?: string | null;
+            /** Source Run Id */
+            source_run_id?: string | null;
             /**
              * Source Surface
              * @default chat
@@ -1400,6 +1683,8 @@ export interface components {
             source_surface: "chat";
             /** Thread Id */
             thread_id?: string | null;
+            /** Title */
+            title?: string | null;
             /** Transcript */
             transcript?: components["schemas"]["ChatMessage"][];
             /** Updated At */
@@ -1430,10 +1715,57 @@ export interface components {
              */
             note: string;
         };
+        /** ChatDraft */
+        ChatDraft: {
+            /** Attachment Ids */
+            attachment_ids?: string[];
+            /**
+             * Content
+             * @default
+             */
+            content: string;
+            /** Content Blocks */
+            content_blocks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Intended Config */
+            intended_config?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** ChatDraftUpdateRequest */
+        ChatDraftUpdateRequest: {
+            /** Attachment Ids */
+            attachment_ids?: string[];
+            /**
+             * Content
+             * @default
+             */
+            content: string;
+            /** Content Blocks */
+            content_blocks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Expected Revision */
+            expected_revision?: number | null;
+            /** Intended Config */
+            intended_config?: {
+                [key: string]: unknown;
+            };
+        };
         /** ChatMessage */
         ChatMessage: {
             /** At */
             at: string;
+            /** Attachment Ids */
+            attachment_ids?: string[];
             /** Content */
             content: string;
             /** Content Blocks */
@@ -1450,8 +1782,95 @@ export interface components {
             /** Run Id */
             run_id?: string | null;
         };
+        /** ChatQueueItem */
+        ChatQueueItem: {
+            /** Attachment Ids */
+            attachment_ids?: string[];
+            /** Content Blocks */
+            content_blocks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Created At */
+            created_at: string;
+            /** Frozen Config */
+            frozen_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string;
+            /** Input Message Id */
+            input_message_id?: string | null;
+            /** Intended Config */
+            intended_config?: {
+                [key: string]: unknown;
+            };
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /** Pause Error */
+            pause_error?: string | null;
+            /** Pause Error Code */
+            pause_error_code?: string | null;
+            /** Pause Reason */
+            pause_reason?: ("failed" | "cancelled" | "dispatch_uncertain") | null;
+            /** Run Id */
+            run_id?: string | null;
+            /**
+             * Status
+             * @default queued
+             * @enum {string}
+             */
+            status: "queued" | "dispatching" | "paused";
+            /** Task */
+            task: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** ChatQueueItemUpdateRequest */
+        ChatQueueItemUpdateRequest: {
+            /** Attachment Ids */
+            attachment_ids?: string[] | null;
+            /** Content Blocks */
+            content_blocks?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Input Message Id */
+            input_message_id?: string | null;
+            /** Intended Config */
+            intended_config?: {
+                [key: string]: unknown;
+            } | null;
+            /** Output Schema */
+            output_schema?: {
+                [key: string]: unknown;
+            } | null;
+            /** Task */
+            task?: string | null;
+        };
+        /** ChatQueueResumeRequest */
+        ChatQueueResumeRequest: {
+            /**
+             * Acknowledge Uncertain Effects
+             * @default false
+             */
+            acknowledge_uncertain_effects: boolean;
+            /**
+             * Resume Paused
+             * @default false
+             */
+            resume_paused: boolean;
+        };
+        /** ChatSearchResult */
+        ChatSearchResult: {
+            conversation: components["schemas"]["ChatConversation"];
+            /** Matched Messages */
+            matched_messages?: components["schemas"]["ChatMessage"][];
+        };
         /** ChatStartRequest */
         ChatStartRequest: {
+            /** Attachment Ids */
+            attachment_ids?: string[];
             /** Content Blocks */
             content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             /** Deployment Id */
@@ -1470,6 +1889,10 @@ export interface components {
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
             output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
+            /** Per Request Overrides */
+            per_request_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Presented Tools */
             presented_tools?: string[] | null;
             /** Profile Id */
@@ -1767,6 +2190,33 @@ export interface components {
          * @enum {string}
          */
         FileRole: "primary_weights" | "shard" | "companion";
+        /** GenerationObservation */
+        GenerationObservation: {
+            /**
+             * Basis
+             * @default reported_tokens_model_call_wall_time
+             * @constant
+             */
+            basis: "reported_tokens_model_call_wall_time";
+            /** Context Limit */
+            context_limit?: number | null;
+            /** Elapsed Seconds */
+            elapsed_seconds: number;
+            /** Input Tokens */
+            input_tokens?: number | null;
+            /**
+             * Interval
+             * @default last_completed_model_call_including_prompt_processing
+             * @constant
+             */
+            interval: "last_completed_model_call_including_prompt_processing";
+            /** Measured At */
+            measured_at: string;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -2080,6 +2530,12 @@ export interface components {
             /** Message */
             message?: string | null;
             /**
+             * Scope
+             * @default once
+             * @enum {string}
+             */
+            scope: "once" | "session" | "always";
+            /**
              * Type
              * @enum {string}
              */
@@ -2089,6 +2545,10 @@ export interface components {
         InterruptDecisionRequest: {
             /** Decisions */
             decisions: components["schemas"]["InterruptDecision"][];
+            /** Interrupt Id */
+            interrupt_id?: string | null;
+            /** Namespace */
+            namespace?: string[];
         };
         /** LifecycleConsumer */
         LifecycleConsumer: {
@@ -2433,6 +2893,8 @@ export interface components {
              * @constant
              */
             environment: "windows_host_shell";
+            /** Interrupt Id */
+            interrupt_id?: string | null;
             /**
              * Isolation
              * @default none
@@ -2442,14 +2904,17 @@ export interface components {
             /**
              * Kind
              * @default deepagents_interrupt_on
-             * @constant
+             * @enum {string}
              */
-            kind: "deepagents_interrupt_on";
+            kind: "deepagents_interrupt_on" | "ask_user";
+            /** Namespace */
+            namespace?: string[];
             /**
              * Note
              * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).
              */
             note: string;
+            question?: components["schemas"]["UserQuestion"] | null;
         };
         /** PendingInterruptAction */
         PendingInterruptAction: {
@@ -2946,6 +3411,19 @@ export interface components {
          * @enum {string}
          */
         ToolMode: "live-tool" | "recorded-tool";
+        /** UserQuestion */
+        UserQuestion: {
+            /**
+             * Answer Type
+             * @default text
+             * @enum {string}
+             */
+            answer_type: "text" | "choice" | "file" | "folder";
+            /** Choices */
+            choices?: string[];
+            /** Prompt */
+            prompt: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -2988,11 +3466,21 @@ export type SchemaBundleConfigurationOptions = components['schemas']['BundleConf
 export type SchemaBundleFile = components['schemas']['BundleFile'];
 export type SchemaBundleSource = components['schemas']['BundleSource'];
 export type SchemaBundleSourceKind = components['schemas']['BundleSourceKind'];
+export type SchemaChatCancelRequest = components['schemas']['ChatCancelRequest'];
 export type SchemaChatContinuity = components['schemas']['ChatContinuity'];
+export type SchemaChatConversation = components['schemas']['ChatConversation'];
+export type SchemaChatConversationArchiveRequest = components['schemas']['ChatConversationArchiveRequest'];
 export type SchemaChatConversationCreateRequest = components['schemas']['ChatConversationCreateRequest'];
+export type SchemaChatConversationUpdateRequest = components['schemas']['ChatConversationUpdateRequest'];
 export type SchemaChatConversationView = components['schemas']['ChatConversationView'];
 export type SchemaChatDeployHealth = components['schemas']['ChatDeployHealth'];
+export type SchemaChatDraft = components['schemas']['ChatDraft'];
+export type SchemaChatDraftUpdateRequest = components['schemas']['ChatDraftUpdateRequest'];
 export type SchemaChatMessage = components['schemas']['ChatMessage'];
+export type SchemaChatQueueItem = components['schemas']['ChatQueueItem'];
+export type SchemaChatQueueItemUpdateRequest = components['schemas']['ChatQueueItemUpdateRequest'];
+export type SchemaChatQueueResumeRequest = components['schemas']['ChatQueueResumeRequest'];
+export type SchemaChatSearchResult = components['schemas']['ChatSearchResult'];
 export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
 export type SchemaChatTranscriptReplaceRequest = components['schemas']['ChatTranscriptReplaceRequest'];
 export type SchemaCompletionReport = components['schemas']['CompletionReport'];
@@ -3006,6 +3494,7 @@ export type SchemaDeploymentProfileChanges = components['schemas']['DeploymentPr
 export type SchemaDeploymentStatus = components['schemas']['DeploymentStatus'];
 export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaFileRole = components['schemas']['FileRole'];
+export type SchemaGenerationObservation = components['schemas']['GenerationObservation'];
 export type SchemaHttpValidationError = components['schemas']['HTTPValidationError'];
 export type SchemaHealthReport = components['schemas']['HealthReport'];
 export type SchemaHostShellFacts = components['schemas']['HostShellFacts'];
@@ -3067,6 +3556,7 @@ export type SchemaStructuredOutputResult = components['schemas']['StructuredOutp
 export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
 export type SchemaTextContentBlock = components['schemas']['TextContentBlock'];
 export type SchemaToolMode = components['schemas']['ToolMode'];
+export type SchemaUserQuestion = components['schemas']['UserQuestion'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
 export type SchemaWorkbenchInteractionMetadata = components['schemas']['WorkbenchInteractionMetadata'];
 export type $defs = Record<string, never>;
@@ -3663,7 +4153,9 @@ export interface operations {
     };
     list_conversations_v1_chat_conversations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                include_archived?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3677,6 +4169,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatConversationView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3701,6 +4202,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_conversations_v1_chat_conversations_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSearchResult"][];
                 };
             };
             /** @description Validation Error */
@@ -3745,6 +4278,76 @@ export interface operations {
             };
         };
     };
+    rename_conversation_v1_chat_conversations__conversation_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatConversationUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_conversation_v1_chat_conversations__conversation_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatConversationArchiveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cancel_conversation_v1_chat_conversations__conversation_id__cancel_post: {
         parameters: {
             query?: never;
@@ -3754,7 +4357,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChatCancelRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -3763,6 +4370,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_conversation_draft_v1_chat_conversations__conversation_id__draft_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatDraftUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
                 };
             };
             /** @description Validation Error */
@@ -3798,6 +4440,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_conversation_turn_v1_chat_conversations__conversation_id__queue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_conversation_queue_v1_chat_conversations__conversation_id__queue_resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChatQueueResumeRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatQueueItemUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_conversation_v1_chat_conversations__conversation_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
                 };
             };
             /** @description Validation Error */

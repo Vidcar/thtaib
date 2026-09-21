@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentStartRequest, InterruptDecisionRequest
@@ -32,6 +32,8 @@ def list_agent_runs(request: Request) -> object:
 
 @router.post("/agent-runs")
 def start_agent_run(request: Request, body: AgentStartRequest) -> object:
+    if body.resume_checkpoint_id:
+        raise HTTPException(status_code=400, detail="Checkpoint resume is an internal branch operation.")
     return get_harness(request).start(body)
 
 
@@ -51,4 +53,4 @@ def decide_agent_run_interrupt(
     run_id: str,
     body: InterruptDecisionRequest,
 ) -> object:
-    return get_harness(request).resume_interrupt(run_id, body)
+    return get_harness(request).resume_interrupt(run_id, body, require_interrupt_identity=True)

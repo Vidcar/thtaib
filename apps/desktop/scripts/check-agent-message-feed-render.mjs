@@ -10,7 +10,7 @@ import { createServer as createViteServer } from "vite";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const desktopRoot = path.join(repoRoot, "apps/desktop");
 
-const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true }, logLevel: "error" });
+const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { AgentMessageFeed } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
   const messages = [
