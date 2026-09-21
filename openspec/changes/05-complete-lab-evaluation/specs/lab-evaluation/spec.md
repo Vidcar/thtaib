@@ -38,7 +38,7 @@ MTP/speculative comparisons SHALL verify supported configuration and actual spec
 
 Model Lab SHALL offer bundle/deployment/profile/trait selection and hardware-local measurements with actual progress, applied settings, units, failures, resources and unavailable reasons. Trait measurement and task-case capture/restore/replay SHALL remain distinct flows; neither is disguised as the other. Task-case controls may remain in their existing separate panel.
 
-Lab SHALL support persistent results, case rename/duplicate/versioned editing/export/dependency-aware deletion, expected-versus-actual/source views and side-by-side answer/quality/performance comparison. Use explicit user-selected criteria rather than declare the fastest run universally best. Cases, fixtures, restored workspaces, logs and results follow shared retention/manual-backup policy, protecting sensitive captures and external source projects.
+Lab SHALL support persistent results, case rename/duplicate/versioned editing/export/dependency-aware deletion, expected-versus-actual/source views and side-by-side answer/quality/performance comparison. The primary journey SHALL be understandable as choose case, choose configurations, run, compare, inspect evidence and deliberately use the tested setup in Chat, without requiring raw JSON, internal identifiers or backend terminology. Use explicit user-selected criteria rather than declare the fastest run universally best. Cases, fixtures, restored workspaces, logs and results follow shared retention/manual-backup policy, protecting sensitive captures and external source projects.
 
 An explicit Use in Chat action SHALL reuse or create a shared profile from the tested immutable configuration with provenance. It MUST NOT automatically write back to an existing profile or mutate an active deployment. Detect later edits/startup mismatches at actual use; attach compatibility findings to the exact tested setup separately from publisher advice and user overrides.
 
@@ -51,6 +51,11 @@ An explicit Use in Chat action SHALL reuse or create a shared profile from the t
 
 - **WHEN** a user deliberately chooses Use in Chat and the profile later changes
 - **THEN** the tested snapshot/provenance are retained and the next actual setup exposes differences instead of claiming equivalence from the profile ID.
+
+#### Scenario: Lab primary journey
+
+- **WHEN** a user chooses a case, selects configurations, runs it, compares results and inspects evidence
+- **THEN** the primary Lab UI explains expected versus actual outcome, evidence and Use in Chat eligibility without requiring raw JSON, internal IDs or backend terminology.
 
 ### Requirement: LAB-008 - Measure engine traits honestly
 
@@ -73,6 +78,8 @@ Map supported benchmark-relevant shared settings to the benchmark's own controls
 ### Requirement: LAB-009 - Reserve execution exclusively for a Lab batch
 
 An active Lab batch SHALL hold a backend-owned exclusive execution reservation. Existing unrelated work must finish or be explicitly cancelled and confirmed stopped before acquisition; do not silently interrupt it. While held, reject or visibly queue all unrelated Chat, Workflow and media work. The batch's own trials, authorised concurrent tests and required human input remain allowed. Every implemented execution path SHALL enforce the reservation, not only the Lab UI.
+
+Lab's exclusive-use state SHALL be visible wherever it blocks work, including Chat, Workflows, media and shared activity/attention surfaces. The message SHALL identify Lab as the owner, distinguish waiting from unavailable, and offer only actions supported by the current ownership and cancellation state.
 
 Release on confirmed completion/cancellation/failure cleanup; restart SHALL reconcile unfinished work and unknown external effects before granting incompatible use. Ordinary concurrency outside Lab remains supported. Service readiness, returned job IDs or a cancel request do not establish terminal evaluation or free resources.
 

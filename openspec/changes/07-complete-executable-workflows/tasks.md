@@ -1,6 +1,6 @@
 # Tasks: Complete executable visual Workflows
 
-Prerequisites: change 06 and `migrate-local-agent-interaction` must be implemented and verified first. React Flow authors definitions; validated backend/LangGraph executes them; shared SDK observation is presentation only. SDK integration does not complete any workflow feature below, and all tasks remain unchecked until their own scope is verified. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
+Prerequisites: change 06 and `migrate-local-agent-interaction` must be implemented and verified first. Implement a React Flow editor within the existing desktop to author definitions; validated backend/LangGraph executes them; shared SDK observation is presentation only. The current baseline is a single-task Agent run surface, not an existing React Flow editor. SDK integration does not complete any workflow feature below, and all tasks remain unchecked until their own scope is verified. Before changing an existing path, run its relevant acceptance checks and retain passing behaviour. The implementation tasks below mean verify and complete only missing behaviour; do not rebuild a satisfied requirement. Keep the acceptance checks even when no code change is needed. Import-time source review is not execution evidence, so all tasks remain unchecked until their full scope is verified.
 
 ## 1. Verify existing behaviour and implement gaps
 
@@ -10,7 +10,8 @@ Prerequisites: change 06 and `migrate-local-agent-interaction` must be implement
 - [ ] 1.4 Implement real sequence, exclusive branch, parallel region/join, explicit approval, typed user input, field selection, text formatting, direct integration, declared loop and reusable-workflow nodes.
 - [ ] 1.5 Implement root/node/iteration/attempt events, exact typed interruption routing, compatible restart, partial failures, cancellation and external-effect reconciliation.
 - [ ] 1.6 Apply shared project/model/residency admission and Lab exclusivity across every node and nested child.
-- [ ] 1.7 Finish the existing React Flow editor, labelled ports, setup/input/output inspectors, validation focus, editor undo/redo, keyboard controls, unsaved handling and actual run history.
+- [ ] 1.7 Implement the React Flow workflow editor within the existing desktop, with labelled ports, setup/input/output inspectors, validation focus, editor undo/redo, keyboard controls, unsaved handling and actual run history.
+- [ ] 1.8 Obtain Dave's approval of the editor layout checkpoint before substantial editor implementation, covering node palette, canvas, inspectors, run controls, validation, historical runs and preserved Agent run history access.
 
 ## 2. Verify
 
@@ -22,5 +23,6 @@ Prerequisites: change 06 and `migrate-local-agent-interaction` must be implement
 - [ ] 2.6 Test independent branch completion after failure, no blanket mutating retry, cancellation during waits/effects/handover and uncertain effects without duplicate dispatch.
 - [ ] 2.7 Run concurrent ordinary Chat/Workflow work through shared admission, then verify unrelated workflows cannot start during Lab exclusivity.
 - [ ] 2.8 On Windows, create/save/reopen/edit/run a workflow, inspect actual node inputs/outputs/iterations, use keyboard and undo/redo, and verify old Agent run history remains reachable. Mock canvas success is insufficient.
+- [ ] 2.9 Record technical verification separately from Dave's UX acceptance. Exercise the built Windows Workflows journey at full-window and half-screen sizes, with Windows display scaling, keyboard navigation, long graph/run content and one validation or recovery failure; leave UX acceptance pending until Dave accepts or explicitly defers review.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.

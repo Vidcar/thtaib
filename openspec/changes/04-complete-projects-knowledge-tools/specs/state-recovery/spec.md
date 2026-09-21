@@ -18,6 +18,11 @@ Agent learning SHALL first be a reviewable proposal with content, destination sc
 - **WHEN** an agent proposes a memory without automatic-save permission for the displayed scope
 - **THEN** the user reviews the actual content/destination before a durable commit; ordinary file permission does not bypass this step.
 
+#### Scenario: Scoped proposal review
+
+- **WHEN** a memory proposal targets user, project or agent scope from the conversation
+- **THEN** the review surface shows the proposed content, provenance and exact scope in plain language, with technical version details available on expansion.
+
 ### Requirement: STATE-006 - Retrieve through LangChain components, not a second knowledge store
 
 Retrieval SHALL be opt-in, require an explicitly selected usable embedding deployment and use LangChain components over selected knowledge/document versions and allowlisted project text. Validate the actual embedding response, pooling/configuration and corpus; missing, unloaded or unusable dependencies and empty requested corpora fail actionably with no invented hits. In authorized live-tool retrieval runs, auto-present the existing shared `search_knowledge` tool without overriding tools-off. Direct project/document reading, memory and skills MUST remain usable without embeddings.

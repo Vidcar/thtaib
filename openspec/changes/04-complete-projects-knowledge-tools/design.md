@@ -12,6 +12,14 @@ After `migrate-local-agent-interaction` is implemented and verified, reuse its s
 
 Implement one concrete public web search plus page-reading integration; choose and document the provider/authentication/limits without assuming a paid account or substituting a documentation MCP. Preserve external content as untrusted task data. No second permission gate is required merely to use supplied content through tools already authorized for that task.
 
+## UX presentation
+
+Follow the shared UX contract in `../03-complete-shared-chat/design.md#shared-ux-contract`. This change owns the everyday workspace presentation for reusable agent setups, project controls, scoped Knowledge, file previews/diffs, proposal review and connection management. The primary journey must be understandable without raw JSON, internal identifiers or backend terminology; technical evidence, provenance, parser details, dependency records and backend diagnostics remain available in expandable details.
+
+Expose reusable setups through the **Agents** destination while keeping the active setup selectable from the conversation controls defined by change 03. Project identity stays in the fixed conversation area and header; changing project area starts or opens a different conversation rather than detaching an existing one. File previews, diffs, changed-file review, document source inspection, memory proposals and tool activity use the shared right-hand panel and Library/retention records instead of separate stores. Connection add/edit/test/disconnect, saved permissions, appearance, notifications and manual backup/restore belong in **Settings**.
+
+Technical verification and Dave's UX acceptance are separate completion records. Everyday workspace UX acceptance is currently pending, not accepted. It covers a built Windows journey at full-window and half-screen sizes, Windows display scaling, keyboard navigation, long content, and at least one failure/recovery state across a project file task, document-backed answer, memory proposal, skill resource read, connection lifecycle and ordinary Chat after the async transition. UX acceptance remains pending until Dave accepts the built journey or explicitly defers it.
+
 ## Failure and migration handling
 
 Preserve real user scope/version identities and compatible existing threads. Expose unsupported checkpoint/session/client behaviour rather than deleting state or inventing compatibility. Record remote tool errors separately from transport/conversion failures. Imported packages, document text and discovered tools cannot authorize themselves. Extend the shared deletion/manual-backup contract for every new record family.

@@ -12,6 +12,7 @@ Prerequisites: change 07 and `migrate-local-agent-interaction` must be implement
 - [ ] 1.6 Implement opt-in final-answer TTS, verified audio artifacts and distinct playback/synthesis controls without an application-owned voice-model worker.
 - [ ] 1.7 Expose the same awaited media adapters through authorised Chat/child tools and typed Workflow nodes, using shared admission, permissions, events and Lab exclusion.
 - [ ] 1.8 Complete real same-run Chat → media → Chat handover with verified two-sided release and restore-only recovery; finish endpoint/preview/output controls in existing views.
+- [ ] 1.9 Extend the shared composer, reply previews and Library with compact attachment, dictation, editable transcription, opt-in spoken reply and explicit playback controls without cluttering ordinary text Chat.
 
 ## 2. Verify
 
@@ -24,5 +25,6 @@ Prerequisites: change 07 and `migrate-local-agent-interaction` must be implement
 - [ ] 2.7 Run equivalent real media via agent and Workflow routes, verifying awaited typed artifacts, tools-off/permissions, Lab-owned media tests and attributable cancellation/recovery.
 - [ ] 2.8 Run the saved Lab-owned round trip with actual managed Chat unload, actual media generation/retrieval, authorised verified media release, exact Chat restore and same-thread continuation. Retain phase timings/output; test restore failure/cancel/restart without generation replay.
 - [ ] 2.9 Render and use the Windows attachment, endpoint, media progress and output-browser controls; exercise open/save/reuse/delete and playback navigation/restart. Mocks or a returned job ID do not satisfy live acceptance.
+- [ ] 2.10 Record technical verification separately from Dave's UX acceptance. Exercise the built Windows media journey at full-window and half-screen sizes, with Windows display scaling, keyboard navigation, long progress/output content, one interrupted recovery state and a repeated ordinary text-only Chat journey; leave UX acceptance pending until Dave accepts or explicitly defers review.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.
