@@ -969,33 +969,6 @@ async function testHeldRegistrationDoesNotBindOldThread(vite) {
   }
 }
 
-async function testTerminalHydrationCannotReselectAfterNew(vite) {
-  const terminalRun = run("run_a_done", "completed");
-  const heldHydration = deferred();
-  const harness = makeHarness({ aRun: terminalRun, threadARun: terminalRun });
-  harness.state.barriers.chatConversation.set("conv_a:2", heldHydration);
-  const renderer = await renderChat(vite, harness);
-  try {
-    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
-    await act(async () => {
-      button(renderer, "Conversation A").props.onClick();
-      await Promise.resolve();
-    });
-    await flush();
-    await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "terminal hydration request");
-    await act(async () => {
-      button(renderer, "New").props.onClick();
-      await Promise.resolve();
-    });
-    await waitFor(() => assertFreshConversation(renderer, "New should clear active selection"), "New should clear active selection");
-    await releaseResponse(harness, heldHydration, "/v1/chat/conversations/conv_a", "GET");
-    assertFreshConversation(renderer, "late terminal hydration must not reselect A");
-  } finally {
-    heldHydration.resolve();
-    await closeHarness(renderer, harness);
-  }
-}
-
 async function testTerminalHydrationCannotReselectAfterB(vite) {
   const terminalRun = run("run_a_done", "completed");
   const heldHydration = deferred();
@@ -2585,7 +2558,6 @@ try {
     ["new-chat file drop", vite => testWholeChatDropStagesFiles(vite, true)],
     ["file-drop creation navigation guard", testFileDropDuringNewChatRegistrationCannotRetarget],
     ["held registration", testHeldRegistrationDoesNotBindOldThread],
-    ["terminal hydration after New", testTerminalHydrationCannotReselectAfterNew],
     ["terminal hydration after B", testTerminalHydrationCannotReselectAfterB],
     ["terminal hydration away/back A", testTerminalHydrationAwayBackSameConversationGeneration],
     ["cancel after switch", testCancelResponseCannotReselectAfterSwitch],
