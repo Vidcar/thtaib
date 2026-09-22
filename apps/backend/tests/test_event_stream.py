@@ -17,7 +17,8 @@ import httpx
 from langchain_core.messages import AIMessage
 import uvicorn
 
-from workbench_backend.agents.schemas import AgentRun, GenerationObservation
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
+from workbench_backend.inference.ids import utc_now
 from workbench_backend.app import create_app
 from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
@@ -245,6 +246,63 @@ class InteractionStreamTests(unittest.TestCase):
         hold.set()
         completed = wait_for_state(self.client, thread_id)
         self.assertEqual(completed["values"]["workbench"]["run"]["status"], "completed")
+
+    def test_live_resume_shows_partial_text_without_replaying_earlier_tokens(self) -> None:
+        thread_id = self._register_agent()
+        graph_thread_id = self.app.state.app_store.get_interaction(thread_id)["graph_thread_id"]
+        now = utc_now()
+        run = AgentRun(
+            id="stream-partial",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="Say hello",
+            input_message_id="partial-user",
+            enabled_tools=[],
+            presented_tools=[],
+            created_at=now,
+            updated_at=now,
+            thread_id=graph_thread_id,
+        )
+        self.app.state.app_store.put_run(run)
+        interaction = self.app.state.interaction
+        interaction.observe(run, None)
+        for data in (
+            {"event": "message-start", "role": "ai", "id": "partial-ai"},
+            {"event": "content-block-delta", "index": 0, "delta": {"type": "text-delta", "text": "Hello"}},
+        ):
+            interaction.observe(run, {"method": "messages", "params": {"namespace": [], "timestamp": 1, "data": data}})
+
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        partial = next(message for message in state["values"]["messages"] if message.get("id") == "partial-ai")
+        self.assertEqual(partial["content"], [{"type": "text", "text": "Hello"}])
+        self.assertIn("partial-ai", state["values"]["workbench"]["incomplete_message_ids"])
+        cursor = state["interaction_cursor"]
+        self.assertGreater(cursor, 0)
+
+        interaction.observe(run, {"method": "messages", "params": {"namespace": [], "timestamp": 2, "data": {
+            "event": "content-block-delta", "index": 0, "delta": {"type": "text-delta", "text": " world"},
+        }}})
+        interaction.observe(run, None)
+
+        with loopback_app_server(self.app) as base_url:
+            streamed = read_loopback_interaction_events(
+                base_url,
+                token=self.app.state.local_trust_token,
+                thread_id=thread_id,
+                body={"channels": ["messages", "values"], "namespaces": [[]], "since": cursor},
+                stop=lambda events: any((event.get("data") or {}).get("method") == "values" for event in events),
+                timeout=5.0,
+            )
+        payloads = [event["data"] for event in streamed if event.get("data")]
+        message_events = [item["params"]["data"] for item in payloads if item["method"] == "messages"]
+        self.assertEqual([item["event"] for item in message_events], ["message-start", "content-block-start", "content-block-delta"])
+        self.assertEqual(message_events[0]["id"], "partial-ai")
+        self.assertEqual(message_events[1]["content"], {"type": "text", "text": "Hello"})
+        self.assertEqual(message_events[2]["delta"]["text"], " world")
+        resumed = next(item["params"]["data"] for item in payloads if item["method"] == "values")
+        resumed_partial = next(message for message in resumed["messages"] if message.get("id") == "partial-ai")
+        self.assertEqual(resumed_partial["content"], [{"type": "text", "text": "Hello world"}])
+        self.assertIn("partial-ai", resumed["workbench"]["incomplete_message_ids"])
 
     def test_subscriber_disconnect_does_not_cancel_run(self) -> None:
         hold = threading.Event()

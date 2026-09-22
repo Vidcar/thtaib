@@ -10,10 +10,32 @@ from langgraph.types import Command
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
-from workbench_backend.interaction.projection import archive_messages, message_dict, native_event
+from workbench_backend.interaction.projection import archive_messages, message_dict, message_resume_seed, native_event, open_tool_starts
 
 
 class InteractionProjectionTests(unittest.TestCase):
+    def test_resume_seed_keeps_text_already_shown_and_leaves_the_new_delta(self) -> None:
+        prefix = [
+            {"method": "messages", "params": {"namespace": [], "timestamp": 1, "node": "model",
+                "data": {"event": "message-start", "role": "ai", "id": "partial-ai"}}},
+            {"method": "messages", "params": {"namespace": [], "timestamp": 2,
+                "data": {"event": "content-block-delta", "index": 0, "delta": {"type": "text-delta", "text": "Hello"}}}},
+        ]
+        seed = message_resume_seed(prefix, seq=4)
+        self.assertEqual(seed[0]["params"]["data"]["event"], "message-start")
+        self.assertEqual(seed[0]["params"]["data"]["id"], "partial-ai")
+        self.assertEqual(seed[0]["seq"], 4)
+        self.assertEqual(seed[1]["params"]["data"], {
+            "event": "content-block-start", "index": 0, "content": {"type": "text", "text": "Hello"},
+        })
+        self.assertEqual(seed[1]["params"]["node"], "model")
+
+    def test_open_tool_start_drops_a_finished_call(self) -> None:
+        started = {"method": "tools", "params": {"namespace": [], "data": {"event": "tool-started", "tool_call_id": "call-1", "tool_name": "write_file"}}}
+        finished = {"method": "tools", "params": {"namespace": [], "data": {"event": "tool-finished", "tool_call_id": "call-1"}}}
+        still_open = {"method": "tools", "params": {"namespace": [], "data": {"event": "tool-started", "tool_call_id": "call-2", "tool_name": "read_file"}}}
+        self.assertEqual(open_tool_starts([started, finished, still_open]), [still_open])
+
     def test_tool_command_projects_matching_reply_without_graph_state_or_routing(self) -> None:
         command = Command(update={"messages": [ToolMessage(content="other reply", tool_call_id="other"),
             ToolMessage(content="Updated todo list", tool_call_id="todo", name="write_todos")],

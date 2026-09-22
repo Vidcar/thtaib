@@ -65,6 +65,80 @@ def archive_messages(existing: list[dict[str, Any]], values: list[Any]) -> list[
     return result
 
 
+def message_resume_seed(prefix: list[dict[str, Any]], *, seq: int) -> list[dict[str, Any]]:
+    """One message-start and the current blocks, so a later delta appends.
+
+    The desktop assembler starts empty. A subscriber that joins after
+    message-start would otherwise treat the next delta as the whole answer.
+    """
+    start = next((item for item in prefix if item.get("params", {}).get("data", {}).get("event") == "message-start"), None)
+    if start is None:
+        return []
+    blocks: dict[int, dict[str, Any]] = {}
+    for item in prefix:
+        _accumulate_message_block(blocks, item.get("params", {}).get("data") or {})
+    params = dict(start["params"])
+    seeds = [{"type": "event", "method": "messages", "seq": seq, "params": params}]
+    for index in sorted(blocks):
+        block = blocks[index]
+        if not _block_has_visible_content(block):
+            continue
+        seed_params: dict[str, Any] = {
+            "namespace": list(params.get("namespace") or []),
+            "timestamp": params.get("timestamp", 0),
+            "data": {"event": "content-block-start", "index": index, "content": block},
+        }
+        if "node" in params:
+            seed_params["node"] = params["node"]
+        seeds.append({"type": "event", "method": "messages", "seq": seq, "params": seed_params})
+    return seeds
+
+
+def open_tool_starts(events: Any) -> list[dict[str, Any]]:
+    """tool-started events that have not finished by the end of `events`."""
+    open_calls: dict[str, dict[str, Any]] = {}
+    for item in events:
+        if item.get("method") != "tools":
+            continue
+        data = item.get("params", {}).get("data") or {}
+        call_id = data.get("tool_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            continue
+        if data.get("event") == "tool-started":
+            open_calls[call_id] = item
+        elif data.get("event") in {"tool-finished", "tool-error"}:
+            open_calls.pop(call_id, None)
+    return list(open_calls.values())
+
+
+def _accumulate_message_block(blocks: dict[int, dict[str, Any]], data: dict[str, Any]) -> None:
+    event_name = data.get("event")
+    index = data.get("index", 0)
+    if not isinstance(index, int) or isinstance(index, bool):
+        index = 0
+    if event_name == "content-block-finish" and isinstance(data.get("content"), dict):
+        blocks[index] = dict(data["content"])
+        return
+    if event_name != "content-block-delta":
+        return
+    delta = data.get("delta") or {}
+    kind = delta.get("type")
+    current = blocks.get(index, {})
+    if kind == "text-delta":
+        blocks[index] = {"type": "text", "text": f"{current.get('text', '')}{delta.get('text', '')}"}
+    elif kind == "reasoning-delta":
+        blocks[index] = {"type": "reasoning", "reasoning": f"{current.get('reasoning', '')}{delta.get('reasoning', '')}"}
+    elif kind == "block-delta" and isinstance(delta.get("fields"), dict):
+        # Tool-call deltas already carry the accumulated arguments.
+        blocks[index] = dict(delta["fields"])
+
+
+def _block_has_visible_content(block: dict[str, Any]) -> bool:
+    if block.get("text") or block.get("reasoning") or block.get("args"):
+        return True
+    return block.get("type") not in {None, "text", "reasoning"}
+
+
 def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
     """Use the public upstream projection to retain interrupted real output.
 

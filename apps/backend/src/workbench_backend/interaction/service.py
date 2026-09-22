@@ -17,6 +17,7 @@ from workbench_backend.errors import WorkbenchError
 from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.state.checkpointer import conversation_state
 from workbench_backend.interaction.projection import archive_messages, event, native_event, partial_archive
+from workbench_backend.interaction.resume import ResumeProjection
 from workbench_backend.interaction.schemas import WorkbenchInteractionMetadata
 
 
@@ -474,13 +475,57 @@ class InteractionService:
             if missing_interrupt or self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run"):
                 self.observe(current, None)
                 binding = self.binding(thread_id)
-        values = self.display_values(binding["snapshot"])
+        with self._projection_lock:
+            # Copy the cursor and snapshot together. Replaying the log stays
+            # outside this lock so a worker can publish its interrupt.
+            binding = self.binding(thread_id)
+            snapshot = copy.deepcopy(binding["snapshot"])
+            seq = binding["seq"]
+        run_record = (snapshot.get("workbench") or {}).get("run") or {}
+        run_status = run_record.get("status") if isinstance(run_record, dict) else None
+        if run_status and is_run_lifecycle_live(run_status):
+            snapshot = self._with_live_partials(snapshot, binding["id"], seq)
+        values = self.display_values(snapshot)
+        if binding["run_id"] and not self._harness_interrupt_is_published(binding["run_id"]):
+            # A native interrupt event can be stored before the run is waiting.
+            # Offering it early accepts an approval the harness does not have yet.
+            values["__interrupt__"] = []
+            values.get("workbench", {}).pop("interrupt_run_id", None)
         run = values.get("workbench", {}).get("run") or {}
         active = run.get("status") in {"queued", "running", "cancel_requested"}
         interrupts = values.get("__interrupt__", [])
         return {"values": values, "next": ["input.respond" if interrupts else "running"] if active else [],
                 "tasks": [{"interrupts": interrupts}] if interrupts else [],
-                "interaction_cursor": binding["seq"]}
+                "interaction_cursor": seq}
+
+    def _harness_interrupt_is_published(self, run_id: str) -> bool:
+        try:
+            current = self.harness.get_run(run_id)
+        except WorkbenchError:
+            return False
+        return bool(self._saved_interrupts(current))
+
+    def _with_live_partials(self, snapshot: dict[str, Any], thread_id: str, through: int) -> dict[str, Any]:
+        """Return a display copy that includes the answer generated so far.
+
+        The stored snapshot still waits until the run finishes. Opening the
+        chat reads this copy and subscribes after its cursor.
+        """
+        started = snapshot.get("workbench", {}).get("run_started_seq", 0)
+        if not isinstance(started, int):
+            started = 0
+        partials, incomplete = partial_archive(self.replay(thread_id, started, through))
+        if partials:
+            snapshot["messages"] = archive_messages(snapshot.get("messages", []), partials)
+        if incomplete:
+            workbench = snapshot.setdefault("workbench", {})
+            workbench["incomplete_message_ids"] = sorted(
+                set(workbench.get("incomplete_message_ids", [])) | set(incomplete))
+        return snapshot
+
+    def resume_view(self, thread_id: str, since: int) -> ResumeProjection:
+        self.binding(thread_id)
+        return ResumeProjection(self, thread_id, since)
 
     def command(self, thread_id: str, body: Command) -> dict[str, Any]:
         fields(body, {"id", "method", "params"}, "command")
