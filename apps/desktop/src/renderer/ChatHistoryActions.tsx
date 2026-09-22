@@ -9,6 +9,7 @@ import {
   type ConversationExportPayload,
 } from "./chatHistoryActionsApi";
 import { conversationTitle, formatWhen } from "./display";
+import { errorMessage } from "./errors";
 import { Icon, type IconName } from "./Icon";
 import type { ChatConversation } from "./types";
 
@@ -69,7 +70,7 @@ export function ChatHistoryActions({
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setActionsError(messageOf(error));
+          setActionsError(errorMessage(error));
         }
       });
     return () => {
@@ -109,7 +110,7 @@ export function ChatHistoryActions({
       const next = await chatHistoryActionsApi.createBranch(conversation.id, selectedRunId, mode, mode === "retry" || mode === "edit", mode === "edit" ? trimmedEdit : undefined);
       onConversationCreated(next);
     } catch (error) {
-      onError(messageOf(error));
+      onError(errorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -121,7 +122,7 @@ export function ChatHistoryActions({
       const payload = await chatHistoryActionsApi.exportConversation(conversation.id);
       downloadText(readableMarkdownExport(payload), `${safeFilename(conversationTitle(conversation))}.md`, "text/markdown");
     } catch (error) {
-      onError(messageOf(error));
+      onError(errorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -132,7 +133,7 @@ export function ChatHistoryActions({
     try {
       setDeletePreview(await chatHistoryActionsApi.deletePreview(conversation.id));
     } catch (error) {
-      onError(messageOf(error));
+      onError(errorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -158,7 +159,7 @@ export function ChatHistoryActions({
       }
       onDeleted(conversation.id);
     } catch (error) {
-      onError(messageOf(error));
+      onError(errorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -313,10 +314,6 @@ function firstLine(value: string): string {
     return "Saved assistant reply";
   }
   return line.length > 96 ? `${line.slice(0, 95)}...` : line;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function safeFilename(title: string): string {

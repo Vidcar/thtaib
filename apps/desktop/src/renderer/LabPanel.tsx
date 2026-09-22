@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { deploymentOptionLabel, shortId } from "./display";
 import { HoverHelp } from "./HoverHelp";
+import { Notice } from "./Notice";
 import { Icon } from "./Icon";
 import { InteractionStream, useWorkbenchProjection, type WorkbenchStream } from "./InteractionStream";
 import {
@@ -244,7 +245,7 @@ export function LabPanel() {
             <span className="badge">{run.status}</span>
           </p>
         ) : null}
-        {run?.error ? <p className="notice notice-error">{run.error}</p> : null}
+        {run?.error ? <Notice tone="error">{run.error}</Notice> : null}
       </form>
       </div>
 

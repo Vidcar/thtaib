@@ -221,12 +221,18 @@ function textFromNode(node: React.ReactNode): string {
   return "";
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  const code = textFromNode(children);
+export function CodeBlock({ children, text, label = "Copy code block", preClassName = "code-block", ariaLabel }: {
+  children?: React.ReactNode;
+  text?: string;
+  label?: string;
+  preClassName?: string;
+  ariaLabel?: string;
+}) {
+  const code = text ?? textFromNode(children);
   return (
     <div className="code-block-wrap">
-      <CopyIconButton text={code} label="Copy code block" />
-      <pre className="code-block">{children}</pre>
+      <CopyIconButton text={code} label={label} />
+      <pre className={preClassName} aria-label={ariaLabel}>{children ?? text}</pre>
     </div>
   );
 }
@@ -377,7 +383,7 @@ function ToolBlockList({
         </>}
       >
         <div className="tool-call-details">
-          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><div className="code-block-wrap"><CopyIconButton text={stringifyValue(tool.args)} label="Copy tool input" /><pre className="code-block"><code>{stringifyValue(tool.args)}</code></pre></div></section> : null}
+          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
           {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
         </div>

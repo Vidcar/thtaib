@@ -859,6 +859,17 @@ textarea {
   border-color: var(--ok);
 }
 
+.notice-with-action {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.notice-with-action > span {
+  flex: 1 1 12rem;
+}
+
 .empty-state {
   padding: 1.25rem 0.25rem;
   max-width: 36rem;

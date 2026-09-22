@@ -4,6 +4,7 @@ import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { Choice, Help, numberChoices, tokenLabel } from "./ModelControls";
 import { mergedStartup, startupPayload } from "./deploymentSettings";
+import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
@@ -287,7 +288,7 @@ export function DeploymentsPanel({
         <button type="submit" className="primary-button" disabled={Boolean(busy) || !runtimeReady || !selected.disk_matches || Boolean(selectedActive)}>{busy === "start" ? "Loading model…" : selectedActive ? "Model is active" : "Start model"}</button>
       </div></footer>
       {settingsPreview ? <details className="technical-details" open><summary>Checked launch settings</summary><p className="hint">Applies on the next start. Final context and memory use are reported after loading.</p>{readout(settingsPreview.startup.applied)}<SettingsNotes unsupported={settingsPreview.startup.unsupported} retired={settingsPreview.startup.retired} /></details> : null}
-    </form></details> : <div className="card"><h3>Choose a model to get started</h3><p className="hint">Select one from your library, or add a new model.</p></div>}
+    </form></details> : <EmptyState title="Choose a model to get started">Select one from your library, or add a new model.</EmptyState>}
     {message ? <Notice tone={messageTone}>{message}</Notice> : null}
     {externalCurrent.length ? <details className="card"><summary>Other model servers <span>{externalCurrent.length}</span></summary><ul className="plain-list">{externalCurrent.map(renderDeployment)}</ul></details> : null}
     <details className="card connection-settings"><summary>Connect an existing server</summary><form onSubmit={event => { event.preventDefault(); void action("connect", async () => { const result = await api.attachConnected(endpoint, connectionName || undefined, connectedEmbedder ? { ...DEFAULT_EMBEDDING_STARTUP } : undefined); await refresh(); setMessageTone(result.health?.healthy ? "ok" : "info"); setMessage(result.health?.healthy ? "Server connected and ready." : "Server saved. Check that it is running at this address."); }); }}>

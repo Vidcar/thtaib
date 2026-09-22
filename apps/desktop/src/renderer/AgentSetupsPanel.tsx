@@ -3,6 +3,7 @@ import { workspaceApi, type AgentSetup, type AgentSetupVersion, type SetupConfig
 import { SetupConfigurationEditor, useSetupCatalogue } from "./SetupConfigurationEditor";
 import { errorMessage } from "./errors";
 import { formatWhen } from "./display";
+import { EmptyState } from "./EmptyState";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
@@ -58,10 +59,10 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
   }
   return <section className="surface workspace-records-surface">
     <header className="surface-head"><div className="entity-head"><h2>Agents</h2><HoverHelp title="About reusable agents">Save a role, instructions, model and selected tools or knowledge. Conversations keep the exact version used; edits apply when a newer version is selected for future work.</HoverHelp></div><button type="button" disabled={busy} onClick={() => { setCreating(true); }}><Icon name="plus" size={15} /> New agent</button></header>
-    {error ? <Notice tone="error">{error}{!records.length && !creating ? <button onClick={() => void action(() => refresh())}>Retry</button> : null}</Notice> : null}
+    {error ? <Notice tone="error" action={!records.length && !creating ? <button type="button" onClick={() => void action(() => refresh())}>Retry</button> : undefined}>{error}</Notice> : null}
     {catalogueError ? <Notice tone="warn">Some setup choices could not load: {catalogueError}</Notice> : null}
     {message ? <p className="hint" role="status">{message}</p> : null}
-    <div className="workspace-records-layout"><aside className="workspace-record-list" aria-label="Saved agents">{loading ? <p className="hint">Loading agents…</p> : !records.length ? <p className="hint">No agents yet. Create a setup you can reuse in Chat.</p> : <ul className="nav-list">{records.map(record => <li key={record.id}><button type="button" className={!creating && selectedId === record.id ? "nav-item active" : "nav-item"} disabled={busy} onClick={() => { setSelectedId(record.id); setCreating(false); }}><span className="nav-item-title">{record.name}</span><span className="nav-item-meta">{record.role || "Reusable setup"}{record.missing_dependencies?.length ? " · Needs attention" : ""}{drafts[record.id] ? " · Unsaved changes" : ""}</span></button></li>)}</ul>}</aside>
+    <div className="workspace-records-layout"><aside className="workspace-record-list" aria-label="Saved agents">{loading ? <p className="hint">Loading agents…</p> : !records.length ? <EmptyState title="No agents yet">Create a setup you can reuse in Chat.</EmptyState> : <ul className="nav-list">{records.map(record => <li key={record.id}><button type="button" className={!creating && selectedId === record.id ? "nav-item active" : "nav-item"} disabled={busy} onClick={() => { setSelectedId(record.id); setCreating(false); }}><span className="nav-item-title">{record.name}</span><span className="nav-item-meta">{record.role || "Reusable setup"}{record.missing_dependencies?.length ? " · Needs attention" : ""}{drafts[record.id] ? " · Unsaved changes" : ""}</span></button></li>)}</ul>}</aside>
     <div className="workspace-record-detail">{creating || selected ? <>
       <form className="card workspace-editor" onSubmit={event => { event.preventDefault(); void save(); }}>
         <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3>{!creating && onUse ? <button type="button" disabled={busy || Boolean(selected?.missing_dependencies?.length)} onClick={() => onUse(selected!)}><Icon name="chat" size={15} /> Use in Chat</button> : null}</div>
@@ -75,6 +76,6 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
         <LifecycleAction key={selected.id} path={`/v1/agent-setups/${selected.id}`} name={selected.name} label="Remove agent" disabled={busy} onBusyChange={setBusy} onComplete={async () => { await refresh(); setMessage("Agent removed from future selection."); }} />
         <details className="card workspace-versions"><summary>Version history <span>{versions.length}</span></summary>{versionsError ? <Notice tone="error">{versionsError}</Notice> : null}<ul className="plain-list">{versions.map(version => <li key={version.id}><div className="section-heading"><strong>{formatWhen(version.created_at)}</strong><span className="hint">{version.id === selected.current_version_id ? "Current" : "Earlier version"}</span></div><details><summary>{version.name}{version.role ? ` · ${version.role}` : ""}</summary><p className="workspace-text">{version.configuration?.instructions || "No additional instructions."}</p></details>{version.id !== selected.current_version_id ? <button type="button" disabled={busy} onClick={() => { setDrafts(current => ({ ...current, [selected.id]: { name: version.name, role: version.role ?? "", configuration: version.configuration ?? {}, base_version: selected.current_version_id } })); setMessage("Earlier version loaded into the editor. Save to create a new current version."); }}>Load into editor</button> : null}</li>)}</ul></details>
       </> : null}
-    </> : <div className="card"><h3>Choose an agent</h3><p className="hint">Select a saved setup or create one.</p></div>}</div></div>
+    </> : <EmptyState title="Choose an agent">Select a saved setup or create one.</EmptyState>}</div></div>
   </section>;
 }

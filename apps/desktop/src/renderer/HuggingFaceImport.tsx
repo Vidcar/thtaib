@@ -88,7 +88,7 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
       <button type="button" disabled={busy === "download"} aria-pressed={selectedRepo === result.repo_id} onClick={() => void inspectRepository(result.repo_id)}>{selectedRepo === result.repo_id ? "Selected" : "Select repository"}</button>
     </li>)}</ul> : null}
     {busy === "inspect" ? <p role="status">Loading model files for <strong>{selectedRepo}</strong>…</p> : null}
-    {error ? <Notice tone="error">{error}{selectedRepo && !hub ? <button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(selectedRepo)}>Retry loading files</button> : null}</Notice> : null}
+    {error ? <Notice tone="error" action={selectedRepo && !hub ? <button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(selectedRepo)}>Retry loading files</button> : undefined}>{error}</Notice> : null}
     {hub ? <section className="model-download-selection" aria-label="Repository files">
       <div className="section-heading"><strong>{hub.repo_id}</strong><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide ↗</a></div>
       {hub.variants.length ? <div className="model-download-options">

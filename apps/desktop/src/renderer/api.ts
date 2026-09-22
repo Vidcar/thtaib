@@ -53,6 +53,26 @@ export class ApiError extends Error {
   }
 }
 
+export function readApiFailure(body: unknown): { message?: string; code?: string } {
+  if (!body || typeof body !== "object") {
+    return {};
+  }
+  const record = body as { error?: unknown; code?: unknown; detail?: unknown };
+  const topCode = typeof record.code === "string" && record.code ? record.code : undefined;
+  const topError = typeof record.error === "string" && record.error ? record.error : undefined;
+  const detail = record.detail;
+  if (typeof detail === "string" && detail) {
+    return { message: detail, code: topCode };
+  }
+  if (detail && typeof detail === "object") {
+    const nested = detail as { message?: unknown; code?: unknown };
+    const message = typeof nested.message === "string" && nested.message ? nested.message : topError;
+    const code = typeof nested.code === "string" && nested.code ? nested.code : topCode;
+    return { message, code };
+  }
+  return { message: topError, code: topCode };
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Electron main injects X-Workbench-Local-Token. The renderer must not.
   const response = await fetch(`${backendUrl()}${path}`, {
@@ -62,9 +82,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  const body = (await response.json().catch(() => ({}))) as T;
   if (!response.ok) {
-    throw new ApiError(body.error ?? `${response.status} ${path}`, response.status, body.code);
+    const failure = readApiFailure(body);
+    throw new ApiError(failure.message ?? `${response.status} ${path}`, response.status, failure.code);
   }
   return body;
 }

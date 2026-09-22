@@ -16,6 +16,7 @@ from workbench_backend.knowledge.diagnostics import (
 )
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
 from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
+from workbench_backend.state.assistant_text import assistant_insert_index, assistant_text
 from workbench_backend.state.chat_state import CHAT_STATE_SCHEMA, ChatStateStoreMixin, migrate_chat_identity_payload
 from workbench_backend.state.interaction import INTERACTION_SCHEMA, InteractionStoreMixin
 from workbench_backend.state.packet03_schema import ASSET_SCHEMA, PREFERENCE_SCHEMA
@@ -280,12 +281,12 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             return conversation
         if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
             return conversation
-        text = _assistant_text(run)
+        text = assistant_text(run)
         if not text:
             return conversation
         conversation = conversation.model_copy(deep=True)
         conversation.transcript.insert(
-            _assistant_insert_index(conversation, run.id),
+            assistant_insert_index(conversation, run.id),
             ChatMessage(
                 role="assistant",
                 content=text,
@@ -309,7 +310,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             return
         if run.status.value not in {"completed", "failed", "cancelled"}:
             return
-        text = _assistant_text(run)
+        text = assistant_text(run)
         if not text:
             return
         message = ChatMessage(
@@ -330,7 +331,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
                 continue
             conversation.transcript.insert(
-                _assistant_insert_index(conversation, run.id),
+                assistant_insert_index(conversation, run.id),
                 message,
             )
             conversation.updated_at = utc_now()
@@ -458,33 +459,6 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
                 """,
                 (run_id, item.path, item.kind, now),
             )
-
-
-def _assistant_text(run: AgentRun) -> str | None:
-    for event in reversed(run.events):
-        if event.kind != "assistant_message":
-            continue
-        content = event.detail.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return None
-
-
-def _assistant_insert_index(conversation: ChatConversation, run_id: str) -> int:
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user" and item.run_id == run_id:
-            return index + 1
-    try:
-        run_index = conversation.run_ids.index(run_id)
-    except ValueError:
-        return len(conversation.transcript)
-    user_seen = 0
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user":
-            user_seen += 1
-            if user_seen == run_index + 1:
-                return index + 1
-    return len(conversation.transcript)
 
 
 def json_chat_root(paths: WorkbenchPaths) -> Path:

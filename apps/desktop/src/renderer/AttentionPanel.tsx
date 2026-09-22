@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "./Icon";
+import { EmptyState } from "./EmptyState";
 import { HoverHelp } from "./HoverHelp";
+import { Notice } from "./Notice";
 import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
@@ -54,8 +56,8 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
         </button>
       </div>
 
-      {message ? <p role="status" className="notice">{message}</p> : null}
-      {items.length === 0 ? <p className="hint">{busy ? "Loading…" : "You're all caught up."}</p> : null}
+      {message ? <Notice role="status">{message}</Notice> : null}
+      {items.length === 0 ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
 
       <ul className="packet03-list">
         {items.map((item) => (

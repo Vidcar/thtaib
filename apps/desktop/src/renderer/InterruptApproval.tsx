@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { interruptCommand } from "./display";
+import { PathBrowseButton } from "./PathField";
 import type { PendingInterrupt, PendingInterruptAction, UserQuestion } from "./types";
 
 type ApprovalType = "approve" | "reject";
@@ -49,21 +50,7 @@ function NativePathSelector(props: {
   onSelect: (selected: string) => void;
 }) {
   const { answerType, busy, onSelect } = props;
-  return (
-    <button
-      type="button"
-      disabled={busy || !window.workbench?.selectPath}
-      onClick={() => {
-        void window.workbench?.selectPath?.(answerType).then((selected) => {
-          if (selected) {
-            onSelect(selected);
-          }
-        });
-      }}
-    >
-      Browse
-    </button>
-  );
+  return <PathBrowseButton kind={answerType} label="Browse" disabled={busy} onPicked={onSelect} />;
 }
 
 export function InterruptApproval(props: {

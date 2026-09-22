@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from workbench_backend.chat.schemas import ChatConversation, ChatDraft, ChatMessage
+from workbench_backend.state.assistant_text import assistant_insert_index
 from workbench_backend.inference.ids import utc_now
 
 CHAT_STATE_SCHEMA = """
@@ -310,7 +311,7 @@ class ChatStateStoreMixin:
             if any(item.run_id == run_id and item.role == message.role for item in conversation.transcript):
                 return conversation
             conversation.transcript.insert(
-                _assistant_insert_index(conversation, run_id),
+                assistant_insert_index(conversation, run_id),
                 message,
             )
             conversation.updated_at = utc_now()
@@ -328,20 +329,3 @@ class ChatStateStoreMixin:
             )
             self._conn.commit()
             return conversation
-
-
-def _assistant_insert_index(conversation: ChatConversation, run_id: str) -> int:
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user" and item.run_id == run_id:
-            return index + 1
-    try:
-        run_index = conversation.run_ids.index(run_id)
-    except ValueError:
-        return len(conversation.transcript)
-    user_seen = 0
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user":
-            user_seen += 1
-            if user_seen == run_index + 1:
-                return index + 1
-    return len(conversation.transcript)

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { errorMessage } from "./errors";
 import { Help } from "./ModelControls";
+import { Notice } from "./Notice";
 import { Icon } from "./Icon";
 import type { Deployment } from "./types";
 import type { SchemaCapabilityProbeReport } from "../generated/shared-contracts/openapi";
@@ -31,7 +32,7 @@ export function ModelCapabilities({ deployment, busy, action }: {
   const evidence = [...(report?.evidence ?? [])].reverse();
   return <section className="model-probes" aria-label="Model capabilities">
     <div className="setting-title"><span>Capabilities</span><Help label="Verified capabilities">Saved results apply to the exact model, engine and settings tested. A changed setup needs another check. Tests run real requests and can take a moment.</Help></div>
-    {error ? <p className="notice notice-warn" role="status">Saved results unavailable. {error} <button type="button" disabled={Boolean(busy)} onClick={() => void load()}>Retry results</button></p> : null}
+    {error ? <Notice tone="warn" role="status" action={<button type="button" disabled={Boolean(busy)} onClick={() => void load()}>Retry results</button>}>Saved results unavailable. {error}</Notice> : null}
     <ul className="model-capabilities">{checks.map(([capability, label]) => {
       const latest = evidence.find(item => item.capability === capability && item.fingerprint === report?.current_fingerprint) ?? evidence.find(item => item.capability === capability);
       const stale = latest && latest.fingerprint !== report?.current_fingerprint;

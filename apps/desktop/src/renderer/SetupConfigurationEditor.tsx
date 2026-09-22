@@ -1,10 +1,11 @@
 import { useEffect, useId, useState } from "react";
-import { api, request } from "./api";
+import { api } from "./api";
+import { connectionsApi } from "./connectionsApi";
 import { errorMessage } from "./errors";
 import { HoverHelp } from "./HoverHelp";
 import type { Deployment, KnowledgeEntry, ModelBundle, RunProfile } from "./types";
 import type { SetupConfiguration } from "./workspaceApi";
-import type { SchemaConnectionRecord } from "../generated/shared-contracts/openapi";
+
 
 interface SelectionOption { id: string; name: string; }
 export interface SetupCatalogue {
@@ -20,7 +21,7 @@ export function useSetupCatalogue() {
   const [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.deployments(), api.bundles(), api.profiles(), api.knowledgeEntries(), api.agentTools(), request<SchemaConnectionRecord[]>("/v1/connections")]).then(([deployments, bundles, profiles, knowledge, tools, connections]) => {
+    void Promise.all([api.deployments(), api.bundles(), api.profiles(), api.knowledgeEntries(), api.agentTools(), connectionsApi.list()]).then(([deployments, bundles, profiles, knowledge, tools, connections]) => {
       if (!cancelled) setCatalogue({ deployments, bundles, profiles, knowledge, tools: tools.enabled.map(id => ({ id, name: id.replaceAll("_", " ") })), connections: connections.filter(item => item.enabled && item.last_tested_at && !item.last_error) });
     }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };

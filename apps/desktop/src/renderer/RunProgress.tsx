@@ -4,6 +4,7 @@ import { EffectiveSetupNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import { isAgentRunLive, type AgentRun } from "./types";
 import { HoverHelp } from "./HoverHelp";
+import { Notice } from "./Notice";
 import { Icon } from "./Icon";
 
 export function RunProgress(props: {
@@ -51,7 +52,7 @@ export function RunProgress(props: {
         <span>{run.host_shell?.available ? "Host shell" : "Shell unavailable"}</span>
         <HoverHelp title="Run environment">{run.host_shell?.available ? `Shell commands run on this computer in ${run.host_shell.cwd ?? "the bound project"}, without isolation.` : "Shell tools need a bound project folder."}</HoverHelp>
       </div>
-      {run.error ? <p className="notice notice-error">{run.error}</p> : null}
+      {run.error ? <Notice tone="error">{run.error}</Notice> : null}
       {run.effective_setup ? (
         <EffectiveSetupNotes
           unsupportedStartup={run.effective_setup.unsupported?.startup}

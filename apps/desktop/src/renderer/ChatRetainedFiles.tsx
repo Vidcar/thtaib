@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { formatBytes } from "./display";
+import { Notice } from "./Notice";
 import {
   packet03Api,
   type RetainedAsset,
   type RetainedAssetContent,
   type RetainedAssetPreview,
 } from "./packet03Api";
+import { loadRetainedContent, loadRetainedPreview, saveRetainedCopy, sourceStatusLabel } from "./retainedFiles";
 import "./ChatRetainedFiles.css";
 import { Icon } from "./Icon";
 import { RetainedImage } from "./ImagePreview";
@@ -23,12 +26,6 @@ export interface ChatRetainedFilesProps {
 
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function originLabel(asset: RetainedAsset): string {
   if (asset.origin === "verified_output") {
     return asset.source_tool_name ? `Verified ${asset.source_tool_name} output` : "Verified output";
@@ -40,20 +37,10 @@ function sourceLabel(status: RetainedAssetPreview["source_status"] | null, asset
   if (asset.deleted_at) {
     return "Deleted retained copy";
   }
-  switch (status) {
-    case "unchanged":
-      return "Source unchanged";
-    case "changed":
-      return "Source changed; retained copy preserved";
-    case "missing":
-      return "Source missing; retained copy preserved";
-    case "retained_only":
-      return "Retained copy";
-    case "unavailable":
-      return "Source status unavailable";
-    default:
-      return asset.mutable_reference ? "Retained copy; source can change" : "Immutable retained copy";
+  if (!status) {
+    return asset.mutable_reference ? "Retained copy; source can change" : "Immutable retained copy";
   }
+  return sourceStatusLabel(status);
 }
 
 function groupLabel(group: string, currentRunId?: string | null, currentRunStatus?: string | null): string {
@@ -182,7 +169,7 @@ export function ChatRetainedFiles({
     try {
       const scope = accessScope(asset, conversationId);
       if (full) {
-        const next = await packet03Api.contentAsset(asset.id, scope);
+        const next = await loadRetainedContent(asset.id, scope);
         if (detailGeneration.current !== request) {
           return;
         }
@@ -199,7 +186,7 @@ export function ChatRetainedFiles({
         });
         onOpenFiles?.([asset.id]);
       } else {
-        const next = await packet03Api.previewAsset(asset.id, scope);
+        const next = await loadRetainedPreview(asset.id, scope);
         if (detailGeneration.current !== request) {
           return;
         }
@@ -221,10 +208,7 @@ export function ChatRetainedFiles({
     setBusy(asset.id);
     setMessage("");
     try {
-      const saved = await window.workbench?.saveAsset?.({
-        assetId: asset.id,
-        ...accessScope(asset, conversationId),
-      });
+      const saved = await saveRetainedCopy(asset.id, accessScope(asset, conversationId));
       setMessage(saved ? `Saved ${asset.filename}.` : "Save cancelled.");
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : String(caught));
@@ -250,8 +234,8 @@ export function ChatRetainedFiles({
         </div>
       </div> : null}
       {loading ? <p className="hint">Loading retained files...</p> : null}
-      {error ? <p role="status" className="notice notice-error">{error}</p> : null}
-      {message ? <p role="status" className="notice">{message}</p> : null}
+      {error ? <Notice tone="error" role="status">{error}</Notice> : null}
+      {message ? <Notice role="status">{message}</Notice> : null}
       <div className="chat-retained-file-groups">
         {grouped.map(([group, assets]) => (
           <div key={group} className="chat-retained-file-group">

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { knowledgeApi, type KnowledgeProposal, type KnowledgeScopeOption } from "./knowledgeApi";
 import { errorMessage } from "./errors";
+import { MemoryProposalCard } from "./MemoryProposalCard";
 import { Notice } from "./Notice";
-import { StatusBadge } from "./StatusBadge";
 
 export function RunMemoryProposals({ runId, status, onOpenKnowledge }: { runId: string; status: string; onOpenKnowledge: () => void }) {
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
@@ -26,5 +26,5 @@ export function RunMemoryProposals({ runId, status, onOpenKnowledge }: { runId: 
     catch (failure) { if (owner === generation.current) setError(errorMessage(failure)); }
     finally { pending.current = false; setBusy(false); }
   }
-  return <section className="file-changes-panel"><div className="file-changes-heading"><h4>Suggested memories</h4><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)}>Refresh suggestions</button></div>{error ? <Notice tone="error">{error}</Notice> : null}{proposals.length ? <ul className="plain-list">{proposals.map(proposal => <li className="file-change-detail" key={proposal.id}><div className="file-changes-heading"><strong>{proposal.display_name || "Memory suggestion"}</strong><StatusBadge label={proposal.status} /></div><p className="hint">{scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"}{proposal.automatic ? " · saved automatically" : ""}</p><pre className="file-change-diff">{proposal.content}</pre>{proposal.entry_id ? <p className="hint">Updates an existing memory. A newer saved version will block acceptance.</p> : null}{proposal.status === "pending" ? <div className="actions"><button disabled={busy} type="button" onClick={() => void review(proposal, "accept")}>Accept memory</button><button disabled={busy} type="button" onClick={() => void review(proposal, "reject")}>Reject memory</button></div> : null}</li>)}</ul> : <p className="hint">No memory suggestions from this turn.</p>}<button type="button" onClick={onOpenKnowledge}>Open Knowledge</button></section>;
+  return <section className="file-changes-panel"><div className="file-changes-heading"><h4>Suggested memories</h4><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)}>Refresh suggestions</button></div>{error ? <Notice tone="error">{error}</Notice> : null}{proposals.length ? <ul className="plain-list">{proposals.map(proposal => <MemoryProposalCard key={proposal.id} proposal={proposal} className="file-change-detail" headingClassName="file-changes-heading" contentClassName="file-change-diff" destination={scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"} existingHint={Boolean(proposal.entry_id)} acceptLabel="Accept memory" rejectLabel="Reject memory" busy={busy} onAccept={() => void review(proposal, "accept")} onReject={() => void review(proposal, "reject")} />)}</ul> : <p className="hint">No memory suggestions from this turn.</p>}<button type="button" onClick={onOpenKnowledge}>Open Knowledge</button></section>;
 }

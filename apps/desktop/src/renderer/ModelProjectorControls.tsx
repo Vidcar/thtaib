@@ -3,6 +3,8 @@ import { api } from "./api";
 import { errorMessage } from "./errors";
 import { formatBytes } from "./display";
 import { Help } from "./ModelControls";
+import { Notice } from "./Notice";
+import { pickWorkbenchPath } from "./PathField";
 import type { SchemaBundleProjectors } from "../generated/shared-contracts/openapi";
 
 export function ModelProjectorControls({ bundleId, active, disabled, onSaved, action }: { bundleId: string; active: boolean; disabled: boolean; onSaved: () => Promise<void>; action: (key: string, operation: () => Promise<unknown>) => Promise<void> }) {
@@ -23,7 +25,7 @@ export function ModelProjectorControls({ bundleId, active, disabled, onSaved, ac
   }, [bundleId, revision]);
   async function chooseFile() {
     const current = generation.current;
-    try { const path = await window.workbench?.selectPath?.("file"); if (path && generation.current === current) setSelected(path); }
+    try { const path = await pickWorkbenchPath("file"); if (path && generation.current === current) setSelected(path); }
     catch (failure) { if (generation.current === current) setError(errorMessage(failure)); }
   }
   async function save() {
@@ -49,6 +51,6 @@ export function ModelProjectorControls({ bundleId, active, disabled, onSaved, ac
     {active ? <p className="hint">Unload this model before changing its vision file, then start it again.</p> : null}
     {selected ? <p className="hint model-projector-path">{selected}</p> : null}
     <div className="actions"><button type="button" disabled={locked || !window.workbench?.selectPath} onClick={() => void chooseFile()}>Choose file</button><button type="button" disabled={locked || !report || selected === (report.selected_path ?? "")} onClick={() => void action(`projector-${bundleId}`, save)}>{busy ? "Saving…" : "Save image setup"}</button></div>
-    {error ? <p className="notice notice-error" role="alert">{error} {!report ? <button type="button" disabled={disabled || busy} onClick={() => setRevision(value => value + 1)}>Retry</button> : null}</p> : null}{message ? <p role="status">{message}</p> : null}
+    {error ? <Notice tone="error" role="alert" action={!report ? <button type="button" disabled={disabled || busy} onClick={() => setRevision(value => value + 1)}>Retry</button> : undefined}>{error}</Notice> : null}{message ? <p role="status">{message}</p> : null}
   </details>;
 }

@@ -1,4 +1,4 @@
-import { backendUrl } from "./api";
+import { request } from "./api";
 import type { ChatConversation } from "./types";
 
 export interface ChatReplyActions {
@@ -38,22 +38,6 @@ export interface ConversationDeletePreview {
   project_sources_deleted: false;
   model_files_deleted: false;
   note: string;
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${backendUrl()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string; detail?: unknown; code?: string };
-  if (!response.ok) {
-    const detail = typeof body.detail === "string" ? body.detail : body.error;
-    throw new Error(detail ?? `${response.status} ${path}`);
-  }
-  return body;
 }
 
 export const chatHistoryActionsApi = {

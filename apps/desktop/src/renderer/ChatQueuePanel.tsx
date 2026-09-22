@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import { ChatModelControls } from "./ChatModelControls";
 import { ComposerAttachments } from "./ComposerAttachments";
+import { errorMessage } from "./errors";
+import { Notice } from "./Notice";
 import { packet03Request } from "./packet03Api";
 import { isAgentRunLive, type ChatConversation, type ChatQueueItem, type Deployment, type RunProfile } from "./types";
 import "./ChatQueuePanel.css";
@@ -164,7 +166,7 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                   {item.frozen_config ? <span className="badge">Captured setup</span> : null}
                 </div>
               </div>
-              {item.pause_error ? <p className="notice notice-error">{item.pause_error}</p> : null}
+              {item.pause_error ? <Notice tone="error">{item.pause_error}</Notice> : null}
               {item.pause_reason ? <p className="hint">{pauseReasonLabel(item)}</p> : null}
               {item.frozen_config ? <p className="chat-queue-frozen-config">{frozenConfigLabel(item)}</p> : null}
 
@@ -320,6 +322,3 @@ function frozenConfigLabel(item: ChatQueueItem): string {
   return `This turn is using its captured setup: ${deployment}, ${profile}. Later header changes do not affect it.`;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

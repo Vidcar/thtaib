@@ -1,99 +1,28 @@
-import { api, backendUrl } from "./api";
+import { api, request } from "./api";
 import type { PresentationSettings } from "./types";
+import type {
+  SchemaAssetContentKind,
+  SchemaRetainedAsset,
+  SchemaRetainedAssetContent,
+  SchemaRetainedAssetDeletionPreview,
+  SchemaRetainedAssetOrigin,
+  SchemaRetainedAssetPreview,
+  SchemaRetainedAssetScope,
+} from "../generated/shared-contracts/openapi";
 import type { components } from "../generated/shared-contracts/openapi";
 
 export async function packet03Request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${backendUrl()}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  const body = (await response.json().catch(() => ({}))) as T & {
-    detail?: { message?: string; code?: string } | string;
-    error?: string;
-  };
-  if (!response.ok) {
-    const detail = body.detail;
-    const message = typeof detail === "object" && detail?.message ? detail.message : typeof detail === "string" ? detail : body.error;
-    throw new Error(message ?? `${response.status} ${path}`);
-  }
-  return body;
+  return request<T>(path, init);
 }
 
-export type RetainedAssetOrigin = "upload" | "verified_output";
-export type RetainedAssetScope = "session" | "project";
-export type AssetContentKind = "text" | "code" | "image" | "document";
-export type RetainedAssetSourceStatus = "retained_only" | "unchanged" | "changed" | "missing" | "unavailable";
-
-export interface RetainedAsset {
-  id: string;
-  origin: RetainedAssetOrigin;
-  scope: RetainedAssetScope;
-  session_id: string;
-  project_path: string | null;
-  access_scope: string;
-  storage: "application.sqlite";
-  filename: string;
-  content_type: string;
-  content_kind: AssetContentKind;
-  encoding: "utf-8" | "base64";
-  image_width?: number | null;
-  image_height?: number | null;
-  extraction?: { parser: string; status: "complete" | "no_text"; note?: string | null } | null;
-  size_bytes: number;
-  sha256: string;
-  observed_at: string;
-  source_run_id: string | null;
-  source_tool_call_id: string | null;
-  source_tool_name: string | null;
-  mutable_reference: string | null;
-  observation: string | null;
-  deleted_at: string | null;
-}
-
-export interface RetainedAssetPreview {
-  id: string;
-  filename: string;
-  content_type: string;
-  size_bytes: number;
-  sha256: string;
-  preview: string;
-  truncated: boolean;
-  image_data_url?: string | null;
-  extraction?: RetainedAsset["extraction"];
-  source_status: RetainedAssetSourceStatus;
-}
-
-export interface RetainedAssetContent {
-  id: string;
-  filename: string;
-  content_type: string;
-  encoding: "utf-8" | "base64";
-  text: string;
-  content_base64?: string | null;
-  sha256: string;
-  size_bytes: number;
-  source_status: RetainedAssetSourceStatus;
-}
-
-export interface RetainedAssetDeletionPreview {
-  requested_asset_ids: string[];
-  affected_asset_ids: string[];
-  preserved_asset_ids: string[];
-  affected_sessions: string[];
-  retained_sessions: string[];
-  affected_runs: string[];
-  retained_runs: string[];
-  affected_projects: string[];
-  retained_projects: string[];
-  affected_branches: string[];
-  retained_branches: string[];
-  affected_cases: string[];
-  retained_cases: string[];
-  note: string;
-}
+export type RetainedAssetOrigin = SchemaRetainedAssetOrigin;
+export type RetainedAssetScope = SchemaRetainedAssetScope;
+export type AssetContentKind = SchemaAssetContentKind;
+export type RetainedAsset = SchemaRetainedAsset;
+export type RetainedAssetPreview = SchemaRetainedAssetPreview;
+export type RetainedAssetContent = SchemaRetainedAssetContent;
+export type RetainedAssetDeletionPreview = SchemaRetainedAssetDeletionPreview;
+export type RetainedAssetSourceStatus = RetainedAssetPreview["source_status"];
 
 export type RetainedAssetReuseResult = (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[];
 

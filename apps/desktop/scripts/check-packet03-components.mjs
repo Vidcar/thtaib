@@ -478,7 +478,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("full retained text"));
-    assert.ok(textOf(renderer.root).includes("Source changed; showing retained copy"));
+    assert.ok(textOf(renderer.root).includes("Source changed; retained copy preserved"));
 
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } });

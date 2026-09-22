@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatBytes } from "./display";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
+import { Notice } from "./Notice";
+import { loadRetainedContent, loadRetainedPreview, saveRetainedCopy, sourceStatusLabel } from "./retainedFiles";
 
 import {
   packet03Api,
@@ -22,12 +25,6 @@ interface LibraryPanelProps {
   onReuseAssets?: (result: RetainedAssetReuseResult, assets: RetainedAsset[]) => void;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function assetOriginLabel(origin: RetainedAssetOrigin): string {
   return origin === "verified_output" ? "Verified output" : "Upload";
 }
@@ -46,25 +43,6 @@ function assetAccessScope(
     sessionId: current.sessionId ?? undefined,
     projectPath: current.projectPath ?? undefined,
   };
-}
-
-function sourceStatusLabel(status: RetainedAssetPreview["source_status"]): string {
-  switch (status) {
-    case "retained_only":
-      return "Retained copy";
-    case "unchanged":
-      return "Source unchanged";
-    case "changed":
-      return "Source changed; showing retained copy";
-    case "missing":
-      return "Source missing; showing retained copy";
-    case "unavailable":
-      return "Source status unavailable";
-    default: {
-      const unexpected: never = status;
-      return unexpected;
-    }
-  }
 }
 
 function deleteOutcomeText(result: RetainedAssetDeletionPreview): string {
@@ -148,7 +126,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
     setMessage("");
     setFullContent(null);
     try {
-      const next = await packet03Api.previewAsset(asset.id, assetAccessScope(asset, { sessionId, projectPath }));
+      const next = await loadRetainedPreview(asset.id, assetAccessScope(asset, { sessionId, projectPath }));
       if (detailGeneration.current !== requestGeneration) return;
       setPreview(next);
     } catch (error) {
@@ -165,7 +143,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
     setBusy(true);
     setMessage("");
     try {
-      const next = await packet03Api.contentAsset(asset.id, assetAccessScope(asset, { sessionId, projectPath }));
+      const next = await loadRetainedContent(asset.id, assetAccessScope(asset, { sessionId, projectPath }));
       if (detailGeneration.current !== requestGeneration) return;
       setFullContent(next);
       setPreview({
@@ -273,7 +251,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
         <button type="button" disabled={busy || !selectedIds.length || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))} onClick={() => void reuseSelected()}><Icon name="plus" size={14} /> Use in Chat</button>
         <button type="button" disabled={busy || !selectedIds.length} onClick={() => void previewDeletion()}><Icon name="trash" size={14} /> Delete</button>
       </div>
-      {message ? <p role="status" className="notice">{message}</p> : null}
+      {message ? <Notice role="status">{message}</Notice> : null}
       {deletionPreview ? <div className="notice notice-warn file-delete-review" role="group" aria-label="Review file deletion">
         <strong>Delete {deletionPreview.affected_asset_ids.length} saved {deletionPreview.affected_asset_ids.length === 1 ? "file" : "files"}?</strong>
         <p>Original project files stay in place.{deletionPreview.preserved_asset_ids.length ? ` ${deletionPreview.preserved_asset_ids.length} shared files will be kept.` : ""}</p>
@@ -299,7 +277,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
           <header><div><strong>{preview.filename}</strong><span>{formatBytes(preview.size_bytes)} · {sourceStatusLabel(preview.source_status)}</span></div><button type="button" className="icon-button" aria-label="Close file preview" onClick={() => { detailGeneration.current += 1; setPreview(null); setFullContent(null); }}><Icon name="close" size={15} /></button></header>
           <div className="file-preview-actions">
             {activeAsset && activeAsset.content_kind !== "image" && fullContent?.id !== preview.id ? <button type="button" disabled={busy} onClick={() => void showFullContent(activeAsset)}><Icon name="expand" size={14} /> Open full text</button> : null}
-            {activeAsset && window.workbench?.saveAsset ? <button type="button" disabled={busy} onClick={() => void window.workbench?.saveAsset?.({ assetId: activeAsset.id, ...assetAccessScope(activeAsset, { sessionId, projectPath }) }).catch(error => setMessage(error instanceof Error ? error.message : String(error)))}><Icon name="download" size={14} /> Save copy</button> : null}
+            {activeAsset && window.workbench?.saveAsset ? <button type="button" disabled={busy} onClick={() => void saveRetainedCopy(activeAsset.id, assetAccessScope(activeAsset, { sessionId, projectPath })).then(saved => setMessage(saved ? `Saved ${activeAsset.filename}.` : "Save cancelled.")).catch(error => setMessage(error instanceof Error ? error.message : String(error)))}><Icon name="download" size={14} /> Save copy</button> : null}
           </div>
           {preview.truncated ? <p className="hint">Preview shortened. Open full text to read the entire saved file.</p> : null}
           {activeAsset?.content_kind === "image" ? <RetainedImage asset={activeAsset} sessionId={sessionId ?? undefined} /> : <pre className="file-preview-content">{preview.preview}</pre>}

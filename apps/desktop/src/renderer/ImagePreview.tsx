@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import { packet03Api, type RetainedAsset } from "./packet03Api";
+import { loadRetainedPreview } from "./retainedFiles";
 import "./ImagePreview.css";
 
 export function safeImageDataUrl(value: unknown): string | undefined {
@@ -73,7 +74,7 @@ export function RetainedImage({ asset, sessionId, small = false }: { asset: Reta
     if (!visible) return;
     let stale = false;
     setPreview(undefined); setError("");
-    void packet03Api.previewAsset(asset.id, scope).then(result => {
+    void loadRetainedPreview(asset.id, scope).then(result => {
       if (!stale) setPreview(result.image_data_url ?? undefined);
     }).catch(caught => { if (!stale) setError(caught instanceof Error ? caught.message : String(caught)); });
     return () => { stale = true; };

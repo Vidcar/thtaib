@@ -1443,7 +1443,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         </header>
         <div className={`chat-workspace${filesOpen ? " files-open" : ""}${filesOpen && filesExpanded ? " files-expanded" : ""}`}>
         <div className="chat-conversation">
-        {loadError ? <Notice tone="error">{loadError} <button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button></Notice> : null}
+        {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <details className="chat-setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)} hidden={!setupOpen}>
           <summary><Icon name="settings" size={16} /> Setup</summary>
           <div className="setup-grid">

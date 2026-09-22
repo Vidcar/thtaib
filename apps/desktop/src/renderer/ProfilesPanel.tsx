@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "./api";
+import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
@@ -79,7 +80,7 @@ export function ProfilesPanel({ profiles, bundles, refresh }: { profiles: RunPro
       {message ? <Notice tone={failed ? "error" : "info"}>{message}</Notice> : null}
     </form>
     <div className="card"><h3>Saved presets</h3>
-      {!profiles.length ? <p className="hint">Save a preset for the way you like to work.</p> : <ul className="list">{profiles.map(profile => <li className="entity" key={profile.id}>
+      {!profiles.length ? <EmptyState title="Save a preset for the way you like to work." /> : <ul className="list">{profiles.map(profile => <li className="entity" key={profile.id}>
         <strong>{profile.display_name}</strong>
         <p className="hint">{profile.bundle_id ? bundles.find(item => item.id === profile.bundle_id)?.display_name ?? "Model unavailable" : "Reusable across compatible models"}</p>
         <div className="actions"><button type="button" className="icon-button" aria-label={`Edit ${profile.display_name}`} title="Edit preset" disabled={busy} onClick={() => edit(profile)}><Icon name="edit" size={16} /></button>

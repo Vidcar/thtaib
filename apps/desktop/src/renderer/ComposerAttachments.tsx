@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { formatBytes } from "./display";
 import { Icon } from "./Icon";
 import { RetainedImage } from "./ImagePreview";
 import { packet03Api, type AssetContentKind, type RetainedAsset } from "./packet03Api";
@@ -297,8 +298,3 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

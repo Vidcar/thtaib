@@ -11,6 +11,7 @@ import { ImportJobsPanel } from "./ImportJobsPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
 import { Help } from "./ModelControls";
+import { PathBrowseButton } from "./PathField";
 import { Icon } from "./Icon";
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
@@ -66,11 +67,6 @@ export function ModelsPanel() {
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
   }
-  async function browse(kind: "file" | "folder") {
-    try { const path = await window.workbench?.selectPath?.(kind); if (path) setLocalPath(path); }
-    catch (error) { fail(error); }
-  }
-
   if (loadError) {
     return (
       <section className="surface">
@@ -131,7 +127,7 @@ export function ModelsPanel() {
               placeholder="C:\Users\…\Qwen3.8-27B-UD-IQ4_XS.gguf"
             />
           </label>
-          <div className="actions"><button type="button" disabled={!window.workbench?.selectPath || localBusy} onClick={() => void browse("file")}><Icon name="files" size={16} />Browse file</button><button type="button" disabled={!window.workbench?.selectPath || localBusy} onClick={() => void browse("folder")}><Icon name="folder" size={16} />Browse folder</button></div>
+          <div className="actions"><PathBrowseButton kind="file" label="Browse file" icon="files" disabled={localBusy} onPicked={setLocalPath} onError={fail} /><PathBrowseButton kind="folder" label="Browse folder" icon="folder" disabled={localBusy} onPicked={setLocalPath} onError={fail} /></div>
           <label>
             Display name (optional)
             <input value={localName} onChange={(event) => setLocalName(event.target.value)} />

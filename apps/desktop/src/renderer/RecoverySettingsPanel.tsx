@@ -8,6 +8,7 @@ import {
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
 import { HoverHelp } from "./HoverHelp";
+import { pickWorkbenchPath } from "./PathField";
 import { Icon } from "./Icon";
 import "./packet03Panels.css";
 import "./RecoverySettingsPanel.css";
@@ -158,12 +159,12 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   }
 
   async function chooseFolder(setter: (path: string) => void): Promise<void> {
-    const selected = await window.workbench?.selectPath?.("folder");
+    const selected = await pickWorkbenchPath("folder");
     if (selected) setter(selected);
   }
 
   async function chooseFile(setter: (path: string) => void): Promise<void> {
-    const selected = await window.workbench?.selectPath?.("file");
+    const selected = await pickWorkbenchPath("file");
     if (selected) setter(selected);
   }
 

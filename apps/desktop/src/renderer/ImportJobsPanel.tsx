@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
+import { ConfirmNote } from "./ConfirmNote";
 import { Notice } from "./Notice";
 import { Help } from "./ModelControls";
 import { Icon } from "./Icon";
@@ -57,7 +58,7 @@ export function ImportJobsPanel({ revision, onCompleted }: { revision: number; o
         {active(job) ? <button disabled={Boolean(busy) || (job.status === "stopping" && !job.error)} onClick={() => void action(job, () => api.cancelImport(job.id))}><Icon name="stop" size={14} />{job.status === "stopping" && job.error ? "Retry stop" : "Cancel"}</button> : null}
         {["stopped", "interrupted", "failed"].includes(job.status) ? <><button disabled={Boolean(busy)} onClick={() => void action(job, () => api.retryImport(job.id))}><Icon name="refresh" size={14} />Retry</button><button disabled={Boolean(busy)} onClick={() => setConfirmDiscard(job.id)}><Icon name="trash" size={14} />Discard</button></> : null}
       </div>
-      {confirmDiscard === job.id ? <div className="inline-note"><p>Discard this stopped import’s eligible temporary files? Installed models and original local files are retained.</p><button disabled={Boolean(busy)} onClick={() => void action(job, () => api.discardImport(job.id))}>Confirm discard</button><button onClick={() => setConfirmDiscard("")}>Keep files</button></div> : null}
+      {confirmDiscard === job.id ? <ConfirmNote confirmLabel="Confirm discard" cancelLabel="Keep files" disabled={Boolean(busy)} cancelDisabled={false} onConfirm={() => void action(job, () => api.discardImport(job.id))} onCancel={() => setConfirmDiscard("")}>Discard this stopped import’s eligible temporary files? Installed models and original local files are retained.</ConfirmNote> : null}
       <details className="technical-details"><summary>Download details</summary><p className="hint">Job {job.id}{job.resolved_revision ? ` · revision ${job.resolved_revision}` : ""}{job.progress?.files_total != null ? ` · ${job.progress.files_done} / ${job.progress.files_total} files` : ""}</p></details>
     </li>;
   };
