@@ -6,6 +6,8 @@
 .chat-header, .compose, .chat-setup { flex-shrink: 0; }
 .chat-main .transcript { min-height: 0; }
 .chat-main { position: relative; min-width: 0; }
+.chat-file-drop-indicator { position: absolute; inset: .75rem; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; padding: 1rem; border: 2px dashed var(--accent); border-radius: 18px; background: color-mix(in srgb, var(--bg-panel) 95%, transparent); text-align: center; pointer-events: none; }
+.chat-file-drop-indicator span { color: var(--muted); font-size: .85rem; }
 .chat-brand h1 { font-size: .94rem; letter-spacing: -.02em; }
 .chat-brand .eyebrow { display: none; }
 .chat-destinations .tab, .side-tabs .tab { display: flex; gap: .7rem; align-items: center; border: none; border-radius: 9px; text-align: left; padding: .45rem .75rem; font-size: .88rem; background: transparent; }

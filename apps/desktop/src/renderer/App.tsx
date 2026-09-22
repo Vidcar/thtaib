@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { PanelResize, usePanelWidth } from "./PanelResize";
 
 import { AgentRunPanel } from "./AgentRunPanel";
@@ -62,10 +62,15 @@ export function App() {
   const productName = window.workbench?.productName ?? "Local AI Workbench";
   const surface: WorkbenchSurface = window.workbench?.surface ?? "managed-inference";
   const [tab, setTab] = useState<WorkbenchTab>("chat");
+  const activeTab = useRef(tab);
+  activeTab.current = tab;
+  const prepareChatNavigation = useRef<(() => Promise<boolean>) | null>(null);
+  const attentionRequest = useRef(0);
   const [backendStatus, setBackendStatus] = useState("Checking local services…");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
+  const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
   const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { const saved = window.localStorage?.getItem("workbench.navigation.collapsed"); return saved === null || saved === undefined ? window.innerWidth < 900 : saved === "true"; } catch { return window.innerWidth < 900; }
@@ -123,20 +128,32 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const unsubscribe = window.workbench?.onAttention?.((conversationId) => {
-      setTab("chat");
+  const openAttentionTarget = useCallback(async (conversationId: string | null, runId: string) => {
+    const request = ++attentionRequest.current;
+    const originTab = activeTab.current;
+    if (prepareChatNavigation.current && !await prepareChatNavigation.current()) return;
+    if (attentionRequest.current !== request || activeTab.current !== originTab) return;
+    if (conversationId) {
       setAttentionConversationId(conversationId);
-    });
+      setTab("chat");
+    } else {
+      setAttentionRunId(runId);
+      setTab("agent-run");
+    }
+  }, []);
+  const clearAttentionConversation = useCallback((id: string) => {
+    setAttentionConversationId(current => current === id ? null : current);
+  }, []);
+  const clearAttentionRun = useCallback((id: string) => {
+    setAttentionRunId(current => current === id ? null : current);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.workbench?.onAttention?.(openAttentionTarget);
     return () => {
       unsubscribe?.();
     };
-  }, []);
-
-  function openAttentionConversation(conversationId: string | null): void {
-    setAttentionConversationId(conversationId);
-    setTab("chat");
-  }
+  }, [openAttentionTarget]);
 
   function handleLibraryReuseMany(assets: RetainedAsset[]): void {
     setReuseAssetIds([...new Set(assets.map((asset) => asset.id))]);
@@ -156,6 +173,8 @@ export function App() {
             backendOk={backendOk}
             backendStatus={backendStatus}
             attentionConversationId={attentionConversationId}
+            onAttentionHandled={clearAttentionConversation}
+            navigationPreparationRef={prepareChatNavigation}
             onPresentationChange={setPresentation}
             onNavigate={(next) => setTab(next)}
             reuseAssetId={reuseAssetIds[0] ?? null}
@@ -170,7 +189,7 @@ export function App() {
       case "knowledge":
         return <KnowledgePanel />;
       case "agent-run":
-        return <AgentRunPanel />;
+        return <AgentRunPanel attentionRunId={attentionRunId} onAttentionHandled={clearAttentionRun} />;
       case "lab":
         return <LabPanel />;
       case "library":
@@ -180,7 +199,7 @@ export function App() {
           />
         );
       case "attention":
-        return <AttentionPanel onOpenConversation={openAttentionConversation} />;
+        return <AttentionPanel onOpenItem={(item) => openAttentionTarget(item.conversation_id, item.run_id)} />;
       case "settings":
         return <SettingsPanel onPreferencesChanged={setPresentation} />;
       default: {

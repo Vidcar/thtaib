@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type RefObject } from "react";
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import { HoverHelp } from "./HoverHelp";
 import { DeleteChatDialog } from "./DeleteChatDialog";
@@ -551,6 +551,8 @@ const fallbackPresentation: PresentationSettings = {
 interface ChatPanelProps {
   activeTab?: WorkbenchTab;
   attentionConversationId?: string | null;
+  onAttentionHandled?: (conversationId: string) => void;
+  navigationPreparationRef?: RefObject<(() => Promise<boolean>) | null>;
   backendOk?: boolean | null;
   backendStatus?: string;
   onNavigate?: (tab: WorkbenchTab) => void;
@@ -570,6 +572,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const {
     activeTab = "chat",
     attentionConversationId = null,
+    onAttentionHandled,
     backendOk = null,
     backendStatus = "",
     onNavigate,
@@ -595,6 +598,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [task, setTask] = useState("");
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const [incomingDrop, setIncomingDrop] = useState<{ id: string; sessionId: string; files: File[] } | null>(null);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const [toolsAllowed, setToolsAllowed] = useState(true);
   const [perRequestOverrides, setPerRequestOverrides] = useState<Record<string, unknown>>({});
   const [setupOpen, setSetupOpen] = useState(false);
@@ -1250,6 +1255,24 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void persistBeforeLeaving().then(() => onNavigate?.(tab)).catch(fail);
   }
 
+  useEffect(() => {
+    if (!props.navigationPreparationRef) return;
+    props.navigationPreparationRef.current = async () => {
+      const selection = selectionRequest.current;
+      try {
+        await persistBeforeLeaving();
+        return selectionRequest.current === selection;
+      } catch (error) {
+        fail(error);
+        return false;
+      }
+    };
+  });
+
+  useEffect(() => () => {
+    if (props.navigationPreparationRef) props.navigationPreparationRef.current = null;
+  }, [props.navigationPreparationRef]);
+
   function startFreshAfterSaving(): void {
     void persistBeforeLeaving().then(startFresh).catch(fail);
   }
@@ -1272,9 +1295,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     return () => clearTimeout(timer);
   }, [conversation?.id, task, selectedDeployment?.id, sending, selectionBusy]);
 
-  async function openAttachments(): Promise<void> {
+  async function openAttachments(files?: File[]): Promise<void> {
     if (conversation) {
-      setAttachmentsOpen(value => !value);
+      setAttachmentsOpen(value => files ? true : !value);
+      if (files) setIncomingDrop({ id: crypto.randomUUID(), sessionId: conversation.id, files });
       return;
     }
     if (!selectedDeployment || sending || selectionBusy) return;
@@ -1291,6 +1315,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setInteractionThreadId(registered.thread_id);
       setConversation(created);
       setAttachmentsOpen(true);
+      if (files) setIncomingDrop({ id: crypto.randomUUID(), sessionId: created.id, files });
     } catch (error) {
       if (generation === selectionRequest.current) fail(error);
     } finally {
@@ -1337,25 +1362,31 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   useEffect(() => {
-    if (!attentionConversationId || attentionConversationId === conversation?.id || historyMutations.current.get(attentionConversationId) === "deleted") {
+    if (!attentionConversationId) return;
+    if (attentionConversationId === conversation?.id || historyMutations.current.get(attentionConversationId) === "deleted") {
+      onAttentionHandled?.(attentionConversationId);
       return;
     }
     let cancelled = false;
+    const requestedSelection = selectionRequest.current;
     void api.chatConversation(attentionConversationId)
       .then((next) => {
-        if (!cancelled && historyMutations.current.get(attentionConversationId) !== "deleted") {
+        if (!cancelled && selectionRequest.current === requestedSelection && historyMutations.current.get(attentionConversationId) !== "deleted") {
           chooseConversation(next);
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled && historyMutations.current.get(attentionConversationId) !== "deleted") {
+        if (!cancelled && selectionRequest.current === requestedSelection && historyMutations.current.get(attentionConversationId) !== "deleted") {
           fail(error);
         }
+      })
+      .finally(() => {
+        if (!cancelled) onAttentionHandled?.(attentionConversationId);
       });
     return () => {
       cancelled = true;
     };
-  }, [attentionConversationId, conversation?.id]);
+  }, [attentionConversationId, onAttentionHandled]);
 
   useEffect(() => {
     const assetIds = props.reuseAssetIds?.length ? props.reuseAssetIds : props.reuseAssetId ? [props.reuseAssetId] : [];
@@ -1462,7 +1493,35 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         {!sidebarCollapsed ? <PanelResize label="Resize chat navigation" width={sidebarWidth} onResize={setSidebarWidth} reset={232} /> : null}
       </aside>
 
-      <div className="chat-main">
+      <div className="chat-main"
+        onDragEnter={event => {
+          if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+          event.preventDefault();
+          setFileDragActive(true);
+        }}
+        onDragOver={event => {
+          if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = selectedDeployment && !selectionBusy && !sending ? "copy" : "none";
+        }}
+        onDragLeave={event => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFileDragActive(false);
+        }}
+        onDrop={event => {
+          if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+          setFileDragActive(false);
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (!selectedDeployment || selectionBusy || sending) {
+            setMessage(!selectedDeployment ? "Choose a model before attaching files." : "Wait for the conversation to finish opening or sending, then drop the files again.");
+            return;
+          }
+          const files = Array.from(event.dataTransfer.files);
+          if (files.length) void openAttachments(files);
+        }}
+      >
+        {fileDragActive ? <div className="chat-file-drop-indicator" role="status"><Icon name="files" size={28} /><strong>Drop files to attach to this conversation</strong><span>Text and code · up to 1 MB per file</span></div> : null}
         <header className="chat-header">
           <div>
             {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
@@ -1698,6 +1757,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             sessionId={conversation.id}
             attachmentIds={attachmentIds}
             disabled={selectionBusy || sending}
+            incomingDrop={incomingDrop}
+            onDropHandled={id => setIncomingDrop(current => current?.id === id ? null : current)}
             onAttachmentsChanged={(items) => {
               const next = items.map(item => item.id);
               if (JSON.stringify(next) !== JSON.stringify(attachmentIds)) {

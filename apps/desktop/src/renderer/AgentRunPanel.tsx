@@ -192,7 +192,12 @@ function AgentRunStreamContent(props: {
   );
 }
 
-export function AgentRunPanel() {
+interface AgentRunPanelProps {
+  attentionRunId?: string | null;
+  onAttentionHandled?: (runId: string) => void;
+}
+
+export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPanelProps = {}) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
@@ -222,6 +227,34 @@ export function AgentRunPanel() {
       setLoadError(errorMessage(error));
     });
   }, []);
+
+  useEffect(() => {
+    if (!attentionRunId) return;
+    let cancelled = false;
+    const generation = ++ownerGeneration.current;
+    setBoundGeneration(generation);
+    setThreadId(null);
+    setRun(null);
+    setPendingSubmit(null);
+    setStarting(true);
+    setMessage("");
+    void Promise.all([
+      api.agentRun(attentionRunId),
+      api.registerAgentInteractionThread({ source_surface: "agent", run_id: attentionRunId }),
+    ]).then(([currentRun, registered]) => {
+      if (cancelled || ownerGeneration.current !== generation) return;
+      setRun(currentRun);
+      setThreadId(registered.thread_id);
+    }).catch((error: unknown) => {
+      if (!cancelled && ownerGeneration.current === generation) setMessage(errorMessage(error));
+    }).finally(() => {
+      if (!cancelled && ownerGeneration.current === generation) {
+        setStarting(false);
+        onAttentionHandled?.(attentionRunId);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [attentionRunId, onAttentionHandled]);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
 

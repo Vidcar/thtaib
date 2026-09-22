@@ -81,6 +81,12 @@ function makeHarness() {
   const state = {
     nextThread: 1,
     registeredThreads: [],
+    registrationPayloads: [],
+    registrationBarriers: new Map(),
+    savedRuns: new Map([
+      ["saved_a", run("saved_a", "completed", "Previously saved task A")],
+      ["saved_b", run("saved_b", "completed", "Previously saved task B")],
+    ]),
     commands: [],
     cancels: [],
     cancelBarrier: heldCancel,
@@ -113,10 +119,21 @@ function makeHarness() {
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/agent-interaction/threads") {
-        const threadId = `thread_${state.nextThread}`;
-        state.nextThread += 1;
+        const payload = body ? JSON.parse(body) : {};
+        state.registrationPayloads.push(payload);
+        const threadId = payload.run_id ? `thread_${payload.run_id}` : `thread_${state.nextThread++}`;
+        if (payload.run_id) {
+          await state.registrationBarriers.get(payload.run_id)?.promise;
+          state.streamRuns.set(threadId, state.savedRuns.get(payload.run_id));
+        }
         state.registeredThreads.push(threadId);
         json(res, 200, { thread_id: threadId });
+        return;
+      }
+      const savedRunMatch = url.pathname.match(/^\/v1\/agent-runs\/([^/]+)$/);
+      if (req.method === "GET" && savedRunMatch) {
+        const savedRun = state.savedRuns.get(savedRunMatch[1]);
+        json(res, savedRun ? 200 : 404, savedRun ?? { error: "This task was deleted." });
         return;
       }
       const stateMatch = url.pathname.match(/^\/v1\/agent-interaction\/threads\/([^/]+)\/state$/);
@@ -262,7 +279,39 @@ try {
   assert.match(allText(renderer), /second task/, "stale first cancel must not replace the second run");
   assert.doesNotMatch(allText(renderer), /Stopping|cancel_requested/, "stale first cancel status must not appear on the second run");
   await act(async () => renderer.unmount());
+
+  const commandsBeforeReopen = harness.state.commands.length;
+  const handled = [];
+  const onAttentionHandled = id => handled.push(id);
+  await act(async () => {
+    renderer = create(React.createElement(AgentRunPanel, { attentionRunId: "saved_a", onAttentionHandled }));
+  });
+  await waitFor(() => assert.match(allText(renderer), /Previously saved task A/), "notification opens its existing non-Chat task");
+  assert.deepEqual(harness.state.registrationPayloads.at(-1), { source_surface: "agent", run_id: "saved_a" });
+  await waitFor(() => assert.deepEqual(handled, ["saved_a"]), "notification target acknowledged after hydration");
+  assert.equal(harness.state.commands.length, commandsBeforeReopen, "notification activation cannot replay a saved task");
+  await act(async () => renderer.unmount());
+
+  const staleRegistration = deferred();
+  harness.state.registrationBarriers.set("saved_a", staleRegistration);
+  const priorRegistrations = harness.state.registrationPayloads.length;
+  await act(async () => {
+    renderer = create(React.createElement(AgentRunPanel, { attentionRunId: "saved_a", onAttentionHandled }));
+  });
+  await waitFor(() => assert.equal(harness.state.registrationPayloads.length, priorRegistrations + 1), "first notification registration held");
+  await act(async () => {
+    renderer.update(React.createElement(AgentRunPanel, { attentionRunId: "saved_b", onAttentionHandled }));
+  });
+  await waitFor(() => assert.match(allText(renderer), /Previously saved task B/), "newer notification wins before old registration returns");
+  staleRegistration.resolve();
+  await waitFor(() => assert.ok(harness.state.registeredThreads.filter(id => id === "thread_saved_a").length >= 2), "old registration response delivered");
+  await flush();
+  assert.match(allText(renderer), /Previously saved task B/, "late registration cannot replace the activated task");
+  assert.deepEqual(handled, ["saved_a", "saved_b"], "obsolete notification is never acknowledged as the newer selection");
+  assert.equal(harness.state.commands.length, commandsBeforeReopen, "reopening and switching saved tasks issues no work commands");
+  await act(async () => renderer.unmount());
 } finally {
+  for (const barrier of harness.state.registrationBarriers.values()) barrier.resolve();
   await vite.close();
   await new Promise((resolve) => harness.server.close(resolve));
 }

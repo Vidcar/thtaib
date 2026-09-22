@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -10,7 +11,13 @@ from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
-from tests.scripted_model import RECEIVED_PROMPTS, ScriptedChatModel, reset_received_prompts
+from tests.scripted_model import (
+    RECEIVED_PROMPTS,
+    ScriptedChatModel,
+    reset_received_prompts,
+    set_generate_hold,
+    wait_for_generate_hold,
+)
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
@@ -286,6 +293,64 @@ class ChatBranchTests(unittest.TestCase):
         wait_for_run(self.client, accepted[0].id)
         saver = open_sqlite_checkpointer(self.app.state.manager.paths.checkpoints_db)
         self.assertTrue(list(saver.list({"configurable": {"thread_id": "thread_regen_fail", "checkpoint_ns": ""}})))
+
+    def test_regenerate_branch_projection_excludes_source_pending_answer_writes(self) -> None:
+        self.install_model([
+            AIMessage(content="first answer", additional_kwargs={"reasoning_content": "First reasoning"}),
+            AIMessage(content="original second answer", additional_kwargs={"reasoning_content": "Second reasoning"}),
+            AIMessage(content="replacement answer", additional_kwargs={"reasoning_content": "Replacement reasoning"}),
+        ])
+        conversation = self.create_conversation()
+        first = self.start_turn(conversation["id"], "first task", input_message_id="first-input")
+        second = self.start_turn(conversation["id"], "second task", input_message_id="second-input")
+        self.client.get(f"/v1/chat/conversations/{conversation['id']}")
+        # Real older conversations retain answer text without the native ID or
+        # reasoning blocks. Branching must still align this readable archive.
+        saved = self.app.state.chat.store.get(conversation["id"])
+        for message in saved.transcript:
+            if message.role == "assistant":
+                message.id = None
+                message.content_blocks = None
+        self.app.state.chat.store.put(saved)
+        continuation = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/branches",
+            json={"source_run_id": second["id"]},
+        )
+        self.assertEqual(continuation.status_code, 200, continuation.text)
+
+        hold = threading.Event()
+        set_generate_hold(hold)
+        try:
+            regenerated = self.client.post(
+                f"/v1/chat/conversations/{continuation.json()['id']}/branches",
+                json={"source_run_id": second["id"], "mode": "regenerate"},
+            )
+            self.assertEqual(regenerated.status_code, 200, regenerated.text)
+            branch = regenerated.json()
+            wait_for_generate_hold()
+            registered = self.client.post(
+                "/v1/agent-interaction/threads",
+                json={"source_surface": "chat", "conversation_id": branch["id"]},
+            )
+            self.assertEqual(registered.status_code, 200, registered.text)
+            pending_state = self.client.get(f"/v1/agent-interaction/threads/{branch['id']}/state").json()
+            before = pending_state["values"]["messages"]
+            self.assertEqual([message["type"] for message in before], ["human", "ai", "human"])
+            self.assertNotIn("original second answer", str(before))
+            self.assertIn("First reasoning", str(before))
+        finally:
+            hold.set()
+            set_generate_hold(None)
+
+        result = wait_for_run(self.client, branch["current_run_id"])
+        self.assertEqual(result["status"], "completed", result)
+        final = self.client.get(f"/v1/agent-interaction/threads/{branch['id']}/state").json()["values"]["messages"]
+        self.assertEqual([message["type"] for message in final], ["human", "ai", "human", "ai"])
+        self.assertNotIn("original second answer", str(final))
+        self.assertIn("Replacement reasoning", str(final))
+        self.assertEqual(final, self.app.state.app_store.get_interaction(branch["id"])["snapshot"]["messages"])
+        original = conversation_state(self.app.state.manager.paths.checkpoints_db, first["thread_id"])
+        self.assertIn("original second answer", str(original["messages"]))
 
     def test_regenerate_malicious_tool_call_has_no_execute_effect(self) -> None:
         marker = self.project / "malicious.txt"

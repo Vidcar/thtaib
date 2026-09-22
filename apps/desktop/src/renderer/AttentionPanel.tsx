@@ -6,7 +6,7 @@ import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
 interface AttentionPanelProps {
-  onOpenConversation?: (conversationId: string | null) => void;
+  onOpenItem?: (item: AttentionItem) => void;
 }
 
 function attentionKindLabel(kind: AttentionItem["kind"]): string {
@@ -24,7 +24,7 @@ function attentionKindLabel(kind: AttentionItem["kind"]): string {
   }
 }
 
-export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
+export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
   const [items, setItems] = useState<AttentionItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -48,7 +48,7 @@ export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
   return (
     <section className="packet03-panel" aria-label="Attention">
       <div className="packet03-row">
-        <div className="entity-head"><h2>Attention</h2><HoverHelp title="About Attention">Approvals, questions and run outcomes that need a look. Open an item to continue in Chat.</HoverHelp></div>
+        <div className="entity-head"><h2>Attention</h2><HoverHelp title="About Attention">Approvals, questions and run outcomes that need a look. Open an item to return to its conversation or task.</HoverHelp></div>
         <button type="button" disabled={busy} onClick={() => void refresh()}>
           <Icon name="refresh" size={14} /> Refresh
         </button>
@@ -68,7 +68,7 @@ export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
                 </div>
                 <HoverHelp title="Item details">Run: {item.run_id}<br />Record: {item.identity}</HoverHelp>
               </div>
-              <button type="button" disabled={!onOpenConversation} onClick={() => onOpenConversation?.(item.conversation_id)}>
+              <button type="button" disabled={!onOpenItem} onClick={() => onOpenItem?.(item)}>
                 <Icon name="chat" size={14} /> Open
               </button>
             </div>

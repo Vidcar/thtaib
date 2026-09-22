@@ -129,7 +129,10 @@ class ChatBranches:
                 branch.project_path = workspace.path
             try:
                 if source_checkpoint:
-                    clone_terminal_checkpoint(chat.manager.paths.checkpoints_db, source_run.thread_id, source_checkpoint, branch.thread_id)
+                    clone_terminal_checkpoint(
+                        chat.manager.paths.checkpoints_db, source_run.thread_id, source_checkpoint, branch.thread_id,
+                        include_tip_writes=request.mode != "regenerate",
+                    )
 
                 if workspace is not None:
                     restore_snapshot_tree(Path(manifest.tree_path), destination, included_files=manifest.included_files)
@@ -274,7 +277,9 @@ class ChatBranches:
 
         return None
 
-def clone_terminal_checkpoint(path: Path, source_thread: str, checkpoint_id: str, target_thread: str) -> None:
+def clone_terminal_checkpoint(
+    path: Path, source_thread: str, checkpoint_id: str, target_thread: str, *, include_tip_writes: bool = True,
+) -> None:
     saver = open_sqlite_checkpointer(path)
     source = saver.get_tuple({"configurable": {"thread_id": source_thread, "checkpoint_ns": "", "checkpoint_id": checkpoint_id}})
     if source is None:
@@ -308,7 +313,12 @@ def clone_terminal_checkpoint(path: Path, source_thread: str, checkpoint_id: str
         metadata["parents"] = {}
         written = saver.put(config, checkpoint, metadata, checkpoint.get("channel_versions", {}))
         by_task = {}
-        for task_id, channel, value in saved.pending_writes or []:
+        # A pre-answer checkpoint's pending writes can contain the original
+        # model answer. Explicit checkpoint replay ignores those future writes,
+        # but latest-state reads apply them and would seed the replaced answer
+        # into Chat. Retain ancestor writes needed by delta channels only.
+        writes_to_copy = saved.pending_writes if include_tip_writes or checkpoint["id"] != checkpoint_id else []
+        for task_id, channel, value in writes_to_copy or []:
             by_task.setdefault(task_id, []).append((channel, copy.deepcopy(value)))
 
         for task_id, writes in by_task.items():

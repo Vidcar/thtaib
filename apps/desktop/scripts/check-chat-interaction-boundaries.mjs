@@ -1367,6 +1367,108 @@ async function testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear(vit
   }
 }
 
+async function testWholeChatDropStagesFiles(vite, fresh = false) {
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "chat list loaded before drop");
+    if (!fresh) {
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "existing chat bound before drop");
+    }
+    const surface = () => renderer.root.findByProps({ className: "chat-main" });
+    assert.equal(typeof surface().props.onDrop, "function", "the ordinary Chat surface must accept files while the attachment picker is closed");
+    let prevented = 0;
+    await act(async () => surface().props.onDrop({
+      preventDefault() { prevented += 1; }, stopPropagation() {}, dataTransfer: { types: ["text/plain"], files: [] },
+    }));
+    assert.equal(prevented, 0, "normal text dragging retains its usual behaviour");
+    const file = testFile("dropped-note.md", "The verification code is amber-meadow-72.", "text/markdown");
+    await act(async () => {
+      surface().props.onDrop({
+        preventDefault() { prevented += 1; }, stopPropagation() {},
+        dataTransfer: { types: ["Files"], files: [file] },
+      });
+    });
+    await waitFor(() => assert.equal(harness.state.requests.assetUploads.length, 1, allText(renderer).slice(-2400)), "dropped file reaches the retained upload owner");
+    await waitFor(() => assert.match(allText(renderer), /dropped-note.md/), "drop reveals the staged filename");
+    const attachment = renderer.root.findByProps({ "aria-label": "Composer attachments" });
+    assert.equal(attachment.parent.parent.props.hidden, false, "drop opens the attachment view");
+    assert.equal(prevented, 1, "drop prevents Chromium file navigation");
+    assert.equal(harness.state.requests.assetUploads[0].session_id, fresh ? "conv_new" : "conv_a");
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, false), "attachment-only Send becomes available");
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "attachment-only drop submits once");
+    assert.deepEqual(harness.state.requests.commands[0].payload.params.metadata.workbench.attachment_ids, ["asset_1"]);
+    assert.equal(harness.state.requests.assetUploads.length, 1, "one drop is not uploaded twice");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testAttentionActivationDoesNotPinConversation(vite) {
+  const harness = makeHarness();
+  const handled = [];
+  const renderer = await renderChat(vite, harness, {
+    attentionConversationId: "conv_a",
+    onAttentionHandled: id => handled.push(id),
+  });
+  try {
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "notification conversation selected");
+    assert.deepEqual(handled, ["conv_a"], "notification selection is consumed once");
+    const previousReads = harness.state.chatGetCounts.get("conv_a");
+    await act(async () => { button(renderer, "Conversation B").props.onClick(); });
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation B/), "history selection remains available after notification activation");
+    await flush();
+    assert.equal(harness.state.chatGetCounts.get("conv_a"), previousReads, "notification target cannot trigger another read when selecting a different conversation");
+    assert.equal(harness.state.requests.commands.length, 0, "opening attention cannot submit or replay work");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testExternalAttentionNavigationPreservesDraft(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  const navigationPreparationRef = { current: null };
+  const renderer = await renderChat(vite, harness, { navigationPreparationRef });
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial history loaded");
+    await act(async () => { button(renderer, "Conversation A").props.onClick(); });
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "conversation selected");
+    await waitFor(() => assert.ok(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream" && node.props.conversation.id === "conv_a").length), "conversation ready for draft editing");
+    await act(async () => { textarea(renderer).props.onChange({ target: { value: "Draft typed immediately before activating a task notification" } }); });
+    assert.equal(typeof navigationPreparationRef.current, "function", "notification navigation uses Chat's draft-save boundary");
+    let canNavigate;
+    await act(async () => { canNavigate = await navigationPreparationRef.current(); });
+    assert.equal(canNavigate, true);
+    assert.equal(harness.state.conversations.conv_a.draft.content, "Draft typed immediately before activating a task notification", "draft reaches durable state before leaving Chat");
+    assert.equal(harness.state.requests.commands.length, 0);
+  } finally { await closeHarness(renderer, harness); }
+  assert.equal(navigationPreparationRef.current, null, "unmounted Chat cannot receive later notification navigation");
+}
+
+async function testFileDropDuringNewChatRegistrationCannotRetarget(vite) {
+  const held = deferred();
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  harness.state.barriers.register.set("conv_new", held);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "chat list loaded");
+    await act(async () => renderer.root.findByProps({ className: "chat-main" }).props.onDrop({
+      preventDefault() {}, stopPropagation() {},
+      dataTransfer: { types: ["Files"], files: [testFile("old-drop.txt", "old drop")] },
+    }));
+    await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_new"), "new drop waits on session registration");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "another conversation selected");
+    held.resolve();
+    await flush();
+    assert.equal(harness.state.requests.assetUploads.length, 0, "obsolete drop is not uploaded into another session");
+    assert.doesNotMatch(allText(renderer), /old-drop.txt/);
+  } finally {
+    held.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
   const harness = makeHarness({
     aRun: null,
@@ -2249,6 +2351,11 @@ try {
     console.log("Projection ownership leak reproduction exposed the broken state.");
   } else {
     const cases = [
+    ["attention selection consumed", testAttentionActivationDoesNotPinConversation],
+    ["attention navigation saves current draft", testExternalAttentionNavigationPreservesDraft],
+    ["whole-chat file drop", testWholeChatDropStagesFiles],
+    ["new-chat file drop", vite => testWholeChatDropStagesFiles(vite, true)],
+    ["file-drop creation navigation guard", testFileDropDuringNewChatRegistrationCannotRetarget],
     ["held registration", testHeldRegistrationDoesNotBindOldThread],
     ["terminal hydration after New", testTerminalHydrationCannotReselectAfterNew],
     ["terminal hydration after B", testTerminalHydrationCannotReselectAfterB],
@@ -2289,6 +2396,7 @@ try {
   ];
     const failures = [];
     for (const [name, fn] of cases) {
+      if (process.env.CHAT_PANEL_CASE && name !== process.env.CHAT_PANEL_CASE) continue;
       if (!aggregateCases) {
         await fn(vite);
         continue;

@@ -25,15 +25,18 @@ interface ComposerAttachmentsProps {
   attachmentIds?: string[];
   disabled?: boolean;
   onAttachmentsChanged?: (attachments: StagedComposerAttachment[]) => void;
+  incomingDrop?: { id: string; sessionId: string; files: File[] } | null;
+  onDropHandled?: (id: string) => void;
 }
 
-export function ComposerAttachments({ sessionId, attachmentIds, disabled = false, onAttachmentsChanged }: ComposerAttachmentsProps) {
+export function ComposerAttachments({ sessionId, attachmentIds, disabled = false, onAttachmentsChanged, incomingDrop, onDropHandled }: ComposerAttachmentsProps) {
   const [items, setItems] = useState<LocalUpload[]>([]);
   const itemsRef = useRef<LocalUpload[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const generation = useRef(0);
   const onAttachmentsChangedRef = useRef(onAttachmentsChanged);
+  const handledDrop = useRef<string | null>(null);
 
   useEffect(() => {
     onAttachmentsChangedRef.current = onAttachmentsChanged;
@@ -100,6 +103,7 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
     const files = Array.from(fileList);
     const startedGeneration = generation.current;
     for (const file of files) {
+      if (generation.current !== startedGeneration) return;
       const localId = crypto.randomUUID();
       commitItems((current) => [
         ...current,
@@ -107,6 +111,7 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
       ]);
       try {
         const prepared = await prepareFile(file);
+        if (generation.current !== startedGeneration) return;
         const asset = await packet03Api.uploadAsset({
           session_id: sessionId,
           filename: file.name || "untitled.txt",
@@ -115,12 +120,12 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
           content_base64: prepared.contentBase64,
         });
         if (generation.current !== startedGeneration) {
-          continue;
+          return;
         }
         commitItems((current) => current.map((item) => item.id === localId ? { ...item, status: "ready", asset, message: "Attached" } : item));
       } catch (error) {
         if (generation.current !== startedGeneration) {
-          continue;
+          return;
         }
         commitItems((current) => current.map((item) => item.id === localId ? {
           ...item,
@@ -135,7 +140,21 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
     commitItems((current) => current.filter((item) => item.id !== id));
   }
 
-  const cannotAttach = disabled || restoring || !sessionId;
+  const savedAttachmentsReady = !attachmentIds?.some(id => !items.some(item => item.status === "ready" && item.asset?.id === id));
+  const cannotAttach = disabled || restoring || !savedAttachmentsReady || !sessionId;
+
+  useEffect(() => {
+    if (!incomingDrop || incomingDrop.sessionId !== sessionId || handledDrop.current === incomingDrop.id || cannotAttach) return;
+    let cancelled = false;
+    // Start after the effect setup has settled, including StrictMode's mount replay.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      handledDrop.current = incomingDrop.id;
+      void stageFiles(incomingDrop.files);
+      onDropHandled?.(incomingDrop.id);
+    });
+    return () => { cancelled = true; };
+  }, [incomingDrop, sessionId, cannotAttach]);
 
   return (
     <section className="packet03-attachments" aria-label="Composer attachments">

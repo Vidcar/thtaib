@@ -24,17 +24,43 @@ try {
   const { ChatHistoryActions } = await vite.ssrLoadModule("/src/renderer/ChatHistoryActions.tsx");
   const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
   const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
+  const { AttentionPanel } = await vite.ssrLoadModule("/src/renderer/AttentionPanel.tsx");
 
   await checkComposerUploadStaleGuard(ComposerAttachments);
+  await checkDropWaitsForSavedAttachments(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
   await checkChatHistoryActions(ChatHistoryActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
+  await checkAttentionTargets(AttentionPanel);
 } finally {
   await vite.close();
 }
 
 console.log("Packet03 component checks passed.");
+
+async function checkAttentionTargets(AttentionPanel) {
+  const originalFetch = globalThis.fetch;
+  const items = [
+    { identity: "approval_chat", kind: "approval", title: "Chat needs approval", conversation_id: "chat_waiting", run_id: "run_chat" },
+    { identity: "question_agent", kind: "question", title: "Task needs an answer", conversation_id: null, run_id: "run_agent" },
+  ];
+  const opened = [];
+  let renderer;
+  globalThis.fetch = async () => jsonResponse(items);
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(AttentionPanel, { onOpenItem: item => opened.push(item) }));
+      await tick();
+    });
+    const buttons = renderer.root.findAll(node => node.type === "button" && textOf(node).includes("Open"));
+    await act(async () => { for (const target of buttons) target.props.onClick(); });
+    assert.deepEqual(opened, items, "Attention preserves the exact conversation or task target rather than dropping non-Chat identity");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch;
+  }
+}
 
 async function checkHoverHelp(HoverHelp) {
   const originals = { window: globalThis.window, document: globalThis.document, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
@@ -161,9 +187,11 @@ async function checkPanelResize(PanelResize, usePanelWidth) {
 async function checkComposerUploadStaleGuard(ComposerAttachments) {
   const originalFetch = globalThis.fetch;
   const uploads = new Map();
+  const uploadRequests = [];
   globalThis.fetch = async (url, init) => {
     assert.match(String(url), /\/v1\/assets\/uploads$/);
     const body = JSON.parse(String(init.body));
+    uploadRequests.push(body);
     const deferred = createDeferred();
     uploads.set(body.session_id, { body, deferred });
     return deferred.promise;
@@ -180,7 +208,10 @@ async function checkComposerUploadStaleGuard(ComposerAttachments) {
     });
 
     await act(async () => {
-      input(renderer, "file").props.onChange({ target: { files: [new File(["old"], "old.txt", { type: "text/plain" })] }, currentTarget: { value: "" } });
+      input(renderer, "file").props.onChange({ target: { files: [
+        new File(["old"], "old.txt", { type: "text/plain" }),
+        new File(["old second"], "old-second.txt", { type: "text/plain" }),
+      ] }, currentTarget: { value: "" } });
       await tick();
     });
     assert.equal(uploads.get("chat_old").body.content_base64, "b2xk");
@@ -201,6 +232,8 @@ async function checkComposerUploadStaleGuard(ComposerAttachments) {
       await tick();
     });
     assert.ok(!textOf(renderer.root).includes("old.txt"), "stale upload response from previous session must not stage an attachment");
+    assert.ok(!textOf(renderer.root).includes("old-second.txt"), "remaining files from an obsolete selection must not appear in the current conversation");
+    assert.equal(uploadRequests.filter(item => item.session_id === "chat_old").length, 1, "navigation cancels undispatched files from the old selection");
 
     uploads.get("chat_new").deferred.resolve(jsonResponse(asset("asset_new", "new.ts", "chat_new")));
     await act(async () => {
@@ -214,6 +247,45 @@ async function checkComposerUploadStaleGuard(ComposerAttachments) {
     });
     assert.deepEqual(attachments.at(-1), [], "removing staged attachment should only update parent draft attachments");
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function checkDropWaitsForSavedAttachments(ComposerAttachments) {
+  const originalFetch = globalThis.fetch;
+  const restored = createDeferred();
+  const savedAsset = asset("asset_saved", "saved.txt", "chat_restore");
+  const addedAsset = asset("asset_added", "added.txt", "chat_restore");
+  const incomingDrop = { id: "drop_restore", sessionId: "chat_restore", files: [new File(["added"], "added.txt", { type: "text/plain" })] };
+  const uploads = [];
+  const changes = [];
+  let renderer;
+  function ComposerHost() {
+    const [ids, setIds] = React.useState([savedAsset.id]);
+    return React.createElement(ComposerAttachments, {
+      sessionId: "chat_restore", attachmentIds: ids, incomingDrop,
+      onAttachmentsChanged: next => { const nextIds = next.map(item => item.id); changes.push(nextIds); setIds(nextIds); },
+    });
+  }
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/uploads")) {
+      uploads.push(JSON.parse(String(init.body)));
+      return jsonResponse(addedAsset);
+    }
+    return restored.promise.then(() => jsonResponse([savedAsset]));
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(React.StrictMode, null, React.createElement(ComposerHost))); await tick(); });
+    assert.equal(uploads.length, 0, "a drop on the first render waits until existing draft attachments are restored");
+    assert.equal(changes.length, 0, "pending restoration must not erase the saved draft attachment IDs");
+    await act(async () => { restored.resolve(jsonResponse([savedAsset])); await tick(); });
+    assert.equal(uploads.length, 1, "StrictMode and restoration deliver a drop only once");
+    assert.deepEqual(changes.at(-1), [savedAsset.id, addedAsset.id], "the saved and newly dropped originals remain staged together");
+    assert.match(textOf(renderer.root), /saved.txt/);
+    assert.match(textOf(renderer.root), /added.txt/);
+  } finally {
+    restored.resolve(jsonResponse([savedAsset]));
+    if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
   }
 }

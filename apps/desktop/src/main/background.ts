@@ -118,15 +118,16 @@ async function pollAttention(openWindow: () => void): Promise<void> {
   polling = true;
   try {
     const [items, preferences] = await Promise.all([
-      backend<Array<{ identity: string; conversation_id: string | null; title: string; kind: string; notified: boolean }>>("desktop/attention"),
-      backend<{ attention_notifications: boolean }>("settings/presentation"),
+      backend<Array<{ identity: string; conversation_id: string | null; run_id: string; title: string; kind: string; notified: boolean }>>("desktop/attention"),
+      backend<{ attention_notifications: boolean; success_notifications: boolean }>("settings/presentation"),
     ]);
     const attentionCount = items.filter(item => item.kind !== "success").length;
     tray?.setToolTip(attentionCount ? `Local AI Workbench — ${attentionCount} need attention` : "Local AI Workbench");
     const foreground = BrowserWindow.getAllWindows().some((window) => window.isFocused() && window.isVisible());
     for (const item of items) {
       if (item.notified || notified.has(item.identity)) continue;
-      if (foreground || !preferences.attention_notifications || !Notification.isSupported()) continue;
+      const enabled = item.kind === "success" ? preferences.success_notifications : preferences.attention_notifications;
+      if (foreground || !enabled || !Notification.isSupported()) continue;
       const claim = await backend<{ claimed: boolean }>(`desktop/attention/${encodeURIComponent(item.identity)}/claim`, "POST");
       if (!claim.claimed) continue;
       notified.add(item.identity);
@@ -134,7 +135,7 @@ async function pollAttention(openWindow: () => void): Promise<void> {
         body: item.kind === "approval" ? "An action needs your approval." : item.kind === "question" ? "An answer is needed." : item.kind === "success" ? "Your task is complete." : "Work needs attention after a failure." });
       notification.on("click", () => {
         openWindow();
-        for (const window of BrowserWindow.getAllWindows()) window.webContents.send("workbench:attention", item.conversation_id);
+        for (const window of BrowserWindow.getAllWindows()) window.webContents.send("workbench:attention", item.conversation_id, item.run_id);
       });
       notification.show();
     }
