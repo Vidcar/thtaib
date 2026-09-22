@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-22.
 
-Packet03 implementation on `codex/packet-03-shared-chat`; review checkpoint pending commit/PR. All25 tasks/delivery authorized. Do not archive/merge/claim completion before remaining gates. CI disabled. Current status: `openspec/changes/03-complete-shared-chat`.
+Packet03 implementation on `codex/packet-03-shared-chat`; 1bb91af pushed; draft PR#118 (https://github.com/Vidcar/thtaib/pull/118). All25 tasks/delivery authorized. Do not archive/merge/claim completion before remaining gates. CI disabled. Current status: `openspec/changes/03-complete-shared-chat`.
 
 Implemented durable Chat/queues, permissions/questions, branches/regeneration, files/Library, recovery/lifecycle and compact composer/thinking controls.19/25 tasks verified. Dave accepted3.1 conditional on polish; final3.2 acceptance/defer question pending.
 
