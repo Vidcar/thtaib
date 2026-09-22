@@ -77,6 +77,16 @@
             ],
             "title": "Agent Setup Version Id"
           },
+          "approval_mode": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "approve_for_me",
+              "full_access"
+            ],
+            "title": "Approval Mode",
+            "type": "string"
+          },
           "budgets": {
             "anyOf": [
               {
@@ -785,6 +795,16 @@
               }
             ],
             "title": "Agent Setup Version Id"
+          },
+          "approval_mode": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "approve_for_me",
+              "full_access"
+            ],
+            "title": "Approval Mode",
+            "type": "string"
           },
           "budgets": {
             "anyOf": [
@@ -1616,6 +1636,16 @@
             ],
             "title": "Agent Setup Version Id"
           },
+          "approval_mode": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "approve_for_me",
+              "full_access"
+            ],
+            "title": "Approval Mode",
+            "type": "string"
+          },
           "archived": {
             "default": false,
             "title": "Archived",
@@ -2004,6 +2034,22 @@
             ],
             "title": "Agent Setup Version Id"
           },
+          "approval_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ask",
+                  "approve_for_me",
+                  "full_access"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Mode"
+          },
           "connection_ids": {
             "anyOf": [
               {
@@ -2205,6 +2251,16 @@
               }
             ],
             "title": "Agent Setup Version Id"
+          },
+          "approval_mode": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "approve_for_me",
+              "full_access"
+            ],
+            "title": "Approval Mode",
+            "type": "string"
           },
           "archived": {
             "default": false,
@@ -3177,6 +3233,22 @@
               }
             ],
             "title": "Agent Setup Version Id"
+          },
+          "approval_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ask",
+                  "approve_for_me",
+                  "full_access"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Mode"
           },
           "attachment_ids": {
             "items": {
@@ -9370,6 +9442,22 @@
       "SetupConfiguration": {
         "additionalProperties": false,
         "properties": {
+          "approval_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ask",
+                  "approve_for_me",
+                  "full_access"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Mode"
+          },
           "bundle_id": {
             "anyOf": [
               {

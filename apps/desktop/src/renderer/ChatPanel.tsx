@@ -8,6 +8,7 @@ import { useDismissibleDetails } from "./useDismissibleDetails";
 import { api, ApiError } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
 import { setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
+import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
@@ -587,7 +588,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [incomingDrop, setIncomingDrop] = useState<{ id: string; sessionId: string; files: File[] } | null>(null);
   const [fileDragActive, setFileDragActive] = useState(false);
-  const [toolsAllowed, setToolsAllowed] = useState(true);
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
   const [perRequestOverrides, setPerRequestOverrides] = useState<Record<string, unknown>>({});
   const [setupOpen, setSetupOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -766,7 +767,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       profile_id: profileId && profileId !== "!none" ? profileId : null,
       inherit_deployment_settings: profileId !== "!none",
       embedding_deployment_id: embeddingDeploymentId || null,
-      presented_tools: toolsAllowed ? (layered ? enabledTools : null) : [],
+      ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: conversation?.draft?.intended_config?.presented_tools ?? conversation?.setup_overrides?.presented_tools ?? null } : {}),
+      ...(setupEditedFields.current.has("approval_mode") ? { approval_mode: approvalMode } : {}),
       per_request_overrides: perRequestOverrides,
       ...knowledgePayload(knowledgeEntries, selectedKnowledgeIds),
     }, setupEditedFields.current, layered);
@@ -782,7 +784,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     else markSetupEdited("deployment_id"); // Use the visibly selected model when the setup inherits it.
     setProfileId(config.profile_id ?? (config.inherit_deployment_settings === false ? "!none" : ""));
     setEmbeddingDeploymentId(config.embedding_deployment_id ?? "");
-    setToolsAllowed(config.presented_tools == null || config.presented_tools.length > 0);
+    if (!setupEditedFields.current.has("approval_mode")) setApprovalMode(approvalModeOf(config.approval_mode));
     setPerRequestOverrides(config.per_request_overrides ?? {});
     setSelectedKnowledgeIds([...(config.memory_version_refs ?? []), ...(config.skill_version_refs ?? []), ...(config.protected_instruction_version_refs ?? [])]);
     setInstructionLayers(selection.instruction_layers ?? []);
@@ -881,7 +883,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     sending,
     task,
     attachmentIds,
-    toolsAllowed,
+    approvalMode,
     perRequestOverrides,
     selectedKnowledgeIds,
     knowledgeEntries,
@@ -1008,7 +1010,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setDeploymentId(typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : next.deployment_id);
         setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
         setProfileId(typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : draftConfig.inherit_deployment_settings === false ? "!none" : next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
-        setToolsAllowed(!Array.isArray(draftConfig.presented_tools) || draftConfig.presented_tools.length > 0);
+        if (draftConfig.approval_mode != null) setApprovalMode(approvalModeOf(draftConfig.approval_mode));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
@@ -1695,23 +1697,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           <div className="actions">
             <button type="button" className="icon-button" aria-label="Attach files" title="Attach files" aria-expanded={attachmentsOpen} disabled={!selectedDeployment || sending || selectionBusy} onClick={() => void openAttachments()}><Icon name="plus" /></button>
             <details ref={toolsMenuRef} name="chat-composer-controls" className="composer-menu">
-              <summary title="Tools and permissions" aria-label="Tools and permissions"><Icon name="shield" /><span>{toolsAllowed ? "Tools on" : "Tools off"}</span></summary>
-              <div className="composer-popover chat-tools-popover" role="group" aria-label="Tools and activity settings">
-                <div className="chat-tools-row">
-                  <label className="check-row"><input type="checkbox" aria-label="Use tools" checked={toolsAllowed} disabled={selectionBusy || sending} onChange={event => { markSetupEdited("presented_tools"); setToolsAllowed(event.target.checked); }} /> Use tools</label>
-                  <HoverHelp title="About tool permissions">Applies to future messages. Sensitive actions ask first unless you saved a matching permission. Turning tools off blocks previously allowed actions too.</HoverHelp>
-                </div>
-                <div className="chat-tools-row">
-                <label className="check-row"><input type="checkbox" aria-label="Detailed activity" checked={presentation.detailed_streams} onChange={event => {
-                  const next = { detailed_streams: event.target.checked };
-                  void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail);
-                }} /> Detailed activity</label>
-                <HoverHelp title="About detailed activity">Expand reasoning and tool output by default. Your choice is saved across chats. Approvals, questions and errors always stay visible.</HoverHelp>
-                </div>
+              <summary title="Approval mode" aria-label="Approval mode"><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></summary>
+              <div className="composer-popover chat-tools-popover" role="group" aria-label="Approval mode choices">
+                <ApprovalModeControl value={approvalMode} disabled={selectionBusy || sending} onChange={mode => { markSetupEdited("approval_mode"); setApprovalMode(mode); }} />
                 <button type="button" className="chat-tools-permissions" onClick={() => navigateAway("settings")}><Icon name="settings" size={14} /> Saved permissions</button>
               </div>
             </details>
             <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={chooseDeployment} onProfileChange={value => { markSetupEdited("profile_id", "inherit_deployment_settings"); setProfileId(value); }} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={value => { markSetupEdited("per_request_overrides"); setPerRequestOverrides(value); }} onInheritDeploymentSettingsChange={inherit => { markSetupEdited("profile_id", "inherit_deployment_settings"); if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />
+            <button type="button" className={`icon-button${presentation.detailed_streams ? " is-pressed" : ""}`} aria-pressed={presentation.detailed_streams} aria-label="Detailed activity" title="Show reasoning and tool detail" disabled={selectionBusy} onClick={() => { const next = { detailed_streams: !presentation.detailed_streams }; void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail); }}><Icon name="activity" size={16} /></button>
             <span className="composer-spacer" />
             <ChatMeasurements run={conversation?.current_run} />
             <button

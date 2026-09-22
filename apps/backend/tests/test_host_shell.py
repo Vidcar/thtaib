@@ -263,6 +263,59 @@ class HostShellPolicyTests(unittest.TestCase):
         self.assertTrue(host_shell_requested(presented))
         self.assertIsNotNone(interrupt_on_for_run(presented))
 
+    def test_approval_mode_chooses_which_actions_pause(self) -> None:
+        from workbench_backend.connections.schemas import ConnectionSnapshot, ConnectionTool
+
+        run = _run(
+            project_path="/tmp/project",
+            presented=["execute", "rename_file", "delete_file", "docs_search", "ask_user", "propose_memory"],
+        )
+        run.connection_snapshots = [
+            ConnectionSnapshot(
+                id="conn",
+                name="Docs",
+                version=1,
+                kind="mcp",
+                transport="http",
+                tools=[
+                    ConnectionTool(
+                        id="tool",
+                        name="docs_search",
+                        remote_name="search",
+                        description="Search",
+                        input_schema={},
+                    )
+                ],
+            )
+        ]
+
+        def pauses(mode: str, name: str, args: dict[str, str]) -> bool:
+            run.approval_mode = mode  # type: ignore[assignment]
+            gate = interrupt_on_for_run(run)
+            assert gate is not None
+
+            class _Req:
+                tool_call = {"name": name, "args": args}
+
+            return bool(gate[name]["when"](_Req()))  # type: ignore[index, operator]
+
+        self.assertTrue(pauses("ask", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
+        self.assertTrue(pauses("ask", "delete_file", {"file_path": "a.txt"}))
+        self.assertTrue(pauses("ask", "execute", {"command": "rm -rf x"}))
+        self.assertFalse(pauses("ask", "execute", {"command": "echo ok"}))
+        self.assertTrue(pauses("ask", "docs_search", {"query": "notes"}))
+        asked = interrupt_on_for_run(run)
+        assert asked is not None
+        self.assertNotIn("ask_user", asked)
+        self.assertNotIn("propose_memory", asked)
+        self.assertFalse(pauses("approve_for_me", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
+        self.assertFalse(pauses("approve_for_me", "delete_file", {"file_path": "a.txt"}))
+        self.assertTrue(pauses("approve_for_me", "execute", {"command": "rm -rf x"}))
+        self.assertTrue(pauses("approve_for_me", "docs_search", {"query": "notes"}))
+        self.assertFalse(pauses("full_access", "execute", {"command": "rm -rf x"}))
+        self.assertFalse(pauses("full_access", "docs_search", {"query": "notes"}))
+        self.assertFalse(pauses("full_access", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
+
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(
             {

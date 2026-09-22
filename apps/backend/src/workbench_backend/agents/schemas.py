@@ -195,6 +195,7 @@ class AgentStartRequest(BaseModel):
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     presented_tools: list[str] | None = None
+    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
     system_prompt: str | None = None
     output_schema: OutputSchemaRequest | None = None
     criteria: TaskCriteria | None = None
@@ -246,6 +247,7 @@ class AgentRun(BaseModel):
     content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]
+    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
     framework_read_paths: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None

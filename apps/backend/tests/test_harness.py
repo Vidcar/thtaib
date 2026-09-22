@@ -390,6 +390,22 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 400)
         self.assertEqual(blocked.json()["code"], "filesystem_requires_project")
         self.assertEqual(self.client.get("/v1/agent-tools").json()["enabled"], catalogue)
+        from workbench_backend.agents.tools import resolve_presented_tools
+        presented, denied, _filesystem, _shell = resolve_presented_tools(
+            ["echo", "read_attachment"],
+            project_bound=True,
+            attachment_available=False,
+        )
+        self.assertIn("echo", presented)
+        self.assertNotIn("read_attachment", presented)
+        self.assertNotIn("read_attachment", denied)
+        with_file, still_denied, _filesystem, _shell = resolve_presented_tools(
+            ["read_attachment"],
+            project_bound=True,
+            attachment_available=True,
+        )
+        self.assertEqual(with_file, ["read_attachment"])
+        self.assertEqual(still_denied, [])
 
     def test_completion_evidence_is_not_judgement(self) -> None:
         started = self._start(

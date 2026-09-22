@@ -303,11 +303,22 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 
 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
-    """HITL config for ``execute`` whenever LocalShellBackend is attached."""
+    """HITL config for protected tools. The run's approval mode chooses which pauses remain.
+
+    Ask keeps every pause. Approve for me lets selected rename and delete proceed.
+    Full access also lets a selected shell command and external tool proceed.
+    A typed question and a memory proposal are not decided here.
+    """
+
+    mode = run.approval_mode if run.approval_mode in {"ask", "approve_for_me", "full_access"} else "ask"
+    auto_file = mode in {"approve_for_me", "full_access"}
+    auto_external = mode == "full_access"
 
     def requires_approval(request: ToolCallRequest) -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+        if auto_external:
+            return False
         if grants is not None and grants.matches(run, "execute", args):
             return False
         return execute_requires_approval(request)
@@ -326,6 +337,8 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
         if name not in run.presented_tools:
             continue
         def file_approval(request: ToolCallRequest, name=name) -> bool:
+            if auto_file:
+                return False
             call = request.tool_call
             args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
             return grants is None or not grants.matches(run, name, args)
@@ -339,6 +352,8 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             if name not in run.presented_tools:
                 continue
             def external_approval(request: ToolCallRequest, name=name) -> bool:
+                if auto_external:
+                    return False
                 call = request.tool_call
                 args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
                 return grants is None or not grants.matches(run, name, args)

@@ -228,6 +228,12 @@ details[open] > summary { color: var(--text); margin-bottom: 8px; }
 .compose .chat-model-controls-model { font-size: 12px; font-weight: 500; }
 .compose .chat-model-controls-main { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .thinking-chip { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.approval-mode { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 9px; background: var(--bg-raised); }
+.approval-mode button { border: 0; background: transparent; color: var(--muted); border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.approval-mode button.is-selected { background: var(--bg); color: var(--text); }
+.approval-mode button:disabled { opacity: .5; cursor: default; }
+.approval-mode-field { display: grid; gap: 8px; }
+.compose .icon-button.is-pressed { color: var(--text); background: var(--bg-panel); }
 .composer-menu > summary { padding: 5px; font-size: 11px; gap: 5px; }
 .composer-menu > summary svg { width: 16px; height: 16px; }
 .composer-popover, .compose .chat-model-controls-panel, .history-menu-panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 15px; box-shadow: var(--shadow); max-height: min(65vh, 580px); overflow: auto; font-size: 12px; }
@@ -266,6 +272,7 @@ details[open] > summary { color: var(--text); margin-bottom: 8px; }
 .tool-call-row { margin: 0; padding: 0; min-width: 0; }
 .tool-call-name { color: var(--text); font-weight: 500; white-space: nowrap; }
 .tool-call-target { font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.tool-call-progress { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .tool-call-state { margin-left: auto; font-size: 10px; color: var(--muted); white-space: nowrap; }
 .tool-call-state[data-state="error"], .tool-call-failed .tool-call-state { color: var(--danger); }
 .tool-call-state[data-state="completed"] { color: var(--ok); }

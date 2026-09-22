@@ -2015,6 +2015,12 @@ export interface components {
             agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /**
+             * Approval Mode
+             * @default ask
+             * @enum {string}
+             */
+            approval_mode: "ask" | "approve_for_me" | "full_access";
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /** Checkpoint Ids */
             checkpoint_ids?: string[];
@@ -2214,6 +2220,12 @@ export interface components {
         AgentStartRequest: {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /**
+             * Approval Mode
+             * @default ask
+             * @enum {string}
+             */
+            approval_mode: "ask" | "approve_for_me" | "full_access";
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /** Connection Ids */
             connection_ids?: string[] | null;
@@ -2489,6 +2501,12 @@ export interface components {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /**
+             * Approval Mode
+             * @default ask
+             * @enum {string}
+             */
+            approval_mode: "ask" | "approve_for_me" | "full_access";
+            /**
              * Archived
              * @default false
              */
@@ -2608,6 +2626,8 @@ export interface components {
         ChatConversationCreateRequest: {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /** Approval Mode */
+            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
             /** Connection Ids */
             connection_ids?: string[] | null;
             /** Deployment Id */
@@ -2657,6 +2677,12 @@ export interface components {
         ChatConversationView: {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /**
+             * Approval Mode
+             * @default ask
+             * @enum {string}
+             */
+            approval_mode: "ask" | "approve_for_me" | "full_access";
             /**
              * Archived
              * @default false
@@ -2972,6 +2998,8 @@ export interface components {
         ChatStartRequest: {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /** Approval Mode */
+            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
             /** Attachment Ids */
             attachment_ids?: string[];
             /** Connection Ids */
@@ -5263,6 +5291,8 @@ export interface components {
         };
         /** SetupConfiguration */
         SetupConfiguration: {
+            /** Approval Mode */
+            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
             /** Bundle Id */
             bundle_id?: string | null;
             /** Connection Ids */

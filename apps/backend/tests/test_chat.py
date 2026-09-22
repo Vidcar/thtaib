@@ -149,6 +149,18 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_approval_mode_reaches_the_run_and_a_queued_turn(self) -> None:
+        created = self._create(approval_mode="full_access")
+        self.assertEqual(created["approval_mode"], "full_access")
+        started = self._start(created["id"], task="Say hello.")
+        self.assertEqual(started["current_run"]["approval_mode"], "full_access")
+        queued = self.client.post(
+            f"/v1/chat/conversations/{created['id']}/queue",
+            json={"task": "Next turn.", "approval_mode": "approve_for_me"},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(queued.json()["queue"][0]["intended_config"]["approval_mode"], "approve_for_me")
+
     def test_listing_skips_conversation_deleted_after_list_snapshot(self) -> None:
         removed = self._create(title='Deleted during refresh')
         retained = self._create(title='Still available')
