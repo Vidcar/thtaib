@@ -22,7 +22,9 @@ from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
 from workbench_backend.errors import HarnessError
+from workbench_backend.inference.configuration_options import validate_model_reasoning
 from workbench_backend.inference.schemas import Deployment, SettingsBag
+from workbench_backend.inference.settings import normalize_on_off_auto
 
 # Transport timeout only — not a product task budget (AGT-003).
 DEFAULT_ADAPTER_TIMEOUT = 120.0
@@ -51,7 +53,6 @@ EXTRA_BODY_KEYS = (
     "min_p",
     "typical_p",
     "repeat_penalty",
-    "reasoning",
     "reasoning_format",
 )
 
@@ -293,6 +294,7 @@ def chat_model_for_deployment(
         )
 
     per_request = per_request if per_request is not None else deployment.settings.per_request
+    validate_model_reasoning(deployment, per_request)
     kwargs = _direct_kwargs(per_request)
     extra_body = _extra_body(per_request)
     client = http_client
@@ -369,11 +371,26 @@ def adapter_target(deployment: Deployment) -> dict[str, Any]:
 
 
 def _direct_kwargs(bag: SettingsBag) -> dict[str, Any]:
-    return {key: bag.applied[key] for key in DIRECT_CHAT_KEYS if key in bag.applied}
+    return {
+        key: bag.applied[key] for key in DIRECT_CHAT_KEYS if key in bag.applied
+        and not (key == "reasoning_effort" and bag.applied[key] == "default")
+    }
 
 
 def _extra_body(bag: SettingsBag) -> dict[str, Any]:
-    return {key: bag.applied[key] for key in EXTRA_BODY_KEYS if key in bag.applied}
+    body = {key: bag.applied[key] for key in EXTRA_BODY_KEYS if key in bag.applied}
+    if "reasoning" in bag.applied:
+        thinking = normalize_on_off_auto(bag.applied["reasoning"], allow_auto=True)
+        if thinking is None:
+            raise HarnessError(
+                "Thinking must be On, Off, or Model default.",
+                code="invalid_reasoning_setting", status_code=422,
+            )
+        if thinking != "auto":
+            # llama.cpp merges these per-request keys into its startup template
+            # defaults. Send only the override so tool/template defaults survive.
+            body["chat_template_kwargs"] = {"enable_thinking": thinking == "on"}
+    return body
 
 
 def _close_async_client_safely(client: httpx.AsyncClient) -> None:

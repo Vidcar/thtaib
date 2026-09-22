@@ -5,6 +5,8 @@ import { AgentMessageFeed } from "./AgentMessageFeed";
 import { deploymentOptionLabel } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
+import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
@@ -184,7 +186,7 @@ function AgentRunStreamContent(props: {
           />
         </div>
       ) : (
-        <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>
+        <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
     </>
   );
@@ -260,7 +262,7 @@ export function AgentRunPanel() {
   if (loadError) {
     return (
       <section className="surface">
-        <h2>Agent run</h2>
+        <h2>Workflows</h2>
         <Notice tone="error">{loadError}</Notice>
       </section>
     );
@@ -269,11 +271,7 @@ export function AgentRunPanel() {
   return (
     <section className="surface">
       <header className="surface-head">
-        <h2>Agent run</h2>
-        <p className="lede">
-          Run a single task with tool approvals and progress in one place. Use Chat when you want a
-          conversation.
-        </p>
+        <div className="entity-head"><h2>Workflows</h2><HoverHelp title="About task runs">Run a task with tools, approvals and progress in one place. Use Chat for an ongoing conversation.</HoverHelp></div>
       </header>
 
       <form
@@ -321,8 +319,10 @@ export function AgentRunPanel() {
             });
         }}
       >
+        <h3>Run a task</h3>
+        <div className="setup-grid">
         <label>
-          Deployment
+          Model
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
             {deployments.length === 0 ? <option value="">No model available</option> : null}
             {deployments.map((deployment) => (
@@ -348,22 +348,24 @@ export function AgentRunPanel() {
           </select>
         </label>
         <label>
-          Project folder (required for host shell)
+          Project folder
           <input
             value={projectPath}
             onChange={(event) => setProjectPath(event.target.value)}
-            placeholder="Leave empty for visibility tools only"
+            placeholder="Optional project path"
           />
         </label>
+        </div>
+        {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer and require approval.</p> : null}
         <label>
           Task
-          <textarea value={task} onChange={(event) => updateTask(event.target.value)} />
+          <textarea value={task} onChange={(event) => updateTask(event.target.value)} placeholder="What would you like to get done?" />
         </label>
-        <p className="hint">Tools: {enabledTools.length ? enabledTools.join(", ") : "none"}</p>
         <div className="actions">
           <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
-            Start
+            <Icon name="send" size={15} /> Run task
           </button>
+          <HoverHelp title="Available tools">{enabledTools.length ? enabledTools.join(", ") : "No tools available."} File and shell tools need a project folder.</HoverHelp>
         </div>
       </form>
 
@@ -381,7 +383,7 @@ export function AgentRunPanel() {
           isCurrentOwner={isCurrentOwner}
         />
       ) : (
-        <EmptyState title="No run yet">Start a model in Models, then give it a task here.</EmptyState>
+        <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
       {message ? <Notice tone="error">{message}</Notice> : null}
     </section>

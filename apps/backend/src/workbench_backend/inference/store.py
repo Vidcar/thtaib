@@ -73,6 +73,10 @@ class RecordStore:
         with _STORE_LOCK:
             remaining = [item for item in self.list_bundles() if item.id != bundle_id]
             self._write_list(self.bundles_path, remaining)
+            with closing(self._connect()) as conn:
+                conn.execute("DELETE FROM app_settings WHERE key IN (?, ?, ?)",
+                    (f"model-verification:{bundle_id}", f"model-inspection:{bundle_id}:runtime", f"model-inspection:{bundle_id}:full"))
+                conn.commit()
 
     def set_bundle_disk_matches(self, bundle_id: str, matches: bool) -> ModelBundle | None:
         """Verification may finish after deletion; never recreate that record."""

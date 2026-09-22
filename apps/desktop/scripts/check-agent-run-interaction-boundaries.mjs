@@ -231,7 +231,7 @@ try {
     renderer = create(React.createElement(StrictMode, null, React.createElement(AgentRunPanel)));
     await Promise.resolve();
   });
-  await waitFor(() => assert.match(allText(renderer), /Agent run/), "initial Agent run render");
+  await waitFor(() => assert.match(allText(renderer), /Workflows/), "initial task surface render");
   await act(async () => {
     textarea(renderer).props.onChange({ target: { value: "first task" } });
     await Promise.resolve();

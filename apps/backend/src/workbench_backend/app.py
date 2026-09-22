@@ -105,7 +105,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.state.preferences = PreferenceStore(application.state.app_store)
     application.state.maintenance_gate = MaintenanceGate()
     application.state.assets = RetainedAssetService(application.state.app_store)
-    application.state.asset_lifecycle = AssetLifecycleService(application.state.manager.paths, application.state.app_store)
+    application.state.asset_lifecycle = AssetLifecycleService(application.state.manager.paths, application.state.app_store,
+        harness_provider=lambda: application.state.harness)
 
     @application.middleware("http")
     async def maintenance_boundary(request, call_next):

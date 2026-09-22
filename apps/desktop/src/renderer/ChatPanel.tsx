@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
+import { PanelResize, usePanelWidth } from "./PanelResize";
+import { HoverHelp } from "./HoverHelp";
+import { DeleteChatDialog } from "./DeleteChatDialog";
 
 import { api } from "./api";
 import { Icon } from "./Icon";
+import { AttentionButton } from "./AttentionPanel";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { LibraryPanel } from "./LibraryPanel";
 import { packet03Api } from "./packet03Api";
@@ -12,7 +16,6 @@ import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
 import { ChatHistoryActions } from "./ChatHistoryActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import { ConversationRename } from "./ConversationRename";
-import { AttentionButton } from "./AttentionPanel";
 import { AgentMessageFeed } from "./AgentMessageFeed";
 import { conversationTitle, displayedTranscript, formatWhen, shortId } from "./display";
 import { EmptyState } from "./EmptyState";
@@ -522,7 +525,7 @@ function tabLabel(tab: WorkbenchTab): string {
     case "knowledge":
       return "Knowledge";
     case "agent-run":
-      return "Agent run";
+      return "Workflows";
     case "lab":
       return "Lab";
     case "library":
@@ -557,6 +560,10 @@ interface ChatPanelProps {
   onReuseAssetHandled?: () => void;
   presentation?: PresentationSettings;
   productName?: string;
+  navigationCollapsed?: boolean;
+  onNavigationCollapsedChange?: (value: boolean) => void;
+  navigationWidth?: number;
+  onNavigationWidthChange?: (value: number) => void;
 }
 
 export function ChatPanel(props: ChatPanelProps = {}) {
@@ -567,9 +574,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     backendStatus = "",
     onNavigate,
     presentation = fallbackPresentation,
-    productName = "Local AI Workbench",
   } = props;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth <= 860);
+  const [localCollapsed, setLocalCollapsed] = useState(() => window.innerWidth <= 860);
+  const sidebarCollapsed = props.navigationCollapsed ?? localCollapsed;
+  const setSidebarCollapsed = (value: boolean) => { setLocalCollapsed(value); props.onNavigationCollapsedChange?.(value); };
+  const [localWidth, setLocalWidth] = usePanelWidth("workbench.navigation.width", 232, 190, 380);
+  const sidebarWidth = props.navigationWidth ?? localWidth;
+  const setSidebarWidth = props.onNavigationWidthChange ?? setLocalWidth;
+  const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 380, 280, 720);
+  const [filesExpanded, setFilesExpanded] = useState(false);
+  const [deletingConversation, setDeletingConversation] = useState<ChatConversation | null>(null);
+  const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
@@ -622,12 +637,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   const cacheConversation = useCallback((next: ChatConversation): void => {
     setConversations((current) => {
+      if (historyMutations.current.get(next.id) === "deleted") return current;
       const others = current.filter((item) => item.id !== next.id);
       return [next, ...others];
     });
   }, []);
 
   const isCurrentOwner = useCallback((owner: SelectionOwner): boolean => (
+    historyMutations.current.get(owner.conversationId) !== "deleted" &&
     selectionRequest.current === owner.generation &&
     activeOwner.current.conversationId === owner.conversationId &&
     activeOwner.current.threadId === owner.threadId &&
@@ -723,7 +740,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setDeployments(nextDeployments);
     setProfiles(nextProfiles);
     setEnabledTools(tools.enabled);
-    setConversations(newestConversationFirst(nextConversations));
+    setConversations(newestConversationFirst(reconcileHistory(nextConversations)));
     setKnowledgeEntries(nextKnowledge);
     setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments, current));
     setProfileId((current) => (current === "!none" || nextProfiles.some((profile) => profile.id === current) ? current : ""));
@@ -747,7 +764,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       void api.searchChatConversations(query, includeArchived)
         .then((results) => {
           if (!cancelled) {
-            setSearchResults(newestConversationFirst(results.map((item) => item.conversation as ChatConversation)));
+            setSearchResults(newestConversationFirst(reconcileHistory(results.map((item) => item.conversation as ChatConversation))));
           }
         })
         .catch((error: unknown) => {
@@ -911,7 +928,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
   const destinations: WorkbenchTab[] = ["chat", "models", "library", "knowledge", "agent-run", "lab", "attention", "settings"];
-  const visibleConversations = searchResults ?? conversations;
+  const visibleConversations = reconcileHistory(searchResults ?? conversations).filter(item => includeArchived || !item.archived);
   const generalConversations = newestConversationFirst(visibleConversations.filter((item) => areaKind(item) !== "project"));
   const projectGroups = newestConversationFirst(visibleConversations.filter((item) => areaKind(item) === "project")).reduce(
     (groups, item) => {
@@ -929,6 +946,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function selectConversation(item: ChatConversation): void {
+    if (historyMutations.current.get(item.id) === "deleted") return;
     const requestId = selectionRequest.current + 1;
     selectionRequest.current = requestId;
     activeOwner.current = { conversationId: null, threadId: null, generation: requestId };
@@ -942,7 +960,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void api
       .chatConversation(item.id)
       .then(async (next) => {
-        if (selectionRequest.current !== requestId) {
+        if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") {
           return;
         }
         cacheConversation(next);
@@ -950,7 +968,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           source_surface: "chat",
           conversation_id: next.id,
         });
-        if (selectionRequest.current !== requestId) {
+        if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") {
           return;
         }
         activeOwner.current = { conversationId: next.id, threadId: registered.thread_id, generation: requestId };
@@ -986,14 +1004,36 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function applyConversationUpdate(next: ChatConversation): void {
+    if (historyMutations.current.get(next.id) === "deleted") return;
     cacheConversation(next);
     setConversation(current => current?.id === next.id ? next : current);
   }
 
+  function chooseDeployment(nextId: string): void {
+    if (nextId === deploymentId) return;
+    setDeploymentId(nextId);
+    setPerRequestOverrides(current => {
+      const next = { ...current };
+      delete next.reasoning;
+      delete next.reasoning_effort;
+      delete next.reasoning_format;
+      return next;
+    });
+  }
+
   function setConversationArchived(item: ChatConversation, archived: boolean): void {
-    const request = archived ? api.archiveChatConversation(item.id, true) : api.reopenChatConversation(item.id);
+    const saveDraft = archived && activeOwner.current.conversationId === item.id
+      ? persistBeforeLeaving()
+      : Promise.resolve();
+    const request = saveDraft.then(() => historyMutations.current.get(item.id) === "deleted"
+      ? null
+      : archived ? api.archiveChatConversation(item.id, true) : api.reopenChatConversation(item.id));
     void request
       .then((next) => {
+        if (!next) return;
+        if (historyMutations.current.get(next.id) === "deleted") return;
+        historyMutations.current.set(next.id, next.archived ?? archived);
+        setSearchResults(current => current?.map(value => value.id === next.id ? next : value) ?? null);
         applyConversationUpdate(next);
         if (archived && activeOwner.current.conversationId === item.id && !includeArchived) {
           startFresh();
@@ -1003,6 +1043,20 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         }
       })
       .catch(fail);
+  }
+
+  function reconcileHistory(items: ChatConversation[]): ChatConversation[] {
+    return items.filter(item => historyMutations.current.get(item.id) !== "deleted").map(item => {
+      const archived = historyMutations.current.get(item.id);
+      return typeof archived === "boolean" ? { ...item, archived } : item;
+    });
+  }
+
+  function removeConversation(id: string): void {
+    historyMutations.current.set(id, "deleted");
+    setConversations(current => current.filter(item => item.id !== id));
+    setSearchResults(current => current?.filter(item => item.id !== id) ?? null);
+    if (activeOwner.current.conversationId === id || selectionLoading?.id === id || conversation?.id === id) startFresh();
   }
 
   function stopCurrentWork(): void {
@@ -1260,6 +1314,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <button
           type="button"
           className={item.id === conversation?.id || item.id === selectionLoading?.id ? "nav-item active" : "nav-item"}
+          title={`${conversationTitle(item)} · ${formatWhen(item.updated_at)}`}
           onClick={() => chooseConversation(item)}
         >
           <span className="nav-item-title">{conversationTitle(item)}</span>
@@ -1268,12 +1323,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           </span>
         </button>
         <div className="conversation-actions" aria-label={`${conversationTitle(item)} actions`}>
-          <button type="button" onClick={() => setRenamingConversationId(item.id)}>Rename</button>
+          <button type="button" className="icon-button" aria-label="Rename chat" title="Rename chat" onClick={() => setRenamingConversationId(item.id)}><Icon name="edit" size={14} /></button>
           {item.archived ? (
-            <button type="button" onClick={() => setConversationArchived(item, false)}>Reopen</button>
+            <button type="button" className="icon-button" aria-label="Reopen chat" title="Reopen chat" onClick={() => setConversationArchived(item, false)}><Icon name="restore" size={14} /></button>
           ) : (
-            <button type="button" onClick={() => setConversationArchived(item, true)}>Archive</button>
+            <button type="button" className="icon-button" aria-label="Archive chat" title="Archive chat" onClick={() => setConversationArchived(item, true)}><Icon name="archive" size={14} /></button>
           )}
+          <button type="button" className="icon-button" aria-label="Delete chat" title="Delete chat" onClick={() => setDeletingConversation(item)}><Icon name="trash" size={14} /></button>
         </div>
         </>}
       </div>
@@ -1281,18 +1337,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   useEffect(() => {
-    if (!attentionConversationId || attentionConversationId === conversation?.id) {
+    if (!attentionConversationId || attentionConversationId === conversation?.id || historyMutations.current.get(attentionConversationId) === "deleted") {
       return;
     }
     let cancelled = false;
     void api.chatConversation(attentionConversationId)
       .then((next) => {
-        if (!cancelled) {
+        if (!cancelled && historyMutations.current.get(attentionConversationId) !== "deleted") {
           chooseConversation(next);
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && historyMutations.current.get(attentionConversationId) !== "deleted") {
           fail(error);
         }
       });
@@ -1332,25 +1388,26 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   return (
-    <section className={sidebarCollapsed ? "chat-layout chat-sidebar-collapsed" : "chat-layout"}>
+    <section className={sidebarCollapsed ? "chat-layout chat-sidebar-collapsed" : "chat-layout"} style={{ "--navigation-width": `${sidebarWidth}px`, "--inspector-width": `${filesWidth}px` } as CSSProperties}>
+      {deletingConversation ? <DeleteChatDialog key={deletingConversation.id} conversation={deletingConversation} onClose={() => setDeletingConversation(null)} onDeleted={removeConversation} /> : null}
       <aside className="chat-list" aria-label="Chat workspace">
         <div className="chat-brand">
           <div>
-            <p className="eyebrow">Local AI Workbench</p>
-            <h1>{productName}</h1>
+            <h1>Workbench</h1>
           </div>
           <button
             type="button"
             className="nav-collapse"
             aria-label={sidebarCollapsed ? "Expand chat sidebar" : "Collapse chat sidebar"}
             aria-expanded={!sidebarCollapsed}
-            onClick={() => setSidebarCollapsed((value) => !value)}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            {sidebarCollapsed ? "›" : "‹"}
+            <Icon name="panel" size={18} />
           </button>
         </div>
+        <button type="button" className="new-chat-button" aria-label="New chat" title="New chat" onClick={startFreshAfterSaving}><Icon name="edit" size={18} /><span>New chat</span></button>
         <nav className="chat-destinations" aria-label="Destinations">
-          {destinations.map((item) => (
+          {destinations.map((item) => item === "attention" ? <AttentionButton key={item} collapsed={sidebarCollapsed} onOpen={() => navigateAway("attention")} /> : (
             <button
               key={item}
               type="button"
@@ -1364,33 +1421,23 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           ))}
         </nav>
         <div className="chat-list-head">
-          <h2>Chats</h2>
-          <button type="button" onClick={startFreshAfterSaving}>
-            <Icon name="plus" size={18} /><span>New</span>
-          </button>
+          <h2>Conversations</h2>
+          <label className="archive-filter" title="Include archived chats"><input type="checkbox" aria-label="Show archived" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /><Icon name="archive" size={14} /></label>
         </div>
         <label className="chat-search">
-          Search
+          <span className="sr-only">Search chats</span><Icon name="search" size={15} />
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search titles and messages"
+            placeholder="Search chats"
           />
-        </label>
-        <label className="check-row include-archived">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(event) => setIncludeArchived(event.target.checked)}
-          />
-          Show archived
         </label>
         {visibleConversations.length === 0 ? (
           <p className="hint">{searchQuery.trim() ? "No matching conversations." : "No conversations yet."}</p>
         ) : (
           <div className="chat-groups">
             <section className="chat-group">
-              <h3>General</h3>
+              <h3>Recent</h3>
               <ul className="nav-list">
                 {generalConversations.map((item) => (
                   <li key={item.id}>{renderConversationButton(item)}</li>
@@ -1399,7 +1446,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </section>
             {[...projectGroups.entries()].map(([project, items]) => (
               <details key={project} className="chat-group" open>
-                <summary>{areaLabel(items[0])}</summary>
+                <summary><Icon name="folder" size={14} />{areaLabel(items[0])}</summary>
                 <ul className="nav-list">
                   {items.map((item) => (
                     <li key={item.id}>{renderConversationButton(item)}</li>
@@ -1410,19 +1457,19 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           </div>
         )}
         <div className="sidebar-footer">
-          <AttentionButton onOpen={() => navigateAway("attention")} />
-          {backendStatus ? <p className={backendOk === false ? "notice notice-error" : "hint"}>{backendStatus}</p> : null}
+          <div className="service-indicator" title={backendStatus}><span className={`status-dot${backendOk ? " ready" : ""}`} /><span>{backendOk === false ? "Service unavailable" : "Local"}</span></div>
         </div>
+        {!sidebarCollapsed ? <PanelResize label="Resize chat navigation" width={sidebarWidth} onResize={setSidebarWidth} reset={232} /> : null}
       </aside>
 
       <div className="chat-main">
         <header className="chat-header">
           <div>
-            <p className="eyebrow">{currentArea} chat</p>
+            {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : "New conversation"}</h2>
           </div>
           <div className="chat-header-status">
-            <span className="badge">{conversation?.project_path ? "Project session" : "General session"}</span>
+            <button type="button" className="icon-button" aria-label="Conversation setup" title="Conversation setup" aria-expanded={setupOpen} onClick={() => setSetupOpen(value => !value)}><Icon name="tune" /></button>
           </div>
           <button type="button" className="icon-button" aria-label="Files and activity" title="Files and activity" onClick={() => setFilesOpen(value => !value)}><Icon name="files" /></button>
           {conversation ? <details className="history-menu"><summary aria-label="Conversation actions" title="Conversation actions"><Icon name="more" /></summary><div className="history-menu-panel"><ChatHistoryActions
@@ -1433,28 +1480,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               cacheConversation(next);
               if (activeOwner.current.conversationId === conversation.id) chooseConversation(next);
             }}
-            onDeleted={(id) => {
-              setConversations(current => current.filter(item => item.id !== id));
-              if (activeOwner.current.conversationId === id) startFresh();
-            }}
+            onDeleted={removeConversation}
             onError={setMessage}
           /></div></details> : null}
         </header>
-        {filesOpen ? <aside className="chat-files-panel" aria-label="Files and activity">
-          <header><h3>Files and activity</h3><button type="button" aria-label="Close Files and activity" onClick={() => setFilesOpen(false)}><Icon name="close" /></button></header>
-          {conversation ? <LibraryPanel sessionId={conversation.id} projectPath={conversation.project_path} onReuseAssets={(_result, assets) => {
-            draftRevision.current += 1;
-            setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
-            setAttachmentsOpen(true);
-            setFilesOpen(false);
-          }} /> : <p className="hint">Files you attach or create will appear here.</p>}
-          {conversation?.current_run ? <details><summary>Activity</summary><RunProgress run={conversation.current_run} onCancel={stopCurrentWork} /></details> : null}
-        </aside> : null}
-        <details className="chat-setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)}>
-          <summary><Icon name="settings" size={18} /> Conversation setup</summary>
+        <div className={`chat-workspace${filesOpen ? " files-open" : ""}${filesOpen && filesExpanded ? " files-expanded" : ""}`}>
+        <div className="chat-conversation">
+        <details className="chat-setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)} hidden={!setupOpen}>
+          <summary><Icon name="settings" size={16} /> Setup</summary>
           <div className="setup-grid">
             <label>
-              Project folder (optional)
+              <span>Project folder <HoverHelp title="About project folders">File tools work inside this folder. A chat stays with its original project.</HoverHelp></span>
               <input
                 value={projectPath}
                 readOnly={Boolean(conversation)}
@@ -1466,9 +1502,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           {missingDeployment ? (
             <Notice tone="warn">This conversation's model connection is unavailable. Its history is preserved. Choose a model before sending another message.</Notice>
           ) : null}
-          {conversation ? (
-            <p className="hint">This conversation stays in its original area. Start a new conversation to choose another project.</p>
-          ) : null}
           {selectedProfile ? (
             <SettingsNotes
               unsupported={selectedProfile.bags.startup.unsupported}
@@ -1479,11 +1512,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <Notice tone="warn">Unsupported agent settings: {selectedProfile.bags.agent.unsupported.join(", ")}. These saved values do not govern execution.</Notice>
           ) : null}
           <details>
-            <summary>Knowledge and retrieval</summary>
-            <p className="hint">
-              Choose the memories and instructions this conversation should use. Retrieval needs a
-              running embedding model.
-            </p>
+            <summary>Knowledge <HoverHelp title="About conversation knowledge">Choose memories and instructions for this chat. Document search needs a running embedding model.</HoverHelp></summary>
             <label>
               Document search model
               <select
@@ -1543,17 +1572,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
         <div className="transcript" aria-live="polite">
           {deployments.length === 0 && !conversation ? (
-            <EmptyState title="Choose a model setup">
-              Open Models and save a setup for Chat, start a model, or connect a server. A saved local setup loads automatically when you send a message.
+            <EmptyState title="Your workspace for local AI">
+              <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>
           ) : selectionLoading ? (
             <EmptyState title="Loading conversation">
               Opening {conversationTitle(selectionLoading)}.
             </EmptyState>
           ) : !conversation && transcript.length === 0 ? (
-            <EmptyState title="Start a conversation">
-              Send a message. A project folder is optional. Without one, the assistant can talk but
-              cannot use file tools or the host shell.
+            <EmptyState title="What are we working on?">
+              <button type="button" className="quiet-button" onClick={() => setSetupOpen(true)}><Icon name="folder" size={16} /> Add a project</button>
             </EmptyState>
           ) : canObserveInteraction && interactionThreadId && conversation ? (
             <ChatInteractionStream
@@ -1602,17 +1630,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 <StatusBadge label="Loading model" tone="live" />
               ) : (
                 <StatusBadge status={conversation?.current_run?.status} />
-              )} This can continue if
-              the window disconnects.
+              )}
             </p>
           ) : null}
           <div ref={transcriptEnd} />
         </div>
 
-        {canObserveInteraction && conversation?.current_run ? (
+        {canObserveInteraction && conversation?.current_run && (isAgentRunLive(conversation.current_run.status) || (!runBusy && conversation.current_run.status === "failed")) ? (
           <details className="card chat-run-details">
             <summary>
-              Run progress <StatusBadge status={conversation.current_run.status} />
+              <Icon name="activity" size={14} /> Activity <StatusBadge status={conversation.current_run.status} />
             </summary>
             <RunProgress
               run={conversation.current_run}
@@ -1639,6 +1666,19 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           onUpdated={applyConversationUpdate}
           onError={setMessage}
         /> : null}
+
+        </div>
+        {filesOpen ? <aside className={`chat-files-panel${filesExpanded ? " expanded" : ""}`} aria-label="Files and activity">
+          {!filesExpanded ? <PanelResize label="Resize Files and activity" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={380} reverse /> : null}
+          <header><h3>Files & activity</h3><button type="button" className="icon-button" aria-label={filesExpanded ? "Restore panel size" : "Expand panel"} onClick={() => setFilesExpanded(value => !value)}><Icon name={filesExpanded ? "shrink" : "expand"} size={16} /></button><button type="button" className="icon-button" aria-label="Close Files and activity" onClick={() => setFilesOpen(false)}><Icon name="close" size={16} /></button></header>
+          {conversation ? <LibraryPanel sessionId={conversation.id} projectPath={conversation.project_path} onReuseAssets={(_result, assets) => {
+            draftRevision.current += 1;
+            setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
+            setAttachmentsOpen(true);
+            setFilesOpen(false);
+          }} /> : <p className="hint">Files you attach or create will appear here.</p>}
+          {conversation?.current_run ? <details><summary>Activity</summary><RunProgress run={conversation.current_run} onCancel={stopCurrentWork} /></details> : null}
+        </aside> : null}
 
         <form
           className="compose"
@@ -1677,7 +1717,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
-              placeholder="Ask or give a task. Shift+Enter for a new line."
+              placeholder="Message your local model…"
+              title="Enter to send · Shift+Enter for a new line"
               disabled={selectionBusy || sending}
             />
           </label>
@@ -1696,7 +1737,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 }} /> Show detailed activity by default</label>
               </div>
             </details>
-            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={setDeploymentId} onProfileChange={setProfileId} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={setPerRequestOverrides} onInheritDeploymentSettingsChange={inherit => { if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />
+            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={chooseDeployment} onProfileChange={setProfileId} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={setPerRequestOverrides} onInheritDeploymentSettingsChange={inherit => { if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />
             <span className="composer-spacer" />
             <ChatMeasurements run={conversation?.current_run} />
             <button
@@ -1719,6 +1760,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </button>
           </div>
         </form>
+        </div>
       </div>
     </section>
   );

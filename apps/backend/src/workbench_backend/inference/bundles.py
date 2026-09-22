@@ -14,6 +14,7 @@ from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hashes import cached_sha256_file, sha256_file
 from workbench_backend.inference.hf_fetch import HuggingFaceDownload, HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.inspection_cache import bundle_identity
 from workbench_backend.inference.schemas import (
     BundleFile,
     BundleSource,
@@ -423,6 +424,19 @@ class BundleService:
         )
 
     def verify_bundle(self, bundle: ModelBundle, *, use_cache: bool = False) -> ModelBundle:
+        cache_key = f"model-verification:{bundle.id}"
+        verification_root = str(self.paths.models.resolve())
+        try:
+            identity = bundle_identity(bundle)
+        except OSError:
+            identity = None
+        if use_cache and identity is not None:
+            try:
+                evidence = json.loads(self.store.get_setting(cache_key) or "null")
+                if isinstance(evidence, dict) and evidence.get("root") == verification_root and evidence.get("identity") == identity and evidence.get("matches") is True:
+                    return self.store.set_bundle_disk_matches(bundle.id, True) or bundle.model_copy(update={"disk_matches": False})
+            except (ValueError, TypeError):
+                pass
         matches = True
         for recorded in bundle.files:
             path = Path(recorded.path)
@@ -437,6 +451,12 @@ class BundleService:
                 if recorded.ownership != "external":
                     matches = False
                     break
+        if matches:
+            try:
+                matches = identity is not None and identity == bundle_identity(bundle)
+            except OSError:
+                matches = False
+        self.store.put_setting(cache_key, json.dumps({"root": verification_root, "identity": identity, "matches": matches}))
         current = self.store.set_bundle_disk_matches(bundle.id, matches)
         return current or bundle.model_copy(update={"disk_matches": False})
 

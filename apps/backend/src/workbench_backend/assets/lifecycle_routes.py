@@ -17,7 +17,9 @@ router = APIRouter()
 def get_lifecycle(request: Request) -> AssetLifecycleService:
     service = getattr(request.app.state, "asset_lifecycle", None)
     if service is None:
-        service = AssetLifecycleService(request.app.state.manager.paths, request.app.state.app_store)
+        harness = getattr(request.app.state, "harness", None)
+        service = AssetLifecycleService(request.app.state.manager.paths, request.app.state.app_store,
+            harness_provider=(lambda: harness) if harness is not None else None)
         request.app.state.asset_lifecycle = service
     return service
 

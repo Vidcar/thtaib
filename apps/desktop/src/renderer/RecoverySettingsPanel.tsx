@@ -7,6 +7,8 @@ import {
   type PermissionGrant,
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
+import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 import "./packet03Panels.css";
 
 interface RecoverySettingsPanelProps {
@@ -213,12 +215,9 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   return (
     <section className="packet03-panel" aria-label="Recovery and settings">
       <div className="packet03-row">
-        <div>
-          <p className="eyebrow">Settings</p>
-          <h2>Recovery and permissions</h2>
-        </div>
+        <h2>Settings</h2>
         <button type="button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
-          Refresh
+          <Icon name="refresh" size={14} /> Refresh
         </button>
       </div>
 
@@ -226,7 +225,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
       <div className="packet03-grid">
         <section className="packet03-item">
-          <h3>Appearance and notifications</h3>
+          <h3>Appearance</h3>
           <label>
             Theme
             <select
@@ -246,8 +245,9 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ detailed_streams: event.target.checked })}
             />
-            Show detailed streams by default
+            Expand reasoning and tool details
           </label>
+          <h4>Notifications</h4>
           <label className="check-row">
             <input
               type="checkbox"
@@ -255,7 +255,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
             />
-            Notify for approvals, questions and failures
+            Approvals, questions and failures
           </label>
           <label className="check-row">
             <input
@@ -264,12 +264,12 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
             />
-            Notify when work succeeds
+            Completed work
           </label>
         </section>
 
         <section className="packet03-item">
-          <h3>Saved permission grants</h3>
+          <div className="entity-head"><h3>Permissions</h3><HoverHelp title="About saved permissions">Saved approvals are limited to their recorded action, arguments and project. Revoke one to require approval again.</HoverHelp></div>
           {grants.length === 0 ? (
             <p className="hint">No saved grants.</p>
           ) : (
@@ -280,7 +280,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
                   <p className="hint">{argumentSummary(grant.arguments)}</p>
                   {grant.project_path ? <p className="hint">Project: {grant.project_path}</p> : null}
                   <button type="button" disabled={busy} onClick={() => void revoke(grant.id)}>
-                    Revoke
+                    <Icon name="close" size={14} /> Revoke
                   </button>
                 </li>
               ))}
@@ -289,29 +289,30 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
         </section>
       </div>
 
-      <section className="packet03-item">
-        <h3>Manual backup</h3>
-        <p className="hint">Backups include application records, compatible checkpoints and retained assets. Models, runtimes, projects and credentials remain external references.</p>
+      <details className="packet03-item">
+        <summary><Icon name="download" size={15} /> Backup</summary>
+        <div className="entity-head"><h3>Create a backup</h3><HoverHelp title="What a backup includes">Includes app records, compatible checkpoints and retained files. Models, runtimes, project files and credentials stay in their existing locations.</HoverHelp></div>
         <label>
           Destination folder
           <input value={backupDestination} onChange={(event) => setBackupDestination(event.target.value)} placeholder="Choose a folder for the backup archive" />
         </label>
         <div className="packet03-actions">
           <button type="button" onClick={() => void chooseFolder(setBackupDestination)} disabled={!window.workbench?.selectPath}>
-            Choose folder
+            <Icon name="folder" size={14} /> Choose folder
           </button>
           <button type="button" disabled={busy || !backupDestination.trim()} onClick={() => void createBackup()}>
-            Create backup
+            <Icon name="download" size={14} /> Create backup
           </button>
         </div>
         {lastBackup ? (
           <p className="hint">Created {lastBackup.archive_path}. Credentials excluded; effects will not be replayed on restore.</p>
         ) : null}
-      </section>
+      </details>
 
-      <section className="packet03-item">
-        <h3>Restore to clean destination</h3>
-        <p className="hint">Restore writes to a clean root and reports missing external dependencies. It does not activate the restored workspace or replay effects.</p>
+      <details className="packet03-item">
+        <summary><Icon name="restore" size={15} /> Restore</summary>
+        <div className="entity-head"><h3>Restore a backup</h3><HoverHelp title="How restore works">Restores into an empty folder and reports missing models, runtimes or other external files. Switch to it using Activate restore when you're ready.</HoverHelp></div>
+        <p className="hint">Restores to an empty folder. Activation restarts the app; previous actions are never replayed.</p>
         {activeRunIds.length ? (
           <p className="notice notice-warn">{activeRunIds.length} active run{activeRunIds.length === 1 ? "" : "s"} detected. Restore is safest after work is stopped or complete.</p>
         ) : null}
@@ -325,19 +326,18 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
         </label>
         <div className="packet03-actions">
           <button type="button" onClick={() => void chooseFile(setRestoreArchive)} disabled={!window.workbench?.selectPath}>
-            Choose archive
+            <Icon name="files" size={14} /> Choose archive
           </button>
           <button type="button" onClick={() => void chooseFolder(setRestoreDestination)} disabled={!window.workbench?.selectPath}>
-            Choose destination
+            <Icon name="folder" size={14} /> Choose destination
           </button>
           <button type="button" disabled={busy || !restoreArchive.trim() || !restoreDestination.trim()} onClick={() => void restoreBackup()}>
-            Restore backup
+            <Icon name="restore" size={14} /> Restore backup
           </button>
         </div>
         {lastRestore ? (
           <div className="notice">
-            <p>Restored to {lastRestore.destination_root}. Activated: no.</p>
-            <p>Effect replay: no.</p>
+            <p>Restored to {lastRestore.destination_root}. Not yet active; no actions replayed.</p>
             {lastRestore.missing_dependencies.length ? (
               <ul>
                 {lastRestore.missing_dependencies.map((item, index) => (
@@ -353,12 +353,12 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
                 disabled={busy}
                 onClick={() => void activateRestore(lastRestore.destination_root)}
               >
-                Activate restore and restart
+                <Icon name="restore" size={14} /> Activate restore and restart
               </button>
             ) : null}
           </div>
         ) : null}
-      </section>
+      </details>
     </section>
   );
 }

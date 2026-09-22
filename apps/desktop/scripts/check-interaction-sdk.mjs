@@ -40,9 +40,12 @@ assert.ok(chatSource.includes("selection_generation: _selectionGeneration"), "UI
 assert.ok(chatSource.includes("submittedIds.current.has(pendingSubmit.id)"), "Chat submit effect must guard StrictMode duplicate submits");
 assert.ok(chatSource.includes("terminalRefreshKey.current === key"), "Chat terminal refresh must be keyed to avoid repeat fetch loops");
 assert.ok(chatSource.includes("selectionRequest.current !== requestId"), "Chat selection load must ignore late async frames");
-const loadRegisterBlock = chatSource.slice(chatSource.indexOf(".chatConversation(item.id)"), chatSource.indexOf("setDeploymentId(next.deployment_id)"));
+const loadRegisterBlock = chatSource.slice(chatSource.indexOf("function selectConversation("), chatSource.indexOf("function applyConversationUpdate("));
 assert.ok(loadRegisterBlock.includes("registerAgentInteractionThread"), "saved chat load must register an SDK interaction thread");
 assert.ok(!loadRegisterBlock.includes("isAgentRunLive"), "saved chat load registration must not be limited to live runs");
+const streamRenderCondition = chatSource.match(/([^\n]+)\?\s*\(\s*<ChatInteractionStream\s/);
+assert.ok(streamRenderCondition, "saved chats must render the interaction stream");
+assert.ok(!/isAgentRunLive|runBusy|status/.test(streamRenderCondition[1]), "completed chats must retain the SDK stream and display history");
 
 const feedSource = readFileSync(path.join(repoRoot, "apps/desktop/src/renderer/AgentMessageFeed.tsx"), "utf8");
 assert.ok(feedSource.includes("ReactMarkdown"), "AgentMessageFeed must use ReactMarkdown for Markdown presentation");

@@ -73,7 +73,7 @@ export const chatHistoryActionsApi = {
     request<ConversationExportPayload>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/export`),
   deletePreview: (conversationId: string) =>
     request<ConversationDeletePreview>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}/delete-preview`, { method: "POST", body: "{}" }),
-  deleteConversation: (conversationId: string, includeDiagnostics = false) =>
+  deleteConversation: (conversationId: string, includeDiagnostics = true) =>
     request<ConversationDeletePreview>(`/v1/chat/conversations/${encodeURIComponent(conversationId)}`, {
       method: "DELETE",
       body: JSON.stringify({ execute: true, include_diagnostics: includeDiagnostics }),

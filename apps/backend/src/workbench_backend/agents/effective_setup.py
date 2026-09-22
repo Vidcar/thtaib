@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from workbench_backend.errors import HarnessError
+from workbench_backend.inference.configuration_options import validate_model_reasoning
 from workbench_backend.inference.schemas import Deployment, RunProfile, SettingsBag, SettingsBags
 from workbench_backend.inference.settings import (
     PER_REQUEST_KEYS,
@@ -129,6 +130,7 @@ def resolve_effective_setup(
     # its current values; opting out clears both response and agent preset bags.
     inherited = profile is None and inherit_deployment_settings
     per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
+    validate_model_reasoning(deployment, per_request)
     agent = deployment.settings.agent if inherited else _resolve_agent(profile)
     startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)

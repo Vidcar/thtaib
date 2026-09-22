@@ -9,7 +9,8 @@ from __future__ import annotations
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -171,11 +172,11 @@ class HarnessService:
 
     def list_runs(self) -> list[AgentRun]:
         self._reconcile_startup_once()
-        stored = {item.id: item for item in self.store.list_runs()}
         with self._lock:
+            stored = {item.id: item for item in self.store.list_runs()}
             for run in self._runs.values():
                 stored[run.id] = run.model_copy(deep=True)
-        return [self._expose_run(item) for item in stored.values()]
+            return [self._expose_run(item) for item in stored.values()]
 
     def get_run(self, run_id: str) -> AgentRun:
         self._reconcile_startup_once()
@@ -183,12 +184,45 @@ class HarnessService:
             run = self._runs.get(run_id)
             if run is not None:
                 return self._expose_run(run)
-        stored = self.store.get_run(run_id)
-        if stored is None:
-            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
-        with self._lock:
+            stored = self.store.get_run(run_id)
+            if stored is None:
+                raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
             self._runs.setdefault(run_id, stored)
-        return self._expose_run(stored)
+            return self._expose_run(stored)
+
+    @contextmanager
+    def run_read_lock(self, run_id: str) -> Iterator[None]:
+        """Keep a derived history read atomic with deletion of its run."""
+        with self._lock:
+            self._require_run(run_id)
+            yield
+
+    @contextmanager
+    def deleting_idle_runs(self, run_ids: list[str]) -> Iterator[None]:
+        """Keep durable deletion and cached read paths inside the run owner.
+
+        A terminal status can precede a worker's final cleanup. Wait for that
+        owner to finish before deleting its records; never let a stale read or
+        worker repopulate history after successful deletion.
+        """
+        with self._lock:
+            for run_id in run_ids:
+                run = self._runs.get(run_id) or self.store.get_run(run_id)
+                worker = self._threads.get(run_id)
+                if (run is not None and is_run_lifecycle_live(run.status)) or (worker is not None and worker.is_alive()):
+                    raise HarnessError(
+                        "This chat is still finishing work. Stop it or wait before deleting it.",
+                        code="conversation_delete_active_runs",
+                        status_code=409,
+                    )
+                self._close_model_client(run_id)
+            yield
+            for run_id in run_ids:
+                self._runs.pop(run_id, None)
+                self._threads.pop(run_id, None)
+                self._cancels.pop(run_id, None)
+                self._decision_ready.pop(run_id, None)
+                self._pending_decisions.pop(run_id, None)
 
     def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
         """Runs still writing or executing against a workspace (quiescent check).

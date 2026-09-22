@@ -197,7 +197,7 @@ class AssetLifecycleTests(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(loaded[1], b"")
 
-    def test_delete_removes_interaction_projection_and_preserves_diagnostics_by_default(self) -> None:
+    def test_delete_removes_interaction_projection_and_can_explicitly_preserve_diagnostics(self) -> None:
         self.put_run("run_1", status="completed", thread_id="thread_delete")
         self.put_conversation("chat_1", thread_id="thread_delete", run_ids=["run_1"])
         self.store.register_interaction(
@@ -221,7 +221,7 @@ class AssetLifecycleTests(unittest.TestCase):
         )
         self.store.put_effect(effect)
 
-        self.lifecycle.delete_conversation("chat_1")
+        self.lifecycle.delete_conversation("chat_1", include_diagnostics=False)
 
         self.assertIsNone(self.store.get_conversation("chat_1"))
         self.assertIsNone(self.store.get_run("run_1"))

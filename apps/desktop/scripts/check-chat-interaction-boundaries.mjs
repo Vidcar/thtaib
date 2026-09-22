@@ -206,6 +206,7 @@ function makeHarness(options = {}) {
       searches: [],
       renames: [],
       archives: [],
+      deletes: [],
       queues: [],
       chatCancels: [],
       assetUploads: [],
@@ -219,6 +220,7 @@ function makeHarness(options = {}) {
       cancel: new Map(),
       chatCancel: new Map(),
       assetUpload: new Map(),
+      draft: new Map(),
     },
     queuedConversationResponses: new Map(),
     consumedResponses: [],
@@ -274,7 +276,7 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "GET" && url.pathname.match(/^\/v1\/bundles\/[^/]+\/configuration-options$/)) {
-          json(res, 200, {
+          json(res, 200, options.configurationOptions?.(url) ?? {
             startup: {},
             per_request: {},
             agent: {},
@@ -332,13 +334,15 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/chat/conversations") {
-          json(res, 200, [state.conversations.conv_a, state.conversations.conv_b]);
+          json(res, 200, Object.values(state.conversations)
+            .filter(item => url.searchParams.get("include_archived") === "true" || !item.archived));
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/chat/conversations/search") {
           const query = (url.searchParams.get("q") ?? "").toLowerCase();
           state.requests.searches.push(query);
           const matches = Object.values(state.conversations)
+            .filter(item => url.searchParams.get("include_archived") === "true" || !item.archived)
             .filter((item) => {
               const haystack = [item.title, ...item.transcript.map((message) => message.content)].join(" ").toLowerCase();
               return haystack.includes(query);
@@ -348,6 +352,19 @@ function makeHarness(options = {}) {
           return;
         }
         const conversationMatch = url.pathname.match(/^\/v1\/chat\/conversations\/([^/]+)$/);
+        const deletePreviewMatch = url.pathname.match(/^\/v1\/chat\/conversations\/([^/]+)\/delete-preview$/);
+        if ((req.method === "POST" && deletePreviewMatch) || (req.method === "DELETE" && conversationMatch)) {
+          const id = (deletePreviewMatch ?? conversationMatch)[1];
+          if (req.method === "DELETE") {
+            state.requests.deletes.push({ id, payload: JSON.parse(body) });
+            delete state.conversations[id];
+          }
+          json(res, 200, { conversation_id: id, can_delete: true, blockers: [], affected_sessions: [id],
+            retained_sessions: [], affected_runs: [], retained_runs: [], affected_assets: [], retained_assets: [],
+            checkpoint_threads_deleted: [], checkpoint_threads_retained: [], scratch_deleted: [],
+            diagnostics_deleted: req.method === "DELETE", project_sources_deleted: false, model_files_deleted: false, note: "" });
+          return;
+        }
         if (req.method === "GET" && conversationMatch) {
           const id = conversationMatch[1];
           const count = (state.chatGetCounts.get(id) ?? 0) + 1;
@@ -430,7 +447,10 @@ function makeHarness(options = {}) {
               updated_at: now(),
             },
           };
-          json(res, 200, state.conversations[id]);
+          const saved = state.conversations[id];
+          const barrier = state.barriers.draft.get(id);
+          if (barrier) await barrier.promise;
+          json(res, 200, saved);
           return;
         }
         const queueMatch = url.pathname.match(/^\/v1\/chat\/conversations\/([^/]+)\/queue$/);
@@ -678,12 +698,13 @@ async function releaseResponse(harness, barrier, path, method = "GET") {
 }
 
 function selectedRunId(renderer) {
-  const progress = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "RunProgress");
-  return progress[0]?.props.run?.id ?? null;
+  const selected = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream");
+  return selected[0]?.props.conversation.current_run_id ?? null;
 }
 
 function buttons(renderer, label) {
-  return renderer.root.findAll((node) => node.type === "button" && textOf(node).includes(label));
+  return renderer.root.findAll((node) => node.type === "button" &&
+    (textOf(node).includes(label) || String(node.props["aria-label"] ?? "").includes(label)));
 }
 
 function button(renderer, label) {
@@ -698,6 +719,12 @@ function activeConversationTitle(renderer) {
   );
   assert.equal(found.length, 1, `expected one active conversation, saw ${found.length}`);
   return textOf(found[0]);
+}
+
+function assertFreshConversation(renderer, message) {
+  assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.className === "nav-item active").length, 0, message);
+  assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false, message);
+  assert.equal(selectedRunId(renderer), null, message);
 }
 
 function textarea(renderer) {
@@ -821,7 +848,7 @@ async function testHeldRegistrationDoesNotBindOldThread(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_a"), "A registration");
-    await waitFor(() => assert.match(allText(renderer), /Run progress/i), "A run projection");
+    await waitFor(() => assert.equal(selectedRunId(renderer), "run_a"), "A run projection");
     await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a"), JSON.stringify(harness.state.requests) + allText(renderer)), "A subscription connected");
     const oldAStream = harness.state.openStreams.get("thread_a");
     assert.ok(oldAStream, "A has a real subscription before navigation");
@@ -841,11 +868,11 @@ async function testHeldRegistrationDoesNotBindOldThread(vite) {
     oldAStream.write(`data: ${JSON.stringify(streamFrame(run("run_a_late"), "late A frame"))}\n\n`);
     await flush();
     assert.doesNotMatch(allText(renderer), /late A frame/i, "late A stream frames must not attach while B registration is held");
-    assert.doesNotMatch(allText(renderer), /Run progress/i, "loading selection must not keep A's live transport mounted");
+    assert.equal(selectedRunId(renderer), null, "loading selection must not keep A's live transport mounted");
 
     await releaseResponse(harness, heldRegister, "/v1/agent-interaction/threads", "POST");
     await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation B/), "B selected after registration");
-    assert.doesNotMatch(allText(renderer), /Run progress/i, "B must not render A's run after B registration completes");
+    assert.equal(selectedRunId(renderer), null, "B must not render A's run after B registration completes");
     assert.equal(harness.state.requests.registers.at(-1).conversation_id, "conv_b");
   } finally {
     heldRegister.resolve();
@@ -871,9 +898,9 @@ async function testTerminalHydrationCannotReselectAfterNew(vite) {
       button(renderer, "New").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.match(allText(renderer), /Start a conversation/i), "New should clear active selection");
+    await waitFor(() => assertFreshConversation(renderer, "New should clear active selection"), "New should clear active selection");
     await releaseResponse(harness, heldHydration, "/v1/chat/conversations/conv_a", "GET");
-    assert.match(allText(renderer), /Start a conversation/i, "late terminal hydration must not reselect A");
+    assertFreshConversation(renderer, "late terminal hydration must not reselect A");
   } finally {
     heldHydration.resolve();
     await closeHarness(renderer, harness);
@@ -994,7 +1021,7 @@ async function testCreateRegisterAfterNewDoesNotSubmitOrSelect(vite) {
       await Promise.resolve();
     });
     await releaseResponse(harness, heldCreate, "/v1/chat/conversations", "POST");
-    assert.match(allText(renderer), /Start a conversation/i, "New should remain active after delayed create/register");
+    assertFreshConversation(renderer, "New should remain active after delayed create/register");
     assert.equal(harness.state.requests.commands.length, 0, "delayed create/register must not submit after navigation");
     assert.equal(harness.state.outgoingRequests.some(item => item.path === "/v1/agent-interaction/threads" && item.method === "POST"), false, "abandoned creation must not start registration");
   } finally {
@@ -1025,7 +1052,7 @@ async function testNewConversationHeldRegistrationAfterCreateDoesNotSubmitAfterN
       await Promise.resolve();
     });
     await releaseResponse(harness, heldRegister, "/v1/agent-interaction/threads", "POST");
-    assert.match(allText(renderer), /Start a conversation/i, "New should remain active after delayed new-conversation registration");
+    assertFreshConversation(renderer, "New should remain active after delayed new-conversation registration");
     assert.equal(harness.state.requests.commands.length, 0, "delayed new-conversation registration must not submit after navigation");
   } finally {
     heldRegister.resolve();
@@ -1942,6 +1969,143 @@ async function testAcceptedSubmitTargetsOriginalThreadAfterNavigationAndRevisit(
   }
 }
 
+async function testArchiveImmediatelyLeavesHistoryAndSearch(vite) {
+  for (const searching of [false, true]) {
+    const harness = makeHarness({ aRun: null, bRun: null });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+      if (searching) {
+        await act(async () => {
+          inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Conversation" } });
+        });
+        await waitFor(() => assert.equal(harness.state.requests.searches.at(-1), "conversation"), "search requested");
+      }
+      await act(async () => button(renderer, "Archive").props.onClick());
+      await waitFor(() => assert.equal(harness.state.requests.archives.length, 1), "archive persisted");
+      await flush();
+      const archivedId = harness.state.requests.archives[0].id;
+      const archivedTitle = harness.state.conversations[archivedId].title;
+      assert.equal(buttons(renderer, archivedTitle).length, 0,
+        `${searching ? "Search" : "History"} must remove the archived row without navigation`);
+      assert.equal(renderer.root.findAll(node => node.props.className === "conversation-row archived").length, 0);
+    } finally {
+      await closeHarness(renderer, harness);
+    }
+  }
+}
+
+async function testModelChangeClearsOnlyModelSpecificOverrides(vite) {
+  const originalOverrides = { temperature: 0.6, max_tokens: 600, reasoning: "on", reasoning_effort: "high", reasoning_format: "deepseek" };
+  const harness = makeHarness({
+    aRun: null, threadARun: null, completeCommands: true,
+    deployments: [{ ...baseDeployment, bundle_id: "bundle_1" }, { ...baseDeployment, id: "dep_2", bundle_id: "bundle_2", display_name: "On-off model" }],
+    configurationOptions: url => url.searchParams.get("deployment_id") === "dep_2"
+      ? { per_request_defaults: { reasoning: { options: [{ value: "default", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] } } }
+      : { per_request_defaults: { reasoning_effort: { options: [{ value: "default", label: "Default" }, { value: "high", label: "High" }] } } },
+  });
+  harness.state.conversations.conv_a.draft = { content: "Keep sampling settings when switching models", attachment_ids: [], revision: 1, updated_at: now(),
+    intended_config: { deployment_id: "dep_1", per_request_overrides: originalOverrides } };
+  const renderer = await renderChat(vite, harness);
+  const modelControls = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+  const modelSelect = () => modelControls().findAllByType("select")[0];
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.deepEqual(modelControls().props.perRequestOverrides, originalOverrides), "draft settings restored");
+    await act(async () => modelSelect().props.onChange({ target: { value: "dep_1" } }));
+    assert.deepEqual(modelControls().props.perRequestOverrides, originalOverrides, "reselecting the same model preserves its settings");
+    await act(async () => modelSelect().props.onChange({ target: { value: "dep_2" } }));
+    assert.deepEqual(modelControls().props.perRequestOverrides, { temperature: 0.6, max_tokens: 600 });
+    await waitFor(() => renderer.root.findByProps({ "aria-label": "Thinking mode for this message" }), "new model thinking modes loaded");
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props["aria-label"] === "Thinking effort for this message").length, 0);
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "new model request submitted");
+    const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    assert.equal(submitted.deployment_id, "dep_2");
+    assert.deepEqual(submitted.per_request_overrides, { temperature: 0.6, max_tokens: 600 },
+      "hidden old-model thinking settings must not travel in the actual submission");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testArchivePreservesDraftBeforeLeaving(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "A selected");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep this newly typed draft" } }));
+    await act(async () => button(renderer, "Archive").props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.archives.length, 1), "archive saved");
+    await flush();
+    assert.equal(harness.state.conversations.conv_a.draft?.content, "Keep this newly typed draft",
+      "archiving during the save debounce must persist the current draft before leaving");
+    assertFreshConversation(renderer, "archiving selected chat returns to a fresh composer");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation(vite) {
+  const held = deferred();
+  const harness = makeHarness({ aRun: null, bRun: null });
+  harness.state.barriers.chatConversation.set("conv_a", held);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(harness.state.chatGetCounts.get("conv_a"), 1), "selection request held");
+    const row = renderer.root.findAll(node => node.props.className === "conversation-row")
+      .find(node => textOf(node).includes("Conversation A"));
+    await act(async () => row.findAllByType("button").find(node => node.props["aria-label"] === "Delete chat").props.onClick());
+    const confirmButton = () => renderer.root.findByType("dialog").findAllByType("button").find(node => textOf(node) === "Delete chat");
+    await waitFor(() => assert.equal(confirmButton().props.disabled, false), "delete preview ready");
+    await act(async () => confirmButton().props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.deletes.length, 1), "delete persisted");
+    await waitFor(() => assert.equal(buttons(renderer, "Conversation A").length, 0), "deleted row leaves history");
+    assert.equal(harness.state.requests.deletes[0].payload.include_diagnostics, true);
+    await releaseResponse(harness, held, "/v1/chat/conversations/conv_a");
+    assert.equal(buttons(renderer, "Conversation A").length, 0);
+    assert.equal(harness.state.requests.registers.some(item => item.conversation_id === "conv_a"), false,
+      "late selection must not register a deleted conversation");
+    assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false,
+      "deleting the loading selection returns to a fresh chat");
+  } finally {
+    held.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testLateDraftSaveCannotRestoreDeletedChat(vite) {
+  const held = deferred();
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  harness.state.barriers.draft.set("conv_a", held);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "A selected");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Draft response arrives after delete" } }));
+    await act(async () => button(renderer, "New chat").props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.draftUpdates.length, 1), "save accepted and response held");
+    const row = renderer.root.findAll(node => node.props.className === "conversation-row").find(node => textOf(node).includes("Conversation A"));
+    await act(async () => row.findAllByType("button").find(node => node.props["aria-label"] === "Delete chat").props.onClick());
+    const confirm = () => renderer.root.findByType("dialog").findAllByType("button").find(node => textOf(node) === "Delete chat");
+    await waitFor(() => assert.equal(confirm().props.disabled, false), "delete preview ready");
+    await act(async () => confirm().props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.deletes.length, 1), "delete saved");
+    await releaseResponse(harness, held, "/v1/chat/conversations/conv_a/draft", "PUT");
+    assert.equal(buttons(renderer, "Conversation A").length, 0, "late save must not put deleted history back in the cache");
+    assertFreshConversation(renderer, "late save must not restore deleted chat selection");
+  } finally {
+    held.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testEarlyShellActions(vite) {
   const harness = makeHarness({ bRun: run("run_b") });
   harness.state.conversations.conv_b.transcript[0].content = "An unrelated retained message";
@@ -1950,7 +2114,7 @@ async function testEarlyShellActions(vite) {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false, "new conversation project field starts editable");
     await act(async () => {
-      inputByPlaceholder(renderer, "Search titles and messages").props.onChange({ target: { value: "Conversation B" } });
+      inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Conversation B" } });
       await Promise.resolve();
     });
     await waitFor(() => assert.deepEqual(harness.state.requests.searches.at(-1), "conversation b"), "backend search requested");
@@ -1979,7 +2143,7 @@ async function testEarlyShellActions(vite) {
     await waitFor(() => assert.equal(harness.state.conversations.conv_b.title, "Renamed B"), "conversation renamed");
     await waitFor(() => assert.match(allText(renderer), /No matching conversations/, "rename invalidates retained search results"), "renamed conversation no longer matches old query");
     await act(async () => {
-      inputByPlaceholder(renderer, "Search titles and messages").props.onChange({ target: { value: "Renamed B" } });
+      inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Renamed B" } });
     });
     await waitFor(() => button(renderer, "Archive"), "rename response closes inline editor");
     await act(async () => {
@@ -1993,7 +2157,7 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await act(async () => {
-      inputByPlaceholder(renderer, "Search titles and messages").props.onChange({ target: { value: "" } });
+      inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "" } });
       await Promise.resolve();
     });
     await waitFor(() => button(renderer, "Reopen"), "archived conversation visible");
@@ -2047,7 +2211,8 @@ async function testProjectionOwnershipLeakReproduction(vite) {
     });
     await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_b"), "B held registration started");
     await releaseResponse(harness, heldRegister, "/v1/agent-interaction/threads", "POST");
-    await waitFor(() => assert.match(allText(renderer), /Run progress/i), "broken source exposes an unowned projected run");
+    await waitFor(() => assert.ok(renderer.root.findAll(node => typeof node.type === "function" &&
+      node.type.name === "AgentMessageFeed" && node.props.messages.length > 0).length), "broken source exposes an unowned projected run");
   } finally {
     heldRegister.resolve();
     await closeHarness(renderer, harness);
@@ -2115,6 +2280,11 @@ try {
     ["accepted submit error navigation guard", testAcceptedSubmitErrorRefreshAfterNavigationDoesNotRetarget],
     ["accepted ack navigation/revisit", testAcceptedSubmitTargetsOriginalThreadAfterNavigationAndRevisit],
     ["early shell actions", testEarlyShellActions],
+    ["archive immediately leaves history and search", testArchiveImmediatelyLeavesHistoryAndSearch],
+    ["model switch clears only model-specific overrides", testModelChangeClearsOnlyModelSpecificOverrides],
+    ["archive preserves draft before leaving", testArchivePreservesDraftBeforeLeaving],
+    ["delete while selection loads", testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation],
+    ["late draft save cannot restore deleted chat", testLateDraftSaveCannotRestoreDeletedChat],
     ["project branches group by immutable area", testProjectBranchesGroupByImmutableArea],
   ];
     const failures = [];

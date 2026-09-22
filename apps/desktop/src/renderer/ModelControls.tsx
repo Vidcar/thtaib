@@ -1,8 +1,8 @@
-import { useId, type ReactNode } from "react";
+import { type ReactNode } from "react";
+import { HoverHelp } from "./HoverHelp";
 
 export function Help({ label, flag, children }: { label: string; flag?: string; children: ReactNode }) {
-  const id = useId();
-  return <span className="setting-help"><button type="button" className="help-button" aria-label={`About ${label}`} aria-describedby={id}>i</button><span id={id} role="tooltip" className="help-popover">{children}{flag ? <code>{flag}</code> : null}</span></span>;
+  return <HoverHelp title={`About ${label}`}>{children}{flag ? <code>{flag}</code> : null}</HoverHelp>;
 }
 
 export function tokenLabel(value: number): string {
@@ -17,6 +17,7 @@ export function Choice({ id, label, help, flag, value, options, onChange, custom
   const isCustom = value === "custom" || !options.some(option => option.value === value);
   return <div className="model-field"><div className="setting-title"><label htmlFor={id}>{label}</label><Help label={label} flag={flag}>{help}</Help></div>
     <select id={id} value={isCustom ? "custom" : value} onChange={event => onChange(event.target.value)} disabled={disabled}>
+      {!custom && isCustom ? <option value="custom">{value} · saved setting</option> : null}
       {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       {custom ? <option value="custom">Custom…</option> : null}
     </select>

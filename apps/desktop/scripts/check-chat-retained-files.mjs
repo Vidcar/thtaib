@@ -157,7 +157,7 @@ async function checkLibraryMultiSelectReuse(LibraryPanel) {
       updatedChecks[1].props.onChange({ target: { checked: true } });
     });
     await act(async () => {
-      button(renderer, "Reuse selected").props.onClick();
+      button(renderer, "Reuse selected (2)").props.onClick();
     });
     assert.deepEqual(reused.at(-1), ["asset_one", "asset_two"], "library reuse should preserve the full multi-selection");
   } finally {

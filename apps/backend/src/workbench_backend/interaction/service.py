@@ -74,6 +74,15 @@ class InteractionService:
 
     def register(self, body: dict[str, Any]) -> dict[str, str]:
         fields(body, {"source_surface", "conversation_id", "run_id"}, "registration")
+        if body.get("source_surface") == "chat" and isinstance(body.get("conversation_id"), str):
+            with self.chat.store.conversation_lock(body["conversation_id"]):
+                return self._register(body)
+        if body.get("source_surface") == "agent" and isinstance(body.get("run_id"), str):
+            with self.harness.run_read_lock(body["run_id"]):
+                return self._register(body)
+        return self._register(body)
+
+    def _register(self, body: dict[str, Any]) -> dict[str, str]:
         surface = body.get("source_surface")
         if surface == "chat" and isinstance(body.get("conversation_id"), str) and not body.get("run_id"):
             view = self.chat.get(body["conversation_id"])

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 
 import {
   packet03Api,
@@ -216,6 +218,9 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
     setMessage("");
     try {
       const result = await packet03Api.deleteAssets(deletionPreview.affected_asset_ids);
+      detailGeneration.current += 1;
+      setPreview(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
+      setFullContent(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
       setDeletionPreview(result);
       setSelectedIds([]);
       setMessage(deleteOutcomeText(result));
@@ -230,12 +235,9 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   return (
     <section className="packet03-panel" aria-label="Library">
       <div className="packet03-row">
-        <div>
-          <p className="eyebrow">Library</p>
-          <h2>Retained files</h2>
-        </div>
+        <div className="entity-head"><h2>Library</h2><HoverHelp title="About saved files">Uploads and verified outputs saved by your chats. Preview a file, reuse it in Chat or save a copy.</HoverHelp></div>
         <button type="button" disabled={busy} onClick={() => void loadAssets()}>
-          Refresh
+          <Icon name="refresh" size={14} /> Refresh
         </button>
       </div>
 
@@ -264,6 +266,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
       </div>
 
       {message ? <p role="status" className="notice">{message}</p> : null}
+      {assets.length === 0 ? <p className="hint">{busy ? "Loading files…" : "No files in this view."}</p> : null}
 
       <div className="packet03-grid">
         <ul className="packet03-list">
@@ -279,22 +282,21 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
                     setSelectedIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id));
                   }}
                 />
-                <strong>{asset.filename}</strong>
+                <Icon name="files" size={15} /><strong>{asset.filename}</strong>
               </label>
               <div className="packet03-meta">
                 <span>{assetOriginLabel(asset.origin)}</span>
-                <span>{asset.scope === "project" ? "Project scoped" : "Conversation scoped"}</span>
+                <span>{asset.scope === "project" ? "Project" : "Chat"}</span>
                 <span>{formatBytes(asset.size_bytes)}</span>
-                <span>{asset.mutable_reference ? "Retained copy; source may have changed" : "Immutable retained copy"}</span>
+                <HoverHelp title="File source">{asset.mutable_reference ? "Saved copy. The original file may have changed since it was captured." : "This saved copy stays unchanged."}{asset.observation ? ` ${asset.observation}` : ""}</HoverHelp>
                 {asset.deleted_at ? <span>Deleted</span> : null}
               </div>
-              {asset.observation ? <p className="hint">{asset.observation}</p> : null}
               <div className="packet03-actions">
                 <button type="button" disabled={busy || Boolean(asset.deleted_at)} onClick={() => void showPreview(asset)}>
-                  Preview
+                  <Icon name="search" size={14} /> Preview
                 </button>
                 <button type="button" disabled={busy || Boolean(asset.deleted_at)} onClick={() => void showFullContent(asset)}>
-                  Open full text
+                  <Icon name="expand" size={14} /> Open full text
                 </button>
                 {window.workbench?.saveAsset ? (
                   <button
@@ -305,7 +307,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
                       ...assetAccessScope(asset, { sessionId, projectPath }),
                     })}
                   >
-                    Save copy
+                    <Icon name="download" size={14} /> Save copy
                   </button>
                 ) : null}
               </div>
@@ -327,7 +329,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
               <pre className="packet03-preview">{preview.preview}</pre>
             </>
           ) : (
-            <p className="hint">Choose Preview to inspect text safely before reuse.</p>
+            <p className="hint">Select a file to preview.</p>
           )}
 
           <div className="packet03-actions">
@@ -336,10 +338,10 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
               disabled={busy || selectedIds.length === 0 || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))}
               onClick={() => void reuseSelected()}
             >
-              Reuse selected
+              <Icon name="plus" size={14} /> Reuse selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
             <button type="button" disabled={busy || selectedIds.length === 0} onClick={() => void previewDeletion()}>
-              Preview delete
+              <Icon name="trash" size={14} /> Preview delete
             </button>
           </div>
 
@@ -351,7 +353,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
                 {" "}{deletionPreview.preserved_asset_ids.length} preserved by other references.
               </p>
               <button type="button" disabled={busy || deletionPreview.affected_asset_ids.length === 0} onClick={() => void confirmDelete()}>
-                Delete affected retained copies
+                <Icon name="trash" size={14} /> Delete affected retained copies
               </button>
             </div>
           ) : null}

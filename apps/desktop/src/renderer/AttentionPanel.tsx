@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "./Icon";
+import { HoverHelp } from "./HoverHelp";
 import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
@@ -47,17 +48,14 @@ export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
   return (
     <section className="packet03-panel" aria-label="Attention">
       <div className="packet03-row">
-        <div>
-          <p className="eyebrow">Attention</p>
-          <h2>Items that need you</h2>
-        </div>
+        <div className="entity-head"><h2>Attention</h2><HoverHelp title="About Attention">Approvals, questions and run outcomes that need a look. Open an item to continue in Chat.</HoverHelp></div>
         <button type="button" disabled={busy} onClick={() => void refresh()}>
-          Refresh
+          <Icon name="refresh" size={14} /> Refresh
         </button>
       </div>
 
       {message ? <p role="status" className="notice">{message}</p> : null}
-      {items.length === 0 ? <p className="hint">No approvals, questions or failures are waiting.</p> : null}
+      {items.length === 0 ? <p className="hint">{busy ? "Loading…" : "You're all caught up."}</p> : null}
 
       <ul className="packet03-list">
         {items.map((item) => (
@@ -68,14 +66,10 @@ export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
                 <div className="packet03-meta">
                   <span>{attentionKindLabel(item.kind)}</span>
                 </div>
-                <details className="packet03-details">
-                  <summary>Details</summary>
-                  <p className="hint">Run: {item.run_id}</p>
-                  <p className="hint">Record: {item.identity}</p>
-                </details>
+                <HoverHelp title="Item details">Run: {item.run_id}<br />Record: {item.identity}</HoverHelp>
               </div>
               <button type="button" disabled={!onOpenConversation} onClick={() => onOpenConversation?.(item.conversation_id)}>
-                Open in Chat
+                <Icon name="chat" size={14} /> Open
               </button>
             </div>
           </li>
@@ -87,9 +81,12 @@ export function AttentionPanel({ onOpenConversation }: AttentionPanelProps) {
 
 interface AttentionButtonProps {
   onOpen?: () => void;
+  active?: boolean;
+  collapsed?: boolean;
+  className?: string;
 }
 
-export function AttentionButton({ onOpen }: AttentionButtonProps) {
+export function AttentionButton({ onOpen, active = false, collapsed = false, className = "" }: AttentionButtonProps) {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -115,9 +112,9 @@ export function AttentionButton({ onOpen }: AttentionButtonProps) {
   }, []);
 
   return (
-    <button type="button" className="packet03-attention-button" onClick={onOpen} aria-label={`${count} attention item${count === 1 ? "" : "s"}`}>
+    <button type="button" className={`tab packet03-attention-button${active ? " active" : ""}${collapsed ? " is-collapsed" : ""} ${className}`} onClick={onOpen} aria-current={active ? "page" : undefined} aria-label={`Attention, ${count} item${count === 1 ? "" : "s"}`} title={`Attention · ${count} item${count === 1 ? "" : "s"}`}>
       <Icon name="attention" size={18} />
-      <span>Attention</span>
+      {!collapsed ? <span className="nav-label">Attention</span> : null}
       {count ? <strong>{count}</strong> : null}
     </button>
   );

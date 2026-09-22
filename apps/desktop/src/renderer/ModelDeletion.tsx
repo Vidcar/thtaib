@@ -3,6 +3,7 @@ import { api } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
+import { Icon } from "./Icon";
 import type { DeletePreview } from "./types";
 
 export function ModelDeletion({ kind, id, name, onDeleted }: { kind: "bundle" | "profile"; id: string; name: string; onDeleted: () => Promise<void> }) {
@@ -20,7 +21,7 @@ export function ModelDeletion({ kind, id, name, onDeleted }: { kind: "bundle" | 
     catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); }
   }
   return <div className="model-deletion">
-    <button type="button" disabled={busy} onClick={() => void inspect()}>Remove {noun}…</button>
+    <button type="button" className="icon-button" title={`Remove ${noun}`} aria-label={`Remove ${name}`} disabled={busy} onClick={() => void inspect()}><Icon name="trash" size={16} /></button>
     {error ? <Notice tone="error">{error}</Notice> : null}
     {preview ? <section className="inline-note" aria-label={`Remove ${name}`}>
       <h4>Remove {name}?</h4>

@@ -380,8 +380,41 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(body["min_p"], 0.1)
         self.assertEqual(body["typical_p"], 0.9)
         self.assertEqual(body["repeat_penalty"], 1.1)
-        self.assertEqual(body["reasoning"], "auto")
+        self.assertNotIn("reasoning", body)
+        self.assertNotIn("chat_template_kwargs", body)
         self.assertEqual(body["reasoning_format"], "deepseek")
+
+    def test_thinking_toggle_uses_boolean_template_override_and_default_effort_is_omitted(self) -> None:
+        for thinking, enabled in (("on", True), ("off", False)):
+            with self.subTest(thinking=thinking):
+                sink: list[dict[str, Any]] = []
+                model = chat_model_for_deployment(self._deployment(), capture_sink=sink,
+                    per_request=resolve_bags(per_request={"reasoning": thinking, "reasoning_effort": "default"}).per_request)
+                try:
+                    model.invoke([HumanMessage(content="ping")])
+                    list(model.stream([HumanMessage(content="ping")]))
+                finally:
+                    model.close()
+                for request in sink:
+                    body = request["body"]
+                    self.assertNotIn("reasoning", body)
+                    self.assertNotIn("reasoning_effort", body)
+                    self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": enabled})
+                    self.assertIs(body["chat_template_kwargs"]["enable_thinking"], enabled)
+
+    def test_known_unsupported_inherited_effort_and_invalid_thinking_fail_before_network(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url=f"{self.endpoint}/props",
+            chat_template_caps={"supports_reasoning_effort": False})
+        deployment = self._deployment(server_props=props)
+        deployment.settings = resolve_bags(per_request={"reasoning_effort": "max"})
+        with patch("workbench_backend.inference.adapter.httpx.Client") as client:
+            with self.assertRaises(HarnessError) as raised:
+                chat_model_for_deployment(deployment)
+            self.assertEqual(raised.exception.code, "model_reasoning_effort_unsupported")
+            with self.assertRaises(HarnessError) as raised:
+                chat_model_for_deployment(deployment, per_request=resolve_bags(per_request={"reasoning": "invalid"}).per_request)
+            self.assertEqual(raised.exception.code, "invalid_reasoning_setting")
+            client.assert_not_called()
 
     def test_adapter_uses_observed_model_alias_without_cloud_default(self) -> None:
         props = ServerProperties(

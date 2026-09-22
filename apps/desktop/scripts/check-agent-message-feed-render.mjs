@@ -75,26 +75,29 @@ try {
   );
 
   assert.match(html, /aria-label="Incomplete response"[^>]*>Partial</);
-  assert.match(html, /<details class="message-reasoning"><summary aria-expanded="false">Reasoning<\/summary>/);
+  assert.match(html, /<details class="message-reasoning"><summary aria-expanded="false">/);
+  assert.ok(html.indexOf('class="message-reasoning"') < html.indexOf("Answer with"), "reasoning must precede its corresponding answer");
   assert.ok(html.includes("Provider supplied reasoning only."), "reasoning text should be preserved");
   assert.ok(!html.slice(0, html.indexOf('<details class="message-reasoning"')).includes("Provider supplied reasoning only."), "reasoning must not be mixed into answer markdown");
   assert.ok(html.includes("Image attachment: chart.png"), "image blocks should leave a visible attachment marker");
   assert.ok(html.includes("Tool result text"), "tool block results should render inside activity details");
-  assert.ok(html.includes("completed"), "tool block status should render");
+  assert.ok(html.includes('data-state="completed">Done'), "tool block status should render honestly");
+  assert.doesNotMatch(html, /Tool activity/, "actual tools must be named without a generic activity wrapper");
   assert.ok(html.includes('aria-label="Copy code block"'), "fenced code blocks should expose a copy button");
   assert.ok(!html.includes("<script>"), "raw HTML script tags must not render as elements");
   assert.ok(!html.includes('href="javascript:alert(1)"'), "unsafe javascript links must not render as links");
 
   const detailed = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages, detailedStreams: true }));
-  assert.match(detailed, /<details class="message-reasoning" open=""><summary aria-expanded="true">Reasoning<\/summary>/);
-  assert.match(detailed, /<details class="message-tools" open=""><summary aria-expanded="true">Tool activity \(1\)<\/summary>/);
+  assert.match(detailed, /<details class="message-reasoning" open=""><summary aria-expanded="true">/);
+  assert.match(detailed, /<details class="message-tools" open=""><summary aria-expanded="true">/);
 
   const historical = renderToStaticMarkup(React.createElement(AgentMessageFeed, {messages: [
     new AIMessage({id: "saved-call", content: "", tool_calls: [{id: "call-old", name: "lookup", args: {q: "retained"}}]}),
     new ToolMessage({id: "saved-result", tool_call_id: "call-old", name: "lookup", content: "Saved lookup result"}),
   ]}));
   assert.ok(historical.includes("lookup") && historical.includes("retained"), "public contentBlocks must preserve hydrated tool calls without live tool events");
-  assert.ok(historical.includes("Tool: lookup") && historical.includes("Tool activity (1)"), "tool messages should render compact activity by default");
+  assert.equal((historical.match(/class="message-tools"/g) ?? []).length, 1, "retained call and result must render one compact named activity");
+  assert.match(historical, /class="tool-call-name"[^>]*>lookup<\/span>/, "tool name stays visible in the collapsed row");
   const historicalDetailsIndex = historical.indexOf('<details class="message-tools"');
   assert.ok(historicalDetailsIndex > -1, "compact tool result should be behind expandable details");
   assert.ok(!historical.slice(0, historicalDetailsIndex).includes("Saved lookup result"), "tool result text must not dump into the foreground when details are off");
@@ -102,8 +105,71 @@ try {
   const errorTool = renderToStaticMarkup(React.createElement(AgentMessageFeed, {messages: [
     new ToolMessage({id: "saved-error", tool_call_id: "call-error", name: "write_file", content: "Error: write failed"}),
   ]}));
-  const errorDetailsIndex = errorTool.indexOf('<details class="message-tools"');
-  assert.ok(errorTool.slice(0, errorDetailsIndex).includes("Error: write failed"), "tool errors should stay visible even when details are compact");
+  assert.match(errorTool, /<p class="tool-call-error" role="status">Error: write failed<\/p>/, "tool errors should stay visible outside the collapsed details");
+
+  const liveCall = { callId: "live-call", id: "live-call", name: "read_file", namespace: [], input: { file_path: "notes.txt" }, args: { file_path: "notes.txt" }, output: null, status: "running", error: undefined };
+  const callingMessage = new AIMessage({ id: "calling", content: "Checking the file.", tool_calls: [{ id: liveCall.callId, name: liveCall.name, args: liveCall.input }] });
+  const resultMessage = new ToolMessage({ id: "result", tool_call_id: liveCall.callId, content: "Saved file contents", status: "success" });
+  const finalMessage = new AIMessage({ id: "final", content: "Final answer after file read." });
+  const completedCall = { ...liveCall, status: "finished", output: "Actual SDK output" };
+  const joined = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], toolCalls: [completedCall] }));
+  assert.equal((joined.match(/class="message-tools"/g) ?? []).length, 1, "live call, retained call and unnamed result join by call identity");
+  assert.match(joined, /class="tool-call-target"[^>]*>notes.txt<\/span>/, "tool target is visible before opening details");
+  assert.match(joined, /Saved file contents/, "retained result is authoritative after hydration");
+  assert.ok(joined.indexOf('class="message-tools"') < joined.indexOf("Final answer after file read"), "completed activity must stay before the final answer");
+
+  const liveOnly = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] }));
+  assert.match(liveOnly, /read_file/, "tool activity must show even before any messages arrive");
+  assert.match(liveOnly, /data-state="running">Running/, "active SDK status must be visible");
+  const liveCompleted = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [callingMessage], toolCalls: [completedCall] }));
+  assert.match(liveCompleted, /Actual SDK output/, "reactive SDK output field must be shown before result hydration");
+  const literalOutput = "_before_ __literal__\n# not a heading\n<script>alert('x')</script><img src=x onerror=alert(1)>\n[unsafe](javascript:alert(1))\n```text\n  preserve_spaces_and_underscores  \n```\n";
+  let literalRenderer;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const copies = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async value => { copies.push(value); } } } });
+  try {
+    await act(async () => { literalRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...completedCall, output: literalOutput }], detailedStreams: true })); });
+    const outputSection = literalRenderer.root.findByProps({ "aria-label": "Tool output" });
+    assert.equal(outputSection.findByType("code").props.children, literalOutput, "tool output must preserve literal Markdown, HTML, whitespace and underscores");
+    assert.equal(outputSection.findAll(node => ["a", "script", "img", "em", "strong", "h1"].includes(node.type)).length, 0, "tool output must not create markup or active HTML");
+    await act(async () => { outputSection.findByProps({ "aria-label": "Copy code block" }).props.onClick(); await tick(); });
+    assert.equal(copies.at(-1), literalOutput, "copy returns exact tool output bytes as text");
+    const jsonOutput = { file_name: "_notes_.txt", count: 3, data: ["<b>literal</b>", true] };
+    await act(async () => literalRenderer.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...completedCall, output: jsonOutput }] })));
+    assert.equal(literalRenderer.root.findByProps({ "aria-label": "Tool output" }).findByType("code").props.children, JSON.stringify(jsonOutput, null, 2), "structured output uses readable raw JSON");
+  } finally {
+    if (literalRenderer) await act(async () => literalRenderer.unmount());
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+  const rawHtml = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...completedCall, output: literalOutput }] }));
+  assert.ok(rawHtml.includes("&lt;script&gt;"));
+  assert.doesNotMatch(rawHtml, /<script>|<img|href="javascript:/);
+  const liveError = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...liveCall, status: "error", error: "Access denied by the tool" }] }));
+  assert.match(liveError, /<p class="tool-call-error" role="status">Access denied by the tool<\/p>/, "SDK errors must be visible without opening details");
+  const successDiscussingErrors = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [new ToolMessage({ id: "logs", name: "grep", tool_call_id: "logs-call", status: "success", content: "Error count: 0. No failed checks." })] }));
+  assert.doesNotMatch(successDiscussingErrors, /tool-call-failed|tool-call-error/, "successful output mentioning errors is not a failed tool");
+  const concurrentCalls = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall, { ...liveCall, id: "second-call", callId: "second-call", input: { file_path: "other.txt" } }] }));
+  assert.equal((concurrentCalls.match(/class="message-tools"/g) ?? []).length, 2, "distinct calls to the same tool keep separate identities");
+  assert.match(concurrentCalls, /other.txt/, "distinct call input must stay paired with its own row");
+  const serverTool = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [{ id: "server-blocks", getType: () => "ai", content: [
+    { type: "server_tool_call", id: "server-call", name: "search", args: { query: "model docs" } },
+    { type: "server_tool_call_result", id: "output-block", toolCallId: "server-call", status: "success", output: "Matching documentation" },
+  ] }] }));
+  assert.equal((serverTool.match(/class="message-tools"/g) ?? []).length, 1, "server tool call and output blocks also join by their call identity");
+  assert.match(serverTool, /Matching documentation/, "joined server tool result is retained");
+
+  let toolRenderer;
+  await act(async () => { toolRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] })); });
+  await toggleDetails(toolRenderer.root, "message-tools", true);
+  await act(async () => { toolRenderer.update(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], toolCalls: [completedCall] })); });
+  assert.equal(toolRenderer.root.findAllByType("details").length, 1, "hydration must not duplicate a live tool row");
+  assert.equal(detailsOpen(toolRenderer.root, "message-tools"), true, "expanded live tool remains open when attached to its retained call");
+  await toggleDetails(toolRenderer.root, "message-tools", false);
+  await act(async () => { toolRenderer.update(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], detailedStreams: true })); });
+  assert.equal(detailsOpen(toolRenderer.root, "message-tools"), false, "explicit tool collapse survives completion, hydration and detailed-stream preference changes");
+  await act(async () => toolRenderer.unmount());
 
   const growingMessage = (reasoning) => [
     {
@@ -167,6 +233,11 @@ try {
   let following;
   let length = 0;
   const growingAnswer = () => [new AIMessage({ id: "growing", content: "answer ".repeat(++length) })];
+  let initiallyEmpty;
+  await act(async () => { initiallyEmpty = create(React.createElement(AgentMessageFeed, { messages: [] }), { createNodeMock: () => transcript }); });
+  await act(async () => initiallyEmpty.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
+  assert.ok(listeners.has("scroll"), "a feed mounted empty must start tracking the reader when its first message arrives");
+  await act(async () => initiallyEmpty.unmount());
   await act(async () => {
     following = create(React.createElement(AgentMessageFeed, { messages: growingAnswer() }), { createNodeMock: () => transcript });
   });
@@ -185,6 +256,10 @@ try {
   reduced = false;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
   assert.equal(scrolls.at(-1).behavior, "smooth", "following resumes when the reader returns to the bottom");
+  await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] })));
+  const beforeToolCompletion = scrolls.length;
+  await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [completedCall] })));
+  assert.ok(scrolls.length > beforeToolCompletion, "following also responds to tool output when no answer text changes");
   await act(async () => following.unmount());
   delete globalThis.HTMLElement;
   delete globalThis.window;

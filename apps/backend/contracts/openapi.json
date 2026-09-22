@@ -5342,6 +5342,20 @@
       },
       "RuntimeControlDescriptor": {
         "properties": {
+          "accepted_values": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Values"
+          },
           "applied": {
             "title": "Applied"
           },
@@ -5395,6 +5409,17 @@
           "source": {
             "title": "Source",
             "type": "string"
+          },
+          "supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supported"
           }
         },
         "required": [
@@ -6902,6 +6927,16 @@
               ],
               "title": "Deployment Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -6979,6 +7014,16 @@
             "schema": {
               "title": "Bundle Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
             }
           }
         ],

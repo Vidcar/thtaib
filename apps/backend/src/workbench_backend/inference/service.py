@@ -16,6 +16,7 @@ from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import inspect_gguf_file, read_gguf_runtime_metadata
+from workbench_backend.inference.inspection_cache import cached_inspection
 from workbench_backend.inference.lifecycle import LifecycleCoordinator
 from workbench_backend.inference.process import HttpProbe, ProcessSupervisor
 from workbench_backend.inference.hardware import NvidiaPresent
@@ -32,6 +33,7 @@ from workbench_backend.inference.schemas import (
     HuggingFaceImportRequest,
     ImportJob,
     InspectReport,
+    GgufRuntimeMetadata,
     LifecycleConsumer,
     LocalImportRequest,
     ManagedDeploymentRequest,
@@ -122,15 +124,21 @@ class ModelManager:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         return self.bundles.verify_bundle(bundle)
 
-    def inspect_bundle(self, bundle_id: str) -> InspectReport:
-        bundle = self.get_bundle(bundle_id)
-        return inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id)
+    def inspect_bundle(self, bundle_id: str, *, refresh: bool = False) -> InspectReport:
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+        bundle = self.bundles.verify_bundle(bundle, use_cache=not refresh)
+        report, _, _ = cached_inspection(self.store, bundle, "full", InspectReport,
+            lambda: inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id), refresh=refresh)
+        return report
 
     def get_bundle_configuration_options(
         self,
         bundle_id: str,
         *,
         deployment_id: str | None = None,
+        refresh: bool = False,
     ) -> BundleConfigurationOptions:
         deployment = self.get_deployment(deployment_id) if deployment_id else None
         if deployment is not None and deployment.bundle_id != bundle_id:
@@ -148,12 +156,26 @@ class ModelManager:
         if bundle is None:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         verified = self.bundles.verify_bundle(bundle, use_cache=True)
-        metadata = read_gguf_runtime_metadata(self.bundles.inspectable_file(verified))
-        return bundle_configuration_options(
+        metadata, cached, inspected_at = cached_inspection(self.store, verified, "runtime", GgufRuntimeMetadata,
+            lambda: self._read_bundle_runtime_metadata(verified), refresh=refresh)
+        result = bundle_configuration_options(
             verified.id,
             metadata,
             deployment=deployment,
         )
+        result.metadata.update(inspection_cached=cached, inspected_at=inspected_at)
+        return result
+
+    def _read_bundle_runtime_metadata(self, bundle: ModelBundle) -> GgufRuntimeMetadata:
+        primary = self.bundles.inspectable_file(bundle)
+        metadata = read_gguf_runtime_metadata(primary)
+        # The MTP head can live in the last shard rather than the primary file.
+        for item in bundle.files:
+            if item.role.value == "shard" and Path(item.path) != primary:
+                shard = read_gguf_runtime_metadata(Path(item.path))
+                if shard.has_mtp_tensors:
+                    metadata.has_mtp_tensors = True
+        return metadata
 
     def list_profiles(self) -> list[RunProfile]:
         return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
@@ -402,6 +424,9 @@ class ModelManager:
                     code="connected_no_lifecycle",
                     status_code=409,
                 )
+            # Reload launches the recorded files again. Verify them strictly
+            # before stopping an otherwise usable owned process.
+            self._require_deployable_bundle(deployment.bundle_id or "")
             self.deployments.stop(deployment.id)
             return self.deployments.start(deployment.id)
 
