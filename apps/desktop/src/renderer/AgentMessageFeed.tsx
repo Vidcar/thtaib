@@ -175,7 +175,91 @@ function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: Asse
   };
 }
 
+const LIVE_TOOL_TAIL = 4000;
+const TOOL_PATH_KEYS = ["file_path", "path"];
+const TOOL_BODY_KEYS = ["content", "text", "file_text", "new_string", "command"];
+
+function decodeJsonString(source: string): string {
+  let out = "";
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '"') return out;
+    if (character !== "\\") {
+      out += character;
+      continue;
+    }
+    const next = source[index + 1];
+    if (next === undefined) break;
+    if (next === "n") out += "\n";
+    else if (next === "t") out += "\t";
+    else if (next === "r") out += "\r";
+    else out += next;
+    index += 1;
+  }
+  return out;
+}
+
+function jsonStringField(source: string, key: string): string | null {
+  const marker = `"${key}"`;
+  const at = source.indexOf(marker);
+  if (at < 0) return null;
+  const colon = source.indexOf(":", at + marker.length);
+  if (colon < 0) return null;
+  let index = colon + 1;
+  while (index < source.length && /\s/.test(source[index])) index += 1;
+  if (source[index] !== '"') return null;
+  return decodeJsonString(source.slice(index + 1));
+}
+
+function toolFilePath(args: unknown): string {
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const fields = args as Record<string, unknown>;
+    for (const key of TOOL_PATH_KEYS) {
+      if (typeof fields[key] === "string" && fields[key]) return fields[key];
+    }
+    return "";
+  }
+  if (typeof args !== "string") return "";
+  for (const key of TOOL_PATH_KEYS) {
+    const value = jsonStringField(args, key);
+    if (value) return value;
+  }
+  return "";
+}
+
+function readableToolText(args: unknown): string {
+  if (typeof args === "string") {
+    for (const key of TOOL_BODY_KEYS) {
+      const value = jsonStringField(args, key);
+      if (value != null) return value;
+    }
+    return args;
+  }
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const fields = args as Record<string, unknown>;
+    for (const key of TOOL_BODY_KEYS) {
+      if (typeof fields[key] === "string" && fields[key]) return fields[key];
+    }
+  }
+  return stringifyValue(args);
+}
+
+function writtenAmount(count: number): string {
+  if (count < 1024) return `${count.toLocaleString()} characters written`;
+  const kilobytes = count / 1024;
+  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes).toLocaleString()} KB written`;
+}
+
+function toolIsStreaming(tool: ToolBlock): boolean {
+  if (toolError(tool)) return false;
+  const status = tool.status ?? "";
+  if (["finished", "success", "completed", "error", "failed"].includes(status)) return false;
+  return tool.result === undefined;
+}
+
 function toolTarget(args: unknown): string {
+  const path = toolFilePath(args);
+  if (path) return path.replace(/\s+/g, " ").slice(0, 100);
   if (typeof args === "string") return args.replace(/\s+/g, " ").slice(0, 100);
   if (!args || typeof args !== "object") return "";
   const fields = args as Record<string, unknown>;
@@ -219,6 +303,30 @@ function textFromNode(node: React.ReactNode): string {
     return textFromNode((node as { props?: { children?: React.ReactNode } }).props?.children);
   }
   return "";
+}
+
+export function LiveToolCode({ text, copyText }: { text: string; copyText: string }) {
+  const ref = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
+    const pre = ref.current;
+    if (!elementCtor || !(pre instanceof elementCtor)) return undefined;
+    const pin = () => {
+      pre.scrollTop = pre.scrollHeight;
+      const box = pre.closest(".tool-call-details");
+      if (box instanceof elementCtor) box.scrollTop = box.scrollHeight;
+    };
+    pin();
+    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return undefined;
+    const frame = window.requestAnimationFrame(pin);
+    return () => window.cancelAnimationFrame(frame);
+  }, [text]);
+  return (
+    <div className="code-block-wrap">
+      <CopyIconButton text={copyText} label="Copy tool input" />
+      <pre ref={ref} className="code-block live-tool-code"><code>{text}</code></pre>
+    </div>
+  );
 }
 
 export function CodeBlock({ children, text, label = "Copy code block", preClassName = "code-block", ariaLabel }: {
@@ -366,7 +474,11 @@ function ToolBlockList({
   return <div className="tool-call-list">{toolBlocks.map((tool, index) => {
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
+    const streaming = toolIsStreaming(tool);
+    const writing = streaming ? readableToolText(tool.args) : "";
+    const tail = streaming ? writing.slice(Math.max(0, writing.length - LIVE_TOOL_TAIL)) : "";
     const target = toolTarget(tool.args);
+    const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
       <DetailSection
@@ -379,14 +491,16 @@ function ToolBlockList({
           <Icon name={tool.name === "execute" ? "terminal" : /file|glob|grep|^ls$/.test(tool.name) ? "files" : "activity"} size={14} />
           <span className="tool-call-name" title={`Inspect ${tool.name} input and output`}>{tool.name}</span>
           {target ? <span className="tool-call-target" title={target}>{target}</span> : null}
+          {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
           <span className="tool-call-state" data-state={error ? "error" : tool.status ?? "requested"}>{toolStatus(tool)}</span>
         </>}
       >
-        <div className="tool-call-details">
-          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
-          {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
+        {streaming && !open ? null : <div className="tool-call-details">
+          {streaming ? <section aria-label="Tool input"><span className="tool-detail-label">Writing</span>{writing.length > LIVE_TOOL_TAIL ? <p className="hint">Showing the latest 4,000 characters.</p> : null}<LiveToolCode text={tail} copyText={writing} /></section> : null}
+          {!streaming && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
+          {!streaming && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
-        </div>
+        </div>}
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
       {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
