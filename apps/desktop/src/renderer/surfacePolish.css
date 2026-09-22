@@ -196,7 +196,8 @@ summary > svg {
 .run-progress .timeline li:last-child { margin-bottom: 0; }
 .tool-call-state:is([data-state="finished"], [data-state="success"]) { color: var(--ok); }
 .tool-call-details section { display: grid; gap: 4px; min-width: 0; margin: 8px 0; }
-.tool-call-details { max-height: min(420px, 50vh); overflow: auto; padding-right: 5px; }
+.tool-call-details { max-height: min(420px, 50vh); overflow: auto; overflow-anchor: none; padding-right: 5px; }
+.live-tool-code { max-height: min(360px, 42vh); overflow: auto; overflow-anchor: none; }
 .tool-detail-label { display: block; }
 .message-reasoning > :not(summary) { font-size: 12px; line-height: 1.6; }
 .message-reasoning[open] > .reasoning-content { max-height: min(420px, 45vh); overflow: auto; padding-left: 12px; border-left: 2px solid var(--border); }
