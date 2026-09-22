@@ -564,20 +564,8 @@ class HarnessService:
                 tools=tools_for_names(presented),
             )
             require_context_fit(context_observation)
-            if request.workspace_id:
-                others = self.active_workspace_run_ids(request.workspace_id)
-                if others:
-                    raise HarnessError(
-                        "Starting snapshot requires a quiescent workspace; live runs still writing: "
-                        f"{', '.join(others)}",
-                        code="not_quiescent",
-                        status_code=409,
-                    )
-            if project_path:
-                blockers = [other.id for other in self.list_runs() if is_run_lifecycle_live(other.status)
-                    and other.project_path and Path(other.project_path).resolve() == Path(project_path).resolve()]
-                if blockers:
-                    raise HarnessError("Another run is using this project. Wait for it to finish before capturing the next consistent state.", code="not_quiescent", status_code=409)
+            # Another live run in this folder does not block a new one. The person
+            # chooses which run writes. Lab capture and backup still wait for a quiet folder.
             starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
             now = utc_now()
             run = AgentRun(

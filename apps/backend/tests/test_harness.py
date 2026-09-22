@@ -408,6 +408,55 @@ class HarnessApiTests(unittest.TestCase):
         self.assertNotEqual(evidence, judgement)
         self.assertIn("not an executable check", judgement["note"].lower())
 
+    def test_second_run_starts_while_another_uses_the_same_project(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        project = self.root / "shared-project"
+        project.mkdir()
+        workspace = self.client.post(
+            "/v1/lab/workspaces",
+            json={"display_name": "shared-folder", "files": {"notes.md": "original\n"}},
+        )
+        self.assertEqual(workspace.status_code, 200, workspace.text)
+        workspace_id = workspace.json()["id"]
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return ScriptedChatModel(echo_then_reply(), hold=hold)
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+        )
+        self.app.state.lab._harness_provider = lambda: self.app.state.harness
+        first = self._start(project_path=str(project), presented_tools=["echo"])
+        wait_for_status(self.client, first["id"], "running")
+        second = self._start(
+            project_path=str(project),
+            presented_tools=["echo"],
+            task="A second chat may write in the same folder.",
+        )
+        self.assertNotEqual(second["id"], first["id"])
+        held_workspace = self._start(workspace_id=workspace_id, presented_tools=["echo"], task="Hold the workspace.")
+        wait_for_status(self.client, held_workspace["id"], "running")
+        another_workspace = self._start(
+            workspace_id=workspace_id,
+            presented_tools=["echo"],
+            task="Another chat in the same workspace.",
+        )
+        self.assertNotEqual(another_workspace["id"], held_workspace["id"])
+        blocked = self.client.post(
+            "/v1/lab/cases/capture",
+            json={"workspace_id": workspace_id, "run_id": held_workspace["id"]},
+        )
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertEqual(blocked.json()["code"], "not_quiescent")
+        hold.set()
+        for run_id in (first["id"], second["id"], held_workspace["id"], another_workspace["id"]):
+            self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
+
     def test_cancel_stops_a_running_task(self) -> None:
         slow = ScriptedChatModel(echo_then_reply(), delay_s=0.4)
 
