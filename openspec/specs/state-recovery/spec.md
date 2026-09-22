@@ -42,13 +42,19 @@ Legacy history without IDs SHALL preserve chronological order and repeated-messa
 
 ### Requirement: STATE-003 - Pair branches with consistent project snapshots
 
-Checkpoint branching SHALL be paired with an application-owned project snapshot captured at a quiescent execution boundary. Snapshot records SHALL include included files, exclusions, configuration, and memory versions. Restore SHALL stage into a separate workspace, verify every recorded path, hash, and size, reject unexpected files or missing trees, and register the workspace only after verification.
+Checkpoint branching SHALL be paired with an application-owned project snapshot. A new chat or agent run SHALL start while another live run is using the same project or workspace. The person chooses which run writes. A starting snapshot taken then records the folder as it is at that moment and MAY include the other run's in-progress files. Lab case capture and application backup SHALL still refuse to copy a folder while a run is live. Snapshot records SHALL include included files, exclusions, configuration, and memory versions. Restore SHALL stage into a separate workspace, verify every recorded path, hash, and size, reject unexpected files or missing trees, and register the workspace only after verification.
 
 #### Scenario: Branch from snapshot
 
 - WHEN a branch is created from a captured point
 - THEN restored inputs and memory references MUST be verified
 - AND changes in the branch MUST NOT modify the original workspace or attempt.
+
+#### Scenario: Second run in a busy folder
+
+- WHEN a new run starts in a project or workspace that already has a live run
+- THEN the new run MUST be allowed to start
+- AND Lab case capture and application backup MUST still refuse to copy while a run is live.
 
 ### Requirement: STATE-004 - Do not promise rollback of external effects
 
