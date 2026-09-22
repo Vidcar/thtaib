@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Callable
 
 from workbench_backend.agents.setup_schemas import (
     AgentSetupCreateRequest, AgentSetupRecord, AgentSetupUpdateRequest, AgentSetupVersion,
-    AgentSetupView, InstructionLayer, ProjectCreateRequest, ProjectFile, ProjectFiles,
-    ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
+    AgentSetupView, InstructionLayer, ProjectCreateRequest, ProjectFile, ProjectFileContent,
+    ProjectFiles, ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
     SetupDependencyIssue,
 )
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
@@ -20,6 +20,20 @@ if TYPE_CHECKING:
     from workbench_backend.inference.service import ModelManager
     from workbench_backend.knowledge.service import KnowledgeService
     from workbench_backend.state.store import ApplicationStore
+
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _image_preview(path: Path) -> str | None:
+    if path.suffix.casefold() not in _IMAGE_SUFFIXES:
+        return None
+    from workbench_backend.assets.extraction import image_thumbnail
+
+    try:
+        return image_thumbnail(path.read_bytes())
+    except (OSError, ValueError):
+        return None
 
 
 class SetupService:
@@ -89,6 +103,34 @@ class SetupService:
             entries.append(ProjectFile(name=child.name, path=child.relative_to(root).as_posix(), kind="directory" if child.is_dir() else "file", size_bytes=child.stat().st_size if child.is_file() else None))
         relative = target.relative_to(root).as_posix()
         return ProjectFiles(project_id=project.id, path="" if relative == "." else relative, entries=entries)
+
+    def read_project_file(self, project_id: str, relative_path: str) -> ProjectFileContent:
+        """Return captured text for one project file. Does not call the model."""
+
+        from workbench_backend.agents.file_changes import TEXT_LIMIT, file_image, project_file
+
+        project = self.get_project(project_id, require_active=True)
+        root = Path(project.path).resolve()
+        path = project_file(root, relative_path)
+        if not path.is_file():
+            raise HarnessError("This project file is unavailable.", code="project_file_missing", status_code=404)
+        image = file_image(path)
+        content = ProjectFileContent(
+            project_id=project.id,
+            path=path.relative_to(root).as_posix(),
+            size_bytes=image.size_bytes,
+            text=image.text,
+        )
+        if image.text is None:
+            if image.size_bytes > TEXT_LIMIT:
+                content.text_unavailable_reason = "This file is larger than 256 KB, so its text is not shown."
+            else:
+                content.text_unavailable_reason = "This file is not UTF-8 text, so its text is not shown."
+            preview = _image_preview(path)
+            if preview is not None:
+                content.image_data_url = preview
+                content.text_unavailable_reason = None
+        return content
 
     def list_setups(self, *, include_inactive: bool = False) -> list[AgentSetupView]:
         return [self.get_setup(r.id) for r in self.store.list_agent_setups() if r.active or include_inactive]

@@ -5,16 +5,17 @@ import { areaLabel, newestConversationFirst } from "./conversationAreas";
 import { HoverHelp } from "./HoverHelp";
 import { useDismissibleDetails } from "./useDismissibleDetails";
 
-import { api, ApiError } from "./api";
+import { api, ApiError, request } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
 import { setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
-import { LibraryPanel } from "./LibraryPanel";
-import { FileChangesPanel } from "./FileChangesPanel";
-import { RunMemoryProposals } from "./RunMemoryProposals";
+import { ChatDock, type DockPage } from "./ChatDock";
+import { ChatDockContext } from "./chatDockContext";
+import type { ObservedFileChange } from "./activityLine";
+import type { SchemaProjectFileChangeView } from "../generated/shared-contracts/openapi";
 import { packet03Api } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { ChatMeasurements } from "./ChatMeasurements";
@@ -30,7 +31,6 @@ import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, ty
 import { InterruptApproval } from "./InterruptApproval";
 import { knowledgeKindLabel } from "./labels";
 import { Notice } from "./Notice";
-import { RunProgress } from "./RunProgress";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import {
@@ -560,7 +560,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     presentation = fallbackPresentation,
   } = props;
   const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 380, 280, 720);
-  const [filesExpanded, setFilesExpanded] = useState(false);
+  const [dockPage, setDockPage] = useState<DockPage>("changes");
+  const [selectedChangeId, setSelectedChangeId] = useState("");
+  const [selectedPath, setSelectedPath] = useState("");
+  const [fileChanges, setFileChanges] = useState<ObservedFileChange[]>([]);
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
@@ -595,6 +598,39 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const reuseClaim = useRef<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const retainedAssets = useChatRetainedAssets(conversation?.id ?? "");
+  const openChange = useCallback((id: string) => {
+    setFilesOpen(true);
+    setDockPage("changes");
+    setSelectedChangeId(id);
+    setSetupOpen(false);
+  }, []);
+  const openFile = useCallback((path: string) => {
+    setFilesOpen(true);
+    setDockPage("files");
+    setSelectedPath(path);
+    setSetupOpen(false);
+  }, []);
+  const runIdsKey = conversation?.run_ids.join("|") ?? "";
+  useEffect(() => {
+    const ids = conversation?.run_ids ?? [];
+    if (!ids.length) {
+      setFileChanges([]);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(ids.map(id => request<SchemaProjectFileChangeView[]>(`/v1/agent-runs/${id}/file-changes`).catch(() => [] as SchemaProjectFileChangeView[]))).then(groups => {
+      if (cancelled) return;
+      setFileChanges(groups.flat().map(item => ({
+        id: item.change.id,
+        toolCallId: item.change.tool_call_id,
+        path: item.change.path,
+        destination: item.change.destination,
+        addedLines: item.added_lines,
+        removedLines: item.removed_lines,
+      })));
+    });
+    return () => { cancelled = true; };
+  }, [conversation?.id, conversation?.current_run?.status, runIdsKey]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
@@ -1392,6 +1428,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.reuseAssetId, props.reuseAssetIds, conversation?.id, selectedDeployment?.id, sending, selectionBusy]);
 
   return (
+    <ChatDockContext.Provider value={{ fileChanges, openChange, openFile }}>
     <section className="chat-layout" style={{ "--inspector-width": `${filesWidth}px` } as CSSProperties}>
       <div className="chat-main"
         onDragEnter={event => {
@@ -1428,10 +1465,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : "New conversation"}</h2>
           </div>
           <div className="chat-header-status">
-            <button type="button" className="icon-button" aria-label="Conversation setup" title="Conversation setup" aria-expanded={setupOpen} onClick={() => setSetupOpen(value => !value)}><Icon name="tune" /></button>
+            <button type="button" className="icon-button" aria-label="Conversation setup" title="Conversation setup" aria-expanded={setupOpen} onClick={() => { setSetupOpen(value => !value); setFilesOpen(false); }}><Icon name="tune" /></button>
           </div>
-          <button type="button" className="icon-button" aria-label="Files and activity" title="Files and activity" onClick={() => setFilesOpen(value => !value)}><Icon name="files" /></button>
-          {conversation ? <details className="history-menu"><summary aria-label="Conversation actions" title="Conversation actions"><Icon name="more" /></summary><div className="history-menu-panel"><ChatHistoryActions
+          <button type="button" className="icon-button" aria-label="Dock" title="Changes and files" aria-pressed={filesOpen} onClick={() => { setFilesOpen(value => !value); setSetupOpen(false); }}><Icon name="files" /></button>
+          {conversation ? <details className="history-menu" onToggle={event => { if (event.currentTarget.open) setSetupOpen(false); }}><summary aria-label="Conversation actions" title="Conversation actions"><Icon name="more" /></summary><div className="history-menu-panel"><ChatHistoryActions
             key={conversation.id}
             conversation={conversation}
             disabled={runBusy || selectionBusy || sending}
@@ -1442,12 +1479,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             onDeleted={removeConversation}
             onError={setMessage}
           /></div></details> : null}
-        </header>
-        <div className={`chat-workspace${filesOpen ? " files-open" : ""}${filesOpen && filesExpanded ? " files-expanded" : ""}`}>
-        <div className="chat-conversation">
-        {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
-        <details className="chat-setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)} hidden={!setupOpen}>
-          <summary><Icon name="settings" size={16} /> Setup</summary>
+        <div className="setup-popover" hidden={!setupOpen}>
           <div className="setup-grid">
             <label><span>Project <HoverHelp title="About projects">File tools work inside the selected folder. A chat stays with its original project.</HoverHelp></span><select aria-label="Chat project" value={projectId ?? ""} disabled={Boolean(conversation) || selectionBusy || sending} onChange={event => void chooseSetup(event.target.value || null, agentSetupVersionId)}><option value="">General · no project</option>{projects.map(project => <option key={project.id} value={project.id} disabled={project.missing}>{project.name}{project.missing ? " · folder unavailable" : ""}</option>)}{projectId && !projects.some(project => project.id === projectId) ? <option value={projectId}>Unavailable project</option> : null}</select></label>
             <label><span>Agent <HoverHelp title="About saved agents">Applies the selected saved version to the next message. Existing runs and queued messages keep their own setup.</HoverHelp></span><select aria-label="Chat agent" value={agentSetupVersionId ?? ""} disabled={selectionBusy || sending} onChange={event => void chooseSetup(projectId, event.target.value || null)}><option value="">Default setup</option>{agentSetups.map(setup => <option key={setup.id} value={setup.current_version_id} disabled={Boolean(setup.missing_dependencies?.length)}>{setup.name}{setup.missing_dependencies?.length ? " · needs repair" : ""}</option>)}{agentSetupVersionId && !agentSetups.some(setup => setup.current_version_id === agentSetupVersionId) ? <option value={agentSetupVersionId}>Saved earlier agent version</option> : null}</select></label>
@@ -1531,8 +1563,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               : ""}
             {conversation && conversation.shell_tools_available === false ? "Host shell unavailable." : ""}
           </p>}
-        </details>
-
+        </div>
+        </header>
+        <div className={`chat-workspace${filesOpen ? " files-open" : ""}`}>
+        <div className="chat-conversation">
+        {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript" aria-live="polite">
           {deployments.length === 0 && !conversation ? (
             <EmptyState title="Your workspace for local AI">
@@ -1609,15 +1644,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         </div>
 
         {canObserveInteraction && conversation?.current_run && (isAgentRunLive(conversation.current_run.status) || (!runBusy && conversation.current_run.status === "failed")) ? (
-          <details className="card chat-run-details">
-            <summary>
-              <Icon name="activity" size={14} /> Activity <StatusBadge status={conversation.current_run.status} />
-            </summary>
-            <RunProgress
-              run={conversation.current_run}
-              onCancel={stopCurrentWork}
-            />
-          </details>
+          <p className="activity-status"><Icon name="activity" size={14} /> Activity <StatusBadge status={conversation.current_run.status} /> <button type="button" onClick={stopCurrentWork}>Cancel</button></p>
         ) : null}
 
         {deployHealthNotice && !runBusy ? (
@@ -1641,18 +1668,30 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         /> : null}
 
         </div>
-        {filesOpen ? <aside className={`chat-files-panel${filesExpanded ? " expanded" : ""}`} aria-label="Files and activity">
-          {!filesExpanded ? <PanelResize label="Resize Files and activity" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={380} reverse /> : null}
-          <header><h3>Files & activity</h3><button type="button" className="icon-button" aria-label={filesExpanded ? "Restore panel size" : "Expand panel"} onClick={() => setFilesExpanded(value => !value)}><Icon name={filesExpanded ? "shrink" : "expand"} size={16} /></button><button type="button" className="icon-button" aria-label="Close Files and activity" onClick={() => setFilesOpen(false)}><Icon name="close" size={16} /></button></header>
-          {conversation ? <FileChangesPanel key={conversation.id} runIds={conversation.run_ids} currentRunId={conversation.current_run_id} currentRunStatus={conversation.current_run?.status} /> : null}
-          {conversation ? <LibraryPanel sessionId={conversation.id} projectPath={conversation.project_path} onReuseAssets={(_result, assets) => {
-            draftRevision.current += 1;
-            setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
-            setAttachmentsOpen(true);
-            setFilesOpen(false);
-          }} /> : <p className="hint">Files you attach or create will appear here.</p>}
-          {conversation?.current_run ? <details><summary>Activity</summary><RunProgress run={conversation.current_run} onCancel={stopCurrentWork} /></details> : null}
-          {conversation?.current_run ? <RunMemoryProposals key={conversation.current_run.id} runId={conversation.current_run.id} status={conversation.current_run.status} onOpenKnowledge={() => navigateAway("knowledge")} /> : null}
+        {filesOpen ? <aside className="chat-files-panel" aria-label="Dock">
+          <PanelResize label="Resize dock" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={380} reverse />
+          <header><h3>Dock</h3><button type="button" className="icon-button" aria-label="Close dock" onClick={() => setFilesOpen(false)}><Icon name="close" size={16} /></button></header>
+          <ChatDock
+            page={dockPage}
+            onPage={setDockPage}
+            projectId={conversation?.project_id ?? projectId}
+            runIds={conversation?.run_ids ?? []}
+            currentRunId={conversation?.current_run_id}
+            currentRunStatus={conversation?.current_run?.status}
+            selectedChangeId={selectedChangeId}
+            selectedPath={selectedPath}
+            onSelectChange={setSelectedChangeId}
+            onSelectPath={setSelectedPath}
+            conversationId={conversation?.id}
+            projectPath={conversation?.project_path}
+            width={filesWidth}
+            onOpenKnowledge={() => navigateAway("knowledge")}
+            onReuseAssets={assets => {
+              draftRevision.current += 1;
+              setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
+              setAttachmentsOpen(true);
+            }}
+          />
         </aside> : null}
 
         <form
@@ -1716,6 +1755,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             >
               {runBusy ? <span>Queue</span> : <Icon name="send" />}<span className="sr-only">{runBusy ? "Queue" : selectionBusy || sending ? "Sending…" : "Send"}</span>
             </button>
+
             <button
               type="button"
               aria-label={pendingStopActive ? "Stopping…" : "Stop"}
@@ -1730,5 +1770,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         </div>
       </div>
     </section>
+    </ChatDockContext.Provider>
   );
 }

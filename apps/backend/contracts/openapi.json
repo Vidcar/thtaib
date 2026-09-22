@@ -7828,6 +7828,17 @@
       },
       "ProjectFileChangeView": {
         "properties": {
+          "added_lines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added Lines"
+          },
           "change": {
             "$ref": "#/components/schemas/ProjectFileChange"
           },
@@ -7863,6 +7874,17 @@
             "title": "Note",
             "type": "string"
           },
+          "removed_lines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Removed Lines"
+          },
           "reversal_available": {
             "default": false,
             "title": "Reversal Available",
@@ -7884,6 +7906,63 @@
           "change"
         ],
         "title": "ProjectFileChangeView",
+        "type": "object"
+      },
+      "ProjectFileContent": {
+        "description": "Read-only captured text for one project file. Not a model call.",
+        "properties": {
+          "image_data_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Data Url"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "text_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Unavailable Reason"
+          }
+        },
+        "required": [
+          "project_id",
+          "path",
+          "size_bytes"
+        ],
+        "title": "ProjectFileContent",
         "type": "object"
       },
       "ProjectFiles": {
@@ -15846,6 +15925,54 @@
           }
         },
         "summary": "Project Delete Preview"
+      }
+    },
+    "/v1/projects/{project_id}/file": {
+      "get": {
+        "operationId": "project_file_content_v1_projects__project_id__file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFileContent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project File Content"
       }
     },
     "/v1/projects/{project_id}/files": {

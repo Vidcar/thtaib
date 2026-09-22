@@ -660,7 +660,7 @@ async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
     assert.match(await downloads.at(-1).blob.text(), /"schema_version": 1/);
 
     await act(async () => {
-      button(renderer, "Preview delete").props.onClick();
+      button(renderer, "Delete").props.onClick();
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("1 retained asset"));

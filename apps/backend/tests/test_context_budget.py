@@ -13,6 +13,8 @@ import httpx
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from deepagents.middleware.summarization import SummarizationMiddleware
+
 from workbench_backend.agents.context import (
     BudgetedSummarizationMiddleware,
     ContextObservation,
@@ -356,10 +358,28 @@ class ContextBudgetHarnessTests(unittest.TestCase):
     def test_tools_off_compaction_uses_one_upstream_middleware_and_records_event(self) -> None:
         self._set_context(n_ctx=16384, vision=True)
         thread_id = "thread-compaction-tools-off"
+        budgets: list[int | None] = []
+        base_calls = {"n": 0}
+        original_budget = BudgetedSummarizationMiddleware._input_budget
+        original_base = SummarizationMiddleware._input_budget
+
+        def budgeted_budget(middleware, request):
+            value = original_budget(middleware, request)
+            budgets.append(value)
+            return value
+
+        def base_budget(middleware, request):
+            base_calls["n"] += 1
+            return original_base(middleware, request)
+
         with patch(
             "workbench_backend.agents.harness.BudgetedSummarizationMiddleware",
             wraps=BudgetedSummarizationMiddleware,
-        ) as middleware_factory:
+        ) as middleware_factory, patch.object(
+            BudgetedSummarizationMiddleware, "_input_budget", budgeted_budget,
+        ), patch.object(
+            SummarizationMiddleware, "_input_budget", base_budget,
+        ):
             started = self._start(
                 thread_id=thread_id,
                 task="Preserve this earlier material. " + ("historic detail " * 1100),
@@ -388,6 +408,12 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertGreater(compacted[0]["detail"]["cutoff_index"], 0)
         self.assertEqual(compacted[0]["detail"]["owner"], "deepagents-upstream")
         self.assertEqual(completed["context_observation"]["summarization_path"], "deepagents-upstream")
+        usable = completed["context_observation"]["usable_input_tokens"]
+        self.assertIsInstance(usable, int)
+        self.assertEqual(base_calls["n"], 0, "the default summarizer must not stay stacked on the replacement")
+        self.assertTrue(budgets, "the configured summarizer should measure the input budget")
+        self.assertTrue(all(item == usable for item in budgets))
+        self.assertNotEqual(budgets[0], max(0, int(usable * 0.95)))
 
 
 if __name__ == "__main__":

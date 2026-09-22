@@ -7,7 +7,7 @@ from workbench_backend.state.dependencies import dependency_preview_for_app
 
 from workbench_backend.agents.setup_schemas import (
     AgentSetupCreateRequest, AgentSetupDuplicateRequest, AgentSetupUpdateRequest,
-    AgentSetupVersion, AgentSetupView, ProjectCreateRequest, ProjectFiles,
+    AgentSetupVersion, AgentSetupView, ProjectCreateRequest, ProjectFileContent, ProjectFiles,
     ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
     SetupResolutionRequest,
 )
@@ -48,6 +48,11 @@ def project_delete_preview(request: Request, project_id: str):
 @router.get("/projects/{project_id}/files", response_model=ProjectFiles)
 def project_files(request: Request, project_id: str, path: str = ""):
     return request.app.state.setups.project_files(project_id, path)
+
+
+@router.get("/projects/{project_id}/file", response_model=ProjectFileContent)
+def project_file_content(request: Request, project_id: str, path: str):
+    return request.app.state.setups.read_project_file(project_id, path)
 
 
 @router.get("/agent-setups", response_model=list[AgentSetupView])

@@ -78,6 +78,17 @@ class ProjectFiles(BaseModel):
     entries: list[ProjectFile]
 
 
+class ProjectFileContent(BaseModel):
+    """Read-only captured text for one project file. Not a model call."""
+
+    project_id: str
+    path: str
+    size_bytes: int
+    text: str | None = None
+    text_unavailable_reason: str | None = None
+    image_data_url: str | None = None
+
+
 class AgentSetupVersion(BaseModel):
     id: str
     setup_id: str

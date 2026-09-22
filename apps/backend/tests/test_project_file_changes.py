@@ -9,6 +9,44 @@ from tests.scripted_model import ScriptedChatModel
 from tests.support import wait_for_run
 
 
+class ContentLineCountTests(unittest.TestCase):
+    def test_counts_use_stored_text_and_omit_missing_text(self) -> None:
+        from workbench_backend.agents.file_changes import content_line_counts
+
+        self.assertEqual(content_line_counts("a\nb\nc\nd\ne", "a\nB\nC\nD\nE\nf"), (5, 4))
+        self.assertIsNone(content_line_counts(None, "a\nB"))
+        self.assertIsNone(content_line_counts("a", None))
+
+    def test_view_counts_match_a_five_and_four_edit(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from workbench_backend.agents.file_changes import FileImage, ProjectFileChange, change_view
+        from workbench_backend.inference.ids import new_id, utc_now
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "thistest.md"
+            target.write_text("a\nB\nC\nD\nE\nf\n", encoding="utf-8")
+            now = utc_now()
+            change = ProjectFileChange(
+                id=new_id("change"),
+                run_id="run",
+                tool_call_id="edit-1",
+                tool_name="edit_file",
+                operation="modified",
+                path="thistest.md",
+                before=FileImage(exists=True, text="a\nb\nc\nd\ne"),
+                after=FileImage(exists=True, text="a\nB\nC\nD\nE\nf"),
+                status="changed",
+                created_at=now,
+                observed_at=now,
+            )
+            view = change_view(root, change, run_active=False)
+            self.assertEqual((view.added_lines, view.removed_lines), (5, 4))
+            self.assertIn("-b", view.diff or "")
+            self.assertIn("+f", view.diff or "")
+
+
 class ProjectFileChangesTests(unittest.TestCase):
     setUp = harness_tests.HarnessApiTests.setUp
     tearDown = harness_tests.HarnessApiTests.tearDown

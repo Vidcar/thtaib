@@ -96,7 +96,7 @@ try {
   assert.ok(!html.slice(0, html.indexOf('<details class="message-reasoning"')).includes("Provider supplied reasoning only."), "reasoning must not be mixed into answer markdown");
   assert.ok(html.includes("Image attachment: chart.png"), "image blocks should leave a visible attachment marker");
   assert.ok(html.includes("Tool result text"), "tool block results should render inside activity details");
-  assert.ok(html.includes('data-state="completed">Done'), "tool block status should render honestly");
+  assert.match(html, /Called search/, "a finished call leads with what happened");
   assert.doesNotMatch(html, /Tool activity/, "actual tools must be named without a generic activity wrapper");
   assert.ok(html.includes('aria-label="Copy code block"'), "fenced code blocks should expose a copy button");
   assert.ok(!html.includes("<script>"), "raw HTML script tags must not render as elements");
@@ -112,7 +112,8 @@ try {
   ]}));
   assert.ok(historical.includes("lookup") && historical.includes("retained"), "public contentBlocks must preserve hydrated tool calls without live tool events");
   assert.equal((historical.match(/class="message-tools"/g) ?? []).length, 1, "retained call and result must render one compact named activity");
-  assert.match(historical, /class="tool-call-name"[^>]*>lookup<\/span>/, "tool name stays visible in the collapsed row");
+  assert.match(historical, /Called lookup/, "a finished call leads with the action");
+  assert.match(historical, /class="tool-call-name"[^>]*>lookup<\/span>/, "the tool name stays available on expand");
   const historicalDetailsIndex = historical.indexOf('<details class="message-tools"');
   assert.ok(historicalDetailsIndex > -1, "compact tool result should be behind expandable details");
   assert.ok(!historical.slice(0, historicalDetailsIndex).includes("Saved lookup result"), "tool result text must not dump into the foreground when details are off");
@@ -129,13 +130,12 @@ try {
   const completedCall = { ...liveCall, status: "finished", output: "Actual SDK output" };
   const joined = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], toolCalls: [completedCall] }));
   assert.equal((joined.match(/class="message-tools"/g) ?? []).length, 1, "live call, retained call and unnamed result join by call identity");
-  assert.match(joined, /class="tool-call-target"[^>]*>notes.txt<\/span>/, "tool target is visible before opening details");
+  assert.match(joined, /Read notes.txt/, "a finished read names the file without a diff count");
   assert.match(joined, /Saved file contents/, "retained result is authoritative after hydration");
   assert.ok(joined.indexOf('class="message-tools"') < joined.indexOf("Final answer after file read"), "completed activity must stay before the final answer");
 
   const liveOnly = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] }));
-  assert.match(liveOnly, /read_file/, "tool activity must show even before any messages arrive");
-  assert.match(liveOnly, /data-state="running">Running/, "active SDK status must be visible");
+  assert.match(liveOnly, /Reading notes.txt/, "tool activity must show even before any messages arrive");
   const liveCompleted = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [callingMessage], toolCalls: [completedCall] }));
   assert.match(liveCompleted, /Actual SDK output/, "reactive SDK output field must be shown before result hydration");
   const literalOutput = "_before_ __literal__\n# not a heading\n<script>alert('x')</script><img src=x onerror=alert(1)>\n[unsafe](javascript:alert(1))\n```text\n  preserve_spaces_and_underscores  \n```\n";

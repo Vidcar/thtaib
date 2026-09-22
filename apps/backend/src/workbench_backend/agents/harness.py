@@ -34,6 +34,7 @@ from workbench_backend.agents.setup_schemas import ProjectCreateRequest, Instruc
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root
+from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
     official_agent_kwargs,
@@ -1105,6 +1106,7 @@ class HarnessService:
                     detail=structured_output.model_dump(mode="json"),
                 )
             )
+        ensure_ordinary_chat_profile(model)
         return create_deep_agent(
             model=model,
             tools=tools,

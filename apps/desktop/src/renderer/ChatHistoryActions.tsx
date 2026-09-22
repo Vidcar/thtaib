@@ -235,7 +235,7 @@ export function ChatHistoryActions({
         />
         <HistoryActionButton
           icon="close"
-          title="Preview delete"
+          title="Delete"
           description="Review dependent runs, assets, checkpoints and blockers before deleting application-owned records."
           disabled={blocked}
           unavailableReason={null}
