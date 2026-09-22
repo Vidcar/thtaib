@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-22. Dave requested wrapping up to conserve credits: finish identified defects and hand over remaining checks. Branch `codex/packet-03-shared-chat`; [draft PR118](https://github.com/Vidcar/thtaib/pull/118). Do not claim Packet03/04 complete or UX accepted.
+Updated 2026-09-22. Branch `codex/packet-03-shared-chat`; [draft PR118](https://github.com/Vidcar/thtaib/pull/118). Packet 03 is closed. Do not claim Packet 04 complete or the deferred journeys accepted.
 
 The familiar chat sidebar (OpenSpec change `familiar-chat-sidebar`) is separate from this handover. Destinations stay fully visible, and project folders plus “No project” share one list. It does not close Packet 03, Packet 04, or draft PR 118.
 
@@ -12,4 +12,4 @@ Qwen8080 PID34364 runs with vision; Gemma is installed/stopped. `.scratch/packet
 
 Final fixes: project-send409 and startup failure recovery pass the complete desktop build. A deterministic conversation-list/delete race regression reproduced startup404; the backend now skips deleted rows under its per-conversation lock. Focused73 Chat/lifecycle checks passed after this last change; the earlier612/156 full-suite results precede it. The rebuilt app opens normally with Qwen selected.
 
-Shared UI helpers landed on this branch; Packet 03/04 gates are unchanged. Next: repeat native project attachment/send; complete file/document-source/proposal/skill journey, full/half-screen review and remaining fixture cleanup. Packet04 tasks2.8/2.9 and Packet03 task3.2 remain open. Work is committed/pushed to draft PR118; merge/archive only after remaining gates are resolved. Use existing OpenSpec evidence/PR, RTK shell routing, no new trackers/CI/memory writes.
+Packet 03 checkpoint 3.2 is resolved. Dave accepted project-file attach/send and the full-screen review. Deferred, not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Those belong in a later change. Packet 04 tasks 2.8/2.9 remain open. Do not merge draft PR 118 while Packet 04 is open. Use existing OpenSpec evidence/PR, no new trackers/CI.

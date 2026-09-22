@@ -32,7 +32,7 @@ Alternatives considered: restyling the chat-only sidebar, and putting Retry on t
 ## Risks / Trade-offs
 
 - [Ten destinations crowd a half-height window] → Destinations stay fully visible, the one chat list scrolls, no-project chats stay last, and collapsed mode remains available. Live check covers half-height and collapsed layout.
-- [API-016 exists only in unarchived Packet 03, so a MODIFIED delta does not match the archived main spec] → Keep Packet 03's API-016 and API-018 text aligned with this change. Do not archive either change here.
+- [API-016 existed only in unarchived Packet 03] → Packet 03 was archived on 2026-09-22 after Dave closed its final checkpoint. API-016 and API-018 are now current specs, and this change's delta modifies that text.
 - [Answer rows on both render paths drift] → Both call the same action component and the same branch API.
 
 ## Migration Plan
