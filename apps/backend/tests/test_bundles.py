@@ -91,6 +91,35 @@ class BundleTests(unittest.TestCase):
             self.assertTrue(path.is_relative_to(self.paths.models))
             self.assertEqual(path.stat().st_size, recorded.size_bytes)
 
+    def test_quantization_uses_weight_file_even_when_projector_sorts_first(self) -> None:
+        projector = self.source_dir / 'a-mmproj-BF16.gguf'
+        write_tiny_gguf(projector, name='fixture projector')
+        job = self.manager.import_local(LocalImportRequest(source_path=str(self.source_dir)))
+        self.assertEqual(job.status, ImportStatus.complete)
+        bundle = self.manager.store.get_bundle(job.bundle_id)
+        self.assertEqual(bundle.files[0].name, projector.name)
+        self.assertEqual(bundle.quantization, 'Q4_K_M')
+        self.assertEqual(bundle_module.detect_quantization(['Ternary-Bonsai-2-27B-PTQ1_0.gguf']), 'PTQ1_0')
+        unknown = self.root / 'unknown-precision'
+        write_tiny_gguf(unknown / 'weights.gguf', name='weights')
+        write_tiny_gguf(unknown / 'a-mmproj-F16.gguf', name='projector')
+        job = self.manager.import_local(LocalImportRequest(source_path=str(unknown)))
+        self.assertEqual(self.manager.get_bundle(job.bundle_id).quantization, None)
+
+    def test_cached_verification_corrects_saved_projector_label_without_hashing(self) -> None:
+        write_tiny_gguf(self.source_dir / 'a-mmproj-BF16.gguf', name='fixture projector')
+        job = self.manager.import_local(LocalImportRequest(source_path=str(self.source_dir)))
+        bundle = self.manager.get_bundle(job.bundle_id)
+        self.manager.store.put_bundle(bundle.model_copy(update={'quantization': 'BF16'}))
+        with patch.object(bundle_module, 'sha256_file', side_effect=AssertionError('unnecessary full hash')), \
+             patch.object(bundle_module, 'cached_sha256_file', side_effect=AssertionError('unnecessary cached hash')):
+            corrected = self.manager.list_bundles()[0]
+        self.assertEqual(corrected.quantization, 'Q4_K_M')
+        self.assertEqual(self.manager.store.get_bundle(job.bundle_id).quantization, 'Q4_K_M')
+        self.assertEqual(corrected.files, bundle.files)
+        self.assertEqual(corrected.companions, bundle.companions)
+        self.assertEqual(corrected.primary_path, bundle.primary_path)
+
     def test_local_import_preserves_relative_paths_and_file_identity(self) -> None:
         nested = self.root / "nested-source"
         primary = write_tiny_gguf(nested / "weights" / "demo-Q4_K_M.gguf", name="nested-demo")

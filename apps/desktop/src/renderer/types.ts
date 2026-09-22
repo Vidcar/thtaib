@@ -1,8 +1,13 @@
 import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
+import type {
+  SchemaChatDraft,
+  SchemaChatQueueItem,
+  SchemaChatSearchResult,
+} from "../generated/shared-contracts/openapi";
 
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "chat" | "models" | "knowledge" | "agent-run" | "lab";
+export type WorkbenchTab = "chat" | "projects" | "agents" | "models" | "knowledge" | "agent-run" | "lab" | "library" | "settings" | "attention";
 
 export interface PathsInfo {
   root: string;
@@ -86,6 +91,15 @@ export interface SettingsBags {
   startup: SettingsBag;
   per_request: SettingsBag;
   agent: SettingsBag;
+}
+
+export type PresentationTheme = "system" | "light" | "dark";
+
+export interface PresentationSettings {
+  theme: PresentationTheme;
+  detailed_streams: boolean;
+  attention_notifications: boolean;
+  success_notifications: boolean;
 }
 
 export interface RunProfile {
@@ -371,6 +385,7 @@ export interface AgentRun {
   host_shell?: HostShellFacts;
   pending_interrupt?: PendingInterrupt | null;
   context_observation?: ContextObservation | null;
+  generation_observation?: import("../generated/shared-contracts/openapi").SchemaGenerationObservation | null;
   structured_output?: StructuredOutputResult | null;
 }
 
@@ -390,12 +405,22 @@ export interface PendingInterruptAction {
   allowed_decisions: string[];
 }
 
+export interface UserQuestion {
+  prompt: string;
+  answer_type: "text" | "choice" | "file" | "folder";
+  choices: string[];
+}
+
 export interface PendingInterrupt {
-  kind: "deepagents_interrupt_on";
+  interrupt_id?: string | null;
+  namespace?: string[];
+  identity?: string | null;
+  kind: "deepagents_interrupt_on" | "ask_user";
   environment: "windows_host_shell";
   isolation: "none";
   note: string;
   action_requests: PendingInterruptAction[];
+  question?: UserQuestion | null;
 }
 
 export function visiblePendingInterrupt(run: AgentRun | null | undefined): PendingInterrupt | null {
@@ -418,9 +443,11 @@ export function visiblePendingInterrupt(run: AgentRun | null | undefined): Pendi
 }
 
 export interface ChatMessage {
+  id?: string | null;
   role: "user" | "assistant" | "system";
   content: string;
   content_blocks?: UserContentBlock[] | null;
+  attachment_ids?: string[];
   at: string;
   run_id: string | null;
 }
@@ -447,8 +474,23 @@ export interface ChatContinuity {
   note: string;
 }
 
+export type ChatDraft = SchemaChatDraft;
+export type ChatQueueItem = SchemaChatQueueItem;
+export type ChatSearchResult = SchemaChatSearchResult;
+
 export interface ChatConversation {
+  project_id?: string | null;
+  agent_setup_version_id?: string | null;
+  setup_overrides?: import("./workspaceApi").SetupConfiguration;
   id: string;
+  title?: string | null;
+  archived?: boolean;
+  archived_at?: string | null;
+  area_kind?: "general" | "project";
+  area_id?: string | null;
+  area_label?: string | null;
+  area_project_path?: string | null;
+  area_workspace_id?: string | null;
   deployment_id: string;
   profile_id: string | null;
   inherit_deployment_settings?: boolean;
@@ -468,6 +510,9 @@ export interface ChatConversation {
   embedding_deployment_id?: string | null;
   retrieval_project_paths?: string[];
   current_run: AgentRun | null;
+  pending_cancel_input_ids?: string[];
+  draft?: ChatDraft | null;
+  queue?: ChatQueueItem[];
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
   continuity?: ChatContinuity | null;
   deploy_health?: ChatDeployHealth | null;
@@ -485,6 +530,12 @@ export interface KnowledgeProvenance {
 }
 
 export interface KnowledgeEntry {
+  resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
+  package_source?: string | null;
+  active?: boolean;
+  enabled?: boolean;
+  scope_bound?: boolean;
+  scope_label?: string | null;
   id: string;
   scope: KnowledgeScope;
   scope_id: string | null;
@@ -500,6 +551,7 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeVersion {
+  resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
   id: string;
   entry_id: string;
   content: string;
@@ -510,6 +562,7 @@ export interface KnowledgeVersion {
 }
 
 export interface KnowledgeConfig {
+  automatic_save_policies?: Array<{ scope: KnowledgeScope; scope_id?: string | null; automatic_agent_writes: boolean }>;
   context_captures: {
     retention_seconds: number | null;
     redaction_mode: RedactionMode;
@@ -554,6 +607,8 @@ export interface RuntimeControlDescriptor {
   observed: string | number | boolean | null;
   maximum: number | null;
   recommended?: number | null;
+  supported?: boolean | null;
+  accepted_values?: string[] | null;
   options: Array<{ value: string | number | boolean | null; label: string; description?: string }>;
 }
 
@@ -563,5 +618,6 @@ export interface BundleConfigurationOptions {
   context_size: RuntimeControlDescriptor;
   gpu_layers: RuntimeControlDescriptor;
   startup_defaults: Record<string, RuntimeControlDescriptor>;
+  per_request_defaults: Record<string, RuntimeControlDescriptor>;
   metadata: Record<string, unknown>;
 }

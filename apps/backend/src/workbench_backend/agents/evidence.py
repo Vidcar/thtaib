@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from workbench_backend.state.assistant_text import assistant_text
 from workbench_backend.agents.schemas import (
     AgentRun,
     CompletionReport,
@@ -45,7 +46,7 @@ def build_completion(run: AgentRun) -> CompletionReport:
         )
 
     artifacts: list[ExpectedArtifact] = []
-    reply = _last_assistant_text(run)
+    reply = assistant_text(run)
     for name in run.criteria.expected_artifacts:
         if name == "assistant_reply":
             artifacts.append(
@@ -68,13 +69,3 @@ def build_completion(run: AgentRun) -> CompletionReport:
             note="Model judgement, not an executable check. Rubric middleware is not required.",
         ),
     )
-
-
-def _last_assistant_text(run: AgentRun) -> str | None:
-    for event in reversed(run.events):
-        if event.kind != "assistant_message":
-            continue
-        content = event.detail.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return None

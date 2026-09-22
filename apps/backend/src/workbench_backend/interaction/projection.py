@@ -5,7 +5,8 @@ import time
 from typing import Any
 
 from langchain_protocol import Event
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage
+from langgraph.types import Command
 from langchain_core.language_models.chat_model_stream import ChatModelStream
 
 
@@ -127,6 +128,16 @@ def native_event(raw: dict[str, Any]) -> list[Event]:
                 projected["params"][key] = params[key]
         return [projected]
     if method in {"messages", "tools"}:
+        if method == "tools" and isinstance(data, dict) and isinstance(data.get("output"), Command):
+            # Framework tools such as write_todos return a graph state update.
+            # Its public tool reply is displayable; routing and other state are
+            # execution-only and must never enter the renderer replay archive.
+            update = data["output"].update
+            messages = update.get("messages", []) if isinstance(update, dict) else []
+            messages = [messages] if isinstance(messages, ToolMessage) else messages if isinstance(messages, (list, tuple)) else []
+            public_output = next((message for message in messages if isinstance(message, ToolMessage)
+                                  and message.tool_call_id == data.get("tool_call_id")), None)
+            data = {**data, "output": public_output}
         projected = event(method, wire_value(data), namespace)
         projected["params"]["timestamp"] = params.get("timestamp", projected["params"]["timestamp"])
         # Preserve upstream graph identity without exporting callback/config data.

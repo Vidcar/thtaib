@@ -7,9 +7,12 @@ rewrite profiles or infer capabilities.
 
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 import psutil
+from workbench_backend.errors import HarnessError
 
 from workbench_backend.inference.schemas import (
     BundleConfigurationOptions,
@@ -17,8 +20,9 @@ from workbench_backend.inference.schemas import (
     GgufRuntimeMetadata,
     RuntimeControlDescriptor,
     RuntimeControlOption,
+    SettingsBag,
 )
-from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE
+from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE, STARTUP_ENUMS
 
 SMALL_CONTEXT_VALUES = (1024, 2048, 4096, 8192, 16384)
 MIN_LARGE_CONTEXT_OPTION = 32 * 1024
@@ -44,14 +48,152 @@ def bundle_configuration_options(
         deployment_id=deployment.id if deployment is not None else None,
         context_size=_context_descriptor(metadata.context_length, observed_context),
         gpu_layers=_gpu_layers_descriptor(metadata.block_count),
-        startup_defaults=_startup_defaults(recommended_threads=recommended_threads),
+        startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata)},
+        per_request_defaults=_per_request_defaults(metadata, deployment),
         metadata={
             "architecture": metadata.architecture,
             "name": metadata.name,
             "context_length": metadata.context_length,
             "block_count": metadata.block_count,
+            "nextn_predict_layers": metadata.nextn_predict_layers,
+            "has_mtp_tensors": metadata.has_mtp_tensors,
         },
     )
+
+
+def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment | None) -> dict[str, RuntimeControlDescriptor]:
+    props = deployment.server_props if deployment is not None else None
+    template = props.chat_template if props is not None and props.chat_template else metadata.chat_template or ""
+    if deployment is not None and not (props and props.chat_template) and any(
+        deployment.applied_startup.get(key) for key in ("chat_template", "chat_template_file")
+    ):
+        template = ""
+    source = "server_template" if props is not None and props.chat_template else "gguf_template"
+    # Extract literal constraints from the selected template. A runtime accepting
+    # an enum does not mean that a template understands or accepts its values.
+    literals, accepted, closed = _template_efforts(template)
+    efforts = [value for value in _ordered_reasoning_efforts() if value != "default" and value in literals]
+    known_unsupported = bool(props is not None and props.chat_template_caps.get("supports_reasoning_effort") is False)
+    if known_unsupported:
+        efforts = []
+    elif template and not re.search(r"\breasoning_(?:effort|strength)\b", template):
+        known_unsupported = True
+    thinking_toggle = "enable_thinking" in template
+    return {
+        "reasoning_effort": RuntimeControlDescriptor(
+            key="reasoning_effort",
+            label="Thinking effort",
+            description=(
+                "Levels declared by this model's chat template."
+                if efforts else "This model's template does not declare adjustable thinking levels."
+            ),
+            source=source if efforts else "unavailable",
+            supported=True if efforts else False if known_unsupported else None,
+            accepted_values=[] if known_unsupported else sorted(accepted) if closed else None,
+            applied="default",
+            options=[
+                RuntimeControlOption(
+                    value=value,
+                    label="Model default" if value == "default" else _title_effort(value),
+                    description=(
+                        "Leave reasoning effort to the model or profile default."
+                        if value == "default"
+                        else f"Send reasoning_effort={value} with this Chat request."
+                    ),
+                )
+                for value in (["default", *efforts] if efforts else [])
+            ],
+        ),
+        "reasoning": RuntimeControlDescriptor(
+            key="reasoning", label="Thinking", description="Enable or disable thinking for this model's template.",
+            source=source if thinking_toggle else "unavailable", supported=thinking_toggle if template else None, applied="auto",
+            options=[RuntimeControlOption(value=value, label=label) for value, label in
+                     ([('auto', 'Model default'), ('on', 'On'), ('off', 'Off')] if thinking_toggle else [])],
+        ),
+    }
+
+
+def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:
+    variable = r"\b\w*reasoning_(?:effort|strength)\b"
+    groups = re.findall(variable + r"\s+(?:not\s+)?in\s*[\[(]([^\])]+)[\])]", template)
+    canonical = {value for group in groups for value in re.findall(r"['\"]([a-z]+)['\"]", group)}
+    if not canonical:
+        canonical = set(re.findall(variable + r"\s*==\s*['\"]([a-z]+)['\"]", template))
+    # Only a closed, rejected-membership check is evidence that other values fail.
+    closed = bool(re.search(variable + r"\s+not\s+in\s*[\[(][^\])]+[\])][^%]*%\}[^{}]*\{\{[-]?\s*raise_exception", template))
+    aliases = set()
+    for _name, alias, target in re.findall(
+        r"\bif\s+(\w*reasoning_(?:effort|strength))\s*==\s*['\"]([a-z]+)['\"]\s*[-]?%\}\s*\{%[-]?\s*set\s+\1\s*=\s*['\"]([a-z]+)['\"]",
+        template,
+    ):
+        if target in canonical:
+            aliases.add(alias)
+    return canonical, canonical | aliases, closed
+
+
+def validate_model_reasoning(deployment: Deployment, bag: SettingsBag) -> None:
+    """Fail before dispatch for known-invalid inherited or explicit effort.
+
+    Unknown templates stay usable with the bag's existing unverified marker.
+    Do not silently lower effort or rewrite a frozen preset/run snapshot.
+    """
+    value = bag.applied.get("reasoning_effort")
+    inherited_startup = value is None or value == "default"
+    if inherited_startup:
+        value = deployment.applied_startup.get("reasoning_effort")
+    if value is None or value == "default":
+        return
+    props = deployment.server_props
+    if props is None:
+        return
+    canonical, accepted, closed = _template_efforts(props.chat_template or "")
+    unsupported = props.chat_template_caps.get("supports_reasoning_effort") is False
+    if unsupported or (closed and (not isinstance(value, str) or value not in accepted)):
+        options = [item for item in _ordered_reasoning_efforts() if item in canonical] if not unsupported else []
+        explanation = f"Supported levels: {', '.join(options)}." if options else "This template has no adjustable thinking levels."
+        remedy = ("Change this model's launch setting and reload it." if inherited_startup else
+                  "Update the selected preset or this message's thinking setting, or use the model default.")
+        raise HarnessError(
+            f"Thinking level '{value}' is not supported by this model. {explanation} {remedy}",
+            code="model_reasoning_effort_unsupported", status_code=409,
+            details={"key": "reasoning_effort", "requested": value, "supported": options,
+                     "source": "server_template", "origin": "loaded_startup" if inherited_startup else "per_request"},
+        )
+
+
+def _speculative_descriptors(metadata: GgufRuntimeMetadata) -> dict[str, RuntimeControlDescriptor]:
+    # b11045 recognizes an embedded MTP head by nextn.eh_proj tensor names.
+    # N-gram modes need no auxiliary weights; model-specific draft architectures
+    # are not offered until compatible head evidence is present.
+    modes = [("none", "Off")]
+    if metadata.has_mtp_tensors:
+        modes.append(("draft-mtp", "MTP · built-in draft head"))
+    modes.extend((value, label) for value, label in (
+        ("ngram-simple", "N-gram · simple"), ("ngram-map-k", "N-gram · map"),
+        ("ngram-map-k4v", "N-gram · map K4V"), ("ngram-mod", "N-gram · adaptive"),
+        ("ngram-cache", "N-gram · cached")))
+    return {
+        "spec_type": RuntimeControlDescriptor(key="spec_type", flag="--spec-type", label="Speculative decoding",
+            description="Drafts ahead to accelerate generation. MTP uses the model's recorded draft head. Speed varies with the model and workload.",
+            source="gguf_tensor_directory" if metadata.has_mtp_tensors else "pinned_runtime_schema", applied="none", supported=True,
+            options=[RuntimeControlOption(value=value, label=label) for value, label in modes]),
+        "spec_draft_n_max": RuntimeControlDescriptor(key="spec_draft_n_max", flag="--spec-draft-n-max", label="Draft tokens",
+            description="Maximum tokens drafted per step. The pinned runtime defaults to 3; benchmark your setup before increasing it.",
+            source="pinned_runtime_default", applied=3, recommended=3, supported=metadata.has_mtp_tensors,
+            options=[RuntimeControlOption(value=value, label=str(value)) for value in (1, 2, 3, 4, 6, 8, 12, 16)]),
+    }
+
+
+def _ordered_reasoning_efforts() -> list[str]:
+    preferred = ["default", "minimal", "low", "medium", "high", "xhigh", "max"]
+    supported = STARTUP_ENUMS["reasoning_effort"]
+    ordered = [value for value in preferred if value in supported]
+    ordered.extend(sorted(supported - set(ordered)))
+    return ordered
+
+
+def _title_effort(value: str) -> str:
+    return value.replace("_", " ").title()
 
 
 def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeControlDescriptor:

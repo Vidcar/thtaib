@@ -60,7 +60,7 @@ const address = server.address();
 const port = typeof address === "object" && address ? address.port : 0;
 globalThis.window = { workbench: { backendUrl: `http://127.0.0.1:${port}` } };
 
-const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true }, logLevel: "error" });
+const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { InteractionStream } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
   let renderCount = 0;

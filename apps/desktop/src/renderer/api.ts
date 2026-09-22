@@ -1,4 +1,4 @@
-import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
+import type { SchemaBundleProjectors, SchemaCapabilityEvidence, SchemaCapabilityProbeReport, SchemaHubRepository, SchemaChatConversationCreateRequest, SchemaChatStartRequest } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
   BundleConfigurationOptions,
@@ -14,7 +14,6 @@ import type {
   LabCase,
   LabRestore,
   LabResult,
-  KnowledgeActor,
   KnowledgeConfig,
   KnowledgeEntry,
   KnowledgeKind,
@@ -25,10 +24,12 @@ import type {
   ModelBundle,
   ModelStorageSummary,
   PathsInfo,
+  PresentationSettings,
   RedactionMode,
   RunProfile,
   RuntimeManifest,
   SettingsBags,
+  ChatSearchResult,
 } from "./types";
 
 export const DEFAULT_GPU_STARTUP = {
@@ -45,7 +46,34 @@ export function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function readApiFailure(body: unknown): { message?: string; code?: string } {
+  if (!body || typeof body !== "object") {
+    return {};
+  }
+  const record = body as { error?: unknown; code?: unknown; detail?: unknown };
+  const topCode = typeof record.code === "string" && record.code ? record.code : undefined;
+  const topError = typeof record.error === "string" && record.error ? record.error : undefined;
+  const detail = record.detail;
+  if (typeof detail === "string" && detail) {
+    return { message: detail, code: topCode };
+  }
+  if (detail && typeof detail === "object") {
+    const nested = detail as { message?: unknown; code?: unknown };
+    const message = typeof nested.message === "string" && nested.message ? nested.message : topError;
+    const code = typeof nested.code === "string" && nested.code ? nested.code : topCode;
+    return { message, code };
+  }
+  return { message: topError, code: topCode };
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Electron main injects X-Workbench-Local-Token. The renderer must not.
   const response = await fetch(`${backendUrl()}${path}`, {
     ...init,
@@ -54,15 +82,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  const body = (await response.json().catch(() => ({}))) as T & { error?: string; code?: string };
+  const body = (await response.json().catch(() => ({}))) as T;
   if (!response.ok) {
-    throw new Error(body.error ?? `${response.status} ${path}`);
+    const failure = readApiFailure(body);
+    throw new ApiError(failure.message ?? `${response.status} ${path}`, response.status, failure.code);
   }
   return body;
 }
 
+// Settings and Chat share one ordered writer. Reads which straddle a write
+// rehydrate afterward, so a late initial load cannot replace the saved values.
+let presentationWrite: Promise<unknown> = Promise.resolve();
+let presentationRevision = 0;
+async function readPresentation(): Promise<PresentationSettings> {
+  for (;;) {
+    const revision = presentationRevision;
+    await presentationWrite;
+    const value = await request<PresentationSettings>("/v1/settings/presentation");
+    if (revision === presentationRevision) return value;
+  }
+}
+function writePresentation(payload: Partial<PresentationSettings>): Promise<PresentationSettings> {
+  presentationRevision += 1;
+  const body = JSON.stringify(payload);
+  const result = presentationWrite.then(() => request<PresentationSettings>("/v1/settings/presentation", { method: "PATCH", body }));
+  presentationWrite = result.catch(() => undefined);
+  return result;
+}
+
 export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
+  presentationSettings: readPresentation,
+  updatePresentationSettings: writePresentation,
   paths: () => request<PathsInfo>("/v1/paths"),
   bundles: () => request<ModelBundle[]>("/v1/bundles"),
   imports: () => request<ImportJob[]>("/v1/imports"),
@@ -91,7 +142,11 @@ export const api = {
       body: JSON.stringify({ repo_id, revision, allow_patterns }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
-  modelConfiguration: (bundleId: string, deploymentId?: string) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options${deploymentId ? `?deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  modelProjectors: (id: string) => request<SchemaBundleProjectors>(`/v1/bundles/${id}/projectors`),
+  selectModelProjector: (id: string, path: string | null) => request<ModelBundle>(`/v1/bundles/${id}/projector`, { method: "PUT", body: JSON.stringify({ path }) }),
+  capabilityProbe: (id: string, capability: string) => request<SchemaCapabilityEvidence>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
+  capabilityStatus: (id: string) => request<SchemaCapabilityProbeReport>(`/v1/compatibility/deployments/${id}/probes`),
   previewSettings: (startup: object, per_request: object, agent: object) =>
     request<SettingsBags>("/v1/settings/preview", {
       method: "POST",
@@ -109,8 +164,8 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   profiles: () => request<RunProfile[]>("/v1/profiles"),
-  deletionPreview: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview`),
-  deleteModelRecord: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}`, { method: "DELETE" }),
+  deletionPreview: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview${kind === "bundle" && permanent ? "?permanent=true" : ""}`),
+  deleteModelRecord: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}${kind === "bundle" && permanent ? "?permanent=true" : ""}`, { method: "DELETE" }),
   deploymentProfileChanges: (id: string) => request<DeploymentProfileChanges>(`/v1/deployments/${id}/profile-changes`),
   updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object }) =>
     request<RunProfile>(`/v1/profiles/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
@@ -175,49 +230,44 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  createChatConversation: (payload: {
-    deployment_id: string;
-    profile_id?: string;
-    inherit_deployment_settings?: boolean;
-    project_path?: string;
-    workspace_id?: string;
-    memory_version_refs?: string[];
-    skill_version_refs?: string[];
-    protected_instruction_version_refs?: string[];
-    knowledge_version_refs?: string[];
-    embedding_deployment_id?: string;
-    retrieval_project_paths?: string[];
-  }) =>
+  createChatConversation: (payload: Omit<SchemaChatConversationCreateRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean }) =>
     request<ChatConversation>("/v1/chat/conversations", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  chatConversations: () => request<ChatConversation[]>("/v1/chat/conversations"),
+  chatConversations: (includeArchived = false) => request<ChatConversation[]>(`/v1/chat/conversations?include_archived=${includeArchived ? "true" : "false"}`),
+  searchChatConversations: (query: string, includeArchived = false) =>
+    request<ChatSearchResult[]>(`/v1/chat/conversations/search?q=${encodeURIComponent(query)}&include_archived=${includeArchived ? "true" : "false"}`),
   chatConversation: (id: string) => request<ChatConversation>(`/v1/chat/conversations/${id}`),
+  renameChatConversation: (id: string, title: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  archiveChatConversation: (id: string, archived = true) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
+  reopenChatConversation: (id: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/reopen`, { method: "POST", body: "{}" }),
+  updateChatDraft: (id: string, payload: { content: string; attachment_ids?: string[]; expected_revision?: number | null; intended_config?: Record<string, unknown> }) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/draft`, { method: "PUT", body: JSON.stringify(payload) }),
   startChat: (
     id: string,
-    payload: {
-      task: string;
-      presented_tools?: string[];
-      deployment_id?: string;
-      profile_id?: string | null;
-      inherit_deployment_settings?: boolean;
-      project_path?: string | null;
-      workspace_id?: string | null;
-      memory_version_refs?: string[];
-      skill_version_refs?: string[];
-      protected_instruction_version_refs?: string[];
-      knowledge_version_refs?: string[];
-      embedding_deployment_id?: string | null;
-      retrieval_project_paths?: string[];
-    },
+    payload: Omit<SchemaChatStartRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean },
   ) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/start`, {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  cancelChat: (id: string) =>
-    request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, { method: "POST" }),
+  enqueueChatTurn: (
+    id: string,
+    payload: Omit<SchemaChatStartRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean },
+  ) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/queue`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelChat: (id: string, inputMessageId?: string) =>
+    request<ChatConversation>(`/v1/chat/conversations/${id}/cancel`, {
+      method: "POST",
+      body: inputMessageId ? JSON.stringify({ input_message_id: inputMessageId }) : undefined,
+    }),
   decideChatInterrupt: (id: string, type: "approve" | "reject") =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/interrupt-decision`, {
       method: "POST",
@@ -274,21 +324,20 @@ export const api = {
     content: string;
     scope_id?: string;
     display_name?: string;
-    provenance: { actor: KnowledgeActor; run_id?: string; note?: string };
   }) =>
     request<KnowledgeEntry>("/v1/knowledge/entries", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  editKnowledgeEntry: (id: string, content: string, base_version: string, actor: KnowledgeActor) =>
+  editKnowledgeEntry: (id: string, content: string, base_version: string) =>
     request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/edit`, {
       method: "POST",
-      body: JSON.stringify({ content, base_version, provenance: { actor } }),
+      body: JSON.stringify({ content, base_version }),
     }),
-  revertKnowledgeEntry: (id: string, target_version_id: string, base_version: string, actor: KnowledgeActor) =>
+  revertKnowledgeEntry: (id: string, target_version_id: string, base_version: string) =>
     request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/revert`, {
       method: "POST",
-      body: JSON.stringify({ target_version_id, base_version, provenance: { actor } }),
+      body: JSON.stringify({ target_version_id, base_version }),
     }),
   knowledgeVersions: (id: string) => request<KnowledgeVersion[]>(`/v1/knowledge/entries/${id}/versions`),
   createContextCapture: (content: string) =>

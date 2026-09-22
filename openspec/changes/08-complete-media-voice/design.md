@@ -31,3 +31,8 @@ Technical verification and Dave's UX acceptance are separate completion records.
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.
 
 - [ComfyUI server routes](https://docs.comfy.org/development/comfyui-server/comms_routes)
+## Dependency refinement — 2026-09-22
+
+Dave explicitly advanced retained image upload, compact clickable previews and viewing screenshot/tool image outputs into the active shared Chat/Packet 04 delivery. Reuse its retained originals, multimodal content, viewer, source access checks and verified capability evidence here. This does not complete the remaining media/audio/voice work. Do not add a second image store, viewer or image transport.
+
+Retained image originals, actual multimodal Chat input, scoped image viewing and source references are now implemented and verified with actual Gemma/Qwen image inputs. Packet 04's present connection kinds are MCP and public web; media endpoints require the explicit future catalogue extension rather than being implied by those tools. Image generation/editing, durable media jobs, audio/voice and their required Windows journeys remain Packet 08 work; its tasks stay unchecked.

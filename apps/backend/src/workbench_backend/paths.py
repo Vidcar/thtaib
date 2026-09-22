@@ -11,6 +11,7 @@ product mode.
 from __future__ import annotations
 
 import os
+import json
 import sys
 from pathlib import Path
 
@@ -21,7 +22,7 @@ CHECKPOINTS_DB_NAME = "checkpoints.sqlite"
 SHARED_SECRET_FILENAME = "desktop_backend_shared_secret"
 
 
-def resolve_data_root(
+def _base_data_root(
     *,
     environ: dict[str, str] | None = None,
     platform: str | None = None,
@@ -42,6 +43,22 @@ def resolve_data_root(
     if xdg:
         return Path(xdg) / PRODUCT_DATA_DIR
     return Path.home() / ".local" / "share" / PRODUCT_DATA_DIR
+
+
+def resolve_data_root(*, environ: dict[str, str] | None = None, platform: str | None = None) -> Path:
+    root = _base_data_root(environ=environ, platform=platform)
+    seen: set[Path] = set()
+    while (root / "state" / "active-data-root.json").is_file():
+        resolved = root.resolve()
+        if resolved in seen or len(seen) >= 8:
+            raise ValueError("Invalid restored application root chain")
+        seen.add(resolved)
+        record = json.loads((root / "state" / "active-data-root.json").read_text(encoding="utf-8"))
+        target = Path(record["destination_root"])
+        if record.get("version") != 1 or not target.is_absolute() or not (target / APPLICATION_DB_NAME).is_file():
+            raise ValueError("The activated restore is unavailable")
+        root = target
+    return root
 
 
 class WorkbenchPaths:

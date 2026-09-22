@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
+import numpy as np
+from gguf import GGUFWriter
 from pathlib import Path
 
 from workbench_backend.app import create_app
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.inspect import inspect_gguf_file
+from workbench_backend.inference.inspect import read_gguf_runtime_metadata
+from workbench_backend.inference.configuration_options import bundle_configuration_options
+from workbench_backend.inference.schemas import GgufRuntimeMetadata
 from workbench_backend.inference.schemas import LocalImportRequest, ManagedDeploymentRequest, ServerProperties
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
@@ -86,6 +92,96 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(body["startup_defaults"]["fit"]["applied"], "on")
         self.assertEqual(body["startup_defaults"]["threads"]["source"], "backend_recommendation")
         self.assertIsNotNone(body["startup_defaults"]["threads"]["recommended"])
+        effort = body["per_request_defaults"]["reasoning_effort"]
+        self.assertEqual(effort["source"], "unavailable")
+        self.assertEqual(effort["applied"], "default")
+        self.assertEqual(
+            [item["value"] for item in effort["options"]],
+            [],
+        )
+
+    def test_template_constrained_thinking_excludes_unsupported_levels(self) -> None:
+        metadata = GgufRuntimeMetadata(architecture="qwen", chat_template="""
+            {% set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}
+            {% if resolved_reasoning_effort == 'high' %}{% set resolved_reasoning_effort = 'xhigh' %}{% endif %}
+            {% if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}{{ raise_exception('Invalid') }}{% endif %}
+            {% if enable_thinking %}Think{% endif %}
+        """)
+        report = bundle_configuration_options("bundle", metadata)
+        self.assertEqual([o.value for o in report.per_request_defaults["reasoning_effort"].options], ["default", "low", "medium", "xhigh"])
+        self.assertEqual(report.per_request_defaults["reasoning_effort"].accepted_values, ["high", "low", "medium", "xhigh"])
+        self.assertTrue(report.per_request_defaults["reasoning"].supported)
+
+    def test_missing_template_is_unverified_and_only_closed_constraints_define_accepted_values(self) -> None:
+        unknown = bundle_configuration_options("bundle", GgufRuntimeMetadata())
+        self.assertIsNone(unknown.per_request_defaults["reasoning_effort"].supported)
+        self.assertIsNone(unknown.per_request_defaults["reasoning_effort"].accepted_values)
+        open_levels = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{% if reasoning_effort == 'high' %}Think{% endif %}"))
+        self.assertIsNone(open_levels.per_request_defaults["reasoning_effort"].accepted_values)
+        plain = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{{ messages }}"))
+        self.assertIs(plain.per_request_defaults["reasoning_effort"].supported, False)
+        self.assertEqual(plain.per_request_defaults["reasoning_effort"].accepted_values, [])
+
+    def test_speculation_requires_head_evidence_and_exposes_numeric_control(self) -> None:
+        without = bundle_configuration_options("bundle", GgufRuntimeMetadata(name="MTP Model", nextn_predict_layers=1))
+        self.assertNotIn("draft-mtp", [o.value for o in without.startup_defaults["spec_type"].options])
+        with_head = bundle_configuration_options("bundle", GgufRuntimeMetadata(has_mtp_tensors=True, nextn_predict_layers=1))
+        self.assertIn("draft-mtp", [o.value for o in with_head.startup_defaults["spec_type"].options])
+        self.assertEqual(with_head.startup_defaults["spec_draft_n_max"].applied, 3)
+
+    def test_mtp_head_and_thinking_template_are_read_from_file_directory(self) -> None:
+        path = self.root / "model-with-head.gguf"
+        writer = GGUFWriter(str(path), "qwen35")
+        writer.add_context_length(32768)
+        writer.add_block_count(4)
+        writer.add_uint32("qwen35.nextn_predict_layers", 1)
+        writer.add_chat_template("{% if reasoning_effort not in ('low', 'medium', 'xhigh') %}{{ raise_exception('Invalid') }}{% endif %}")
+        writer.add_tensor("blk.3.nextn.eh_proj.weight", np.zeros((2, 2), dtype=np.float32))
+        writer.write_header_to_file(); writer.write_kv_data_to_file(); writer.write_tensors_to_file(); writer.close()
+        metadata = read_gguf_runtime_metadata(path)
+        self.assertTrue(metadata.has_mtp_tensors)
+        self.assertEqual(metadata.nextn_predict_layers, 1)
+        self.assertIn("reasoning_effort", metadata.chat_template)
+
+    def test_missing_file_does_not_return_cached_details(self) -> None:
+        bundle_id = self._bundle()
+        self.manager.get_bundle_configuration_options(bundle_id)
+        Path(self.manager.store.get_bundle(bundle_id).primary_path).unlink()
+        response = self.client.get(f"/v1/bundles/{bundle_id}/configuration-options")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "model_inspection_unavailable")
+
+    def test_inspection_reused_after_restart_refreshed_and_invalidated(self) -> None:
+        bundle_id = self._bundle()
+        with patch("workbench_backend.inference.service.read_gguf_runtime_metadata", wraps=read_gguf_runtime_metadata) as reader:
+            first = self.manager.get_bundle_configuration_options(bundle_id)
+            second = self.manager.get_bundle_configuration_options(bundle_id)
+            restarted = ModelManager(self.paths)
+            third = restarted.get_bundle_configuration_options(bundle_id)
+            self.assertEqual(reader.call_count, 1)
+            self.assertFalse(first.metadata["inspection_cached"])
+            self.assertTrue(second.metadata["inspection_cached"])
+            self.assertTrue(third.metadata["inspection_cached"])
+            restarted.get_bundle_configuration_options(bundle_id, refresh=True)
+            self.assertEqual(reader.call_count, 2)
+            with patch("workbench_backend.inference.inspection_cache.INSPECTION_SCHEMA", 999):
+                restarted.get_bundle_configuration_options(bundle_id)
+            self.assertEqual(reader.call_count, 3)
+            path = Path(self.manager.store.get_bundle(bundle_id).primary_path)
+            data = bytearray(path.read_bytes()); data[-1] ^= 1; path.write_bytes(data)
+            restarted.get_bundle_configuration_options(bundle_id)
+            self.assertEqual(reader.call_count, 4)
+            self.assertFalse(restarted.store.get_bundle(bundle_id).disk_matches)
+
+    def test_library_reuses_persistent_verification_but_launch_is_strict(self) -> None:
+        bundle_id = self._bundle()
+        self.manager.list_bundles()
+        restarted = ModelManager(self.paths)
+        with patch("workbench_backend.inference.bundles.cached_sha256_file", side_effect=AssertionError("cold cache rehash")):
+            self.assertTrue(restarted.list_bundles()[0].disk_matches)
+        with patch("workbench_backend.inference.bundles.sha256_file", side_effect=RuntimeError("strict launch verification")):
+            with self.assertRaisesRegex(RuntimeError, "strict launch verification"):
+                restarted.create_managed(ManagedDeploymentRequest(bundle_id=bundle_id, auto_start=False))
 
     def test_small_context_models_get_small_options(self) -> None:
         bundle_id = self._bundle(context_length=8192, block_count=4)

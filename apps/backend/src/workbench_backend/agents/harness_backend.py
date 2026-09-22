@@ -62,7 +62,7 @@ def harness_scratch_root(paths: WorkbenchPaths, thread_id: str) -> Path:
     return paths.state / HARNESS_SCRATCH_DIRNAME / sanitize_thread_id(thread_id)
 
 
-def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol | None:
+def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: bool = True) -> BackendProtocol | None:
     """Attach a CompositeBackend, or none for recorded-tool without knowledge.
 
     Default backend is the bound project (virtual ``/``) when one exists,
@@ -87,11 +87,9 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths) -> BackendProtocol |
     retrieved = scratch / "retrieved"
     memories = scratch / "memories"
     skills = scratch / "skills"
-    large.mkdir(parents=True, exist_ok=True)
-    history.mkdir(parents=True, exist_ok=True)
-    retrieved.mkdir(parents=True, exist_ok=True)
-    memories.mkdir(parents=True, exist_ok=True)
-    skills.mkdir(parents=True, exist_ok=True)
+    if prepare_storage:
+        for directory in (large, history, retrieved, memories, skills):
+            directory.mkdir(parents=True, exist_ok=True)
     routes: dict[str, BackendProtocol] = {
         "/large_tool_results/": FilesystemBackend(root_dir=large, virtual_mode=True),
         "/conversation_history/": FilesystemBackend(root_dir=history, virtual_mode=True),

@@ -3,6 +3,9 @@ import { eventKindLabel } from "./labels";
 import { EffectiveSetupNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import { isAgentRunLive, type AgentRun } from "./types";
+import { HoverHelp } from "./HoverHelp";
+import { Notice } from "./Notice";
+import { Icon } from "./Icon";
 
 export function RunProgress(props: {
   run: AgentRun | null;
@@ -35,22 +38,21 @@ export function RunProgress(props: {
     <div className="run-progress">
       <div className="run-progress-head">
         <h3>
-          {title ?? "Run"}
+          {title ?? "Activity"}
           <StatusBadge status={run.status} />
         </h3>
         {onCancel ? (
           <button type="button" disabled={!live || cancelBusy} onClick={onCancel}>
-            {run.status === "cancel_requested" ? "Stopping…" : "Cancel"}
+            <Icon name="stop" size={13} /> {run.status === "cancel_requested" ? "Stopping…" : "Cancel"}
           </button>
         ) : null}
       </div>
-      <p className="hint">
-        {run.stop_reason ? `Stop reason: ${run.stop_reason}. ` : null}
-        {run.host_shell?.available
-          ? `Host shell cwd ${run.host_shell.cwd ?? "(bound project)"}. No isolation.`
-          : "Host shell unavailable (no project folder)."}
-      </p>
-      {run.error ? <p className="notice notice-error">{run.error}</p> : null}
+      <div className="packet03-meta">
+        {run.stop_reason ? <span>{run.stop_reason}</span> : null}
+        <span>{run.host_shell?.available ? "Host shell" : "Shell unavailable"}</span>
+        <HoverHelp title="Run environment">{run.host_shell?.available ? `Shell commands run on this computer in ${run.host_shell.cwd ?? "the bound project"}, without isolation.` : "Shell tools need a bound project folder."}</HoverHelp>
+      </div>
+      {run.error ? <Notice tone="error">{run.error}</Notice> : null}
       {run.effective_setup ? (
         <EffectiveSetupNotes
           unsupportedStartup={run.effective_setup.unsupported?.startup}
@@ -69,7 +71,7 @@ export function RunProgress(props: {
       ) : null}
       {context || structured ? (
         <details className="run-inspection">
-          <summary>Request and model details</summary>
+          <summary><Icon name="tune" size={14} /> Request details</summary>
           {context ? (
             <section aria-label="Context estimate">
               <h4>Context estimate</h4>
@@ -95,7 +97,7 @@ export function RunProgress(props: {
               <p className="hint">
                 Schema: {structured.schema_name} · Strategy: {structuredStrategy} · Validation: {validationStatus}
               </p>
-              <p className="hint">This value is separate from the assistant’s written reply.</p>
+              <HoverHelp title="About structured results">The validated structured value is separate from the assistant's written reply.</HoverHelp>
               <h5>Requested schema</h5>
               <pre>{JSON.stringify(structured.requested_json_schema, null, 2)}</pre>
               <h5>Structured value</h5>
@@ -110,7 +112,7 @@ export function RunProgress(props: {
       {run.events.length === 0 ? (
         <p className="hint">{live ? "Waiting for the first event…" : "No events recorded."}</p>
       ) : (
-        <ol className="timeline">
+        <details className="run-inspection"><summary><Icon name="activity" size={14} /> Event log <span className="badge">{run.events.length}</span></summary><ol className="timeline">
           {run.events.map((event, index) => {
             const summary = eventDetailSummary(event.kind, event.detail);
             return (
@@ -121,11 +123,11 @@ export function RunProgress(props: {
               </li>
             );
           })}
-        </ol>
+        </ol></details>
       )}
       {retrieved.length > 0 ? (
-        <div>
-          <h4>Retrieved</h4>
+        <details>
+          <summary><Icon name="knowledge" size={14} /> Retrieved context <span className="badge">{retrieved.length}</span></summary>
           <ul className="plain-list">
             {retrieved.map((item) => (
               <li key={item}>
@@ -133,11 +135,11 @@ export function RunProgress(props: {
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       ) : null}
       {related.length > 0 ? (
         <div>
-          <h4>Related files</h4>
+          <h4>Files</h4>
           <ul className="plain-list">
             {related.map((item) => (
               <li key={`${item.kind}:${item.path}`}>

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
+import time
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
+from workbench_backend.agents.file_changes import FileChangeRecorder, MUTATION_TOOLS
 from workbench_backend.agents.context import observe_payload, require_context_fit
 from workbench_backend.agents.harness_backend import is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
@@ -22,7 +25,7 @@ from workbench_backend.agents.replay import (
     FixtureBank,
     apply_recorded_reconstruction,
 )
-from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture, GenerationObservation
 from workbench_backend.agents.tools import (
     FILESYSTEM_TOOL_NAMES,
     KNOWLEDGE_ROUTE_READ_TOOLS,
@@ -48,21 +51,26 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         settings_provider: Callable[[], ContextCaptureSettings] | None = None,
         *,
         fixture_bank: FixtureBank | None = None,
+        file_changes: FileChangeRecorder | None = None,
     ) -> None:
         super().__init__()
         self.run = run
         self.http_sink = http_sink if http_sink is not None else []
         self._settings_provider = settings_provider
         self.fixture_bank = fixture_bank
+        self.file_changes = file_changes
 
     def wrap_model_call(
         self,
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
+        self.run.generation_observation = None
         before = len(self.http_sink)
+        started = time.perf_counter()
         try:
             response = handler(filtered)
         except Exception as exc:
@@ -80,6 +88,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             http_payloads=_payloads_after(self.http_sink, before),
             handler_returned=True,
         )
+        self._observe_generation(response, time.perf_counter() - started)
         return response
 
     async def awrap_model_call(
@@ -87,9 +96,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
+        self.run.generation_observation = None
         before = len(self.http_sink)
+        started = time.perf_counter()
         try:
             response = await handler(filtered)
         except Exception as exc:
@@ -107,18 +119,49 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             http_payloads=_payloads_after(self.http_sink, before),
             handler_returned=True,
         )
+        self._observe_generation(response, time.perf_counter() - started)
         return response
+
+    def _observe_generation(self, response: ModelResponse, elapsed: float) -> None:
+        native = getattr(self.run, "generation_observation", None)
+        if native is not None and native.basis == "llama_cpp_timings":
+            return
+        usages = [getattr(message, "usage_metadata", None) for message in response.result]
+        reported = [usage.get("output_tokens") for usage in usages if isinstance(usage, dict)]
+        tokens = sum(reported) if reported and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in reported) else None
+        inputs = [usage.get("input_tokens") for usage in usages if isinstance(usage, dict)]
+        input_tokens = sum(inputs) if inputs and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in inputs) else None
+        context = getattr(self.run, "context_observation", None)
+        limit = context.capacity_tokens if context is not None else None
+        self.run.generation_observation = GenerationObservation(output_tokens=tokens,
+            input_tokens=input_tokens, context_limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None,
+            context_used_tokens=input_tokens + tokens if input_tokens is not None and tokens is not None else None,
+            elapsed_seconds=elapsed, tokens_per_second=tokens / elapsed if tokens is not None and elapsed > 0 else None,
+            measured_at=utc_now())
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
+        self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
         if self.fixture_bank is None:
-            return handler(request)
+            name, args, call_id = _tool_call_parts(request)
+            if self.file_changes is None or name not in MUTATION_TOOLS:
+                return handler(request)
+            with self.file_changes.lock:
+                self._require_dispatch_allowed()
+                change = self.file_changes.prepare(name, args, call_id)
+                try:
+                    result = handler(request)
+                except BaseException as exc:
+                    self.file_changes.finish(change, error=exc)
+                    raise
+                self.file_changes.finish(change, error=_file_tool_error(result))
+                return result
         return self._replay_tool_call(request)
 
     async def awrap_tool_call(
@@ -126,12 +169,48 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Any],
     ) -> ToolMessage | Any:
+        self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
         if self.fixture_bank is None:
-            return await handler(request)
+            name, args, call_id = _tool_call_parts(request)
+            async def invoke() -> Any:
+                recorder = self.file_changes if name in MUTATION_TOOLS else None
+                if recorder is None:
+                    return await handler(request)
+                await asyncio.to_thread(recorder.lock.acquire)
+                try:
+                    self._require_dispatch_allowed()
+                    change = await asyncio.to_thread(recorder.prepare, name, args, call_id)
+                    try:
+                        result = await handler(request)
+                    except BaseException as exc:
+                        await asyncio.to_thread(recorder.finish, change, error=exc)
+                        raise
+                    await asyncio.to_thread(recorder.finish, change, error=_file_tool_error(result))
+                    return result
+                finally:
+                    recorder.lock.release()
+            if name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
+                # These upstream async backends run synchronous local work in
+                # an executor. Cancelling the await cannot stop that work.
+                # Retain ownership until it settles before confirming a stop.
+                execution = asyncio.create_task(invoke())
+                try:
+                    return await asyncio.shield(execution)
+                except asyncio.CancelledError:
+                    try:
+                        await execution
+                    finally:
+                        raise
+            return await invoke()
         return self._replay_tool_call(request)
+
+    def _require_dispatch_allowed(self) -> None:
+        if self.run.status in {"cancel_requested", "cancelled"}:
+            from workbench_backend.errors import HarnessError
+            raise HarnessError("This run is stopping; no further model or tool call was dispatched.", code="run_cancelling", status_code=409)
 
     def _reject_projectless_privileged_tool(self, request: ToolCallRequest) -> ToolMessage | None:
         """File and host-shell tools need a project; execute must also be presented.
@@ -147,6 +226,17 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
         if not self.run.presented_tools:
             return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
+        if name == "read_file" and self.run.framework_read_paths:
+            path = str(args.get("file_path", "")).replace("\\", "/")
+            parts = path.split("/")
+            allowed = not path.startswith("//") and not any(part in {".", ".."} or ":" in part for part in parts)
+            if allowed and any(path.startswith(prefix) and len(path) > len(prefix) for prefix in self.run.framework_read_paths):
+                return None
+            return ToolMessage(content="This reader can only open framework-saved tool results or conversation history, not project or knowledge files.", name=name, tool_call_id=call_id, status="error")
+        if name not in self.run.presented_tools:
+            if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path and not _allow_projectless_knowledge_tool(name, args, self.run):
+                return ToolMessage(content="Filesystem tools require a bound project folder or selected knowledge. The unselected action was not executed.", name=name, tool_call_id=call_id, status="error")
+            return ToolMessage(content="This tool was not selected for this run. The action was not executed.", name=name, tool_call_id=call_id, status="error")
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
             if _allow_projectless_knowledge_tool(name, args, self.run):
                 return None
@@ -164,16 +254,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 content=(
                     "The host shell requires a bound project folder as cwd. "
                     "This run has no project; the command was not executed."
-                ),
-                name=name,
-                tool_call_id=call_id,
-                status="error",
-            )
-        if name in SHELL_TOOL_NAMES and name not in self.run.presented_tools:
-            return ToolMessage(
-                content=(
-                    "The host shell is not presented on this run. "
-                    "The command was not executed."
                 ),
                 name=name,
                 tool_call_id=call_id,
@@ -213,10 +293,16 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _presented(self, tools: list[Any] | None) -> list[Any]:
         allowed = set(self.run.presented_tools)
+        if self.run.framework_read_paths:
+            allowed.add("read_file")
         selected: list[Any] = []
         for item in tools or []:
             name = tool_name(item)
             if name is None or name in allowed:
+                if name == "read_file" and self.run.framework_read_paths:
+                    description = "Read framework-saved tool results or conversation history with offset and limit pagination. Only these paths are permitted: " + ", ".join(self.run.framework_read_paths) + ". Project and knowledge files are not authorized by this reader."
+                    if hasattr(item, "model_copy"):
+                        item = item.model_copy(update={"description": description})
                 selected.append(item)
         return selected
 
@@ -270,7 +356,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 presented_tools=[
                     name
                     for name in (_tool_names(request.tools))
-                    if name in self.run.presented_tools
+                    if name in self.run.presented_tools or (name == "read_file" and self.run.framework_read_paths)
                 ],
                 generation_settings=generation,
                 memory_versions=list(self.run.memory_version_refs),
@@ -327,6 +413,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     },
                 )
             )
+
+
+def _file_tool_error(result: Any) -> Exception | None:
+    if isinstance(result, ToolMessage) and result.status == "error":
+        return RuntimeError(str(result.content))
+    return None
 
 
 def _allow_projectless_knowledge_tool(

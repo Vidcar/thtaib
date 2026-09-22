@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { api } from "./api";
+import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { ModelDeletion } from "./ModelDeletion";
+import { Help } from "./ModelControls";
+import { Icon } from "./Icon";
 import type { ModelBundle, RunProfile } from "./types";
 
 function objectFrom(text: string): Record<string, unknown> {
@@ -56,22 +59,19 @@ export function ProfilesPanel({ profiles, bundles, refresh }: { profiles: RunPro
         setEditing(saved.id); setMessage(`Saved ${saved.display_name}. Running models keep their original launch settings.`);
       });
     }}>
-      <h3>{editing ? "Edit preset" : "Create a preset"}</h3>
-      <p className="hint">Reuse model startup, response settings and instructions across your workspace. Changes apply to future work.</p>
+      <div className="setting-title"><h3>{editing ? "Edit preset" : "New preset"}</h3><Help label="Presets">Reusable model, response and instruction settings. Edits affect future work; running models keep their launch settings.</Help></div>
       <label>Name<input required value={name} onChange={event => setName(event.target.value)} /></label>
       <label>Use with<select value={bundle} onChange={event => setBundle(event.target.value)}>
         <option value="">Any compatible model</option>
         {bundle && !bundles.some(item => item.id === bundle) ? <option value={bundle}>Model unavailable</option> : null}
         {bundles.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}
       </select></label>
-      <p className="hint">A preset bound to one model cannot accidentally launch a different model. A reusable preset still needs compatible settings.</p>
       <div className="setup-grid">
         <label>Creativity (temperature)<input type="number" min="0" step="0.01" value={temperature} onChange={event => setTemperature(event.target.value)} placeholder="Use model setting" /></label>
         <label>Reply limit (tokens)<input type="number" min="1" step="1" value={limit} onChange={event => setLimit(event.target.value)} placeholder="No preset limit" /></label>
       </div>
       <label>Instructions<textarea value={instructions} onChange={event => setInstructions(event.target.value)} /></label>
-      <details className="technical-details"><summary>Advanced preset settings</summary>
-        <p className="hint">Startup settings take effect when a model is loaded. Response and agent settings affect future requests without restarting the model.</p>
+      <details className="technical-details"><summary>Additional settings</summary>
         <label>Startup settings (JSON)<textarea spellCheck={false} value={startup} onChange={event => setStartup(event.target.value)} /></label>
         <label>Additional response settings (JSON)<textarea spellCheck={false} value={requestExtra} onChange={event => setRequestExtra(event.target.value)} /></label>
         <label>Additional agent settings (JSON)<textarea spellCheck={false} value={agentExtra} onChange={event => setAgentExtra(event.target.value)} /></label>
@@ -80,11 +80,11 @@ export function ProfilesPanel({ profiles, bundles, refresh }: { profiles: RunPro
       {message ? <Notice tone={failed ? "error" : "info"}>{message}</Notice> : null}
     </form>
     <div className="card"><h3>Saved presets</h3>
-      {!profiles.length ? <p className="hint">Save a preset for the way you like to work.</p> : <ul className="list">{profiles.map(profile => <li className="entity" key={profile.id}>
+      {!profiles.length ? <EmptyState title="Save a preset for the way you like to work." /> : <ul className="list">{profiles.map(profile => <li className="entity" key={profile.id}>
         <strong>{profile.display_name}</strong>
         <p className="hint">{profile.bundle_id ? bundles.find(item => item.id === profile.bundle_id)?.display_name ?? "Model unavailable" : "Reusable across compatible models"}</p>
-        <div className="actions"><button type="button" disabled={busy} onClick={() => edit(profile)}>Inspect / edit</button>
-          <button type="button" disabled={busy} onClick={() => void action(async () => { const copy = await api.duplicateProfile(profile.id); edit(copy); setMessage(`Created ${copy.display_name}.`); })}>Duplicate</button>
+        <div className="actions"><button type="button" className="icon-button" aria-label={`Edit ${profile.display_name}`} title="Edit preset" disabled={busy} onClick={() => edit(profile)}><Icon name="edit" size={16} /></button>
+          <button type="button" className="icon-button" aria-label={`Duplicate ${profile.display_name}`} title="Duplicate preset" disabled={busy} onClick={() => void action(async () => { const copy = await api.duplicateProfile(profile.id); edit(copy); setMessage(`Created ${copy.display_name}.`); })}><Icon name="copy" size={16} /></button>
         </div>
         <SettingsNotes unsupported={profile.bags.startup.unsupported} retired={profile.bags.startup.retired} />
         <ModelDeletion kind="profile" id={profile.id} name={profile.display_name} onDeleted={async () => { if (editing === profile.id) edit(); await refresh(); }} />

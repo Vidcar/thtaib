@@ -12,12 +12,26 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from workbench_backend import __version__
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.routes import router as agent_router
+from workbench_backend.agents.setup_routes import router as setup_router
+from workbench_backend.agents.setup_service import SetupService
+from workbench_backend.connections.service import ConnectionService
+from workbench_backend.connections.routes import router as connections_router
 from workbench_backend.chat.routes import router as chat_router
+from workbench_backend.chat.branch_routes import router as branch_router
 from workbench_backend.chat.service import ChatService
+from workbench_backend.chat.coordinator import ChatCoordinator
+from workbench_backend.assets.service import RetainedAssetService
+from workbench_backend.assets.routes import router as assets_router
+from workbench_backend.assets.lifecycle import AssetLifecycleService
+from workbench_backend.assets.lifecycle_routes import router as asset_lifecycle_router
+from workbench_backend.state.backup import BackupService, MaintenanceGate, BackupError
+from workbench_backend.state.backup_routes import router as backup_router
+from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import HarnessError, WorkbenchError, workbench_error_handler
 from workbench_backend.inference.compatibility import CompatibilityService
 from workbench_backend.inference.compatibility_routes import router as compatibility_router
@@ -31,6 +45,9 @@ from workbench_backend.local_trust import ensure_shared_secret, require_local_tr
 from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
 from workbench_backend.state.effect_routes import router as effect_router
 from workbench_backend.state.effects import EffectService
+from workbench_backend.state.preferences import PreferenceStore
+from workbench_backend.state.preference_routes import router as preference_router
+from workbench_backend.state.desktop_routes import router as desktop_router
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.interaction.routes import router as interaction_router
 from workbench_backend.interaction.service import InteractionService
@@ -41,7 +58,16 @@ SURFACE = "managed-inference"
 
 @asynccontextmanager
 async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
+    application.state.chat.reconcile_saved_queue_on_startup()
+    application.state.chat_coordinator = ChatCoordinator(application)
+    for conversation in application.state.chat.store.list_conversations(include_archived=True):
+        if conversation.current_run_id:
+            try:
+                application.state.chat_coordinator.observe(application.state.harness.get_run(conversation.current_run_id))
+            except HarnessError:
+                pass
     yield
+    application.state.chat_coordinator.close()
     harness = getattr(application.state, "harness", None)
     if harness is not None:
         closer = getattr(harness, "close", None)
@@ -80,6 +106,21 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.state.local_trust_token = ensure_shared_secret(application.state.manager.paths)
     application.middleware("http")(require_local_trust)
     application.state.app_store = open_application_store(application.state.manager.paths)
+    application.state.preferences = PreferenceStore(application.state.app_store)
+    application.state.maintenance_gate = MaintenanceGate()
+    application.state.assets = RetainedAssetService(application.state.app_store)
+    application.state.asset_lifecycle = AssetLifecycleService(application.state.manager.paths, application.state.app_store,
+        harness_provider=lambda: application.state.harness)
+
+    @application.middleware("http")
+    async def maintenance_boundary(request, call_next):
+        if not request.url.path.startswith("/v1/") or request.url.path.startswith("/v1/backups") or request.url.path == "/v1/desktop/stop-owned-work":
+            return await call_next(request)
+        try:
+            with application.state.maintenance_gate.mutation():
+                return await call_next(request)
+        except BackupError as exc:
+            return JSONResponse(status_code=409, content={"code": exc.code, "message": str(exc)})
     application.state.compatibility = CompatibilityService(application.state.manager.paths)
     def _lookup_run(run_id: str):
         try:
@@ -91,17 +132,26 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         application.state.app_store,
         run_lookup=_lookup_run,
     )
-    application.state.knowledge = KnowledgeService(application.state.manager.paths)
+    application.state.knowledge = KnowledgeService(application.state.manager.paths, app_store=application.state.app_store)
+    application.state.connections = ConnectionService(application.state.app_store)
+    application.state.setups = SetupService(application.state.app_store, application.state.manager, application.state.knowledge, connection_available=application.state.connections.available, connection_tools=lambda ident: [tool.name for tool in application.state.connections.get(ident).tools])
+    application.include_router(connections_router)
     application.state.interaction = InteractionService(
         application.state.app_store,
         lambda: application.state.harness,
         lambda: application.state.chat,
     )
+    def _observe_run(run, event, *, telemetry=False):
+        application.state.interaction.observe(run, event, telemetry=telemetry)
+        coordinator = getattr(application.state, "chat_coordinator", None)
+        if coordinator is not None and event is None and not telemetry:
+            coordinator.observe(run)
+
     application.state.harness = HarnessService(
         lambda: application.state.manager,
         knowledge_provider=lambda: application.state.knowledge,
         app_store=application.state.app_store,
-        interaction_observer=application.state.interaction.observe,
+        interaction_observer=_observe_run,
     )
     application.state.lab = LabService(
         lambda: application.state.manager,
@@ -115,14 +165,37 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.lab,
         app_store=application.state.app_store,
         knowledge_provider=lambda: application.state.knowledge,
+        assets_provider=lambda: application.state.assets,
     )
+    def _active_work():
+        active = [run.id for run in application.state.harness.list_runs() if is_run_lifecycle_live(run.status)]
+        active.extend(job.id for job in application.state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"})
+        return active
+    def _reconcile_for_backup():
+        # Maintenance has drained coordinator mutations and blocks dispatch.
+        # Persist terminal history/assets here without advancing any queue.
+        for conversation in application.state.chat.store.list_conversations(include_archived=True):
+            if conversation.current_run_id:
+                run = application.state.harness.get_run(conversation.current_run_id)
+                if not is_run_lifecycle_live(run.status):
+                    application.state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
+        application.state.chat.reconcile_saved_queue_on_startup()
+    application.state.backups = BackupService(application.state.manager.paths, application.state.app_store,
+        maintenance_gate=application.state.maintenance_gate, active_work=_active_work, reconcile=_reconcile_for_backup)
     application.include_router(router)
     application.include_router(compatibility_router)
     application.include_router(effect_router)
+    application.include_router(preference_router)
+    application.include_router(desktop_router)
     application.include_router(agent_router)
+    application.include_router(setup_router)
     application.include_router(lab_router)
     application.include_router(knowledge_router)
     application.include_router(chat_router)
+    application.include_router(branch_router)
+    application.include_router(assets_router)
+    application.include_router(asset_lifecycle_router)
+    application.include_router(backup_router)
     application.include_router(interaction_router)
     application.add_exception_handler(WorkbenchError, workbench_error_handler)
 

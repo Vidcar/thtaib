@@ -7,6 +7,7 @@ import os
 import socketserver
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -16,10 +17,11 @@ import httpx
 from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.messages import AIMessage
 
-from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness import HarnessService, _graph_checkpoint_snapshot
 from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
+    GenerationObservation,
     PendingInterrupt,
     PendingInterruptAction,
 )
@@ -101,6 +103,23 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIsInstance(checkpoint_id, str)
         return checkpoint_id
 
+    def _put_pending_interrupt_checkpoint(self, thread_id: str) -> str:
+        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+        saved = saver.put(
+            {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {"source": "test", "step": 0, "writes": {}, "parents": {}},
+            {},
+        )
+        saver.put_writes(
+            saved,
+            [("__interrupt__", [{"id": f"{thread_id}:interrupt", "value": {"action_requests": [{"name": "execute", "args": {}}]}}])],
+            "test_interrupt_task",
+        )
+        checkpoint_id = saved["configurable"]["checkpoint_id"]
+        self.assertIsInstance(checkpoint_id, str)
+        return checkpoint_id
+
     def _start(self, **extra: Any) -> dict[str, Any]:
         payload = {
             "deployment_id": self.deployment_id,
@@ -110,6 +129,18 @@ class HarnessApiTests(unittest.TestCase):
         response = self.client.post("/v1/agent-runs", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    def _wait_for_pending_interrupt(self, run_id: str) -> dict[str, Any]:
+        deadline = time.monotonic() + 10
+        body: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            response = self.client.get(f"/v1/agent-runs/{run_id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            if body.get("pending_interrupt") and body.get("checkpoint_ids"):
+                return body
+            time.sleep(0.05)
+        raise AssertionError(f"pending interrupt not observed: {body}")
 
     def _record_capability(self, capability: str, status: str = "passed") -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
@@ -316,21 +347,27 @@ class HarnessApiTests(unittest.TestCase):
                 "edit_file",
                 "glob",
                 "grep",
+                "rename_file",
+                "delete_file",
                 "execute",
                 "write_todos",
+                "ask_user",
+                "propose_memory",
+                "read_attachment",
             ],
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos"])
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos"])
-        self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertCountEqual(body["model_requests"][0]["presented_tools"], ["echo", "read_file"])
+        self.assertEqual(body["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
         project = self.root / "agt-005-project"
         project.mkdir()
         bound = self._start(presented_tools=["echo"], project_path=str(project))
         bound_body = wait_for_run(self.client, bound["id"])
-        self.assertEqual(bound_body["enabled_tools"], catalogue)
+        self.assertEqual(bound_body["enabled_tools"], [name for name in catalogue if name != "read_attachment"])
         self.assertEqual(bound_body["presented_tools"], ["echo"])
         denied = self.client.post(
             "/v1/agent-runs",
@@ -545,6 +582,9 @@ class HarnessApiTests(unittest.TestCase):
             created_at=now,
             updated_at=now,
             workspace_id="ws_orphan",
+            generation_observation=GenerationObservation(request_id="lost-request", phase="generating",
+                input_tokens=100, output_tokens=7, context_used_tokens=107, elapsed_seconds=.5,
+                tokens_per_second=12, measured_at=now, basis="llama_cpp_timings", interval="current_model_call_generation"),
         )
         self.app.state.harness.store.put_run(run)
 
@@ -555,6 +595,10 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(observed.stop_reason, "orphaned")
         self.assertIn("restarted", observed.error or "")
         self.assertEqual(restarted.active_workspace_run_ids("ws_orphan"), [])
+        self.assertEqual(observed.generation_observation.phase, "interrupted")
+        self.assertEqual(observed.generation_observation.output_tokens, 7)
+        self.assertEqual(observed.generation_observation.interval, "last_model_call_generation")
+        self.assertEqual(restarted.store.get_run(run.id).generation_observation, observed.generation_observation)
 
     def test_restart_reconciles_orphan_queued_and_running_runs_as_failed(self) -> None:
         for status in (AgentRunStatus.queued, AgentRunStatus.running):
@@ -587,6 +631,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_restart_preserves_pending_interrupt_for_resume(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_pending_interrupt:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -606,7 +651,7 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_pending_interrupt",
-            checkpoint_ids=[self._put_checkpoint("thread_pending_interrupt")],
+            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_pending_interrupt")],
         )
         self.app.state.harness.store.put_run(run)
 
@@ -617,9 +662,117 @@ class HarnessApiTests(unittest.TestCase):
         self.assertIsNotNone(observed.pending_interrupt)
         self.assertEqual(observed.pending_interrupt.action_requests[0].name, "execute")
 
+    def test_checkpoint_reader_matches_execution_graph_for_pending_interrupt_without_runtime_effects(self) -> None:
+        self._record_capability("tools")
+        self._record_capability("structured_tools")
+        self._record_capability("structured_tools_with_tools")
+        project = self.root / "checkpoint-reader-project"
+        project.mkdir()
+        (project / "disposable.txt").write_text("keep", encoding="utf-8")
+        self.scripted = ScriptedChatModel([
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "Remove-Item disposable.txt"},
+                        "id": "exec_checkpoint_reader",
+                    }
+                ],
+            )
+        ])
+        started = self._start(
+            task="run a shell command",
+            presented_tools=["execute"],
+            project_path=str(project),
+            output_schema={
+                "schema_version": 1, "name": "AnswerShape",
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            },
+        )
+        body = self._wait_for_pending_interrupt(started["id"])
+        run = self.app.state.harness.get_run(started["id"])
+        checkpoint_id = body["checkpoint_ids"][-1]
+
+        execution_agent = self.app.state.harness._create_compiled_agent(run, [], None)
+        execution_snapshot = _graph_checkpoint_snapshot(execution_agent, run.thread_id, checkpoint_id)
+
+        def fail_model_factory(_run, _sink):
+            raise AssertionError("checkpoint read must not construct a runtime model")
+
+        self.app.state.harness._model_factory = fail_model_factory
+        original_run = run.model_dump(mode="json")
+        with patch.object(
+            self.app.state.manager,
+            "ensure_deployment_ready",
+            side_effect=AssertionError("checkpoint read must not start deployment"),
+        ):
+            with patch(
+                "workbench_backend.agents.harness_backend.harness_scratch_root",
+                # Backend construction may resolve paths, but may not create
+                # or populate storage while inspecting saved state.
+                wraps=lambda *_args: self.root / "inspection-must-not-create",
+            ):
+                with patch(
+                    "workbench_backend.agents.harness.materialize_onto_backend",
+                    side_effect=AssertionError("checkpoint read must not materialize knowledge"),
+                ):
+                    inspected = self.app.state.harness.checkpoint_state_for_run(run, checkpoint_id)
+                    inspection_agent = self.app.state.harness._create_compiled_agent(
+                        run.model_copy(deep=True), [], None, inspection_only=True,
+                    )
+
+        self.assertEqual(inspected["next"], tuple(execution_snapshot.next))
+        self.assertEqual(inspected["values"], dict(execution_snapshot.values))
+        self.assertEqual(set(inspection_agent.nodes), set(execution_agent.nodes))
+        self.assertEqual(set(inspection_agent.channels), set(execution_agent.channels))
+        self.assertEqual(run.model_dump(mode="json"), original_run)
+        self.assertFalse((self.root / "inspection-must-not-create").exists())
+
+    def test_restart_fails_pending_interrupt_with_historical_only_checkpoint(self) -> None:
+        now = utc_now()
+        pending = PendingInterrupt(
+            interrupt_id="historical-only:interrupt",
+            action_requests=[
+                PendingInterruptAction(
+                    name="execute",
+                    args={"command": "Remove-Item disposable.txt"},
+                    allowed_decisions=["approve", "reject"],
+                )
+            ]
+        )
+        run = AgentRun(
+            id="agent_historical_only_interrupt",
+            status=AgentRunStatus.running,
+            deployment_id=self.deployment_id,
+            task="approval paused",
+            enabled_tools=["execute"],
+            presented_tools=["execute"],
+            created_at=now,
+            updated_at=now,
+            pending_interrupt=pending,
+            thread_id="thread_historical_only_interrupt",
+            checkpoint_ids=[self._put_checkpoint("thread_historical_only_interrupt")],
+        )
+        # A later non-interrupted checkpoint makes the saved interrupt checkpoint
+        # historical. Restart must not resume from the old approval boundary.
+        self._put_checkpoint("thread_historical_only_interrupt")
+        self.app.state.harness.store.put_run(run)
+
+        restarted = self._restart_harness()
+
+        observed = restarted.get_run(run.id)
+        self.assertEqual(observed.status, AgentRunStatus.failed)
+        self.assertEqual(observed.stop_reason, "orphaned")
+        self.assertEqual(
+            observed.events[-1].detail["code"],
+            "pending_interrupt_checkpoint_missing",
+        )
+
     def test_restart_fails_pending_interrupt_without_checkpoint_linkage(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -684,6 +837,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_restart_cancel_requested_pending_checkpoint_is_terminal_no_worker(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -730,6 +884,7 @@ class HarnessApiTests(unittest.TestCase):
     def test_resume_after_restart_reserves_once_before_worker_runs(self) -> None:
         now = utc_now()
         pending = PendingInterrupt(
+            interrupt_id="thread_resume_reserved:interrupt",
             action_requests=[
                 PendingInterruptAction(
                     name="execute",
@@ -749,12 +904,12 @@ class HarnessApiTests(unittest.TestCase):
             updated_at=now,
             pending_interrupt=pending,
             thread_id="thread_resume_reserved",
-            checkpoint_ids=[self._put_checkpoint("thread_resume_reserved")],
+            checkpoint_ids=[self._put_pending_interrupt_checkpoint("thread_resume_reserved")],
         )
         harness = self.app.state.harness
         harness.store.put_run(run)
 
-        request = {"decisions": [{"type": "reject"}]}
+        request = {"interrupt_id": pending.interrupt_id, "namespace": [], "decisions": [{"type": "reject"}]}
         entered = threading.Event()
         release = threading.Event()
 

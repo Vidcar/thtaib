@@ -14,6 +14,7 @@ from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hashes import cached_sha256_file, sha256_file
 from workbench_backend.inference.hf_fetch import HuggingFaceDownload, HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.inspection_cache import bundle_identity
 from workbench_backend.inference.schemas import (
     BundleFile,
     BundleSource,
@@ -26,13 +27,15 @@ from workbench_backend.inference.schemas import (
     ImportStatus,
     LocalImportRequest,
     ModelBundle,
+    BundleProjectors,
+    ProjectorCandidate,
 )
 from workbench_backend.inference.store import RecordStore
 from workbench_backend.paths import WorkbenchPaths
 
 SHARD_RE = re.compile(r"-(?P<index>\d{5})-of-(?P<total>\d{5})\.gguf$", re.I)
 QUANT_RE = re.compile(
-    r"(?:[.-])(IQ\d[_A-Z0-9]+|Q\d[_A-Z0-9]+|F16|F32|BF16|Q8_0)(?:[.-]|$)",
+    r"(?:[.-])(IQ\d[_A-Z0-9]+|Q\d[_A-Z0-9]+|P?TQ\d[_A-Z0-9]+|F16|F32|BF16|Q8_0)(?:[.-]|$)",
     re.I,
 )
 COMPANION_HINTS = ("mmproj", "projector", "tokenizer", "chat_template")
@@ -40,6 +43,20 @@ PROJECTOR_HINTS = ("mmproj", "projector")
 _HF_RECORD_LOCK = RLock()
 ProgressCallback = Callable[[ImportStage, str | None, int, int | None, int, int | None], None]
 CancelCheck = Callable[[], bool]
+
+
+def _projector_name(name: str) -> bool:
+    return name.lower().endswith(".gguf") and any(hint in name.lower() for hint in PROJECTOR_HINTS)
+
+
+def _projector_metadata(path: Path) -> dict[str, str]:
+    from workbench_backend.inference.inspect import _RuntimeMetadataReader, _close_reader
+    reader = _RuntimeMetadataReader(str(path), "r")
+    try:
+        return {key: value for key in ("general.architecture", "general.name", "clip.projector_type")
+                if (field := reader.fields.get(key)) is not None and isinstance(value := field.contents(), str)}
+    finally:
+        _close_reader(reader)
 
 
 def mmproj_companion(bundle: ModelBundle) -> BundleFile | None:
@@ -72,6 +89,13 @@ def detect_quantization(names: list[str]) -> str | None:
         if match:
             return match.group(1).upper()
     return None
+
+
+def weight_quantization(files: list[BundleFile]) -> str | None:
+    return detect_quantization([
+        item.name for role in (FileRole.primary_weights, FileRole.shard)
+        for item in files if item.role == role
+    ])
 
 
 def _shard_match(path: Path) -> re.Match[str] | None:
@@ -288,6 +312,59 @@ class BundleService:
         self.store = store
         self.hf = hf or HuggingFaceFetcher()
 
+    def projector_candidates(self, bundle: ModelBundle) -> BundleProjectors:
+        selected = mmproj_companion(bundle)
+        candidates = {str(Path(item.path).resolve()): Path(item.path) for item in [*bundle.files, *bundle.companions]
+                      if _projector_name(item.name)}
+        # Nearby files are offered for deliberate selection, never auto-loaded.
+        # Do not walk other model installations or search arbitrary directories.
+        if bundle.primary_path:
+            parent = Path(bundle.primary_path).parent
+            for path in parent.glob("*.gguf"):
+                if _projector_name(path.name) and path.is_file():
+                    candidates[str(path.resolve())] = path
+        result = []
+        for path in sorted(candidates.values()):
+            if not path.is_file():
+                continue
+            candidate = ProjectorCandidate(path=str(path.resolve()), name=path.name, size_bytes=path.stat().st_size,
+                                           selected=selected is not None and path.resolve() == Path(selected.path).resolve())
+            try:
+                metadata = _projector_metadata(path)
+                candidate.metadata_name = metadata.get("general.name")
+                candidate.architecture = metadata.get("general.architecture")
+                candidate.projector_type = metadata.get("clip.projector_type")
+            except (ValueError, OSError):
+                candidate.inspection_error = "This file's projector metadata could not be read."
+            result.append(candidate)
+        return BundleProjectors(bundle_id=bundle.id, selected_path=selected.path if selected else None, candidates=result)
+
+    def select_projector(self, bundle: ModelBundle, path: str | None) -> ModelBundle:
+        companion = None
+        if path is not None:
+            selected = Path(path).expanduser().resolve()
+            if not selected.is_file() or not _projector_name(selected.name):
+                raise ManagerError("Select an existing mmproj or projector GGUF file.", code="projector_invalid", status_code=400)
+            try:
+                metadata = _projector_metadata(selected)
+            except (ValueError, OSError) as exc:
+                raise ManagerError("The selected projector's GGUF metadata could not be read.", code="projector_invalid", status_code=400) from exc
+            if metadata.get("general.architecture") != "clip":
+                raise ManagerError("The selected file is not a multimodal projector GGUF.", code="projector_invalid", status_code=400)
+            # Reuse a known file's ownership; selecting an unregistered local
+            # file grants read access, not authority to delete its original.
+            known = next((item for item in [*bundle.files, *bundle.companions]
+                          if Path(item.path).resolve() == selected), None)
+            companion = BundleFile(role=FileRole.companion, name=selected.name, path=str(selected),
+                                   sha256=sha256_file(selected), size_bytes=selected.stat().st_size,
+                                   ownership=known.ownership if known else "external")
+        companions = [item for item in bundle.companions if not _projector_name(item.name)]
+        if companion:
+            companions.append(companion)
+        updated = bundle.model_copy(update={"companions": companions})
+        self.store.put_bundle(updated)
+        return updated
+
     def import_local(
         self,
         request: LocalImportRequest,
@@ -423,8 +500,22 @@ class BundleService:
         )
 
     def verify_bundle(self, bundle: ModelBundle, *, use_cache: bool = False) -> ModelBundle:
+        cache_key = f"model-verification:{bundle.id}"
+        verification_root = str(self.paths.models.resolve())
+        quantization = weight_quantization(bundle.files)
+        try:
+            identity = bundle_identity(bundle)
+        except OSError:
+            identity = None
+        if use_cache and identity is not None:
+            try:
+                evidence = json.loads(self.store.get_setting(cache_key) or "null")
+                if isinstance(evidence, dict) and evidence.get("root") == verification_root and evidence.get("identity") == identity and evidence.get("matches") is True:
+                    return self.store.set_bundle_disk_matches(bundle.id, True, quantization=quantization) or bundle.model_copy(update={"disk_matches": False})
+            except (ValueError, TypeError):
+                pass
         matches = True
-        for recorded in bundle.files:
+        for recorded in {item.path: item for item in [*bundle.files, *bundle.companions]}.values():
             path = Path(recorded.path)
             if not path.is_file() or path.stat().st_size != recorded.size_bytes:
                 matches = False
@@ -437,7 +528,13 @@ class BundleService:
                 if recorded.ownership != "external":
                     matches = False
                     break
-        current = self.store.set_bundle_disk_matches(bundle.id, matches)
+        if matches:
+            try:
+                matches = identity is not None and identity == bundle_identity(bundle)
+            except OSError:
+                matches = False
+        self.store.put_bundle_setting(bundle.id, cache_key, json.dumps({"root": verification_root, "identity": identity, "matches": matches}))
+        current = self.store.set_bundle_disk_matches(bundle.id, matches, quantization=quantization)
         return current or bundle.model_copy(update={"disk_matches": False})
 
     def inspectable_file(self, bundle: ModelBundle) -> Path:
@@ -603,7 +700,7 @@ class BundleService:
         bundle = ModelBundle(
             id=bundle_id,
             display_name=display_name,
-            quantization=detect_quantization([item.name for item in files_out]),
+            quantization=weight_quantization(files_out),
             source=source,
             files=files_out,
             shards=shard_files,

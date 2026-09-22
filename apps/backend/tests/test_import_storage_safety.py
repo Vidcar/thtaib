@@ -3,6 +3,9 @@ import tempfile
 import unittest
 import subprocess
 import sys
+import json
+import os
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +15,7 @@ from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import BundleService
 from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.schemas import BundleSourceKind, ImportJob, ImportStatus
+from workbench_backend.inference.schemas import ImportStage
 from workbench_backend.inference.store import RecordStore
 from workbench_backend.paths import WorkbenchPaths
 
@@ -71,8 +75,17 @@ class ImportStorageSafetyTests(unittest.TestCase):
         self.assertEqual(self.store.get_job(job.id).status, ImportStatus.interrupted)
 
     def test_reconcile_confirms_real_owned_process_exit(self):
-        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        marker = self.paths.state / 'actual-worker.json'
+        child = subprocess.Popen([sys.executable, '-c',
+            'import os,time,json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"pid":os.getpid()})); time.sleep(60)', str(marker)])
         self.addCleanup(lambda: child.kill() if child.poll() is None else None)
+        deadline = time.monotonic() + 10
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(marker.exists())
+        actual_pid = json.loads(marker.read_text())['pid']
+        actual = psutil.Process(actual_pid)
+        self.addCleanup(lambda: actual.kill() if actual.is_running() else None)
         identity = psutil.Process(child.pid).create_time()
         job = self.job('real-child', ImportStatus.running, worker_id='old-worker',
                        transfer_pid=child.pid, transfer_create_time=identity)
@@ -82,6 +95,73 @@ class ImportStorageSafetyTests(unittest.TestCase):
         self.assertEqual(current.status, ImportStatus.interrupted)
         self.assertIsNone(current.transfer_pid)
         self.assertIsNotNone(child.poll())
+        self.assertFalse(actual.is_running(), 'The launcher exited but its real Python worker survived')
+
+    def test_real_python_worker_adopts_only_durable_launcher_before_transfer(self):
+        marker = self.paths.state / 'transfer-started.json'
+        owner = psutil.Process(os.getpid())
+        payload = {'job_id': 'launcher-transfer', 'application_db': str(self.paths.application_db),
+                   'parent_pid': owner.pid, 'parent_create_time': owner.create_time()}
+        job = self.job(payload['job_id'], ImportStatus.running, worker_id=self.runner.worker_id)
+        source = '\n'.join([
+            'import os,json,sys,time',
+            'from pathlib import Path',
+            'from workbench_backend.inference.import_jobs import _wait_for_durable_transfer_identity',
+            '_wait_for_durable_transfer_identity(json.loads(sys.argv[1]))',
+            'Path(sys.argv[2]).write_text(json.dumps({"pid":os.getpid()}))',
+            'time.sleep(60)',
+        ])
+        child = subprocess.Popen([sys.executable, '-c', source, json.dumps(payload), str(marker)])
+        identity = psutil.Process(child.pid).create_time()
+        self.addCleanup(lambda: self.runner._terminate_transfer(self.store.get_job(job.id)))
+        self.addCleanup(lambda: child.wait(timeout=5) if child.poll() is not None else None)
+        self.store.update_job_fields(job.id, transfer_pid=child.pid, transfer_create_time=identity)
+        deadline = time.monotonic() + 15
+        while not marker.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertTrue(marker.exists(), f'Actual worker did not pass the durable identity handshake (exit={child.poll()})')
+        actual_pid = json.loads(marker.read_text())['pid']
+        current = self.store.get_job(job.id)
+        self.assertEqual(current.transfer_pid, actual_pid)
+        self.assertAlmostEqual(current.transfer_create_time, psutil.Process(actual_pid).create_time())
+        self.runner.cancel_job(job.id)
+        child.wait(timeout=5)
+        self.assertFalse(psutil.pid_exists(actual_pid))
+
+    def test_stopped_job_cannot_pass_durable_handshake_or_begin_transfer(self):
+        from workbench_backend.inference.import_jobs import _wait_for_durable_transfer_identity
+        owner = psutil.Process(os.getpid())
+        self.job('stopped-transfer', ImportStatus.stopping, cancel_requested=True,
+                 transfer_pid=owner.pid, transfer_create_time=owner.create_time())
+        with self.assertRaisesRegex(RuntimeError, 'stopped before'):
+            _wait_for_durable_transfer_identity({'job_id': 'stopped-transfer',
+                'application_db': str(self.paths.application_db), 'parent_pid': owner.pid,
+                'parent_create_time': owner.create_time()})
+
+    def test_progress_update_cannot_replace_a_workers_new_durable_identity(self):
+        job = self.job('identity-race', ImportStatus.running, transfer_pid=123, transfer_create_time=1.0)
+        original = self.runner.get_job
+        def handoff_after_read(job_id):
+            old = original(job_id)
+            self.store.update_job_fields(job_id, transfer_pid=456, transfer_create_time=2.0)
+            return old
+        with patch.object(self.runner, 'get_job', side_effect=handoff_after_read):
+            self.runner._record_progress(job.id, ImportStage.transfer, 'Downloading selected files', 0, 1, 100, 200)
+        current = self.store.get_job(job.id)
+        self.assertEqual((current.transfer_pid, current.transfer_create_time), (456, 2.0))
+        self.assertEqual(current.progress.bytes_done, 100)
+
+    def test_transfer_progress_counts_payloads_without_hub_metadata_or_alternatives(self):
+        root = self.paths.state / 'progress'
+        cache = root / '.cache' / 'huggingface' / 'download'
+        cache.mkdir(parents=True)
+        (root / 'README.md').write_bytes(b'card')
+        (root / 'model.gguf').write_bytes(b'complete')
+        (root / 'other.gguf').write_bytes(b'exclude alternative')
+        (cache / 'mmproj.hash.incomplete').write_bytes(b'partial')
+        (cache / 'model.gguf.metadata').write_bytes(b'not payload')
+        (cache / 'model.gguf.lock').write_bytes(b'not payload')
+        self.assertEqual(self.runner._transfer_progress(root, ['README.md', 'model.gguf', 'mmproj.gguf']), (2, 19))
 
     def test_restart_partial_install_is_retained_until_explicit_discard(self):
         partial = self.paths.models / 'bundle_partial'

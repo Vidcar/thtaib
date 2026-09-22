@@ -1,0 +1,101 @@
+.chat-retained-files {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--bg-raised);
+  display: grid;
+  gap: 0.8rem;
+  margin: 0.75rem 0;
+  padding: 0.85rem;
+}
+
+.chat-retained-files-head,
+.chat-retained-files-actions,
+.chat-retained-file-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chat-retained-files-head {
+  justify-content: space-between;
+}
+
+.chat-retained-files h3,
+.chat-retained-files h4 {
+  margin: 0;
+}
+
+.chat-retained-file-groups {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.chat-retained-file-group {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.chat-retained-file-group ul {
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-retained-file-card {
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--bg-input);
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.7rem;
+}
+
+.chat-retained-file-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chat-retained-file-meta span {
+  overflow-wrap: anywhere;
+}
+
+.chat-retained-preview {
+  border-top: 1px solid var(--border);
+  padding-top: 0.65rem;
+}
+
+.chat-retained-preview summary {
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.chat-retained-preview pre {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  color: var(--text);
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .chat-retained-files-head {
+    align-items: stretch;
+  }
+
+  .chat-retained-files-actions {
+    width: 100%;
+  }
+}
+.chat-retained-files.compact { border: 0; padding: 0; margin-top: .5rem; background: transparent; }
+.chat-retained-files.compact .chat-retained-file-card { padding: .5rem .65rem; gap: .35rem; }
+.retained-file-name { display: flex; align-items: center; gap: .5rem; border: 0; background: transparent; padding: .2rem; text-align: left; }
+.retained-file-name span { overflow-wrap: anywhere; }
+.retained-file-name small { color: var(--muted); white-space: nowrap; }
+.chat-retained-files.compact .chat-retained-files-actions button { padding: .2rem .4rem; font-size: .75rem; border: 0; background: transparent; color: var(--muted); }

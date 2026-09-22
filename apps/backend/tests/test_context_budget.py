@@ -30,7 +30,7 @@ from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.inference.schemas import SettingsBag
-from workbench_backend.state.checkpointer import conversation_state
+from workbench_backend.state.checkpointer import conversation_state, run_checkpoint_task
 
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run
 from workbench_backend.agents.tools import tools_for_names
@@ -58,6 +58,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.chat_payloads: list[dict] = []
         self.chat_responses: list[str] = []
         self.http_requests: list[dict] = []
+        self.mock_async_clients: list[httpx.AsyncClient] = []
         self.harness = HarnessService(
             lambda: self.manager,
             model_factory=self._mock_transport_model,
@@ -67,6 +68,8 @@ class ContextBudgetHarnessTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.harness.close(timeout=1.0)
+        for client in self.mock_async_clients:
+            run_checkpoint_task(self.manager.paths.checkpoints_db, client.aclose())
         close_workbench_sqlite(self.app, self.client)
         self.tmp.cleanup()
 
@@ -138,6 +141,8 @@ class ContextBudgetHarnessTests(unittest.TestCase):
     def _mock_transport_model(self, run: AgentRun, sink: list[dict]):
         deployment = self.manager.ensure_deployment_ready(run.deployment_id)
         client = httpx.Client(transport=httpx.MockTransport(self._mock_openai), timeout=15.0)
+        async_client = httpx.AsyncClient(transport=httpx.MockTransport(self._mock_openai), timeout=15.0)
+        self.mock_async_clients.append(async_client)
         with self.harness._lock:
             self.harness._model_clients[run.id] = client
         per_request = run.effective_setup.bags.per_request if run.effective_setup else None
@@ -147,6 +152,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
             capture_sink=sink,
             timeout=15.0,
             http_client=client,
+            http_async_client=async_client,
         )
 
     def _start(self, *, thread_id: str, task: str, **extra: object):

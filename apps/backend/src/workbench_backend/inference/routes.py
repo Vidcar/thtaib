@@ -22,6 +22,8 @@ from workbench_backend.inference.schemas import (
     ImportJob,
     StorageSummary,
     ModelBundle,
+    BundleProjectors,
+    ProjectorSelectionRequest,
     RunProfile,
     Deployment,
     InspectReport,
@@ -135,9 +137,19 @@ def get_bundle(request: Request, bundle_id: str) -> object:
     return get_manager(request).get_bundle(bundle_id)
 
 
+@router.get("/bundles/{bundle_id}/projectors", response_model=BundleProjectors)
+def bundle_projectors(request: Request, bundle_id: str) -> BundleProjectors:
+    return get_manager(request).bundle_projectors(bundle_id)
+
+
+@router.put("/bundles/{bundle_id}/projector", response_model=ModelBundle)
+def select_bundle_projector(request: Request, bundle_id: str, body: ProjectorSelectionRequest) -> ModelBundle:
+    return get_manager(request).select_bundle_projector(bundle_id, body.path)
+
+
 @router.get("/bundles/{bundle_id}/inspect", response_model=InspectReport)
-def inspect_bundle(request: Request, bundle_id: str) -> object:
-    return get_manager(request).inspect_bundle(bundle_id)
+def inspect_bundle(request: Request, bundle_id: str, refresh: bool = False) -> object:
+    return get_manager(request).inspect_bundle(bundle_id, refresh=refresh)
 
 
 @router.get("/bundles/{bundle_id}/configuration-options", response_model=BundleConfigurationOptions)
@@ -145,10 +157,12 @@ def bundle_configuration_options(
     request: Request,
     bundle_id: str,
     deployment_id: str | None = None,
+    refresh: bool = False,
 ) -> object:
     return get_manager(request).get_bundle_configuration_options(
         bundle_id,
         deployment_id=deployment_id,
+        refresh=refresh,
     )
 
 
@@ -199,13 +213,13 @@ def delete_profile(request: Request, profile_id: str) -> DeletePreview:
 
 
 @router.get("/bundles/{bundle_id}/delete-preview", response_model=DeletePreview)
-def bundle_delete_preview(request: Request, bundle_id: str) -> DeletePreview:
-    return get_manager(request).bundle_delete_preview(bundle_id)
+def bundle_delete_preview(request: Request, bundle_id: str, permanent: bool = False) -> DeletePreview:
+    return get_manager(request).bundle_delete_preview(bundle_id, permanent=permanent)
 
 
 @router.delete("/bundles/{bundle_id}", response_model=DeletePreview)
-def delete_bundle(request: Request, bundle_id: str) -> DeletePreview:
-    return get_manager(request).delete_bundle(bundle_id)
+def delete_bundle(request: Request, bundle_id: str, permanent: bool = False) -> DeletePreview:
+    return get_manager(request).delete_bundle(bundle_id, permanent=permanent)
 
 
 @router.post("/settings/preview", response_model=SettingsBags)

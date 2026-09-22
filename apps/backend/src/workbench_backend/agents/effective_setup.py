@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from workbench_backend.errors import HarnessError
+from workbench_backend.inference.configuration_options import validate_model_reasoning
 from workbench_backend.inference.schemas import Deployment, RunProfile, SettingsBag, SettingsBags
 from workbench_backend.inference.settings import (
     PER_REQUEST_KEYS,
@@ -25,6 +26,7 @@ from workbench_backend.agents.memory_skills import (
     MaterializedKnowledgeFact,
 )
 from workbench_backend.knowledge.schemas import KnowledgeKind, KnowledgeRefs, KnowledgeVersion
+from workbench_backend.agents.setup_schemas import InstructionLayer
 
 NO_RETRIEVAL_GAP = "no retrieval requested"
 RAG_GAP = NO_RETRIEVAL_GAP
@@ -58,6 +60,11 @@ class EffectiveSetup(BaseModel):
     """Inspectable selected / loaded / applied facts for one run."""
 
     selected_profile_id: str | None = None
+    selected_project_id: str | None = None
+    selected_agent_setup_id: str | None = None
+    selected_agent_setup_version_id: str | None = None
+    selected_connection_ids: list[str] = Field(default_factory=list)
+    instruction_layers: list[InstructionLayer] = Field(default_factory=list)
     selected_deployment_id: str
     selected_embedding_deployment_id: str | None = None
     selected_memory_version_ids: list[str] = Field(default_factory=list)
@@ -108,6 +115,11 @@ def resolve_effective_setup(
     retrieval_instructions: str | None = None,
     materialized_knowledge: list[MaterializedKnowledgeFact] | None = None,
     inherit_deployment_settings: bool = True,
+    instruction_layers: list[InstructionLayer] | None = None,
+    selected_project_id: str | None = None,
+    selected_agent_setup_id: str | None = None,
+    selected_agent_setup_version_id: str | None = None,
+    selected_connection_ids: list[str] | None = None,
 ) -> EffectiveSetup:
     """Resolve bags, startup mismatch and knowledge content before execution."""
 
@@ -129,6 +141,7 @@ def resolve_effective_setup(
     # its current values; opting out clears both response and agent preset bags.
     inherited = profile is None and inherit_deployment_settings
     per_request = _resolve_per_request(profile, deployment, per_request_overrides, inherit_deployment_settings)
+    validate_model_reasoning(deployment, per_request)
     agent = deployment.settings.agent if inherited else _resolve_agent(profile)
     startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
@@ -139,6 +152,7 @@ def resolve_effective_setup(
         default_system_prompt=default_system_prompt,
         versions=knowledge_versions,
         retrieval_instructions=retrieval_instructions,
+        instruction_layers=instruction_layers,
     )
     gaps: list[str] = []
     if retrieval_presented:
@@ -159,6 +173,11 @@ def resolve_effective_setup(
         agent=agent,
     )
     return EffectiveSetup(
+        selected_project_id=selected_project_id,
+        selected_agent_setup_id=selected_agent_setup_id,
+        selected_agent_setup_version_id=selected_agent_setup_version_id,
+        selected_connection_ids=list(selected_connection_ids or []),
+        instruction_layers=list(instruction_layers or []),
         selected_profile_id=profile.id if profile is not None else deployment.profile_id if inherited else None,
         selected_deployment_id=deployment.id,
         selected_embedding_deployment_id=(
@@ -214,6 +233,7 @@ def compose_system_prompt(
     default_system_prompt: str,
     versions: list[KnowledgeVersion],
     retrieval_instructions: str | None = None,
+    instruction_layers: list[InstructionLayer] | None = None,
 ) -> str:
     """Prefer the profile identity prompt; compose the surface prompt after it.
 
@@ -227,7 +247,15 @@ def compose_system_prompt(
 
     profile = (profile_system_prompt or "").strip() or None
     surface = (surface_system_prompt or "").strip() or None
-    if profile and surface and surface != profile:
+    if instruction_layers:
+        sections = [default_system_prompt]
+        if profile:
+            sections.append(f"## Model preset instructions\n{profile}")
+        sections.extend(f"## {layer.name}\n{layer.content}" for layer in instruction_layers)
+        if surface and surface not in {layer.content for layer in instruction_layers}:
+            sections.append(f"{SURFACE_PROMPT_HEADING}\n{surface}")
+        base = "\n\n".join(sections)
+    elif profile and surface and surface != profile:
         base = f"{profile}\n\n{SURFACE_PROMPT_HEADING}\n{surface}"
     elif profile:
         base = profile

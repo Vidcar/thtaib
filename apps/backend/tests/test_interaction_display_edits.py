@@ -174,7 +174,7 @@ class InteractionDisplayEditTests(unittest.TestCase):
 
         binding = self.app.state.app_store.get_interaction(thread_id)
         cutover = binding["snapshot"]["workbench"]["display_cutover_seq"]
-        page, _high_water = self.app.state.app_store.interaction_page(thread_id, cutover - 1)
+        page, _high_water, _gap = self.app.state.app_store.interaction_page(thread_id, cutover - 1)
         self.assertTrue(page)
         first_data = str(page[0])
 

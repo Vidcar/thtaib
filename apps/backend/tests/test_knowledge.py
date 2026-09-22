@@ -36,7 +36,7 @@ def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> d
 
 
 HUMAN = {"actor": "human", "note": "maintainer"}
-MAINTAINER = {"actor": "api_maintainer", "note": "api"}
+MAINTAINER = {"actor": "human", "note": "api"}
 AGENT = {"actor": "agent", "run_id": "agent_fixture"}
 
 
@@ -95,7 +95,7 @@ class KnowledgeApiTests(unittest.TestCase):
             scope="agent",
             kind="skill",
             content="skill body",
-            scope_id="agent-alpha",
+            scope_id=self.client.post("/v1/agent-setups", json={"name": "Alpha"}).json()["id"],
             display_name="agent-skill",
         )
         project = self._create(
@@ -103,7 +103,7 @@ class KnowledgeApiTests(unittest.TestCase):
             kind="protected_instruction",
             content="do not overwrite",
             provenance=MAINTAINER,
-            scope_id="proj-1",
+            scope_id=self.client.post("/v1/projects", json={"path": str(self.root)}).json()["id"],
         )
         self.assertEqual(user["scope"], "user")
         self.assertEqual(agent["kind"], "skill")
@@ -111,7 +111,7 @@ class KnowledgeApiTests(unittest.TestCase):
         self.assertTrue(user["id"].startswith("kn_"))
         self.assertTrue(user["current_version_id"].startswith("knv_"))
         self.assertEqual(user["provenance"]["actor"], "human")
-        self.assertEqual(project["provenance"]["actor"], "api_maintainer")
+        self.assertEqual(project["provenance"]["actor"], "human")
         on_disk = json.loads((self.paths.knowledge / "entries.json").read_text(encoding="utf-8"))
         self.assertEqual({item["id"] for item in on_disk}, {user["id"], agent["id"], project["id"]})
         version_file = self.paths.knowledge / "versions" / f"{user['current_version_id']}.json"
@@ -181,7 +181,7 @@ class KnowledgeApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["code"], "protected_instruction_denied")
+        self.assertEqual(denied.json()["code"], "knowledge_actor_forged")
         current = self.client.get(f"/v1/knowledge/entries/{created['id']}").json()
         self.assertEqual(current["content"], "keep this instruction")
         allowed = self.client.post(
@@ -204,28 +204,23 @@ class KnowledgeApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(create_denied.status_code, 403)
-        self.assertEqual(create_denied.json()["code"], "protected_instruction_denied")
+        self.assertEqual(create_denied.json()["code"], "knowledge_actor_forged")
 
     def test_agent_writes_require_explicit_scope_policy(self) -> None:
-        denied = self.client.post(
-            "/v1/knowledge/entries",
-            json={
-                "scope": "user",
-                "kind": "memory",
-                "content": "agent memory",
-                "provenance": AGENT,
-            },
-        )
-        self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["code"], "scope_policy_denied")
-        updated = self.client.put(
-            "/v1/knowledge/config",
-            json={"scope_policies": {"user": {"automatic_agent_writes": True}}},
-        )
+        from workbench_backend.knowledge.schemas import KnowledgeCreateRequest
+        from workbench_backend.errors import KnowledgeError
+        request = KnowledgeCreateRequest(scope="user", kind="memory", content="agent memory")
+        with self.assertRaises(KnowledgeError) as denied:
+            self.app.state.knowledge.create(request, actor="agent", run_id="agent_fixture")
+        self.assertEqual(denied.exception.code, "scope_policy_denied")
+        updated = self.client.put("/v1/knowledge/automatic-save-policy", json={"scope": "user", "automatic_agent_writes": True})
         self.assertEqual(updated.status_code, 200, updated.text)
-        allowed = self._create(content="agent memory", provenance=AGENT)
-        self.assertEqual(allowed["provenance"]["actor"], "agent")
-        self.assertEqual(allowed["provenance"]["run_id"], "agent_fixture")
+        allowed = self.app.state.knowledge.create(request, actor="agent", run_id="agent_fixture")
+        self.assertEqual(allowed.provenance.actor, "agent")
+        self.assertEqual(allowed.provenance.run_id, "agent_fixture")
+        forged = self.client.post("/v1/knowledge/entries", json={**request.model_dump(exclude_none=True), "provenance": AGENT})
+        self.assertEqual(forged.status_code, 403)
+        self.assertEqual(forged.json()["code"], "knowledge_actor_forged")
 
     def test_context_capture_default_redacts_secrets_and_is_configurable(self) -> None:
         config = self.client.get("/v1/knowledge/config").json()
@@ -324,7 +319,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
             "/v1/knowledge/entries",
             json={
                 "scope": "project",
-                "scope_id": "proj-lab",
+                "scope_id": self.client.post("/v1/projects", json={"path": str(self.root)}).json()["id"],
                 "kind": "memory",
                 "content": "project memory",
                 "provenance": HUMAN,
@@ -334,7 +329,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
             "/v1/knowledge/entries",
             json={
                 "scope": "agent",
-                "scope_id": "agent-lab",
+                "scope_id": self.client.post("/v1/agent-setups", json={"name": "Lab agent"}).json()["id"],
                 "kind": "skill",
                 "content": "skill text",
                 "provenance": HUMAN,

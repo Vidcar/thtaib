@@ -276,6 +276,25 @@ class StructuredOutputRepairMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
         exc: StructuredOutputValidationError | MultipleStructuredOutputsError,
     ) -> ModelResponse:
+        retry = self._repair_request(request, exc)
+        try:
+            return self._validate_repair_response(handler(retry))
+        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as retry_exc:
+            self._repair_failed(retry_exc)
+            raise
+
+    async def awrap_model_call(self, request: ModelRequest, handler: Any) -> ModelResponse:
+        try:
+            return await handler(request)
+        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as exc:
+            retry = self._repair_request(request, exc)
+            try:
+                return self._validate_repair_response(await handler(retry))
+            except (StructuredOutputValidationError, MultipleStructuredOutputsError) as retry_exc:
+                self._repair_failed(retry_exc)
+                raise
+
+    def _repair_request(self, request: ModelRequest, exc: Any) -> ModelRequest:
         if self.result.repair_attempts >= 1:
             self._record_event(
                 "structured_output_repair_failed",
@@ -291,7 +310,7 @@ class StructuredOutputRepairMiddleware(AgentMiddleware):
                 "tools_presented_on_retry": [],
             },
         )
-        retry = request.override(
+        return request.override(
             messages=[
                 *request.messages,
                 exc.ai_message,
@@ -300,19 +319,17 @@ class StructuredOutputRepairMiddleware(AgentMiddleware):
             tools=[],
             response_format=request.response_format,
         )
-        try:
-            response = handler(retry)
-            for message in response.result:
-                for call in getattr(message, "tool_calls", []):
-                    if call.get("name") != self.result.schema_name:
-                        raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
-            return response
-        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as retry_exc:
-            self._record_event(
-                "structured_output_repair_failed",
-                {"error": str(retry_exc), "attempts": self.result.repair_attempts},
-            )
-            raise retry_exc
+
+    def _validate_repair_response(self, response: ModelResponse) -> ModelResponse:
+        for message in response.result:
+            for call in getattr(message, "tool_calls", []):
+                if call.get("name") != self.result.schema_name:
+                    raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
+        return response
+
+    def _repair_failed(self, exc: Any) -> None:
+        self._record_event("structured_output_repair_failed",
+            {"error": str(exc), "attempts": self.result.repair_attempts})
 
     def _record_event(self, kind: str, detail: dict[str, Any]) -> None:
         if self.on_event is not None:

@@ -12,6 +12,7 @@ from workbench_backend.inference.schemas import Deployment, SettingsBag
 
 Capability = Literal["text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image"]
 ProbeStatus = Literal["passed", "failed", "untested", "inconclusive"]
+CAPABILITIES: tuple[Capability, ...] = ("text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image")
 
 
 class CapabilityProbeRequest(BaseModel):
@@ -34,10 +35,24 @@ class CapabilityEvidence(BaseModel):
     note: str = "Evidence applies only to this setup and probe; schema validity is not factual correctness."
 
 
+class ImageProbeSetup(BaseModel):
+    selected_projector: str | None = None
+    projector_present: bool | None = None
+    runtime_support: bool | None = None
+
+
+class CapabilityProbeReport(BaseModel):
+    current_fingerprint: str
+    current_support: dict[Capability, ProbeStatus]
+    evidence: list[CapabilityEvidence]
+    image_setup: ImageProbeSetup
+
+
 def setup_identity(deployment: Deployment, per_request: SettingsBag | dict | None = None) -> dict[str, Any]:
     props = deployment.server_props
     settings = deployment.settings.per_request.applied if per_request is None else per_request.applied if isinstance(per_request, SettingsBag) else per_request
     return {
+        "probe_version": 2,
         "deployment_id": deployment.id,
         "bundle_id": deployment.bundle_id,
         "artifacts": deployment.inference_identity,
@@ -51,6 +66,7 @@ def setup_identity(deployment: Deployment, per_request: SettingsBag | dict | Non
         "template_caps": props.chat_template_caps if props else {},
         "modalities": props.modalities if props else {},
         "context": props.n_ctx if props else None,
+        "generation_defaults": props.default_generation_settings if props else {},
     }
 
 

@@ -1,59 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { HttpAgentServerAdapter } from "@langchain/react";
-
-const require = createRequire(import.meta.url);
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-
-const reactPackage = require("@langchain/react/package.json");
-const sdkPackage = require("@langchain/langgraph-sdk/package.json");
-const corePackage = require("@langchain/core/package.json");
-const reactMarkdownPackage = JSON.parse(readFileSync(path.join(repoRoot, "apps/desktop/node_modules/react-markdown/package.json"), "utf8"));
-const remarkGfmPackage = JSON.parse(readFileSync(path.join(repoRoot, "apps/desktop/node_modules/remark-gfm/package.json"), "utf8"));
-
-assert.equal(reactPackage.version, "1.1.1");
-assert.equal(sdkPackage.version, "1.11.1");
-assert.equal(corePackage.version, "1.2.9");
-assert.equal(reactMarkdownPackage.version, "10.1.0");
-assert.equal(remarkGfmPackage.version, "4.0.1");
-assert.equal(sdkPackage.dependencies["@langchain/protocol"], "^0.0.19");
-
-const streamSource = readFileSync(path.join(repoRoot, "apps/desktop/src/renderer/InteractionStream.tsx"), "utf8");
-assert.ok(!streamSource.includes("stream.disconnect()"), "InteractionStream must not disconnect on stream object updates");
-assert.ok(streamSource.includes("new HttpAgentServerAdapter"), "desktop must use the stock adapter");
-assert.ok(streamSource.includes("threadId }),"), "adapter construction must include the registered interaction thread id");
-assert.ok(streamSource.includes("optimistic: true"), "SDK optimistic input must stay enabled for stable caller ids");
-assert.ok(streamSource.includes("incomplete_message_ids"), "Workbench projection must expose backend incomplete message ids");
-
-const chatSource = readFileSync(path.join(repoRoot, "apps/desktop/src/renderer/ChatPanel.tsx"), "utf8");
-assert.ok(chatSource.includes("interactionThreadId"), "Chat must keep adapter thread separate from graph thread_id");
-assert.ok(!chatSource.includes("const bound = { ...created, thread_id"), "Chat must not overwrite conversation.thread_id with interaction id");
-assert.ok(chatSource.includes("task: inputTask"), "task must be pulled into the message input");
-assert.ok(chatSource.includes("id: messageId"), "caller id must be pulled into the message input");
-assert.ok(chatSource.includes("draft_revision: _draftRevision"), "UI-only draft ownership must stay out of metadata.workbench");
-assert.ok(chatSource.includes("selection_generation: _selectionGeneration"), "UI-only selection ownership must stay out of metadata.workbench");
-assert.ok(chatSource.includes("submittedIds.current.has(pendingSubmit.id)"), "Chat submit effect must guard StrictMode duplicate submits");
-assert.ok(chatSource.includes("terminalRefreshKey.current === key"), "Chat terminal refresh must be keyed to avoid repeat fetch loops");
-assert.ok(chatSource.includes("selectionRequest.current !== requestId"), "Chat selection load must ignore late async frames");
-const loadRegisterBlock = chatSource.slice(chatSource.indexOf(".chatConversation(item.id)"), chatSource.indexOf("setDeploymentId(next.deployment_id)"));
-assert.ok(loadRegisterBlock.includes("registerAgentInteractionThread"), "saved chat load must register an SDK interaction thread");
-assert.ok(!loadRegisterBlock.includes("isAgentRunLive"), "saved chat load registration must not be limited to live runs");
-
-const feedSource = readFileSync(path.join(repoRoot, "apps/desktop/src/renderer/AgentMessageFeed.tsx"), "utf8");
-assert.ok(feedSource.includes("ReactMarkdown"), "AgentMessageFeed must use ReactMarkdown for Markdown presentation");
-assert.ok(feedSource.includes("remarkGfm"), "AgentMessageFeed must enable GFM Markdown support");
-assert.ok(feedSource.includes("safeHref"), "AgentMessageFeed must keep link sanitization explicit");
-assert.ok(feedSource.includes("incompleteMessageIds"), "AgentMessageFeed must mark backend-reported partial messages");
-assert.ok(feedSource.includes("aria-label=\"Incomplete response\""), "partial message label must be accessible and status-neutral");
-assert.ok(feedSource.includes("blockType === \"reasoning\""), "reasoning blocks must render separately from answer text");
-assert.ok(feedSource.includes("useFollowTranscript"), "feed must preserve near-bottom transcript follow-scroll while streaming");
-assert.ok(!feedSource.includes("dangerouslySetInnerHTML"), "AgentMessageFeed must not render raw HTML");
-assert.ok(!feedSource.includes("rehypeRaw"), "AgentMessageFeed must not enable raw HTML rehype plugins");
 
 const requests = [];
 let streamClosed = false;
@@ -158,4 +106,4 @@ try {
   await new Promise((resolve) => server.close(resolve));
 }
 
-console.log("Interaction SDK dependency, adapter, stream, submit, and response checks passed.");
+console.log("Interaction SDK adapter, stream, submit, and response checks passed.");

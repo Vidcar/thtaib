@@ -8,9 +8,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from workbench_backend.agents.context import ContextObservation
+from workbench_backend.agents.file_changes import ProjectFileChange
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
+from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.knowledge.schemas import KnowledgeBinding, RedactionMode
 from workbench_backend.state.schemas import RelatedFile
@@ -114,8 +116,8 @@ HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
     "LocalShellBackend with the bound project as cwd. permissions= apply to "
     "routed filesystem prefixes only while the default backend is a sandbox. "
-    "interrupt_on pauses dangerous execute calls. Not a durable Approvals "
-    "inbox (OQ-011)."
+    "interrupt_on pauses dangerous execute calls; the application persists "
+    "native interrupts and surfaces them through shared Chat."
 )
 
 
@@ -137,29 +139,58 @@ class PendingInterruptAction(BaseModel):
     allowed_decisions: list[str] = Field(default_factory=lambda: ["approve", "reject"])
 
 
-class PendingInterrupt(BaseModel):
-    """Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011)."""
+class UserQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str = Field(min_length=1, max_length=4000)
+    answer_type: Literal["text", "choice", "file", "folder"] = "text"
+    choices: list[str] = Field(default_factory=list, max_length=30)
 
-    kind: Literal["deepagents_interrupt_on"] = "deepagents_interrupt_on"
-    environment: Literal["windows_host_shell"] = "windows_host_shell"
+
+class UserAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer: str = Field(default="", max_length=32000)
+    cancelled: bool = False
+    interrupt_id: str | None = Field(default=None, min_length=1, max_length=200)
+    namespace: list[str] = Field(default_factory=list, max_length=20)
+
+
+class PendingInterrupt(BaseModel):
+    """Native Deep Agents interrupt persisted by the application and surfaced in Chat."""
+
+    interrupt_id: str | None = None
+    namespace: list[str] = Field(default_factory=list)
+    kind: Literal["deepagents_interrupt_on", "ask_user"] = "deepagents_interrupt_on"
+    environment: Literal["windows_host_shell", "tool_actions", "user_input"] = "windows_host_shell"
     isolation: Literal["none"] = "none"
     note: str = HOST_SHELL_NOTE
     action_requests: list[PendingInterruptAction] = Field(default_factory=list)
+    question: UserQuestion | None = None
 
 
 class InterruptDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     type: Literal["approve", "reject"]
     message: str | None = None
+    scope: Literal["once", "session", "always"] = "once"
 
 
 class InterruptDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     decisions: list[InterruptDecision]
+    interrupt_id: str | None = Field(default=None, min_length=1, max_length=200)
+    namespace: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AgentStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    deployment_id: str
+    deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] | None = None
+    retained_asset_ids: list[str] = Field(default_factory=list, max_length=32)
+    instructions: str | None = None
+    per_request_overrides: dict[str, Any] | None = None
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
@@ -183,17 +214,39 @@ class AgentStartRequest(BaseModel):
     retrieval_project_paths: list[str] = Field(default_factory=list)
     source_surface: SourceSurface = "agent-run"
     thread_id: str | None = None
+    resume_checkpoint_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class GenerationObservation(BaseModel):
+    request_id: str | None = None
+    phase: Literal["prompt_processing", "generating", "completed", "interrupted"] = "completed"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    context_limit: int | None = None
+    context_used_tokens: int | None = None
+    elapsed_seconds: float
+    tokens_per_second: float | None = None
+    measured_at: str
+    basis: Literal["reported_tokens_model_call_wall_time", "llama_cpp_timings"] = "reported_tokens_model_call_wall_time"
+    interval: Literal["last_completed_model_call_including_prompt_processing", "current_model_call_generation", "last_model_call_generation"] = "last_completed_model_call_including_prompt_processing"
 
 
 class AgentRun(BaseModel):
     id: str
     status: AgentRunStatus = AgentRunStatus.queued
     deployment_id: str
+    project_id: str | None = None
+    agent_setup_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] = Field(default_factory=list)
+    connection_snapshots: list[ConnectionSnapshot] = Field(default_factory=list)
+    retained_asset_ids: list[str] = Field(default_factory=list, max_length=32)
     task: str
     input_message_id: str | None = None
     content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]
+    framework_read_paths: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None
     criteria: TaskCriteria = Field(default_factory=TaskCriteria)
@@ -201,10 +254,12 @@ class AgentRun(BaseModel):
     events: list[AgentEvent] = Field(default_factory=list)
     model_requests: list[ModelRequestCapture] = Field(default_factory=list)
     tool_invocations: list[dict[str, Any]] = Field(default_factory=list)
+    file_changes: list[ProjectFileChange] = Field(default_factory=list)
     completion: CompletionReport | None = None
     output_schema: OutputSchemaRequest | None = None
     structured_output: StructuredOutputResult | None = None
     context_observation: ContextObservation | None = None
+    generation_observation: GenerationObservation | None = None
     stop_reason: str | None = None
     error: str | None = None
     created_at: str
@@ -230,8 +285,10 @@ class AgentRun(BaseModel):
     retrieved_material: list[str] = Field(default_factory=list)
     thread_id: str | None = None
     checkpoint_ids: list[str] = Field(default_factory=list)
+    resume_checkpoint_id: str | None = None
     related_files: list[RelatedFile] = Field(default_factory=list)
     effective_setup: EffectiveSetup | None = None
     starting_snapshot_id: str | None = None
+    final_snapshot_id: str | None = None
     host_shell: HostShellFacts = Field(default_factory=HostShellFacts)
     pending_interrupt: PendingInterrupt | None = None

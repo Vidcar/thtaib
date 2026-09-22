@@ -145,12 +145,3 @@ export function eventKindLabel(kind: string): string {
   }
 }
 
-export function deploymentHealthLabel(healthy: boolean | null | undefined): string {
-  if (healthy === true) {
-    return "Healthy";
-  }
-  if (healthy === false) {
-    return "Unhealthy";
-  }
-  return "Health unknown";
-}

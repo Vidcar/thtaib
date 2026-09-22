@@ -1,8 +1,8 @@
 """Windows host shell policy on Deep Agents 0.7.15 (ENV-001 / OQ-003).
 
 Uses ``LocalShellBackend``, ``permissions=``, and ``interrupt_on=``. The
-framework pauses dangerous ``execute`` calls; this module does not invent a
-second approvals inbox (OQ-011).
+framework pauses dangerous ``execute`` calls; the application persists native
+interrupts and surfaces them through shared Chat.
 
 Sources consulted 2026-09-19 for pinned ``deepagents==0.7.15``:
 
@@ -79,7 +79,8 @@ HOST_SHELL_NOTE = (
     "LocalShellBackend with the bound project as cwd and inherit the backend "
     "process environment. permissions= apply only to routed filesystem "
     "prefixes while the default backend is a sandbox. interrupt_on pauses "
-    "dangerous execute calls. This is not a durable Approvals inbox (OQ-011)."
+    "dangerous execute calls; the application persists native interrupts and "
+    "surfaces them through shared Chat."
 )
 
 
@@ -301,21 +302,49 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
     return rules or None
 
 
-def interrupt_on_for_run(run: AgentRun) -> dict[str, bool | dict[str, Any]] | None:
+def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for ``execute`` whenever LocalShellBackend is attached."""
 
-    if not host_shell_requested(run):
-        return None
-    return {
+    def requires_approval(request: ToolCallRequest) -> bool:
+        call = request.tool_call
+        args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+        if grants is not None and grants.matches(run, "execute", args):
+            return False
+        return execute_requires_approval(request)
+
+    result = {
         "execute": {
             "allowed_decisions": ["approve", "reject"],
-            "when": execute_requires_approval,
+            "when": requires_approval,
             "description": (
                 "Host shell command (no isolation). Approve to run on this machine "
                 "in the bound project working directory."
             ),
         }
-    }
+    } if host_shell_requested(run) else {}
+    for name in ("rename_file", "delete_file"):
+        if name not in run.presented_tools:
+            continue
+        def file_approval(request: ToolCallRequest, name=name) -> bool:
+            call = request.tool_call
+            args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+            return grants is None or not grants.matches(run, name, args)
+        result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
+            "description": "Change a file in this project. Review the exact source and destination before allowing it."}
+    for connection in run.connection_snapshots:
+        if connection.kind != "mcp":
+            continue
+        for selected in connection.tools:
+            name = selected.name
+            if name not in run.presented_tools:
+                continue
+            def external_approval(request: ToolCallRequest, name=name) -> bool:
+                call = request.tool_call
+                args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+                return grants is None or not grants.matches(run, name, args)
+            result[name] = {"allowed_decisions": ["approve", "reject"], "when": external_approval,
+                "description": f"Use {selected.remote_name} through {connection.name}. Review the exact inputs before allowing this external action."}
+    return result or None
 
 
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
@@ -324,6 +353,8 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     value = _interrupt_value(raw)
     if value is None:
         return None
+    if value.get("kind") == "ask_user":
+        return PendingInterrupt(kind="ask_user", question=value.get("question"), environment="user_input", note="A user answer is required. This is not a permission approval.")
     requests = value.get("action_requests")
     reviews = value.get("review_configs")
     if not isinstance(requests, list) or not requests:
@@ -356,14 +387,19 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
         )
     if not actions:
         return None
-    return PendingInterrupt(action_requests=actions)
+    if all(action.name == "execute" for action in actions):
+        return PendingInterrupt(action_requests=actions)
+    return PendingInterrupt(action_requests=actions, environment="tool_actions",
+        note="Review each selected action and its exact inputs. Approval does not grant other tools or allow automatic memory saving.")
 
 
 def reject_decisions_for(pending: PendingInterrupt) -> list[dict[str, str]]:
+    if pending.kind == "ask_user":
+        return [{"type": "user_answer", "cancelled": "true"}]
     return [
         {
             "type": "reject",
-            "message": "Run cancelled before the host-shell command was approved.",
+            "message": "Run cancelled before this action was approved.",
         }
         for _ in pending.action_requests
     ]
@@ -401,6 +437,6 @@ def _interrupt_value(raw: Any) -> dict[str, Any] | None:
                 return found
         return None
     value = getattr(raw, "value", raw)
-    if isinstance(value, dict) and value.get("action_requests"):
+    if isinstance(value, dict) and (value.get("action_requests") or value.get("kind") == "ask_user"):
         return value
     return None

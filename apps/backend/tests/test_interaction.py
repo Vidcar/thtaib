@@ -49,6 +49,140 @@ def _execute_then_reply(command: str, *, call_id: str = "call_interaction_exec")
 
 
 class InteractionApiTests(unittest.TestCase):
+    def test_checkpoint_branch_continues_saved_context_in_separate_workspace(self) -> None:
+        conversation_id, thread = self._register_chat()
+        self._install_model([AIMessage(content="Remembered first answer")])
+        response = self._run_start(thread)
+        self.assertEqual(response.status_code, 200, response.text)
+        completed = self._wait_state(thread)
+        source_run = completed["values"]["workbench"]["run"]
+        source = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
+        response = self.client.post(f"/v1/chat/conversations/{conversation_id}/branches", json={"source_run_id": source_run["id"]})
+        self.assertEqual(response.status_code, 200, response.text)
+        branch = response.json()
+        self.assertNotEqual(branch["thread_id"], source["thread_id"])
+        self.assertNotEqual(branch["project_path"], source["project_path"])
+        self.assertEqual(branch["area_id"], source["area_id"])
+        from workbench_backend.state.checkpointer import conversation_state
+        state = conversation_state(self.app.state.manager.paths.checkpoints_db, branch["thread_id"])
+        from workbench_backend.state.checkpointer import open_sqlite_checkpointer
+        saver = open_sqlite_checkpointer(self.app.state.manager.paths.checkpoints_db)
+        saved = saver.get_tuple({"configurable": {"thread_id": branch["thread_id"]}})
+        self.assertIn("Remembered first answer", str(state["messages"]), str(saved))
+        self._install_model([AIMessage(content="A separate follow-up")])
+        following = self.client.post(f"/v1/chat/conversations/{branch['id']}/start", json={"task": "Continue", "presented_tools": []})
+        self.assertEqual(following.status_code, 200, following.text)
+        from tests.test_harness import wait_for_run
+        finished = wait_for_run(self.client, following.json()["current_run_id"])
+        self.assertEqual(finished["status"], "completed", finished)
+        self.assertEqual(finished["project_id"], source["project_id"])
+        self.assertEqual(Path(finished["project_path"]).resolve(), Path(branch["project_path"]).resolve())
+        self.assertNotEqual(Path(finished["project_path"]).resolve(), Path(source["project_path"]).resolve())
+        original = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
+        self.assertEqual(original["current_run_id"], source_run["id"])
+        self.assertNotIn("A separate follow-up", str(original["transcript"]))
+
+    def test_typed_question_resumes_exact_interrupt_without_approval(self) -> None:
+        self._install_model([
+            AIMessage(content="", tool_calls=[{"name": "ask_user", "args": {"prompt": "Choose format", "answer_type": "choice", "choices": ["Text", "Code"]}, "id": "question1"}]),
+            AIMessage(content="Here is the selected result."),
+        ])
+        thread = self._register_agent()
+        started = self._run_start(thread, metadata={"presented_tools": ["ask_user"]})
+        self.assertEqual(started.status_code, 200, started.text)
+        state = self._wait_interrupt(thread)
+        deadline = time.monotonic() + 10
+        while not state["values"]["workbench"]["run"].get("pending_interrupt"):
+            if time.monotonic() >= deadline:
+                self.fail("Typed question did not become a durable interruption")
+            time.sleep(0.01)
+            state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
+        interrupt = state["values"]["__interrupt__"][0]
+        run = state["values"]["workbench"]["run"]
+        self.assertEqual(run["pending_interrupt"]["kind"], "ask_user")
+        def answer(value, ident="answer1", interrupt_id=None):
+            return self.client.post(f"/v1/agent-interaction/threads/{thread}/commands", json={
+                "id": ident, "method": "input.respond", "params": {"namespace": interrupt.get("namespace", []),
+                    "interrupt_id": interrupt_id or interrupt["id"], "response": {"answer": value}}})
+        self.assertEqual(answer("Text", "stale", "wrong").status_code, 409)
+        self.assertEqual(answer("Invalid", "invalid").status_code, 400)
+        accepted = answer("Code")
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        final = self._wait_state(thread)
+        self.assertIsNone(final["values"]["workbench"]["run"].get("pending_interrupt"))
+        self.assertEqual(answer("Text", "late").status_code, 409)
+
+    def test_chat_interaction_start_accepts_once_when_bound_deploy_reports_unhealthy(self) -> None:
+        self._install_model([AIMessage(content="silver-lake-42")])
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id, "profile_id": self.profile_id},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation_id = created.json()["id"]
+        registered = self.client.post(
+            "/v1/agent-interaction/threads",
+            json={"source_surface": "chat", "conversation_id": conversation_id},
+        )
+        self.assertEqual(registered.status_code, 200, registered.text)
+        thread = registered.json()["thread_id"]
+        message_id = "desktop-input-silver-lake"
+        response = self._run_start(
+            thread,
+            message_id=message_id,
+            content="Packet03 desktop check: remember the code silver-lake-42. Reply with that code only.",
+            metadata={"project_path": None},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        accepted_run_id = response.json()["result"]["run_id"]
+        state = self._wait_state(thread)
+        run = state["values"]["workbench"]["run"]
+        self.assertEqual(run["id"], accepted_run_id)
+        self.assertEqual(run["status"], "completed", run)
+        self.assertEqual(run["input_message_id"], message_id)
+
+        duplicate = self._run_start(
+            thread,
+            command_id="cmd-duplicate",
+            message_id=message_id,
+            content="Packet03 desktop check: remember the code silver-lake-42. Reply with that code only.",
+            metadata={"project_path": None},
+        )
+
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.json()["error"], "duplicate_input")
+        conversation = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
+        self.assertEqual(conversation["run_ids"], [run["id"]])
+        users = [item for item in conversation["transcript"] if item["role"] == "user"]
+        self.assertEqual([item.get("id") for item in users], [message_id])
+        self.assertEqual(conversation["queue"], [])
+
+    def test_chat_interaction_start_preserves_missing_deployment_error_without_input(self) -> None:
+        created = self.client.post(
+            "/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id, "profile_id": self.profile_id},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation_id = created.json()["id"]
+        registered = self.client.post(
+            "/v1/agent-interaction/threads",
+            json={"source_surface": "chat", "conversation_id": conversation_id},
+        )
+        self.assertEqual(registered.status_code, 200, registered.text)
+        thread = registered.json()["thread_id"]
+        self.manager.store.delete_deployment(self.deployment_id)
+
+        response = self._run_start(thread, message_id="missing-deploy-input", metadata={"project_path": None})
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["error"], "deployment_missing")
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state")
+        self.assertEqual(state.status_code, 200, state.text)
+        self.assertIsNone(state.json()["values"]["workbench"].get("run"))
+        conversation = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
+        self.assertEqual(conversation["run_ids"], [])
+        self.assertEqual(conversation["transcript"], [])
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -527,6 +661,49 @@ class InteractionApiTests(unittest.TestCase):
         response = wrong.get(f"/v1/agent-interaction/threads/{thread_id}/state")
         self.assertEqual(response.status_code, 403, response.text)
         self.assertEqual(response.json()["code"], "invalid_token")
+
+    def test_register_after_direct_chat_interrupt_recovers_native_response_target(self) -> None:
+        marker = self.project / "late-registration.txt"
+        self._install_model(_execute_then_reply(write_marker_command(marker.name)))
+        created = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.deployment_id, "project_path": str(self.project),
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation_id = created.json()["id"]
+        started = self.client.post(f"/v1/chat/conversations/{conversation_id}/start", json={
+            "task": "Create the marker", "presented_tools": ["execute"],
+        })
+        self.assertEqual(started.status_code, 200, started.text)
+        run_id = started.json()["current_run_id"]
+        deadline = time.monotonic() + 10
+        while True:
+            saved = self.app.state.harness.get_run(run_id)
+            if saved.pending_interrupt:
+                break
+            if time.monotonic() >= deadline:
+                self.fail("Direct Chat did not reach its durable approval")
+            time.sleep(0.01)
+        self.assertFalse(marker.exists())
+        registered = self.client.post("/v1/agent-interaction/threads", json={
+            "source_surface": "chat", "conversation_id": conversation_id,
+        })
+        self.assertEqual(registered.status_code, 200, registered.text)
+        thread_id = registered.json()["thread_id"]
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        self.assertTrue(state["tasks"], "reopening a durable approval must expose its SDK response target")
+        pending = state["tasks"][0]["interrupts"][0]
+        self.assertEqual(pending["id"], saved.pending_interrupt.interrupt_id)
+        self.assertEqual(state["values"]["workbench"]["interrupt_run_id"], run_id)
+        approved = self.client.post(f"/v1/agent-interaction/threads/{thread_id}/commands", json={
+            "id": "approve-recovered", "method": "input.respond", "params": {
+                "interrupt_id": pending["id"], "namespace": pending.get("namespace", []),
+                "response": {"decisions": [{"type": "approve"}]},
+            },
+        })
+        self.assertEqual(approved.status_code, 200, approved.text)
+        finished = self._wait_state(thread_id)
+        self.assertEqual(finished["tasks"], [])
+        self.assertTrue(marker.exists())
 
     def test_native_approval_identity_namespace_and_duplicates(self) -> None:
         marker = self.project / "approved-marker.txt"

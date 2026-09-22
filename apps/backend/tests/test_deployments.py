@@ -381,6 +381,30 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(deployment.startup_overrides["ctx_size"], None)
         self.assertNotEqual(deployment.applied_startup.get("ctx_size"), 1024)
 
+    def test_reload_rejects_changed_weights_before_stopping_owned_process(self) -> None:
+        deployment = self.manager.create_managed(
+            ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18126})
+        )
+        self.assertEqual(deployment.status, DeploymentStatus.running)
+        model_path = Path(self.manager.store.get_bundle(self.bundle_id).primary_path)
+        content = bytearray(model_path.read_bytes())
+        content[-1] ^= 1
+        model_path.write_bytes(content)
+        launches_before = len(self.supervisor.launched)
+
+        with patch.object(self.supervisor, "stop", wraps=self.supervisor.stop) as stop:
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.reload_deployment(deployment.id)
+            self.assertEqual(caught.exception.code, "bundle_not_deployable")
+            stop.assert_not_called()
+
+        self.assertEqual(len(self.supervisor.launched), launches_before)
+        current = self.manager.get_deployment(deployment.id)
+        self.assertEqual(current.process_identity, deployment.process_identity)
+        self.assertEqual(current.status, DeploymentStatus.running)
+        self.assertTrue(self.supervisor.launched_still_running(deployment.pid))
+        self.assertFalse(self.manager.store.get_bundle(self.bundle_id).disk_matches)
+
     def test_reload_uses_frozen_launch_config_after_profile_edit(self) -> None:
         profile = self.manager.create_profile(
             ProfileWriteRequest(

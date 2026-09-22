@@ -92,6 +92,22 @@ def wait_for_chat_interrupt(
     raise TimeoutError(f"chat {conversation_id} did not interrupt: {body}")
 
 
+def direct_interrupt_decision(pending: dict[str, Any], decision: str) -> dict[str, Any]:
+    return {
+        "interrupt_id": pending["interrupt_id"],
+        "namespace": pending.get("namespace", []),
+        "decisions": [{"type": decision}],
+    }
+
+
+def run_direct_interrupt_decision(paused_run: dict[str, Any], decision: str) -> dict[str, Any]:
+    return direct_interrupt_decision(paused_run["pending_interrupt"], decision)
+
+
+def chat_direct_interrupt_decision(paused_view: dict[str, Any], decision: str) -> dict[str, Any]:
+    return direct_interrupt_decision(paused_view["current_run"]["pending_interrupt"], decision)
+
+
 def execute_then_reply(command: str) -> list[AIMessage]:
     return [
         AIMessage(
@@ -380,11 +396,11 @@ class HostShellHarnessTests(unittest.TestCase):
         def skip_persist(_run: AgentRun) -> None:
             return None
 
-        def skip_resume_reject(*_args: Any, **_kwargs: Any) -> None:
+        async def skip_resume_reject(*_args: Any, **_kwargs: Any) -> None:
             return None
 
         old_harness._persist_and_notify = skip_persist  # type: ignore[method-assign]
-        old_harness._resume_reject_then_stop = skip_resume_reject  # type: ignore[method-assign]
+        old_harness._aresume_reject_then_stop = skip_resume_reject  # type: ignore[method-assign]
         self._retire_old_waiting_harness(old_harness, run_id)
         thread = old_harness._threads.get(run_id)
         self.assertTrue(thread is None or not thread.is_alive())
@@ -450,9 +466,19 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(pending["action_requests"][0]["name"], "execute")
         kinds = [event["kind"] for event in paused["events"]]
         self.assertIn("interrupt", kinds)
+        stale = self.client.post(
+            f"/v1/agent-runs/{started['id']}/interrupt-decision",
+            json={
+                "interrupt_id": f"{pending['interrupt_id']}-old",
+                "namespace": pending.get("namespace", []),
+                "decisions": [{"type": "approve"}],
+            },
+        )
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(stale.json()["code"], "stale_interrupt")
         decided = self.client.post(
             f"/v1/agent-runs/{started['id']}/interrupt-decision",
-            json={"decisions": [{"type": "approve"}]},
+            json=run_direct_interrupt_decision(paused, "approve"),
         )
         self.assertEqual(decided.status_code, 200, decided.text)
         body = wait_for_run(self.client, started["id"])
@@ -468,10 +494,10 @@ class HostShellHarnessTests(unittest.TestCase):
     def test_dangerous_execute_deny_does_not_run(self) -> None:
         self._install(execute_then_reply(write_marker_command("host-shell-denied.txt")))
         started = self._start()
-        wait_for_interrupt(self.client, started["id"])
+        paused = wait_for_interrupt(self.client, started["id"])
         decided = self.client.post(
             f"/v1/agent-runs/{started['id']}/interrupt-decision",
-            json={"decisions": [{"type": "reject"}]},
+            json=run_direct_interrupt_decision(paused, "reject"),
         )
         self.assertEqual(decided.status_code, 200, decided.text)
         body = wait_for_run(self.client, started["id"])
@@ -501,10 +527,10 @@ class HostShellHarnessTests(unittest.TestCase):
 
         self._install(execute_then_reply("git branch -D doomed"))
         rejected = self._start()
-        wait_for_interrupt(self.client, rejected["id"])
+        rejected_pause = wait_for_interrupt(self.client, rejected["id"])
         response = self.client.post(
             f"/v1/agent-runs/{rejected['id']}/interrupt-decision",
-            json={"decisions": [{"type": "reject"}]},
+            json=run_direct_interrupt_decision(rejected_pause, "reject"),
         )
         self.assertEqual(response.status_code, 200, response.text)
         rejected_body = wait_for_run(self.client, rejected["id"])
@@ -520,13 +546,13 @@ class HostShellHarnessTests(unittest.TestCase):
 
         self._install(execute_then_reply("git branch -D doomed"))
         approved = self._start()
-        wait_for_interrupt(self.client, approved["id"])
+        approved_pause = wait_for_interrupt(self.client, approved["id"])
         results: list[int] = []
 
         def approve() -> None:
             result = self.client.post(
                 f"/v1/agent-runs/{approved['id']}/interrupt-decision",
-                json={"decisions": [{"type": "approve"}]},
+                json=run_direct_interrupt_decision(approved_pause, "approve"),
             )
             results.append(result.status_code)
 
@@ -553,9 +579,10 @@ class HostShellHarnessTests(unittest.TestCase):
             write_marker_command("restart-reject.txt")
         )
         try:
+            paused = self.client.get(f"/v1/agent-runs/{started['id']}").json()
             response = self.client.post(
                 f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                json={"decisions": [{"type": "reject"}]},
+                json=run_direct_interrupt_decision(paused, "reject"),
             )
             self.assertEqual(response.status_code, 200, response.text)
             body = wait_for_run(self.client, started["id"])
@@ -570,9 +597,10 @@ class HostShellHarnessTests(unittest.TestCase):
             write_marker_command("restart-approve.txt")
         )
         try:
+            paused = self.client.get(f"/v1/agent-runs/{started['id']}").json()
             response = self.client.post(
                 f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                json={"decisions": [{"type": "approve"}]},
+                json=run_direct_interrupt_decision(paused, "approve"),
             )
             self.assertEqual(response.status_code, 200, response.text)
             body = wait_for_run(self.client, started["id"])
@@ -595,9 +623,10 @@ class HostShellHarnessTests(unittest.TestCase):
                 )
                 started, old_harness = self._restart_from_script(stop_original_worker=True)
 
+                first_pause = self.client.get(f"/v1/agent-runs/{started['id']}").json()
                 first_response = self.client.post(
                     f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                    json={"decisions": [{"type": "approve"}]},
+                    json=run_direct_interrupt_decision(first_pause, "approve"),
                 )
                 self.assertEqual(first_response.status_code, 200, first_response.text)
                 second_pause = wait_for_interrupt_command(
@@ -624,7 +653,7 @@ class HostShellHarnessTests(unittest.TestCase):
                         barrier.wait(timeout=5.0)
                         response = self.client.post(
                             f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                            json={"decisions": [{"type": "approve"}]},
+                            json=run_direct_interrupt_decision(second_pause, "approve"),
                         )
                         results.append(response.status_code)
 
@@ -640,7 +669,7 @@ class HostShellHarnessTests(unittest.TestCase):
                 else:
                     second_response = self.client.post(
                         f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                        json={"decisions": [{"type": second_action}]},
+                        json=run_direct_interrupt_decision(second_pause, second_action),
                     )
                     self.assertEqual(second_response.status_code, 200, second_response.text)
                     body = wait_for_run(self.client, started["id"])
@@ -677,6 +706,7 @@ class HostShellHarnessTests(unittest.TestCase):
             else "sh -c 'echo hit >> restart-race.txt'"
         )
         started, old_harness = self._restart_from_interrupt(command)
+        paused = self.client.get(f"/v1/agent-runs/{started['id']}").json()
         barrier = threading.Barrier(2)
         results: list[int] = []
 
@@ -684,7 +714,7 @@ class HostShellHarnessTests(unittest.TestCase):
             barrier.wait(timeout=5.0)
             result = self.client.post(
                 f"/v1/agent-runs/{started['id']}/interrupt-decision",
-                json={"decisions": [{"type": "approve"}]},
+                json=run_direct_interrupt_decision(paused, "approve"),
             )
             results.append(result.status_code)
 
@@ -715,16 +745,20 @@ class HostShellHarnessTests(unittest.TestCase):
 
     def test_decision_count_must_match(self) -> None:
         started = self._start()
-        wait_for_interrupt(self.client, started["id"])
+        paused = wait_for_interrupt(self.client, started["id"])
         bad = self.client.post(
             f"/v1/agent-runs/{started['id']}/interrupt-decision",
-            json={"decisions": []},
+            json={
+                "interrupt_id": paused["pending_interrupt"]["interrupt_id"],
+                "namespace": paused["pending_interrupt"].get("namespace", []),
+                "decisions": [],
+            },
         )
         self.assertEqual(bad.status_code, 400, bad.text)
         self.assertEqual(bad.json()["code"], "interrupt_decision_count")
         self.client.post(
             f"/v1/agent-runs/{started['id']}/interrupt-decision",
-            json={"decisions": [{"type": "reject"}]},
+            json=run_direct_interrupt_decision(paused, "reject"),
         )
         wait_for_run(self.client, started["id"])
 
@@ -745,7 +779,7 @@ class HostShellHarnessTests(unittest.TestCase):
         paused = wait_for_chat_interrupt(self.client, created.json()["id"])
         decided = self.client.post(
             f"/v1/chat/conversations/{created.json()['id']}/interrupt-decision",
-            json={"decisions": [{"type": "approve"}]},
+            json=chat_direct_interrupt_decision(paused, "approve"),
         )
         self.assertEqual(decided.status_code, 200, decided.text)
         deadline = time.time() + 20
@@ -773,7 +807,7 @@ class HostShellHarnessTests(unittest.TestCase):
             json={"task": "Run a host-shell command.", "presented_tools": ["execute"]},
         )
         self.assertEqual(started.status_code, 200, started.text)
-        wait_for_chat_interrupt(self.client, created.json()["id"])
+        paused = wait_for_chat_interrupt(self.client, created.json()["id"])
         stored = self.app.state.app_store.get_conversation(created.json()["id"])
         self.assertIsNotNone(stored)
         assert stored is not None
@@ -788,7 +822,7 @@ class HostShellHarnessTests(unittest.TestCase):
         self.app.state.app_store.put_conversation(stored)
         decided = self.client.post(
             f"/v1/chat/conversations/{created.json()['id']}/interrupt-decision",
-            json={"decisions": [{"type": "approve"}]},
+            json=chat_direct_interrupt_decision(paused, "approve"),
         )
         self.assertEqual(decided.status_code, 200, decided.text)
         self.assertIn(

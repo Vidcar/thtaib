@@ -377,7 +377,7 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         self.assertNotIn(SYNTH_API_KEY, dumped)
         self.assertTrue(capture["redacted"] or capture["discarded"])
         self.assertIn("echo", capture["available_tools"])
-        self.assertEqual(capture["presented_tools"], ["echo"])
+        self.assertCountEqual(capture["presented_tools"], ["echo", "read_file"])
         stored = self._sqlite_run(body["id"])
         self.assertNotIn(SYNTH_API_KEY, json.dumps(stored["model_requests"]))
         http_payload = stored["model_requests"][0].get("http_payload")

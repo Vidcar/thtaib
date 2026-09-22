@@ -29,6 +29,9 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 export function conversationTitle(conversation: ChatConversation): string {
+  if (conversation.title?.trim()) {
+    return conversation.title.trim();
+  }
   const firstUser = conversation.transcript.find((item) => item.role === "user" && item.content.trim());
   if (!firstUser) {
     return "New conversation";

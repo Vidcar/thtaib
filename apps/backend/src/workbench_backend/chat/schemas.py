@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.agents.structured import OutputSchemaRequest
+from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 
@@ -21,14 +22,22 @@ class ChatMessage(BaseModel):
     # Display archives also retain upstream assistant reasoning/tool blocks.
     # Execution input remains separately validated by ChatStartRequest.
     content_blocks: list[dict[str, Any]] | None = None
+    attachment_ids: list[str] = Field(default_factory=list)
     at: str
     run_id: str | None = None
 
 
 class ChatConversationCreateRequest(BaseModel):
-    deployment_id: str
+    deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    presented_tools: list[str] | None = None
+    per_request_overrides: dict[str, Any] | None = None
+    connection_ids: list[str] | None = None
+    instructions: str | None = None
     project_path: str | None = None
     workspace_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
     profile_id: str | None = None
     inherit_deployment_settings: bool = True
     memory_version_refs: list[str] = Field(default_factory=list)
@@ -43,11 +52,18 @@ class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
+    draft_revision: int | None = Field(default=None, ge=0)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     output_schema: OutputSchemaRequest | None = None
     deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] | None = None
+    instructions: str | None = None
     profile_id: str | None = None
     inherit_deployment_settings: bool = True
+    per_request_overrides: dict[str, Any] | None = None
     project_path: str | None = None
     workspace_id: str | None = None
     presented_tools: list[str] | None = None
@@ -57,6 +73,73 @@ class ChatStartRequest(BaseModel):
     knowledge_version_refs: list[str] | None = None
     embedding_deployment_id: str | None = None
     retrieval_project_paths: list[str] | None = None
+
+
+class ChatConversationUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class ChatConversationArchiveRequest(BaseModel):
+    archived: bool = True
+
+
+class ChatSearchResult(BaseModel):
+    conversation: "ChatConversation"
+    matched_messages: list[ChatMessage] = Field(default_factory=list)
+
+
+class ChatDraft(BaseModel):
+    content: str = ""
+    content_blocks: list[dict[str, Any]] | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    intended_config: dict[str, Any] = Field(default_factory=dict)
+    revision: int = 0
+    updated_at: str
+
+
+class ChatDraftUpdateRequest(BaseModel):
+    content: str = ""
+    content_blocks: list[dict[str, Any]] | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    intended_config: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int | None = None
+
+
+class ChatQueueItem(BaseModel):
+    instruction_layers: list[InstructionLayer] | None = None
+    id: str
+    task: str
+    run_id: str | None = None
+    input_message_id: str | None = None
+    content_blocks: list[dict[str, Any]] | None = None
+    attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    output_schema: dict[str, Any] | None = None
+    intended_config: dict[str, Any] = Field(default_factory=dict)
+    frozen_config: dict[str, Any] | None = None
+    status: Literal["queued", "dispatching", "paused"] = "queued"
+    pause_reason: Literal["failed", "cancelled", "dispatch_uncertain"] | None = None
+    pause_error_code: str | None = None
+    pause_error: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ChatQueueItemUpdateRequest(BaseModel):
+    task: str | None = None
+    input_message_id: str | None = None
+    content_blocks: list[dict[str, Any]] | None = None
+    attachment_ids: list[str] | None = Field(default=None, max_length=32)
+    output_schema: dict[str, Any] | None = None
+    intended_config: dict[str, Any] | None = None
+
+
+class ChatQueueResumeRequest(BaseModel):
+    resume_paused: bool = False
+    acknowledge_uncertain_effects: bool = False
+
+
+class ChatCancelRequest(BaseModel):
+    input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ChatTranscriptReplaceRequest(BaseModel):
@@ -105,7 +188,26 @@ class ChatContinuity(BaseModel):
 
 class ChatConversation(BaseModel):
     id: str
+    title: str | None = None
+    archived: bool = False
+    archived_at: str | None = None
+    area_kind: Literal["general", "project"] = "general"
+    area_id: str | None = None
+    area_label: str | None = None
+    area_project_path: str | None = None
+    area_workspace_id: str | None = None
+    source_conversation_id: str | None = None
+    source_run_id: str | None = None
+    source_checkpoint_id: str | None = None
+    branch_head_checkpoint_id: str | None = None
     deployment_id: str
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    setup_overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
+    setup_cleared_fields: list[str] = Field(default_factory=list)
+    presented_tools: list[str] | None = None
+    connection_ids: list[str] | None = None
+    per_request_overrides: dict[str, Any] | None = None
     profile_id: str | None = None
     inherit_deployment_settings: bool = True
     project_path: str | None = None
@@ -123,6 +225,8 @@ class ChatConversation(BaseModel):
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     embedding_deployment_id: str | None = None
     retrieval_project_paths: list[str] = Field(default_factory=list)
+    draft: ChatDraft | None = None
+    queue: list[ChatQueueItem] = Field(default_factory=list)
     created_at: str
     updated_at: str
 
@@ -130,16 +234,18 @@ class ChatConversation(BaseModel):
 class ChatConversationView(ChatConversation):
     current_run: AgentRun | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
+    pending_cancel_input_ids: list[str] = Field(default_factory=list)
     continuity: ChatContinuity | None = None
     deploy_health: ChatDeployHealth | None = None
     filesystem_tools_available: bool = False
     shell_tools_available: bool = False
     enabled_tools: list[str] = Field(default_factory=list)
     note: str = (
-        "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
-        "iteration. Follow-ups resume conversation.thread_id. Transcript is "
-        "displayed history, not the working project and not harness context. "
+        "Shared Chat. The embedded Deep Agents harness owns model/tool iteration; "
+        "the application persists native interrupts and surfaces them here. "
+        "Follow-ups resume conversation.thread_id. Transcript is displayed "
+        "history, not the working project and not harness context. "
         "A project folder is optional; filesystem and host-shell tools are "
         "unavailable without one. Host-shell execute pauses on Deep Agents "
-        "interrupt_on; this is not a durable Approvals inbox (OQ-011)."
+        "interrupt_on; the application persists the interrupt for Chat."
     )

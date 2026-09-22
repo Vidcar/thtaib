@@ -31,8 +31,12 @@ class _RuntimeMetadataReader(GGUFReader):
     subclass keeps gguf-py parsing and suppresses only tensor construction.
     """
 
-    def _build_tensors(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
+    def _build_tensors(self, _offset: int, fields: list[Any]) -> None:
+        # Names are in the GGUF directory; no tensor data or type decoding is needed.
+        self.has_mtp_tensors = any(
+            bytes(field.parts[1]).decode("utf-8", errors="replace").endswith(".nextn.eh_proj.weight")
+            for field in fields
+        )
 
 
 class _InspectReader(GGUFReader):
@@ -140,7 +144,8 @@ def read_gguf_runtime_metadata(path: Path) -> GgufRuntimeMetadata:
         fields = {
             name: _jsonable(field.contents())
             for name, field in reader.fields.items()
-            if name in {"general.architecture", "general.name"} or name.endswith((".context_length", ".block_count"))
+            if name in {"general.architecture", "general.name", "tokenizer.chat_template"}
+            or name.endswith((".context_length", ".block_count", ".nextn_predict_layers"))
         }
     finally:
         _close_reader(reader)
@@ -153,6 +158,9 @@ def read_gguf_runtime_metadata(path: Path) -> GgufRuntimeMetadata:
         name=_as_str(fields.get("general.name")),
         context_length=context_length if context_length is not None and context_length > 0 else None,
         block_count=block_count if block_count is not None and block_count > 0 else None,
+        chat_template=_as_str(fields.get("tokenizer.chat_template")),
+        nextn_predict_layers=_as_int(fields.get(f"{prefix}nextn_predict_layers")) if prefix else None,
+        has_mtp_tensors=reader.has_mtp_tensors,
     )
 
 

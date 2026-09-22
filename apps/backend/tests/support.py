@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import time
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from anyio.from_thread import start_blocking_portal
 import numpy as np
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -20,6 +23,58 @@ from workbench_backend.state.store import ApplicationStore
 
 
 TERMINAL_RUN_STATUSES = {"completed", "cancelled", "failed"}
+
+
+class WorkbenchTestClient(TestClient):
+    """Keep polling on one AnyIO loop without implicitly starting app lifespan.
+
+    Starlette's unentered client otherwise opens a fresh portal per request.
+    On Windows every loop consumes a TCP self-pipe and repeated suite polling
+    exhausts ephemeral sockets. Explicit ``with client`` still uses Starlette's
+    native lifespan owner; ordinary fixtures retain their previous semantics.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._request_portal_context = None
+        self._request_portal = None
+        self._request_portal_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    @contextmanager
+    def _portal_factory(self):
+        if self.portal is not None:
+            yield self.portal
+            return
+        with self._request_portal_lock:
+            if self.is_closed:
+                raise RuntimeError("Cannot send a request after the test client is closed.")
+            if self._request_portal is None:
+                context = start_blocking_portal(**self.async_backend)
+                self._request_portal = context.__enter__()
+                self._request_portal_context = context
+            portal = self._request_portal
+        yield portal
+
+    def __enter__(self):
+        if self.is_closed:
+            raise RuntimeError("Cannot reopen a closed test client.")
+        return super().__enter__()
+
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            with self._request_portal_lock:
+                context, self._request_portal_context = self._request_portal_context, None
+                self._request_portal = None
+            if context is not None:
+                context.__exit__(None, None, None)
 
 
 def wait_for_import(client: TestClient, job: dict[str, Any], timeout: float = 5) -> dict[str, Any]:
@@ -40,7 +95,12 @@ def workbench_client(application: FastAPI, *, token: str | None = None) -> TestC
     headers = {}
     if token != "":
         headers[WORKBENCH_LOCAL_TOKEN_HEADER] = token or application.state.local_trust_token
-    return TestClient(application, headers=headers)
+    client = WorkbenchTestClient(application, headers=headers)
+    clients = getattr(application.state, "workbench_test_clients", None)
+    if clients is None:
+        clients = application.state.workbench_test_clients = []
+    clients.append(client)
+    return client
 
 
 class OfflineProbe(HttpProbe):
@@ -76,12 +136,17 @@ def close_workbench_sqlite(*objects: object) -> None:
         if isinstance(obj, ApplicationStore):
             stores.append(obj)
             continue
+        if isinstance(obj, TestClient):
+            obj.close()
         app = getattr(obj, "app", None)
         if app is not None and getattr(app, "state", None) is not None:
             obj = app
         state = getattr(obj, "state", None)
         if state is None:
             continue
+        for client in getattr(state, "workbench_test_clients", []):
+            client.close()
+        state.workbench_test_clients = []
         manager = getattr(state, "manager", None)
         runner = getattr(manager, "imports", None)
         closer = getattr(runner, "close", None)

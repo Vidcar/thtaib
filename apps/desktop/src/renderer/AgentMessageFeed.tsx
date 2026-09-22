@@ -1,9 +1,13 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CopyIconButton } from "./CopyIconButton";
+import { Icon } from "./Icon";
+import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
+import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
 
 // Markdown presentation follows the safe ReactMarkdown + remark-gfm pattern from
 // langchain-ai/agent-chat-ui at revision 41926d89c9798cebe45a26886d6e437acc5201c1.
@@ -12,15 +16,27 @@ import remarkGfm from "remark-gfm";
 interface MessageParts {
   answer: string;
   reasoning: string[];
-  attachments: string[];
+  attachments: Array<{ label: string; src?: string }>;
   toolBlocks: ToolBlock[];
 }
 
 interface ToolBlock {
+  id?: string;
   name: string;
   args?: unknown;
   status?: string;
   result?: unknown;
+  error?: string;
+}
+
+interface DetailSectionProps {
+  children: React.ReactNode;
+  defaultOpen: boolean;
+  id: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  summary: React.ReactNode;
+  className: string;
 }
 
 function roleLabel(type: string): string {
@@ -49,14 +65,23 @@ function stringifyValue(value: unknown): string {
   return value == null ? "" : JSON.stringify(value, null, 2);
 }
 
-function imageMarker(part: Record<string, unknown>, index: number): string {
-  const source =
-    part.source ||
-    part.url ||
-    part.image_url ||
-    (part.image_url && typeof part.image_url === "object" && "url" in part.image_url ? (part.image_url as { url?: string }).url : undefined);
+function toolError(tool: ToolBlock): string | undefined {
+  if (tool.error) return tool.error;
+  const resultText = Array.isArray(tool.result) ? parseContent(tool.result).answer : stringifyValue(tool.result);
+  if (tool.status === "error" || tool.status === "failed") return resultText || "The tool could not complete.";
+  // Successful output can discuss errors, for example a log search.
+  if (tool.status) return undefined;
+  const text = resultText;
+  return /^\s*(error|failed|exception|traceback)\b/i.test(text) ? text : undefined;
+}
+
+function imageMarker(part: Record<string, unknown>, index: number): { label: string; src?: string } {
+  const sourceObject = part.source && typeof part.source === "object" ? part.source as Record<string, unknown> : undefined;
+  const source = part.url || (typeof part.image_url === "string" ? part.image_url : part.image_url && typeof part.image_url === "object" ? (part.image_url as { url?: string }).url : undefined)
+    || (typeof part.source === "string" ? part.source : sourceObject?.url)
+    || (typeof (part.base64 ?? part.data ?? sourceObject?.data) === "string" ? `data:${part.mime_type ?? part.mimeType ?? sourceObject?.media_type};base64,${part.base64 ?? part.data ?? sourceObject?.data}` : undefined);
   const label = typeof source === "string" && source && !source.startsWith("data:") ? source : `image ${index + 1}`;
-  return `Image attachment: ${label}`;
+  return { label: `Image attachment: ${label}`, src: safeImageDataUrl(source) };
 }
 
 function parseContent(content: unknown): MessageParts {
@@ -69,7 +94,7 @@ function parseContent(content: unknown): MessageParts {
 
   const answer: string[] = [];
   const reasoning: string[] = [];
-  const attachments: string[] = [];
+  const attachments: MessageParts["attachments"] = [];
   const toolBlocks: ToolBlock[] = [];
 
   content.forEach((part) => {
@@ -94,13 +119,26 @@ function parseContent(content: unknown): MessageParts {
       attachments.push(imageMarker(block, attachments.length));
       return;
     }
-    if (blockType === "tool_call" || blockType === "tool_result" || blockType === "tool") {
-      toolBlocks.push({
-        name: String(block.name ?? block.tool_name ?? block.id ?? "tool"),
+    if (["tool_call", "tool_call_chunk", "invalid_tool_call", "tool_result", "tool", "server_tool_call", "server_tool_call_result"].includes(blockType)) {
+      const id = block.tool_call_id ?? block.toolCallId ?? block.callId ?? block.id;
+      const tool: ToolBlock = {
+        id: typeof id === "string" ? id : undefined,
+        name: String(block.name ?? block.tool_name ?? "Tool"),
         args: block.args ?? block.input,
-        status: typeof block.status === "string" ? block.status : undefined,
+        status: typeof block.status === "string" ? block.status : blockType === "tool_call_chunk" ? "preparing" : undefined,
         result: block.result ?? block.output ?? block.content,
-      });
+        error: typeof block.error === "string" ? block.error : undefined,
+      };
+      const previous = tool.id ? toolBlocks.find(item => item.id === tool.id) : undefined;
+      if (previous) {
+        if (tool.name !== "Tool") previous.name = tool.name;
+        if (tool.args !== undefined) previous.args = tool.args;
+        if (tool.result !== undefined) previous.result = tool.result;
+        if (tool.status) previous.status = tool.status;
+        if (tool.error) previous.error = tool.error;
+      } else {
+        toolBlocks.push(tool);
+      }
       return;
     }
     if (typeof block.text === "string") {
@@ -118,6 +156,41 @@ function parseContent(content: unknown): MessageParts {
     attachments,
     toolBlocks,
   };
+}
+
+function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
+  if (messageType(message) !== "tool") return undefined;
+  const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content };
+}
+
+function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
+  return {
+    ...block,
+    name: live?.name || (block.name !== "Tool" ? block.name : retained?.name) || "Tool",
+    args: live?.input ?? live?.args ?? block.args,
+    status: retained ? retained.status ?? (toolError(retained) ? "error" : "success") : live?.status ?? block.status,
+    result: retained ? retained.result : live?.status === "finished" ? live.output : block.result,
+    error: retained?.status === "success" ? undefined : live?.error ?? block.error,
+  };
+}
+
+function toolTarget(args: unknown): string {
+  if (typeof args === "string") return args.replace(/\s+/g, " ").slice(0, 100);
+  if (!args || typeof args !== "object") return "";
+  const fields = args as Record<string, unknown>;
+  for (const key of ["file_path", "path", "command", "query", "q", "pattern", "url", "prompt", "description", "text"]) {
+    if (typeof fields[key] === "string" && fields[key]) return fields[key].replace(/\s+/g, " ").slice(0, 100);
+  }
+  return "";
+}
+
+function toolStatus(tool: ToolBlock): string {
+  if (toolError(tool)) return "Failed";
+  if (["finished", "success", "completed"].includes(tool.status ?? "") || tool.result !== undefined) return "Done";
+  if (tool.status === "running") return "Running";
+  if (tool.status === "preparing") return "Preparing";
+  return "Requested";
 }
 
 function safeHref(href: string | undefined): string | undefined {
@@ -148,32 +221,18 @@ function textFromNode(node: React.ReactNode): string {
   return "";
 }
 
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  const code = textFromNode(children);
-  // Adapted from Agent Chat UI's useCopyToClipboard/CodeHeader at the revision
-  // above; local styling, error handling and timer cleanup stay in this UI.
-  const [copyState, setCopyState] = useState<"ready" | "copied" | "failed">("ready");
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
+export function CodeBlock({ children, text, label = "Copy code block", preClassName = "code-block", ariaLabel }: {
+  children?: React.ReactNode;
+  text?: string;
+  label?: string;
+  preClassName?: string;
+  ariaLabel?: string;
+}) {
+  const code = text ?? textFromNode(children);
   return (
     <div className="code-block-wrap">
-      <button
-        type="button"
-        className="copy-code"
-        aria-label={copyState === "copied" ? "Code copied" : "Copy code block"}
-        disabled={copyState === "copied"}
-        onClick={() => {
-          if (!code || !navigator.clipboard) { setCopyState("failed"); return; }
-          void navigator.clipboard.writeText(code).then(() => {
-            setCopyState("copied");
-            if (resetTimer.current) clearTimeout(resetTimer.current);
-            resetTimer.current = setTimeout(() => setCopyState("ready"), 3000);
-          }).catch(() => setCopyState("failed"));
-        }}
-      >
-        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Retry copy" : "Copy"}
-      </button>
-      <pre className="code-block">{children}</pre>
+      <CopyIconButton text={code} label={label} />
+      <pre className={preClassName} aria-label={ariaLabel}>{children ?? text}</pre>
     </div>
   );
 }
@@ -185,8 +244,10 @@ function MarkdownMessage({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      urlTransform={url => sourceReference(url) ? url : defaultUrlTransform(url)}
       components={{
         a({ children, href }) {
+          if (href && sourceReference(href)) return <SourceLink href={href}>{children}</SourceLink>;
           const allowedHref = safeHref(href);
           if (!allowedHref) {
             return <span>{children}</span>;
@@ -219,61 +280,125 @@ function MarkdownMessage({ text }: { text: string }) {
   );
 }
 
-function ReasoningDetails({ reasoning }: { reasoning: string[] }) {
-  if (reasoning.length === 0) {
-    return null;
-  }
+function DetailSection({ children, className, defaultOpen, id, onToggle, openStates, summary }: DetailSectionProps) {
+  const open = openStates.get(id) ?? defaultOpen;
   return (
-    <details className="message-reasoning">
-      <summary>Reasoning</summary>
-      {reasoning.map((item, index) => (
-        <MarkdownMessage key={index} text={item} />
-      ))}
+    <details
+      className={className}
+      open={open}
+    >
+      <summary
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          onToggle(id, !open);
+        }}
+      >
+        {summary}
+        <span className="activity-toggle" aria-hidden="true">{open ? "−" : "+"}</span>
+      </summary>
+      {children}
     </details>
   );
 }
 
-function AttachmentList({ attachments }: { attachments: string[] }) {
+function ReasoningDetails({
+  defaultOpen,
+  messageKey,
+  onToggle,
+  openStates,
+  reasoning,
+}: {
+  defaultOpen: boolean;
+  messageKey: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  reasoning: string[];
+}) {
+  if (reasoning.length === 0) {
+    return null;
+  }
+  return (
+    <DetailSection
+      className="message-reasoning"
+      defaultOpen={defaultOpen}
+      id={`${messageKey}:reasoning`}
+      onToggle={onToggle}
+      openStates={openStates}
+      summary={<><Icon name="activity" size={14} /><span className="activity-name">Reasoning</span></>}
+    >
+      <div className="reasoning-content">{reasoning.map((item, index) => (
+        <MarkdownMessage key={index} text={item} />
+      ))}</div>
+    </DetailSection>
+  );
+}
+
+function AttachmentList({ attachments }: { attachments: MessageParts["attachments"] }) {
   if (attachments.length === 0) {
     return null;
   }
   return (
     <ul className="message-attachments" aria-label={`${attachments.length} image attachment${attachments.length === 1 ? "" : "s"}`}>
       {attachments.map((item, index) => (
-        <li key={`${item}-${index}`}>{item}</li>
+        <li key={index}>{item.src ? <ImagePreview src={item.src} name={item.label} /> : item.label}</li>
       ))}
     </ul>
   );
 }
 
-function ToolBlockList({ toolBlocks }: { toolBlocks: ToolBlock[] }) {
+function ToolBlockList({
+  defaultOpen,
+  messageKey,
+  onToggle,
+  openStates,
+  toolBlocks,
+}: {
+  defaultOpen: boolean;
+  messageKey: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  toolBlocks: ToolBlock[];
+}) {
   if (toolBlocks.length === 0) {
     return null;
   }
-  return (
-    <details className="message-tools">
-      <summary>Tool activity</summary>
-      <ul className="plain-list">
-        {toolBlocks.map((tool, index) => (
-          <li key={`${tool.name}-${index}`}>
-            <strong>{tool.name}</strong>
-            {tool.status ? <span className="message-state">{tool.status}</span> : null}
-            {tool.args !== undefined ? (
-              <pre className="code-block">
-                <code>{JSON.stringify(tool.args, null, 2)}</code>
-              </pre>
-            ) : null}
-            {tool.result !== undefined ? <MarkdownMessage text={stringifyValue(tool.result)} /> : null}
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
+  return <div className="tool-call-list">{toolBlocks.map((tool, index) => {
+    const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
+    const error = toolError(tool);
+    const target = toolTarget(tool.args);
+    const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
+    return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
+      <DetailSection
+        className="message-tools"
+        defaultOpen={defaultOpen}
+        id={id}
+        onToggle={onToggle}
+        openStates={openStates}
+        summary={<>
+          <Icon name={tool.name === "execute" ? "terminal" : /file|glob|grep|^ls$/.test(tool.name) ? "files" : "activity"} size={14} />
+          <span className="tool-call-name" title={`Inspect ${tool.name} input and output`}>{tool.name}</span>
+          {target ? <span className="tool-call-target" title={target}>{target}</span> : null}
+          <span className="tool-call-state" data-state={error ? "error" : tool.status ?? "requested"}>{toolStatus(tool)}</span>
+        </>}
+      >
+        <div className="tool-call-details">
+          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
+          {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
+          {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
+        </div>
+      </DetailSection>
+      <AttachmentList attachments={output.attachments} />
+      {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
+      {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
+    </div>;
+  })}</div>;
 }
 
-function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>) {
+function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>, toolCalls: AssembledToolCall[]) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const shouldFollow = useRef(true);
+  const hasContent = messages.length > 0 || toolCalls.length > 0;
   const signature = useMemo(
     () =>
       messages
@@ -281,13 +406,14 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
           const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
           return `${message.id ?? ""}:${content.length}:${incompleteMessageIds.has(message.id ?? "") ? "partial" : "done"}`;
         })
-        .join("|"),
-    [incompleteMessageIds, messages],
+        .join("|") + toolCalls.map(call => `${call.callId}:${call.status}:${stringifyValue(call.output).length}:${call.error ?? ""}`).join("|"),
+    [incompleteMessageIds, messages, toolCalls],
   );
 
   useLayoutEffect(() => {
     const transcript = rootRef.current?.closest(".transcript");
-    if (!(transcript instanceof HTMLElement)) {
+    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
+    if (!elementCtor || !(transcript instanceof elementCtor)) {
       return undefined;
     }
     const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
@@ -297,14 +423,24 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     transcript.addEventListener("scroll", onScroll, { passive: true });
     shouldFollow.current = nearBottom();
     return () => transcript.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasContent]);
 
   useLayoutEffect(() => {
     const transcript = rootRef.current?.closest(".transcript");
-    if (!(transcript instanceof HTMLElement) || !shouldFollow.current) {
+    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
+    if (!elementCtor || !(transcript instanceof elementCtor) || !shouldFollow.current) {
       return;
     }
-    transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+    const selection = typeof document === "undefined" ? null : document.getSelection?.();
+    if (selection && !selection.isCollapsed && transcript.contains(selection.anchorNode)) {
+      return;
+    }
+    const reduceMotion = typeof window === "undefined" ? false : window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (typeof transcript.scrollTo === "function") {
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+    } else {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
   }, [signature]);
 
   return rootRef;
@@ -315,49 +451,80 @@ export function AgentMessageFeed(props: {
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   fallback?: React.ReactNode;
+  detailedStreams?: boolean;
+  renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
+  renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
+  userMessageText?: (message: BaseMessage) => string | undefined;
+  sourceScope?: { sessionId?: string; projectPath?: string };
 }) {
-  const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback } = props;
-  const rootRef = useFollowTranscript(messages, incompleteMessageIds);
-  if (messages.length === 0) {
+  const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback, detailedStreams = false } = props;
+  const rootRef = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
+  const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
+  const handleDetailToggle = (id: string, open: boolean) => {
+    setOpenStates((current) => {
+      if (current.get(id) === open) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(id, open);
+      return next;
+    });
+  };
+  if (messages.length === 0 && toolCalls.length === 0) {
     return fallback;
   }
+  const prepared = messages.map((message, index) => {
+    const type = messageType(message);
+    const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
+    return { message, type, key: message.id ?? `${type}-${index}`, parts: parseContent(submittedText ?? message.contentBlocks ?? message.content) };
+  });
+  const resultById = new Map<string, ToolBlock>();
+  const callIds = new Set<string>();
+  for (const item of prepared) {
+    const result = toolResultMessage(item.message);
+    if (result?.id) resultById.set(result.id, result);
+    if (item.type !== "tool") for (const call of item.parts.toolBlocks) if (call.id) callIds.add(call.id);
+  }
+  const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
+  const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
+  const renderTools = (tools: ToolBlock[], key: string) => <ToolBlockList defaultOpen={detailedStreams} messageKey={key} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={tools} />;
   return (
-    <div className="message-feed" ref={rootRef}>
-      {messages.map((message, index) => {
-        const type = messageType(message);
+    <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
+      {prepared.map(({ message, type, key: messageKey, parts }) => {
         const incomplete = Boolean(message.id && incompleteMessageIds.has(message.id));
-        const parts = parseContent(message.contentBlocks ?? message.content);
+        const result = toolResultMessage(message);
+        if (result) {
+          // A completed ToolMessage and the SDK's live handle describe the same
+          // call. Keep its result beside the original call in transcript order.
+          if (result.id && callIds.has(result.id)) return null;
+          return <div className="tool-message" key={messageKey}>{renderTools([mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)], messageKey)}</div>;
+        }
+        const messageTools = parts.toolBlocks.map(block => mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined));
+        if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
         return (
-          <article key={message.id ?? `${type}-${index}`} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
+          <article key={messageKey} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
             <header>
-              <strong>{type === "tool" && message.name ? `Tool: ${message.name}` : roleLabel(type)}</strong>
+              <strong>{roleLabel(type)}</strong>
               {incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
             </header>
             <div className="message-body">
+              <ReasoningDetails
+                defaultOpen={detailedStreams}
+                messageKey={messageKey}
+                onToggle={handleDetailToggle}
+                openStates={openStates}
+                reasoning={parts.reasoning}
+              />
               <MarkdownMessage text={parts.answer} />
               <AttachmentList attachments={parts.attachments} />
-              <ReasoningDetails reasoning={parts.reasoning} />
-              <ToolBlockList toolBlocks={parts.toolBlocks} />
+              {renderTools(messageTools, messageKey)}
             </div>
+            {type === "ai" ? props.renderAnswerActions?.(message, incomplete, parts.answer) : null}
+            {props.renderMessageFooter?.(message)}
           </article>
         );
       })}
-      {toolCalls.length > 0 ? (
-        <details className="card">
-          <summary>Tool activity</summary>
-          <ul className="plain-list">
-            {toolCalls.map((call, index) => (
-              <li key={`${call.id ?? call.name}-${index}`}>
-                <strong>{call.name}</strong>
-                {"status" in call && typeof call.status === "string" ? <span className="message-state">{call.status}</span> : null}
-                <pre className="code-block">
-                  <code>{JSON.stringify({ args: call.args ?? {}, result: "result" in call ? call.result : undefined }, null, 2)}</code>
-                </pre>
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </div>
+      {renderTools(remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)), "live-tools")}
+    </div></SourceScope.Provider>
   );
 }

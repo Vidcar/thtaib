@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 
 from workbench_backend.inference.compatibility import (
@@ -10,7 +12,8 @@ from workbench_backend.inference.compatibility import (
     UserOverrideRequest,
 )
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.inference.capabilities import CapabilityEvidence, CapabilityProbeRequest, capability_support
+from workbench_backend.inference.capabilities import CAPABILITIES, CapabilityEvidence, CapabilityProbeRequest, CapabilityProbeReport, ImageProbeSetup, capability_support, setup_fingerprint
+from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.probes import run_capability_probe
 
 router = APIRouter(prefix="/v1/compatibility")
@@ -21,15 +24,22 @@ def probe(request: Request, deployment_id: str, body: CapabilityProbeRequest) ->
     return run_capability_probe(get_manager(request), deployment_id, body)
 
 
-@router.get("/deployments/{deployment_id}/probes")
-def probe_evidence(request: Request, deployment_id: str) -> object:
-    deployment = get_manager(request).get_deployment(deployment_id)
-    return {
-        "evidence": deployment.capability_evidence,
-        "current_support": {name: capability_support(deployment, name) for name in (
-            "text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image"
-        )},
-    }
+@router.get("/deployments/{deployment_id}/probes", response_model=CapabilityProbeReport)
+def probe_evidence(request: Request, deployment_id: str) -> CapabilityProbeReport:
+    manager = get_manager(request)
+    deployment = manager.get_deployment(deployment_id)
+    bundle = manager.store.get_bundle(deployment.bundle_id) if deployment.bundle_id else None
+    projector = mmproj_companion(bundle) if bundle else None
+    return CapabilityProbeReport(
+        current_fingerprint=setup_fingerprint(deployment),
+        evidence=deployment.capability_evidence,
+        current_support={name: capability_support(deployment, name) for name in CAPABILITIES},
+        image_setup=ImageProbeSetup(
+            selected_projector=projector.path if projector else None,
+            projector_present=Path(projector.path).is_file() if projector else None,
+            runtime_support=deployment.server_props.modalities.get("vision") if deployment.server_props else None,
+        ),
+    )
 
 
 def get_compatibility(request: Request) -> CompatibilityService:

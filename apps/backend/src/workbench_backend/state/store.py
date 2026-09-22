@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import threading
 from pathlib import Path
 
@@ -15,9 +16,13 @@ from workbench_backend.knowledge.diagnostics import (
 )
 from workbench_backend.paths import APPLICATION_DB_NAME, WorkbenchPaths
 from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLinkage
+from workbench_backend.state.assistant_text import assistant_insert_index, assistant_text
+from workbench_backend.state.chat_state import CHAT_STATE_SCHEMA, ChatStateStoreMixin, migrate_chat_identity_payload
 from workbench_backend.state.interaction import INTERACTION_SCHEMA, InteractionStoreMixin
+from workbench_backend.state.packet03_schema import ASSET_SCHEMA, PREFERENCE_SCHEMA
+from workbench_backend.state.setup_records import SETUP_SCHEMA, SetupStoreMixin
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -82,7 +87,7 @@ CREATE TABLE IF NOT EXISTS external_effects (
 """
 
 
-class ApplicationStore(InteractionStoreMixin):
+class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMixin):
     """Owns ``application.sqlite`` only. Never opens ``checkpoints.sqlite``."""
 
     def __init__(self, paths: WorkbenchPaths) -> None:
@@ -102,13 +107,32 @@ class ApplicationStore(InteractionStoreMixin):
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         with self._lock:
-            self._conn.executescript(_SCHEMA)
-            self._conn.executescript(INTERACTION_SCHEMA)
-            self._conn.execute(
-                "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
-                ("schema_version", SCHEMA_VERSION),
-            )
-            self._conn.commit()
+            try:
+                table = self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='schema_meta'").fetchone()
+                previous = self._conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone() if table else None
+                if previous and previous[0] not in {"1", SCHEMA_VERSION}:
+                    raise ValueError("This application database requires a different runtime version.")
+                self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + CHAT_STATE_SCHEMA + INTERACTION_SCHEMA + ASSET_SCHEMA + PREFERENCE_SCHEMA + SETUP_SCHEMA)
+                self._migrate_interaction_replay()
+                if previous is None or previous[0] == "1":
+                    self._migrate_chat_identity()
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
+                    ("schema_version", SCHEMA_VERSION),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                self._conn.close()
+                self._conn = None
+                raise
+
+    def _migrate_chat_identity(self) -> None:
+        """Preserve legacy bindings even when their external project disappeared."""
+        for row in self._conn.execute("SELECT id,payload FROM conversations").fetchall():
+            payload = migrate_chat_identity_payload(json.loads(row["payload"]))
+            ChatConversation.model_validate(payload)
+            self._conn.execute("UPDATE conversations SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
 
     def close(self) -> None:
         """Release ``application.sqlite`` so Windows can delete the workroot."""
@@ -233,27 +257,6 @@ class ApplicationStore(InteractionStoreMixin):
             ],
         )
 
-    def put_conversation(self, conversation: ChatConversation) -> ChatConversation:
-        with self._lock:
-            conversation = self._reconcile_conversation_current_run_locked(conversation)
-            self._conn.execute(
-                """
-                INSERT INTO conversations(id, payload, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    payload=excluded.payload,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    conversation.id,
-                    conversation.model_dump_json(),
-                    conversation.created_at,
-                    conversation.updated_at,
-                ),
-            )
-            self._conn.commit()
-        return conversation
-
     def _reconcile_conversation_current_run_locked(
         self,
         conversation: ChatConversation,
@@ -278,12 +281,12 @@ class ApplicationStore(InteractionStoreMixin):
             return conversation
         if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
             return conversation
-        text = _assistant_text(run)
+        text = assistant_text(run)
         if not text:
             return conversation
         conversation = conversation.model_copy(deep=True)
         conversation.transcript.insert(
-            _assistant_insert_index(conversation, run.id),
+            assistant_insert_index(conversation, run.id),
             ChatMessage(
                 role="assistant",
                 content=text,
@@ -302,55 +305,12 @@ class ApplicationStore(InteractionStoreMixin):
                 self._conversation_locks[conversation_id] = lock
             return lock
 
-    def append_conversation_message_once(
-        self,
-        conversation_id: str,
-        message: ChatMessage,
-        *,
-        run_id: str,
-    ) -> ChatConversation | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT payload FROM conversations WHERE id = ?",
-                (conversation_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            conversation = ChatConversation.model_validate_json(row["payload"])
-            if conversation.history_replaced:
-                return conversation
-            if run_id not in conversation.run_ids:
-                return conversation
-            if run_id != conversation.current_run_id:
-                return conversation
-            if any(item.run_id == run_id and item.role == message.role for item in conversation.transcript):
-                return conversation
-            conversation.transcript.insert(
-                _assistant_insert_index(conversation, run_id),
-                message,
-            )
-            conversation.updated_at = utc_now()
-            self._conn.execute(
-                """
-                UPDATE conversations
-                SET payload = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    conversation.model_dump_json(),
-                    conversation.updated_at,
-                    conversation.id,
-                ),
-            )
-            self._conn.commit()
-            return conversation
-
     def _reconcile_chat_completion_locked(self, run: AgentRun) -> None:
         if run.source_surface != "chat":
             return
         if run.status.value not in {"completed", "failed", "cancelled"}:
             return
-        text = _assistant_text(run)
+        text = assistant_text(run)
         if not text:
             return
         message = ChatMessage(
@@ -371,7 +331,7 @@ class ApplicationStore(InteractionStoreMixin):
             if any(item.run_id == run.id and item.role == "assistant" for item in conversation.transcript):
                 continue
             conversation.transcript.insert(
-                _assistant_insert_index(conversation, run.id),
+                assistant_insert_index(conversation, run.id),
                 message,
             )
             conversation.updated_at = utc_now()
@@ -387,23 +347,6 @@ class ApplicationStore(InteractionStoreMixin):
                     conversation.id,
                 ),
             )
-
-    def get_conversation(self, conversation_id: str) -> ChatConversation | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT payload FROM conversations WHERE id = ?",
-                (conversation_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return ChatConversation.model_validate_json(row["payload"])
-
-    def list_conversations(self) -> list[ChatConversation]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT payload FROM conversations ORDER BY created_at"
-            ).fetchall()
-        return [ChatConversation.model_validate_json(row["payload"]) for row in rows]
 
     def migration_done(self, source: str) -> bool:
         with self._lock:
@@ -516,33 +459,6 @@ class ApplicationStore(InteractionStoreMixin):
                 """,
                 (run_id, item.path, item.kind, now),
             )
-
-
-def _assistant_text(run: AgentRun) -> str | None:
-    for event in reversed(run.events):
-        if event.kind != "assistant_message":
-            continue
-        content = event.detail.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return None
-
-
-def _assistant_insert_index(conversation: ChatConversation, run_id: str) -> int:
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user" and item.run_id == run_id:
-            return index + 1
-    try:
-        run_index = conversation.run_ids.index(run_id)
-    except ValueError:
-        return len(conversation.transcript)
-    user_seen = 0
-    for index, item in enumerate(conversation.transcript):
-        if item.role == "user":
-            user_seen += 1
-            if user_seen == run_index + 1:
-                return index + 1
-    return len(conversation.transcript)
 
 
 def json_chat_root(paths: WorkbenchPaths) -> Path:

@@ -311,6 +311,67 @@ class AdapterTests(unittest.TestCase):
         finally:
             model.close()
 
+    def test_llama_stream_reports_request_timings_and_leaves_unknown_servers_compatible(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url=self.endpoint.replace("/v1", "/props"),
+            n_ctx=8192, default_generation_settings={"params": {"timings_per_token": False}, "n_ctx": 8192})
+        _RecordingHandler.stream_chunks = [
+            {"id": "timed-stream", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "answer"}}],
+             "timings": {"cache_n": 80, "prompt_n": 20, "predicted_n": 10,
+                         "predicted_ms": 200, "predicted_per_second": 45}},
+            {"id": "timed-stream", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110}},
+        ]
+        for supported in (False, True):
+            with self.subTest(supported=supported):
+                seen = []
+                model = chat_model_for_deployment(self._deployment(server_props=props if supported else None))
+                model.set_generation_observer(seen.append)
+                try:
+                    list(model.stream([HumanMessage(content="ping")]))
+                finally:
+                    model.close()
+                body = _RecordingHandler.requests[-1]["body"]
+                self.assertEqual(body.get("timings_per_token"), True if supported else None)
+                self.assertEqual(body.get("return_progress"), True if supported else None)
+                self.assertTrue(seen[0]["reset"])
+                self.assertEqual(seen[-1]["phase"], "completed")
+                self.assertEqual(seen[-1]["context_used_tokens"], 110)
+                self.assertEqual(seen[-1]["tokens_per_second"], 45)
+
+    def test_cancelled_sync_and_async_streams_keep_only_observed_request_counts(self) -> None:
+        _RecordingHandler.stream_chunks = [{"id": "partial-timings", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "partial"}}],
+            "timings": {"cache_n": 80, "prompt_n": 20, "predicted_n": 10,
+                        "predicted_ms": 200, "predicted_per_second": 45}}]
+        observed = []
+        async_errors = []
+        model = chat_model_for_deployment(self._deployment())
+        model.set_generation_observer(observed.append)
+        try:
+            stream = model.stream([HumanMessage(content="ping")])
+            next(stream)
+            stream.close()
+            self.assertEqual(observed[-1]["phase"], "interrupted")
+            self.assertEqual(observed[-1]["output_tokens"], 10)
+            first_id = observed[-1]["request_id"]
+
+            async def cancel_async():
+                asyncio.get_running_loop().set_exception_handler(lambda _loop, context: async_errors.append(context))
+                stream = model.astream([HumanMessage(content="ping")])
+                await anext(stream)
+                await stream.aclose()
+                await model.aclose()
+
+            asyncio.run(cancel_async())
+            self.assertEqual(async_errors, [])
+            self.assertEqual(observed[-1]["phase"], "interrupted")
+            self.assertEqual(observed[-1]["context_used_tokens"], 110)
+            self.assertNotEqual(observed[-1]["request_id"], first_id)
+        finally:
+            model.close()
+
     def test_reasoning_final_message_replays_once_after_generic_projection(self) -> None:
         props = ServerProperties(
             fetched=utc_now(),
@@ -380,8 +441,41 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(body["min_p"], 0.1)
         self.assertEqual(body["typical_p"], 0.9)
         self.assertEqual(body["repeat_penalty"], 1.1)
-        self.assertEqual(body["reasoning"], "auto")
+        self.assertNotIn("reasoning", body)
+        self.assertNotIn("chat_template_kwargs", body)
         self.assertEqual(body["reasoning_format"], "deepseek")
+
+    def test_thinking_toggle_uses_boolean_template_override_and_default_effort_is_omitted(self) -> None:
+        for thinking, enabled in (("on", True), ("off", False)):
+            with self.subTest(thinking=thinking):
+                sink: list[dict[str, Any]] = []
+                model = chat_model_for_deployment(self._deployment(), capture_sink=sink,
+                    per_request=resolve_bags(per_request={"reasoning": thinking, "reasoning_effort": "default"}).per_request)
+                try:
+                    model.invoke([HumanMessage(content="ping")])
+                    list(model.stream([HumanMessage(content="ping")]))
+                finally:
+                    model.close()
+                for request in sink:
+                    body = request["body"]
+                    self.assertNotIn("reasoning", body)
+                    self.assertNotIn("reasoning_effort", body)
+                    self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": enabled})
+                    self.assertIs(body["chat_template_kwargs"]["enable_thinking"], enabled)
+
+    def test_known_unsupported_inherited_effort_and_invalid_thinking_fail_before_network(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url=f"{self.endpoint}/props",
+            chat_template_caps={"supports_reasoning_effort": False})
+        deployment = self._deployment(server_props=props)
+        deployment.settings = resolve_bags(per_request={"reasoning_effort": "max"})
+        with patch("workbench_backend.inference.adapter.httpx.Client") as client:
+            with self.assertRaises(HarnessError) as raised:
+                chat_model_for_deployment(deployment)
+            self.assertEqual(raised.exception.code, "model_reasoning_effort_unsupported")
+            with self.assertRaises(HarnessError) as raised:
+                chat_model_for_deployment(deployment, per_request=resolve_bags(per_request={"reasoning": "invalid"}).per_request)
+            self.assertEqual(raised.exception.code, "invalid_reasoning_setting")
+            client.assert_not_called()
 
     def test_adapter_uses_observed_model_alias_without_cloud_default(self) -> None:
         props = ServerProperties(

@@ -16,6 +16,7 @@ from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import inspect_gguf_file, read_gguf_runtime_metadata
+from workbench_backend.inference.inspection_cache import cached_inspection
 from workbench_backend.inference.lifecycle import LifecycleCoordinator
 from workbench_backend.inference.process import HttpProbe, ProcessSupervisor
 from workbench_backend.inference.hardware import NvidiaPresent
@@ -32,11 +33,13 @@ from workbench_backend.inference.schemas import (
     HuggingFaceImportRequest,
     ImportJob,
     InspectReport,
+    GgufRuntimeMetadata,
     LifecycleConsumer,
     LocalImportRequest,
     ManagedDeploymentRequest,
     ManagementScope,
     ModelBundle,
+    BundleProjectors,
     PinRuntimeRequest,
     ProfileWriteRequest,
     RenameProfileRequest,
@@ -122,15 +125,43 @@ class ModelManager:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         return self.bundles.verify_bundle(bundle)
 
-    def inspect_bundle(self, bundle_id: str) -> InspectReport:
-        bundle = self.get_bundle(bundle_id)
-        return inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id)
+    def bundle_projectors(self, bundle_id: str) -> BundleProjectors:
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+        return self.bundles.projector_candidates(bundle)
+
+    def select_bundle_projector(self, bundle_id: str, path: str | None) -> ModelBundle:
+        with self.lifecycle.mutate("select_projector", bundle_ids={bundle_id}):
+            self._require_no_live_runs(bundle_ids={bundle_id}, code="bundle_active")
+            for deployment in self.store.list_deployments():
+                if deployment.bundle_id == bundle_id and (
+                    deployment.status in {DeploymentStatus.starting, DeploymentStatus.running, DeploymentStatus.unhealthy}
+                    or deployment.pid is not None or deployment.process_identity is not None
+                ):
+                    raise ManagerError("Unload this model before changing its image companion.", code="bundle_active", status_code=409)
+            bundle = self.store.get_bundle(bundle_id)
+            if bundle is None:
+                raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+            if bundle.status.value != "complete":
+                raise ManagerError("Complete the model installation before selecting its image companion.", code="bundle_not_deployable", status_code=409)
+            return self.bundles.select_projector(bundle, path)
+
+    def inspect_bundle(self, bundle_id: str, *, refresh: bool = False) -> InspectReport:
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
+        bundle = self.bundles.verify_bundle(bundle, use_cache=not refresh)
+        report, _, _ = cached_inspection(self.store, bundle, "full", InspectReport,
+            lambda: inspect_gguf_file(self.bundles.inspectable_file(bundle), bundle_id=bundle.id), refresh=refresh)
+        return report
 
     def get_bundle_configuration_options(
         self,
         bundle_id: str,
         *,
         deployment_id: str | None = None,
+        refresh: bool = False,
     ) -> BundleConfigurationOptions:
         deployment = self.get_deployment(deployment_id) if deployment_id else None
         if deployment is not None and deployment.bundle_id != bundle_id:
@@ -148,12 +179,26 @@ class ModelManager:
         if bundle is None:
             raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         verified = self.bundles.verify_bundle(bundle, use_cache=True)
-        metadata = read_gguf_runtime_metadata(self.bundles.inspectable_file(verified))
-        return bundle_configuration_options(
+        metadata, cached, inspected_at = cached_inspection(self.store, verified, "runtime", GgufRuntimeMetadata,
+            lambda: self._read_bundle_runtime_metadata(verified), refresh=refresh)
+        result = bundle_configuration_options(
             verified.id,
             metadata,
             deployment=deployment,
         )
+        result.metadata.update(inspection_cached=cached, inspected_at=inspected_at)
+        return result
+
+    def _read_bundle_runtime_metadata(self, bundle: ModelBundle) -> GgufRuntimeMetadata:
+        primary = self.bundles.inspectable_file(bundle)
+        metadata = read_gguf_runtime_metadata(primary)
+        # The MTP head can live in the last shard rather than the primary file.
+        for item in bundle.files:
+            if item.role.value == "shard" and Path(item.path) != primary:
+                shard = read_gguf_runtime_metadata(Path(item.path))
+                if shard.has_mtp_tensors:
+                    metadata.has_mtp_tensors = True
+        return metadata
 
     def list_profiles(self) -> list[RunProfile]:
         return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
@@ -402,6 +447,9 @@ class ModelManager:
                     code="connected_no_lifecycle",
                     status_code=409,
                 )
+            # Reload launches the recorded files again. Verify them strictly
+            # before stopping an otherwise usable owned process.
+            self._require_deployable_bundle(deployment.bundle_id or "")
             self.deployments.stop(deployment.id)
             return self.deployments.start(deployment.id)
 
@@ -490,11 +538,34 @@ class ModelManager:
             has_pending_agent_changes=profile.bags.agent.requested != frozen.agent.requested,
         )
 
-    def bundle_delete_preview(self, bundle_id: str) -> DeletePreview:
-        bundle = self.get_bundle(bundle_id)
+    def bundle_delete_preview(self, bundle_id: str, *, permanent: bool = False) -> DeletePreview:
+        # Deletion needs recorded ownership and current file paths, not a full
+        # multi-gigabyte integrity scan of weights which will be removed.
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown bundle", code="bundle_missing", status_code=404)
         consumers = self._bundle_consumers(bundle.id)
+        related_jobs = self.imports.bundle_jobs(bundle)
+        consumers.extend(LifecycleConsumer(kind="import_job", id=job.id, label=job.display_name or job.id,
+            live=self.imports.job_is_active(job),
+            retained=not permanent) for job in related_jobs)
+        related_ids = {job.id for job in related_jobs}
+        for job in self.store.list_active_jobs():
+            if job.id in related_ids or not job.source_path:
+                continue
+            source = Path(job.source_path).resolve()
+            if any(Path(file.path).resolve() == source or Path(file.path).resolve().is_relative_to(source)
+                   for file in [*bundle.files, *bundle.shards, *bundle.companions]):
+                consumers.append(LifecycleConsumer(kind="import_job", id=job.id, label="Import is reading this model's files", live=True))
+        if permanent:
+            consumers = [consumer.model_copy(update={"retained": False}) if consumer.kind in {"profile", "deployment"} else consumer for consumer in consumers]
         blockers = [consumer for consumer in consumers if consumer.live]
-        files = self._bundle_delete_files(bundle)
+        files = self._bundle_delete_files(bundle, permanent=permanent)
+        if permanent:
+            files.extend(DeleteFilePlan(path=str(path), size_bytes=self._current_file_size(path), removable=True)
+                         for path in self.imports.bundle_staging_files(bundle))
+            blockers.extend(LifecycleConsumer(kind="file", id=file.path,
+                label=f"{file.reason}: {file.path}", live=True) for file in files if not file.removable)
         return DeletePreview(
             target_kind="bundle",
             target_id=bundle.id,
@@ -503,29 +574,43 @@ class ModelManager:
             files=files,
             removable_bytes=sum(file.size_bytes for file in files if file.removable),
             retained=[
+                "Historical conversations and runs remain with unavailable model references; they are not switched to another model.",
+                "Unrelated files and download caches still used by other models or imports are retained.",
+            ] if permanent else [
                 "External imported originals and shared companion paths outside the managed models directory are retained.",
                 "Historical consumers keep unavailable references instead of switching models.",
             ],
         )
 
-    def delete_bundle(self, bundle_id: str) -> DeletePreview:
-        initial = self.bundle_delete_preview(bundle_id)
-        bundle = self.get_bundle(bundle_id)
+    def delete_bundle(self, bundle_id: str, *, permanent: bool = False) -> DeletePreview:
+        initial = self.bundle_delete_preview(bundle_id, permanent=permanent)
         deployment_ids = {consumer.id for consumer in initial.consumers if consumer.kind == "deployment"}
         profile_ids = {consumer.id for consumer in initial.consumers if consumer.kind == "profile"}
-        with self.lifecycle.mutate(
+        with self.imports._job_lock, self.lifecycle.mutate(
             "delete_bundle",
             deployment_ids=deployment_ids,
             profile_ids=profile_ids,
             bundle_ids={bundle_id},
         ):
-            preview = self.bundle_delete_preview(bundle_id)
+            preview = self.bundle_delete_preview(bundle_id, permanent=permanent)
             if preview.blockers:
                 raise self._blocked_error("bundle_delete_blocked", preview.blockers)
+            bundle = self.store.get_bundle(bundle_id)
             for file in preview.files:
                 if file.removable:
-                    Path(file.path).unlink(missing_ok=True)
+                    try:
+                        Path(file.path).unlink(missing_ok=True)
+                    except OSError as exc:
+                        raise ManagerError("Could not delete a model file. Close applications using it and retry. The model record was kept so you can retry.",
+                            code="bundle_delete_failed", status_code=409, details={"path": file.path}) from exc
             self._cleanup_empty_managed_dirs(preview.files, bundle)
+            if permanent:
+                self.imports.purge_bundle_jobs(bundle)
+                for consumer in preview.consumers:
+                    if consumer.kind == "profile":
+                        self.store.delete_profile(consumer.id)
+                    elif consumer.kind == "deployment":
+                        self.store.delete_deployment(consumer.id)
             self.store.delete_bundle(bundle_id)
             return preview
 
@@ -714,7 +799,7 @@ class ModelManager:
             code=code,
         )
 
-    def _bundle_delete_files(self, bundle: ModelBundle) -> list[DeleteFilePlan]:
+    def _bundle_delete_files(self, bundle: ModelBundle, *, permanent: bool = False) -> list[DeleteFilePlan]:
         all_files = [*bundle.files, *bundle.shards, *bundle.companions]
         unique: dict[str, DeleteFilePlan] = {}
         managed_bundle_root = Path(bundle.managed_root).resolve() if bundle.managed_root else None
@@ -738,10 +823,17 @@ class ModelManager:
                     in_managed_bundle = True
                 except ValueError:
                     in_managed_bundle = False
-            if file.ownership != "managed" or not in_managed_bundle or not root_is_owned_bundle:
-                reason = "external_original"
+            linked = any(candidate.is_symlink() or candidate.is_junction() for candidate in (path, *path.parents))
+            if linked:
+                reason = "linked_path"
+            elif path.exists() and not path.is_file():
+                reason = "not_a_regular_file"
             elif self._path_key(path) in referenced_paths:
                 reason = "shared_reference"
+            elif permanent:
+                removable = True
+            elif file.ownership != "managed" or not in_managed_bundle or not root_is_owned_bundle:
+                reason = "external_original"
             else:
                 removable = True
             unique[file.path] = DeleteFilePlan(
@@ -785,6 +877,10 @@ class ModelManager:
                 except OSError:
                     break
                 path = path.parent
+        try:
+            managed_root.rmdir()
+        except OSError:
+            pass
 
     def _blocked_error(self, code: str, blockers: list[LifecycleConsumer]) -> ManagerError:
         return ManagerError(

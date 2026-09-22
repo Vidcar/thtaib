@@ -18,6 +18,20 @@ export function resolveProductDataRoot(
   environ: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): string {
+  let root = baseProductDataRoot(environ, platform);
+  const seen = new Set<string>();
+  while (existsSync(path.join(root, "state", "active-data-root.json"))) {
+    if (seen.has(root) || seen.size >= 8) throw new Error("Invalid restored application root chain");
+    seen.add(root);
+    const record = JSON.parse(readFileSync(path.join(root, "state", "active-data-root.json"), "utf8"));
+    if (record.version !== 1 || typeof record.destination_root !== "string" || !path.isAbsolute(record.destination_root)
+      || !existsSync(path.join(record.destination_root, "application.sqlite"))) throw new Error("The activated restore is unavailable");
+    root = path.resolve(record.destination_root);
+  }
+  return root;
+}
+
+function baseProductDataRoot(environ: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
   const override = environ[DATA_ROOT_ENV];
   if (override) {
     return path.resolve(override);

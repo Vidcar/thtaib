@@ -14,6 +14,7 @@ from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore, json_chat_root, json_runs_root
+from workbench_backend.state.chat_state import migrate_chat_identity_payload
 
 CHAT_SOURCE = "state/chat"
 RUNS_SOURCE = "state/runs"
@@ -39,7 +40,7 @@ def _migrate_chat(store: ApplicationStore) -> None:
     if root.is_dir():
         archived = root / "migrated"
         for path in sorted(root.glob("chat_*.json")):
-            conversation = ChatConversation.model_validate_json(path.read_text(encoding="utf-8"))
+            conversation = ChatConversation.model_validate(migrate_chat_identity_payload(json.loads(path.read_text(encoding="utf-8"))))
             if store.get_conversation(conversation.id) is None:
                 store.put_conversation(conversation)
             _archive(path, archived)

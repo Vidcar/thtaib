@@ -14,6 +14,7 @@ from contextlib import nullcontext
 import json
 import os
 import sqlite3
+import fnmatch
 
 import psutil
 from huggingface_hub import scan_cache_dir, get_token
@@ -32,6 +33,7 @@ from workbench_backend.inference.schemas import (
     ImportStage,
     ImportStatus,
     LocalImportRequest,
+    ModelBundle,
     StorageLocation,
     StorageSummary,
 )
@@ -152,7 +154,9 @@ class ImportJobRunner:
                 staging_path=str(staging),
                 install_root=str(self._future_install_root()),
                 retry_of=retry_of,
-                progress=ImportProgress(stage=ImportStage.queued, message="Waiting to start"),
+                progress=ImportProgress(stage=ImportStage.queued, message="Waiting to start", bytes_total=selected_bytes,
+                    files_total=len([name for name in listing.file_sizes if request.allow_patterns is None or
+                        any(fnmatch.fnmatchcase(name, pattern) for pattern in request.allow_patterns)]) or None),
             )
             self.store.put_job(job)
         return self._launch(job, pinned)
@@ -183,6 +187,54 @@ class ImportJobRunner:
         if job is None:
             raise ManagerError("Unknown import job", code="job_missing", status_code=404)
         return job
+
+    def bundle_jobs(self, bundle: ModelBundle) -> list[ImportJob]:
+        """Find the installed bundle's imports, repairs and retry lineage."""
+        jobs = [job for job in self.store.list_jobs() if job.bundle_id in {None, bundle.id}
+                and job.repair_of_bundle_id in {None, bundle.id}]
+        related = {job.id for job in jobs if job.bundle_id == bundle.id or job.repair_of_bundle_id == bundle.id}
+        while True:
+            expanded = related | {job.retry_of for job in jobs if job.id in related and job.retry_of} | {
+                job.id for job in jobs if job.retry_of in related
+            }
+            if expanded == related:
+                return [job for job in jobs if job.id in related]
+            related = expanded
+
+    def job_is_active(self, job: ImportJob) -> bool:
+        with self._lock:
+            thread = self._threads.get(job.id)
+            return (job.status in {ImportStatus.pending, ImportStatus.running, ImportStatus.stopping}
+                    or job.transfer_pid is not None or (thread is not None and thread.is_alive()))
+
+    def purge_bundle_jobs(self, bundle: ModelBundle) -> None:
+        """Remove only this model's inactive import records and owned staging."""
+        with self._job_lock:
+            jobs = self.bundle_jobs(bundle)
+            if any(self.job_is_active(job) for job in jobs):
+                raise ManagerError("Stop the model's import before deleting it.", code="job_active", status_code=409)
+            ignored = {job.id for job in jobs}
+            for job in jobs:
+                if job.staging_path:
+                    staging = Path(job.staging_path)
+                    if staging.exists() and self._owns_staging(staging) and not self._staging_is_referenced(staging, ignore_job_ids=ignored):
+                        shutil.rmtree(staging)
+                self.store.delete_job(job.id)
+
+    def bundle_staging_files(self, bundle: ModelBundle) -> list[Path]:
+        jobs = self.bundle_jobs(bundle)
+        ignored = {job.id for job in jobs}
+        files: dict[str, Path] = {}
+        for job in jobs:
+            if not job.staging_path:
+                continue
+            root = Path(job.staging_path)
+            if not self._owns_staging(root) or self._staging_is_referenced(root, ignore_job_ids=ignored):
+                continue
+            for path in root.rglob("*"):
+                if path.is_file() and path.resolve().is_relative_to(root.resolve()):
+                    files[str(path.resolve()).casefold()] = path
+        return list(files.values())
 
     def cancel_job(self, job_id: str) -> ImportJob:
         with self._job_lock:
@@ -462,7 +514,7 @@ class ImportJobRunner:
                     "started_at": utc_now(),
                     "updated_at": utc_now(),
                     "worker_id": self.worker_id,
-                    "progress": ImportProgress(stage=ImportStage.queued, message="Starting import"),
+                    "progress": job.progress.model_copy(update={"stage": ImportStage.queued, "message": "Starting import"}),
                 }
             )
         )
@@ -565,20 +617,9 @@ class ImportJobRunner:
             job = self.get_job(job_id)
             if job.cancel_requested and job.status == ImportStatus.running:
                 job = job.model_copy(update={"status": ImportStatus.stopping})
-            self.store.put_job(
-                job.model_copy(
-                    update={
-                        "updated_at": utc_now(),
-                        "progress": ImportProgress(
-                            stage=stage,
-                            message=message,
-                            files_done=files_done,
-                            files_total=files_total,
-                            bytes_done=bytes_done,
-                            bytes_total=bytes_total,
-                        ),
-                    }
-                )
+            self.store.update_job_fields(job_id, status=job.status, updated_at=utc_now(),
+                progress=ImportProgress(stage=stage, message=message, files_done=files_done,
+                    files_total=files_total, bytes_done=bytes_done, bytes_total=bytes_total),
             )
 
     def _repair_huggingface_bundle(
@@ -681,6 +722,7 @@ class ImportJobRunner:
         result_path = staging / "download-result.json"
         input_path = staging / "download-request.json"
         staging.mkdir(parents=True, exist_ok=True)
+        result_path.unlink(missing_ok=True)
         input_payload = {
             "job_id": job.id,
             "repo_id": request.repo_id,
@@ -694,7 +736,7 @@ class ImportJobRunner:
             "force_download": bool(job.retry_of or job.repair_of_bundle_id),
         }
         input_path.write_text(json.dumps(input_payload), encoding="utf-8")
-        self._record_progress(job.id, ImportStage.transfer, "Downloading selected files", 0, None, 0, None)
+        self._record_progress(job.id, ImportStage.transfer, "Downloading selected files", 0, job.progress.files_total, 0, job.progress.bytes_total)
         child_env = os.environ.copy()
         cache_root = self.paths.state / "huggingface-cache"
         child_env["HF_HOME"] = str(cache_root / "home")
@@ -719,6 +761,7 @@ class ImportJobRunner:
                 }
             )
         )
+        last_progress = 0.0
         while proc.poll() is None:
             current = self.get_job(job.id)
             if current.cancel_requested:
@@ -735,8 +778,18 @@ class ImportJobRunner:
                         }
                     )
                 )
+            if time.monotonic() - last_progress >= 1.0:
+                files_done, bytes_done = self._transfer_progress(staging / request.revision, request.allow_patterns)
+                if (files_done, bytes_done) != (current.progress.files_done, current.progress.bytes_done):
+                    self._record_progress(job.id, ImportStage.transfer, "Downloading selected files",
+                        files_done, current.progress.files_total, bytes_done, current.progress.bytes_total)
+                last_progress = time.monotonic()
             time.sleep(0.1)
         current = self.get_job(job.id)
+        if current.transfer_pid != proc.pid:
+            # An exited launcher is not evidence that its adopted worker
+            # exited. Confirm that separate durable owner before releasing it.
+            self._terminate_transfer(current)
         current = self.store.put_job(current.model_copy(update={"transfer_pid": None, "transfer_create_time": None, "updated_at": utc_now()}))
         if current.cancel_requested:
             return self.store.put_job(current.model_copy(update={"status": ImportStatus.stopped, "finished_at": utc_now(), "error": "Import download was stopped."}))
@@ -808,6 +861,30 @@ class ImportJobRunner:
         return Path(self.store.get_setting(FUTURE_INSTALL_ROOT_KEY) or self.paths.models).resolve()
 
     @staticmethod
+    def _transfer_progress(root: Path, allow_patterns: list[str] | None) -> tuple[int, int]:
+        """Observe payload bytes written by huggingface_hub, at most once/sec."""
+        files_done = bytes_done = 0
+        if not root.is_dir():
+            return files_done, bytes_done
+        for path in root.rglob("*"):
+            relative = path.relative_to(root).as_posix()
+            incomplete = ".cache/" in relative and path.name.endswith(".incomplete")
+            complete = not relative.startswith(".cache/") and (
+                allow_patterns is None or any(fnmatch.fnmatchcase(relative, pattern) for pattern in allow_patterns)
+            )
+            if not incomplete and not complete:
+                continue
+            try:
+                if path.is_file():
+                    bytes_done += path.stat().st_size
+                    files_done += int(complete)
+            except FileNotFoundError:
+                # The library atomically renames completed partials while the
+                # parent observes them; the next bounded sample catches up.
+                continue
+        return files_done, bytes_done
+
+    @staticmethod
     def _copy_files_key(job_id: str) -> str:
         return f"import_job.{job_id}.copy_files"
 
@@ -845,6 +922,19 @@ class ImportJobRunner:
                 raise ManagerError("Cannot verify the download process identity; its files remain protected.", code="import_stop_unconfirmed", status_code=409)
             if abs(proc.create_time() - job.transfer_create_time) > 0.01:
                 return
+            # A Windows virtual-environment Python launcher can be the durable
+            # owner until the actual worker adopts its identity. Stop that
+            # verified tree from the leaves before releasing the launcher.
+            for child in reversed(proc.children(recursive=True)):
+                try:
+                    child.terminate()
+                    try:
+                        child.wait(timeout=5)
+                    except psutil.TimeoutExpired:
+                        child.kill()
+                        child.wait(timeout=5)
+                except psutil.NoSuchProcess:
+                    continue
             proc.terminate()
             try:
                 proc.wait(timeout=5)
@@ -861,7 +951,7 @@ class ImportJobRunner:
             root = (self.paths.state / "staging").resolve()
             resolved = path.resolve()
             resolved.relative_to(root)
-            return resolved != root and not path.is_symlink() and not any(p.is_symlink() for p in path.parents if p != root)
+            return resolved != root and not any(p.is_symlink() or p.is_junction() for p in (path, *path.parents) if p != root)
         except ValueError:
             return False
 
@@ -876,7 +966,7 @@ class ImportJobRunner:
                 if _paths_overlap(resolved, other):
                     return True
         for bundle in self.store.list_bundles():
-            for item in bundle.files:
+            for item in [*bundle.files, *bundle.shards, *bundle.companions]:
                 if _paths_overlap(resolved, Path(item.path).resolve()):
                     return True
         return False
@@ -962,19 +1052,38 @@ def _wait_for_durable_transfer_identity(payload: dict[str, object]) -> None:
             conn = sqlite3.connect(db_path)
             try:
                 row = conn.execute("SELECT payload FROM import_jobs WHERE id = ?", (job_id,)).fetchone()
+                if row is not None:
+                    encoded = str(row[0])
+                    job = json.loads(encoded)
+                    if job.get("cancel_requested") or job.get("status") != ImportStatus.running.value:
+                        raise RuntimeError("Import was stopped before its transfer could begin.")
+                    recorded_pid = job.get("transfer_pid")
+                    recorded_time = float(job.get("transfer_create_time") or 0)
+                    if recorded_pid == own.pid and abs(recorded_time - own.create_time()) <= 0.01:
+                        return
+                    # On Windows Popen(sys.executable) may launch a venv
+                    # redirector whose child executes this code. Adopt only a
+                    # durably recorded ancestor, never an unrelated process.
+                    # The compare-and-swap also prevents a concurrent stop or
+                    # newer owner from being overwritten before side effects.
+                    if recorded_pid != parent_pid and any(
+                        ancestor.pid == recorded_pid and abs(ancestor.create_time() - recorded_time) <= 0.01
+                        for ancestor in own.parents()
+                    ):
+                        job.update(transfer_pid=own.pid, transfer_create_time=own.create_time(), updated_at=utc_now())
+                        changed = conn.execute(
+                            "UPDATE import_jobs SET payload=?,updated_at=? WHERE id=? AND payload=?",
+                            (json.dumps(job), job["updated_at"], job_id, encoded),
+                        ).rowcount
+                        conn.commit()
+                        if changed:
+                            return
             finally:
                 conn.close()
         except sqlite3.Error:
-            row = None
-        if row is not None:
-            job = json.loads(str(row[0]))
-            if (
-                job.get("transfer_pid") == os.getpid()
-                and abs(float(job.get("transfer_create_time") or 0) - own.create_time()) <= 0.01
-            ):
-                return
+            pass
         time.sleep(0.05)
-    raise TimeoutError("Timed out waiting for durable import transfer identity.")
+    raise TimeoutError("The download worker could not confirm safe startup. Retry the download; if it repeats, restart Workbench.")
 
 
 def main() -> int:

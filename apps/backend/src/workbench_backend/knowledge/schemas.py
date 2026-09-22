@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 KnowledgeScope = Literal["user", "agent", "project"]
 KnowledgeKind = Literal["memory", "skill", "protected_instruction"]
@@ -17,10 +17,49 @@ class KnowledgeProvenance(BaseModel):
     actor: KnowledgeActor
     run_id: str | None = None
     note: str | None = None
+    proposal_id: str | None = None
+    reviewed_by: Literal["human"] | None = None
 
 
 class ScopeWritePolicy(BaseModel):
     automatic_agent_writes: bool = False
+
+
+class KnowledgeAutomaticPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope: KnowledgeScope
+    scope_id: str | None = None
+    automatic_agent_writes: bool = False
+
+
+class KnowledgeScopeOption(BaseModel):
+    scope: KnowledgeScope
+    scope_id: str | None = None
+    label: str
+    active: bool = True
+
+
+class SkillResource(BaseModel):
+    path: str
+    sha256: str
+    size_bytes: int
+
+
+class SkillPackageImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_path: str
+    scope: KnowledgeScope = "user"
+    scope_id: str | None = None
+    display_name: str | None = None
+    entry_id: str | None = None
+    base_version: str | None = None
+
+
+class SkillResourceView(SkillResource):
+    version_id: str
+    content: str | None = None
+    binary: bool = False
+    execution_available: Literal[False] = False
 
 
 class ContextCaptureSettings(BaseModel):
@@ -29,6 +68,7 @@ class ContextCaptureSettings(BaseModel):
 
 
 class KnowledgeConfig(BaseModel):
+    automatic_save_policies: list[KnowledgeAutomaticPolicy] = Field(default_factory=list)
     context_captures: ContextCaptureSettings = Field(default_factory=ContextCaptureSettings)
     scope_policies: dict[KnowledgeScope, ScopeWritePolicy] = Field(
         default_factory=lambda: {
@@ -44,11 +84,13 @@ class KnowledgeConfig(BaseModel):
     note: str = (
         "Durable knowledge versioning (STATE-005). This store is not a "
         "retrieval index. Query-time RAG is a derived per-run index (STATE-006). "
-        "Automatic writes and a durable shared index remain open (OQ-006)."
+        "Automatic saves require permission for the exact destination scope."
     )
 
 
 class KnowledgeVersion(BaseModel):
+    resources: list[SkillResource] = Field(default_factory=list)
+    package_source: str | None = None
     id: str
     entry_id: str
     scope: KnowledgeScope
@@ -70,40 +112,76 @@ class KnowledgeEntry(BaseModel):
     current_version_id: str
     created_at: str
     updated_at: str
+    active: bool = True
+    enabled: bool = True
 
 
 class KnowledgeEntryView(KnowledgeEntry):
+    resources: list[SkillResource] = Field(default_factory=list)
+    package_source: str | None = None
     content: str
     provenance: KnowledgeProvenance
     previous_version_id: str | None = None
     reverted_from_version_id: str | None = None
     version_created_at: str
+    scope_bound: bool = True
+    scope_label: str | None = None
 
 
 class KnowledgeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     scope: KnowledgeScope
     kind: KnowledgeKind
     content: str
-    provenance: KnowledgeProvenance
+    provenance: KnowledgeProvenance | None = None
     scope_id: str | None = None
     display_name: str | None = None
 
 
 class KnowledgeEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     content: str
     base_version: str
-    provenance: KnowledgeProvenance
+    provenance: KnowledgeProvenance | None = None
 
 
 class KnowledgeRevertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     target_version_id: str
     base_version: str
-    provenance: KnowledgeProvenance
+    provenance: KnowledgeProvenance | None = None
 
 
 class KnowledgeConfigUpdateRequest(BaseModel):
     context_captures: ContextCaptureSettings | None = None
     scope_policies: dict[KnowledgeScope, ScopeWritePolicy] | None = None
+
+
+class KnowledgeLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = None
+    enabled: bool | None = None
+
+
+class KnowledgeProposal(BaseModel):
+    id: str
+    status: Literal["pending", "accepted", "rejected"] = "pending"
+    entry_id: str | None = None
+    base_version: str | None = None
+    scope: KnowledgeScope
+    scope_id: str | None = None
+    display_name: str | None = None
+    content: str
+    provenance: KnowledgeProvenance
+    created_at: str
+    updated_at: str
+    committed_version_id: str | None = None
+    automatic: bool = False
+
+
+class KnowledgeProposalReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["accept", "reject"]
 
 
 class ContextCaptureRequest(BaseModel):

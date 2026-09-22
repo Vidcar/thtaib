@@ -1,0 +1,158 @@
+.chat-history-actions {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.28));
+  border-radius: 18px;
+  background: var(--bg-raised);
+}
+
+.chat-history-actions-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-history-actions-head h3,
+.chat-history-actions-kicker,
+.chat-history-actions-hint,
+.chat-history-actions-error,
+.chat-delete-preview p {
+  margin: 0;
+}
+
+.chat-history-actions-head h3 {
+  font-size: 0.98rem;
+  line-height: 1.2;
+}
+
+.chat-history-actions-kicker,
+.chat-history-actions-hint,
+.chat-history-action small,
+.chat-delete-preview li {
+  color: var(--muted, #94a3b8);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.chat-history-actions-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.chat-history-actions-badge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.28));
+  color: var(--muted, #94a3b8);
+  font-size: 0.76rem;
+}
+
+.chat-history-actions-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text, #e5e7eb);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.chat-history-actions-field select {
+  width: 100%;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.28));
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  color: var(--text, #e5e7eb);
+}
+
+.chat-history-actions-error {
+  color: var(--danger, #fb7185);
+  font-size: 0.8rem;
+}
+
+.chat-history-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.chat-history-action {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 82px;
+  padding: 10px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.28));
+  border-radius: 15px;
+  background: var(--bg-panel);
+  color: var(--text, #e5e7eb);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-history-action:hover:not(:disabled),
+.chat-history-action:focus-visible {
+  border-color: var(--accent, #60a5fa);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #60a5fa) 24%, transparent);
+}
+
+.chat-history-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.chat-history-action strong,
+.chat-history-action small {
+  display: block;
+}
+
+.chat-history-action strong {
+  margin-bottom: 3px;
+  font-size: 0.86rem;
+}
+
+.chat-delete-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #60a5fa) 40%, var(--border, rgba(148, 163, 184, 0.28)));
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--accent, #60a5fa) 9%, transparent);
+}
+
+.chat-delete-preview.blocked {
+  border-color: color-mix(in srgb, var(--danger, #fb7185) 45%, var(--border, rgba(148, 163, 184, 0.28)));
+  background: color-mix(in srgb, var(--danger, #fb7185) 9%, transparent);
+}
+
+.chat-delete-preview ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.chat-history-actions-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted, #94a3b8);
+  font-size: 0.8rem;
+}
+
+.chat-history-danger {
+  justify-self: start;
+  border: 1px solid color-mix(in srgb, var(--danger, #fb7185) 60%, transparent);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--danger, #fb7185) 14%, transparent);
+  color: var(--danger, #fb7185);
+  font-weight: 700;
+}
+
+.chat-history-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

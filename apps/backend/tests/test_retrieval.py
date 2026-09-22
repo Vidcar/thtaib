@@ -303,6 +303,54 @@ class RetrievalHarnessTests(unittest.TestCase):
         self.assertIn("recorded-tool replay", " ".join(body["effective_setup"]["gaps"]))
         self.assertFalse(any(self.manager.paths.state.joinpath("harness").rglob("chunk_*.md")))
 
+    def test_same_thread_retrieval_rebuild_drops_updated_and_deselected_versions(self) -> None:
+        memory = self._knowledge('RETRIEVAL-ORIGINAL-PRIVATE-417')
+        original = memory['current_version_id']
+        project = self.root / 'selected-retrieval-project'
+        project.mkdir()
+        (project / 'allowed.txt').write_text('CURRENT-AUTHORIZED-PROJECT-928')
+        created = self.client.post('/v1/chat/conversations', json={
+            'deployment_id': self.chat_deployment_id, 'project_path': str(project),
+            'memory_version_refs': [original], 'embedding_deployment_id': self.embed_deployment_id,
+            'retrieval_project_paths': ['allowed.txt'],
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        chat = created.json()
+        changed = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={
+            'base_version': original, 'content': 'RETRIEVAL-UPDATED-PRIVATE-563',
+        })
+        self.assertEqual(changed.status_code, 200, changed.text)
+        updated = changed.json()['current_version_id']
+        previous_files = set()
+        for selected, expected, forbidden in [
+            ([original], 'RETRIEVAL-ORIGINAL-PRIVATE-417', 'RETRIEVAL-UPDATED-PRIVATE-563'),
+            ([updated], 'RETRIEVAL-UPDATED-PRIVATE-563', 'RETRIEVAL-ORIGINAL-PRIVATE-417'),
+            ([], 'CURRENT-AUTHORIZED-PROJECT-928', 'RETRIEVAL-UPDATED-PRIVATE-563'),
+        ]:
+            with self.subTest(selected=selected):
+                self.scripted = ScriptedChatModel(search_then_reply())
+                started = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
+                    'task': 'Search current authorized knowledge.', 'memory_version_refs': selected,
+                    'presented_tools': [SEARCH_KNOWLEDGE_TOOL_NAME],
+                })
+                self.assertEqual(started.status_code, 200, started.text)
+                run = wait_for_run(self.client, started.json()['current_run_id'])
+                self.assertEqual(run['status'], 'completed', run.get('error'))
+                self.assertEqual(run['thread_id'], chat['thread_id'])
+                self.assertEqual({source.split(':/retrieved/', 1)[0] for source in run['retrieved_material']}, {'project:allowed.txt', *[f'knowledge:{ref}' for ref in selected]})
+                files = set((harness_scratch_root(self.manager.paths, chat['thread_id']) / 'retrieved').rglob('chunk_*.md'))
+                self.assertTrue(files - previous_files)
+                current_text = '\n'.join(path.read_text(encoding='utf-8') for path in files - previous_files)
+                self.assertIn(expected, current_text)
+                self.assertNotIn(forbidden, current_text)
+                if not selected:
+                    self.assertNotIn('RETRIEVAL-ORIGINAL-PRIVATE-417', current_text)
+                previous_files = files
+        from tests.test_chat import wait_for_chat
+        view = wait_for_chat(self.client, chat['id'])
+        self.assertEqual(len(view['run_ids']), 3)
+        self.assertEqual(len([message for message in view['transcript'] if message['role'] == 'user']), 3)
+
     def test_pooling_none_fails_closed(self) -> None:
         memory = self._knowledge()
         now = utc_now()

@@ -29,6 +29,33 @@ def display_id(conversation_id: str, index: int, role: str) -> str:
 
 
 class InteractionRecoveryTests(unittest.TestCase):
+    def test_branch_seed_aligns_queued_identity_and_structured_answer_without_duplicate(self) -> None:
+        now = utc_now()
+        conversation = ChatConversation(id="chat_branch_structured", deployment_id=self.deployment_id,
+            thread_id="branch_structured", created_at=now, updated_at=now,
+            transcript=[
+                ChatMessage(role="user", content="Old prompt", at=now),
+                ChatMessage(role="assistant", content="Same answer", at=now),
+                ChatMessage(id="queue:input", role="user", content="Reply again", at=now,
+                    content_blocks=[{"type": "workbench_submission", "submission": {"task": "Reply again"}}]),
+                ChatMessage(role="assistant", content="Same answer", at=now),
+            ])
+        self.app.state.app_store.put_conversation(conversation)
+        blocks = [{"type": "reasoning", "reasoning": "Follow exact response"},
+                  {"type": "text", "text": "Same answer"}]
+        with patch("workbench_backend.interaction.service.conversation_state", return_value={"messages": [
+            HumanMessage(id="queue:input", content="Reply again"),
+            AIMessage(id="saved-answer", content=blocks),
+        ]}):
+            response = self.client.post("/v1/agent-interaction/threads",
+                json={"source_surface": "chat", "conversation_id": conversation.id})
+        self.assertEqual(response.status_code, 200, response.text)
+        messages = self.client.get(f"/v1/agent-interaction/threads/{conversation.id}/state").json()["values"]["messages"]
+        self.assertEqual(len(messages), 4)
+        self.assertEqual(messages[1]["content"], "Same answer", "earlier repeated answer must survive")
+        self.assertEqual(messages[-1]["id"], "saved-answer")
+        self.assertEqual(messages[-1]["content"], blocks, "native reasoning must survive alignment")
+
     def test_isolated_legacy_database_copy_upgrades_without_losing_records(self) -> None:
         now = utc_now()
         conversation = ChatConversation(id="chat_legacy_copy", deployment_id=self.deployment_id,
