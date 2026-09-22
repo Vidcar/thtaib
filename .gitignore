@@ -47,3 +47,4 @@ desktop_backend_shared_secret
 /uat-*.txt
 /uat-backend-*.txt
 apps/backend/uat_*.py
+/.playwright-mcp/
