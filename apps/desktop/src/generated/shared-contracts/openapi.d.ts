@@ -1830,6 +1830,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Project File Content */
+        get: operations["project_file_content_v1_projects__project_id__file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/files": {
         parameters: {
             query?: never;
@@ -4700,6 +4717,8 @@ export interface components {
         };
         /** ProjectFileChangeView */
         ProjectFileChangeView: {
+            /** Added Lines */
+            added_lines?: number | null;
             change: components["schemas"]["ProjectFileChange"];
             /**
              * Current Matches
@@ -4715,6 +4734,8 @@ export interface components {
              * @default Observed file changes only. This does not undo shell commands, remote actions or an entire run.
              */
             note: string;
+            /** Removed Lines */
+            removed_lines?: number | null;
             /**
              * Reversal Available
              * @default false
@@ -4722,6 +4743,24 @@ export interface components {
             reversal_available: boolean;
             /** Reversal Unavailable Reason */
             reversal_unavailable_reason?: string | null;
+        };
+        /**
+         * ProjectFileContent
+         * @description Read-only captured text for one project file. Not a model call.
+         */
+        ProjectFileContent: {
+            /** Image Data Url */
+            image_data_url?: string | null;
+            /** Path */
+            path: string;
+            /** Project Id */
+            project_id: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Text */
+            text?: string | null;
+            /** Text Unavailable Reason */
+            text_unavailable_reason?: string | null;
         };
         /** ProjectFiles */
         ProjectFiles: {
@@ -5779,6 +5818,7 @@ export type SchemaProjectCreateRequest = components['schemas']['ProjectCreateReq
 export type SchemaProjectFile = components['schemas']['ProjectFile'];
 export type SchemaProjectFileChange = components['schemas']['ProjectFileChange'];
 export type SchemaProjectFileChangeView = components['schemas']['ProjectFileChangeView'];
+export type SchemaProjectFileContent = components['schemas']['ProjectFileContent'];
 export type SchemaProjectFiles = components['schemas']['ProjectFiles'];
 export type SchemaProjectRecord = components['schemas']['ProjectRecord'];
 export type SchemaProjectUpdateRequest = components['schemas']['ProjectUpdateRequest'];
@@ -9898,6 +9938,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeletePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_file_content_v1_projects__project_id__file_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectFileContent"];
                 };
             };
             /** @description Validation Error */

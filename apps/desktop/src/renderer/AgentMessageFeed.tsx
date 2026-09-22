@@ -2,6 +2,8 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { activityLine, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
+import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyIconButton } from "./CopyIconButton";
@@ -257,26 +259,6 @@ function toolIsStreaming(tool: ToolBlock): boolean {
   return tool.result === undefined;
 }
 
-function toolTarget(args: unknown): string {
-  const path = toolFilePath(args);
-  if (path) return path.replace(/\s+/g, " ").slice(0, 100);
-  if (typeof args === "string") return args.replace(/\s+/g, " ").slice(0, 100);
-  if (!args || typeof args !== "object") return "";
-  const fields = args as Record<string, unknown>;
-  for (const key of ["file_path", "path", "command", "query", "q", "pattern", "url", "prompt", "description", "text"]) {
-    if (typeof fields[key] === "string" && fields[key]) return fields[key].replace(/\s+/g, " ").slice(0, 100);
-  }
-  return "";
-}
-
-function toolStatus(tool: ToolBlock): string {
-  if (toolError(tool)) return "Failed";
-  if (["finished", "success", "completed"].includes(tool.status ?? "") || tool.result !== undefined) return "Done";
-  if (tool.status === "running") return "Running";
-  if (tool.status === "preparing") return "Preparing";
-  return "Requested";
-}
-
 function safeHref(href: string | undefined): string | undefined {
   if (!href) {
     return undefined;
@@ -455,6 +437,58 @@ function AttachmentList({ attachments }: { attachments: MessageParts["attachment
   );
 }
 
+const FILE_ACTIVITY = new Set(["read_file", "write_file", "edit_file", "delete_file", "rename_file", "ls", "glob", "grep"]);
+
+function todoLabel(status: TodoItem["status"]): string {
+  if (status === "in_progress") return "In progress";
+  if (status === "completed") return "Completed";
+  return "Pending";
+}
+
+function TodoChecklist({ defaultOpen, failure, id, items, onToggle, openStates, raw }: {
+  defaultOpen: boolean;
+  failure: string;
+  id: string;
+  items: TodoItem[];
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  raw: unknown;
+}) {
+  return <div className="todo-checklist">
+    {items.length ? <ol aria-label="Todo list">{items.map((item, index) => <li key={`${item.status}-${index}`} data-status={item.status}><span className="todo-status">{todoLabel(item.status)}</span> {item.content}</li>)}</ol> : failure ? null : <p className="activity-line">Updating the list</p>}
+    {failure ? <p className="tool-call-error" role="status">{failure}</p> : null}
+    <DetailSection className="todo-arguments" defaultOpen={defaultOpen} id={id} onToggle={onToggle} openStates={openStates} summary={<span>List arguments</span>}>
+      <CodeBlock text={stringifyValue(raw)} label="Copy tool input"><code>{stringifyValue(raw)}</code></CodeBlock>
+    </DetailSection>
+  </div>;
+}
+
+function todoState(toolBlocks: ToolBlock[]): { items: TodoItem[]; failure: string; raw: unknown } | null {
+  let items: TodoItem[] | null = null;
+  let failure = "";
+  let raw: unknown;
+  let saw = false;
+  for (const tool of toolBlocks) {
+    if (tool.name !== "write_todos") continue;
+    saw = true;
+    const parsed = parseTodoList(tool.args);
+    const error = toolError(tool);
+    if (error) {
+      failure = error.split("\n")[0].slice(0, 240);
+      continue;
+    }
+    if (parsed) {
+      items = parsed;
+      failure = "";
+      raw = tool.args;
+    } else {
+      raw = tool.args ?? raw;
+    }
+  }
+  if (!saw) return null;
+  return { items: items ?? [], failure, raw };
+}
+
 function ToolBlockList({
   defaultOpen,
   messageKey,
@@ -468,16 +502,26 @@ function ToolBlockList({
   openStates: ReadonlyMap<string, boolean>;
   toolBlocks: ToolBlock[];
 }) {
+  const dock = useChatDock();
   if (toolBlocks.length === 0) {
     return null;
   }
-  return <div className="tool-call-list">{toolBlocks.map((tool, index) => {
+  const todos = todoState(toolBlocks);
+  const rows = toolBlocks.filter(tool => tool.name !== "write_todos");
+  return <div className="tool-call-list">
+    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
+    {rows.map((tool, index) => {
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
     const streaming = toolIsStreaming(tool);
     const writing = streaming ? readableToolText(tool.args) : "";
     const tail = streaming ? writing.slice(Math.max(0, writing.length - LIVE_TOOL_TAIL)) : "";
-    const target = toolTarget(tool.args);
+    const finished = !streaming;
+    const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
+    const label = activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
+    const counts = !error && finished ? lineCounts(change) : "";
+    const path = toolFilePath(tool.args);
+    const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || Boolean(path));
     const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
@@ -488,14 +532,18 @@ function ToolBlockList({
         onToggle={onToggle}
         openStates={openStates}
         summary={<>
-          <Icon name={tool.name === "execute" ? "terminal" : /file|glob|grep|^ls$/.test(tool.name) ? "files" : "activity"} size={14} />
-          <span className="tool-call-name" title={`Inspect ${tool.name} input and output`}>{tool.name}</span>
-          {target ? <span className="tool-call-target" title={target}>{target}</span> : null}
+          <Icon name={tool.name === "execute" ? "terminal" : FILE_ACTIVITY.has(tool.name) ? "files" : "activity"} size={14} />
+          {openable ? <button type="button" className="activity-line" onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (change) dock?.openChange(change.id);
+            else if (path) dock?.openFile(path);
+          }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
           {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
-          <span className="tool-call-state" data-state={error ? "error" : tool.status ?? "requested"}>{toolStatus(tool)}</span>
         </>}
       >
         {streaming && !open ? null : <div className="tool-call-details">
+          <p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>
           {streaming ? <section aria-label="Tool input"><span className="tool-detail-label">Writing</span>{writing.length > LIVE_TOOL_TAIL ? <p className="hint">Showing the latest 4,000 characters.</p> : null}<LiveToolCode text={tail} copyText={writing} /></section> : null}
           {!streaming && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
           {!streaming && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}

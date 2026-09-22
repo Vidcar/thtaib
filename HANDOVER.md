@@ -1,6 +1,8 @@
 # Current handover
 
-Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. Active changes are `rewrite-loaded-boundaries` and `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
+Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. Active changes are `rewrite-loaded-boundaries` (implemented on `codex/chat-dock`, not yet merged) and `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
+
+`rewrite-loaded-boundaries` is implemented. Ordinary Chat registers a Deep Agents harness profile that turns off the general-purpose helper and the recursive `delete` tool, including for a compiled child. One budgeted summarizer remains. `rename_file` and single-file `delete_file` stay the only custom file mutations. Chat has a dock beside the transcript: Changes uses Monaco on the stored before/after text, Files uses a virtualized tree and a read-only Monaco view backed by `GET /v1/projects/{id}/file`. Setup is a header popover. The conversation menu stays in the header. A narrow conversation stacks the dock. Tool rows are one checklist and one activity line; `+N -M` comes from the stored texts. Choosing a file line opens the dock and does not send a message. Desktop `pnpm run build` passed, including the local Monaco worker check. Focused backend tests passed for the catalogue, one summarizer, file-read confinement, and line counts. `openspec validate --all` passed.
 
 Dave then asked for app fixes. A second chat or agent run may start in a folder or workspace another run is already using. The person chooses which run writes. Lab case capture and application backup still refuse to copy while a run is live. Restarting the backend marks a live run that cannot resume as failed or orphaned.
 
@@ -8,7 +10,9 @@ The chat shield and each saved agent choose Ask, Approve for me, or Full access.
 
 The live file-write display is included with the approval-mode change. Measured in ScratchArea while `write_file` wrote `stream-bench-tail.html` at about 42 tok/s. The open tool box stayed on the newest lines: about bench-20 to bench-34 at 2.1 KB, the rule being written near bench-92 at 5.3 KB, and bench-126 to bench-141 at 8.2 KB, with the latest 4,000 characters labelled. An earlier look, before the box was pinned to the newest line, stayed on the start of the file at 3.5 KB. The open reasoning panel still fell behind while the model wrote the rules there first: the screen showed about bench-78 to bench-98 after the text had already passed bench-133. A saved tool list that names `read_attachment` no longer blocks a message that has no attachment. Do not delete Dave's ScratchArea chats.
 
-Build order when implementation starts:
+Next implementation is `consolidate-product-contract` task 1, everyday workspace beyond the dock: compact destinations, immediate archive, chat deletion that leaves project files, skill import, document extraction, web search, and connection secrets.
+
+Build order after the dock:
 
 1. Everyday workspace still specified beyond the dock: compact destinations, immediate archive, chat deletion that leaves project files, skill import, document extraction, web search, and connection secrets.
 2. Lab: prefill and decode charts, the configurable needle test, the small exact challenges, and the visible machine reservation.
@@ -18,7 +22,7 @@ Build order when implementation starts:
 
 Screens are part of the contract, not a later pass. Lab opens on Measurements. Helpers are an empty section until named. Workflows is a palette, canvas, and inspector. Media controls stay hidden until an address is saved.
 
-The dock, Monaco, the file tree, and the one-line activity rows remain as specified in `rewrite-loaded-boundaries`. Ordinary Chat still has no general-purpose helper. `+N -M` still comes only from the observed file difference.
+The dock, Monaco, the file tree, and the one-line activity rows are implemented on `codex/chat-dock` as specified in `rewrite-loaded-boundaries`. Ordinary Chat still has no general-purpose helper. `+N -M` still comes only from the observed file difference. Half-screen review is still not accepted.
 
 Retained, and not part of this rewrite: Packet 03 is merged. Packet 04 tasks 2.8/2.9 stay open. Deferred and not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Dave accepted project-file attach/send, the full-screen review, and drop/notifications/tray only. Gemma combined JSON/tool failure remains visible; Qwen can ignore loaded memory without explicit reading.
 

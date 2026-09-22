@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import httpx
@@ -39,6 +39,39 @@ from tests.support import close_workbench_sqlite, offline_workbench_client, wait
 class _ThreadingHttpServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+
+class _RecordingModel(ScriptedChatModel):
+    """Records the tool names bound for each model call, including copies."""
+
+    offered: ClassVar[list[list[str]]] = []
+
+    def bind_tools(self, tools, **kwargs):  # type: ignore[override]
+        names: list[str] = []
+        for tool in tools:
+            name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+            if isinstance(name, str):
+                names.append(name)
+        type(self).offered.append(names)
+        return super().bind_tools(tools, **kwargs)
+
+
+class _UnprofiledModel(ScriptedChatModel):
+    offered: ClassVar[list[list[str]]] = []
+
+    def bind_tools(self, tools, **kwargs):  # type: ignore[override]
+        names: list[str] = []
+        for tool in tools:
+            name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+            if isinstance(name, str):
+                names.append(name)
+        type(self).offered.append(names)
+        return super().bind_tools(tools, **kwargs)
+
+    def _get_ls_params(self, stop=None, **kwargs):  # type: ignore[override]
+        params = super()._get_ls_params(stop=stop, **kwargs)
+        params["ls_provider"] = "workbench-unprofiled"
+        return params
 
 
 def echo_then_reply() -> list[AIMessage]:
@@ -406,6 +439,70 @@ class HarnessApiTests(unittest.TestCase):
         )
         self.assertEqual(with_file, ["read_attachment"])
         self.assertEqual(still_denied, [])
+        from workbench_backend.agents.tools import ENABLED_TOOLS, project_mutation_tools
+        self.assertFalse(set(ENABLED_TOOLS) & {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "task"})
+        mutations = [tool.name for tool in project_mutation_tools(str(project))]
+        self.assertEqual(mutations, ["rename_file", "delete_file"])
+
+    def test_ordinary_chat_does_not_offer_task_or_recursive_delete(self) -> None:
+        from deepagents import create_deep_agent
+        from deepagents.backends import FilesystemBackend
+        from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
+        from workbench_backend.agents.tools import project_mutation_tools
+
+        project = self.root / "offered-tools"
+        project.mkdir()
+        (project / "note.txt").write_text("hello\n", encoding="utf-8")
+        _RecordingModel.offered.clear()
+        model = _RecordingModel([
+            AIMessage(content="", tool_calls=[{"name": "task", "args": {"description": "Read note.txt", "subagent_type": "helper"}, "id": "task-1"}]),
+            AIMessage(content="helper finished"),
+            AIMessage(content="parent finished"),
+        ])
+        unprofiled = _UnprofiledModel([AIMessage(content="defaults")])
+        _UnprofiledModel.offered.clear()
+        defaults = create_deep_agent(model=unprofiled, system_prompt="defaults")
+        defaults.invoke({"messages": [{"role": "user", "content": "hi"}]})
+        default_names = set().union(*_UnprofiledModel.offered)
+        self.assertIn("task", default_names)
+        self.assertIn("delete", default_names)
+
+        ensure_ordinary_chat_profile(model)
+        child_agent = create_deep_agent(
+            model=model,
+            tools=project_mutation_tools(str(project)),
+            system_prompt="parent",
+            backend=FilesystemBackend(root_dir=str(project), virtual_mode=True),
+            subagents=[{
+                "name": "helper",
+                "description": "Reads one project file.",
+                "system_prompt": "Report the file.",
+                "model": model,
+            }],
+        )
+        child_agent.invoke({"messages": [{"role": "user", "content": "look"}]})
+        self.assertTrue(_RecordingModel.offered, "the model should be offered a tool list")
+        child_offers = [names for names in _RecordingModel.offered if "task" not in names]
+        self.assertTrue(child_offers, "a compiled child should be offered tools without the task tool")
+        for names in child_offers:
+            self.assertNotIn("delete", names)
+            self.assertNotIn("task", names)
+            self.assertIn("read_file", names)
+        self.assertIn("delete_file", set().union(*_RecordingModel.offered))
+
+        _RecordingModel.offered.clear()
+        self.scripted = _RecordingModel([AIMessage(content="ordinary chat")])
+        started = self._start(project_path=str(project), task="Say hello.")
+        body = wait_for_run(self.client, started["id"])
+        self.assertEqual(body["status"], "completed", body.get("error"))
+        self.assertTrue(_RecordingModel.offered)
+        for names in _RecordingModel.offered:
+            self.assertNotIn("task", names)
+            self.assertNotIn("delete", names)
+        offered = set().union(*_RecordingModel.offered)
+        self.assertIn("read_file", offered)
+        self.assertIn("delete_file", offered)
+        self.assertNotIn("task", [item["name"] for item in body["tool_invocations"]])
 
     def test_completion_evidence_is_not_judgement(self) -> None:
         started = self._start(

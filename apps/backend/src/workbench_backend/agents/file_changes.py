@@ -50,7 +50,27 @@ class ProjectFileChangeView(BaseModel):
     reversal_unavailable_reason: str | None = None
     diff: str | None = None
     diff_unavailable_reason: str | None = None
+    added_lines: int | None = None
+    removed_lines: int | None = None
     note: str = "Observed file changes only. This does not undo shell commands, remote actions or an entire run."
+
+
+def content_line_counts(before: str | None, after: str | None) -> tuple[int, int] | None:
+    """Added and removed content lines of the observed texts.
+
+    ``None`` when either text was not captured. Diff headers are not part of
+    this count because the comparison is the stored texts themselves.
+    """
+
+    if before is None or after is None:
+        return None
+    added = removed = 0
+    for line in difflib.ndiff(before.splitlines(), after.splitlines()):
+        if line.startswith("+ "):
+            added += 1
+        elif line.startswith("- "):
+            removed += 1
+    return added, removed
 
 
 def project_file(root: Path, value: str) -> Path:
@@ -174,6 +194,10 @@ def change_view(root: Path, change: ProjectFileChange, *, run_active: bool) -> P
                 tofile=change.destination or change.path))
     if view.diff is None:
         view.diff_unavailable_reason = "A complete before-and-after UTF-8 text capture is unavailable (binary, larger than 256 KB, or interrupted)."
+    else:
+        counts = content_line_counts(change.before.text or "", change.after.text or "" if change.after is not None else None)
+        if counts is not None:
+            view.added_lines, view.removed_lines = counts
     try:
         current = file_image(project_file(root, change.destination or change.path))
         view.current_matches = change.after is not None and same_image(current, change.after)

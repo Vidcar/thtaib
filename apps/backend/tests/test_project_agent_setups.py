@@ -1,5 +1,6 @@
 """Canonical folders, immutable setup versions and real Chat dispatch selection."""
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,6 +54,27 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertEqual(listing["path"], "")
         self.assertEqual(listing["entries"][0]["path"], "sample.txt")
         self.assertEqual(self.client.get(f'/v1/projects/{project["id"]}/files', params={"path": ".."}).status_code, 403)
+        read = self.client.get(f'/v1/projects/{project["id"]}/file', params={"path": "sample.txt"})
+        self.assertEqual(read.status_code, 200, read.text)
+        self.assertEqual(read.json()["text"], "original")
+        self.assertIsNone(read.json()["text_unavailable_reason"])
+        self.assertEqual(self.client.get(f'/v1/projects/{project["id"]}/file', params={"path": "../sample.txt"}).status_code, 403)
+        self.assertEqual(self.client.get(f'/v1/projects/{project["id"]}/file', params={"path": "memories/note.txt"}).status_code, 403)
+        binary = self.folder / "binary.dat"
+        binary.write_bytes(b"\x00\x01not text")
+        unread = self.client.get(f'/v1/projects/{project["id"]}/file', params={"path": "binary.dat"})
+        self.assertEqual(unread.status_code, 200, unread.text)
+        self.assertIsNone(unread.json()["text"])
+        self.assertIn("not UTF-8", unread.json()["text_unavailable_reason"])
+        link = self.folder / "linked"
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret", encoding="utf-8")
+        created = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, text=True)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        denied = self.client.get(f'/v1/projects/{project["id"]}/file', params={"path": "linked/secret.txt"})
+        self.assertEqual(denied.status_code, 403, denied.text)
+        self.assertNotIn("secret", denied.text)
         self.assertEqual(self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "go", "project_id": None}).status_code, 409)
         removed = self.client.delete(f'/v1/projects/{project["id"]}').json()
         self.assertFalse(removed["active"])
