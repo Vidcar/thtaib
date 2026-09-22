@@ -8,7 +8,9 @@ Specify how Chat, Agent-run, and Workflows use the embedded Deep Agents harness 
 
 ### Requirement: AGT-001 - Use the embedded harness
 
-Agent tasks SHALL run through the existing Deep Agents harness using LangChain components and LangGraph. Chat SHALL call the same harness with or without a bound project; the application MUST NOT add a model/tool loop. Each run executes once; native streaming, scoped selectors and audit projections observe that invocation while preserving message/block/tool and namespace identities. Without a project, project-filesystem and host-shell access SHALL be absent or rejected, not assigned an invented working directory. Explicitly supplied session attachments MAY be read through their authorized content/scoped backend without granting project or host access.
+Agent tasks SHALL run through `create_deep_agent` using LangChain components and LangGraph. Chat SHALL call the same harness with or without a bound project; the application MUST NOT add a model/tool loop. Each run executes once; native streaming, scoped selectors and audit projections observe that invocation while preserving message/block/tool and namespace identities. Without a project, project-filesystem and host-shell access SHALL be absent or rejected, not assigned an invented working directory. Explicitly supplied session attachments MAY be read through their authorized content/scoped backend without granting project or host access.
+
+The harness SHALL receive the run's backend, filesystem permissions, `interrupt_on`, `memory`, and `skills` through those official parameters when the run uses them. Planning SHALL be the official `write_todos` tool when planning is selected. Exactly one summarization middleware SHALL run, and it SHALL use the model's configured usable input budget. A default summarizer MUST NOT stay stacked on a replacement. Ordinary Chat SHALL disable the general-purpose subagent through the upstream profile switch, and SHALL NOT rely on a parent-only filter that a compiled child does not inherit. The product MUST NOT embed the Deep Agents CLI or a hosted agent runtime.
 
 #### Scenario: Project-bound and project-free chat
 
@@ -20,6 +22,18 @@ Agent tasks SHALL run through the existing Deep Agents harness using LangChain c
 - WHEN streamed content, a tool call and its result are observed by multiple scoped selectors
 - THEN stable message/block/call and namespace identities MUST keep each result paired with its call without extra execution
 - AND provider-reported reasoning, answer content and internal compaction output MUST remain distinct.
+
+#### Scenario: Ordinary Chat has no general-purpose child
+
+- **WHEN** ordinary Chat is compiled and a tool exclusion would matter
+- **THEN** the general-purpose `task` tool is not offered, including to a child
+- **AND** disabling it is the upstream profile switch rather than a filter only the parent runs.
+
+#### Scenario: Summarize once
+
+- **WHEN** a long turn is compacted
+- **THEN** one summarizer runs against the configured usable input budget
+- **AND** a second default summarizer MUST NOT shrink that budget again.
 
 
 ### Requirement: WF-001 - Keep configuration links out of execution sequencing
@@ -138,7 +152,7 @@ Grants SHALL be rechecked at dispatch/resume and MUST NOT enable disabled tools,
 
 ### Requirement: AGT-009 - Enforce tools-off without disabling context housekeeping
 
-Omitted tool selection SHALL inherit and an explicitly empty selection SHALL mean no tools. Tools-off SHALL remove filesystem, shell, planning, retrieval, delegation and synthetic formatting definitions and block unexpected/unrecognized/restored handlers at every sync/async execution hook. Projects, knowledge or connections MUST NOT silently re-enable them. Ordinary answer completion SHALL require no tool. Checkpoints and internal context housekeeping remain available. Selected official planning SHALL expose its observed task states, not invented progress or proof of task correctness.
+Omitted tool selection SHALL inherit and an explicitly empty selection SHALL mean no tools. Tools-off SHALL remove filesystem, shell, planning, retrieval, delegation and synthetic formatting definitions and block unexpected/unrecognized/restored handlers at every sync/async execution hook. Projects, knowledge or connections MUST NOT silently re-enable them. Ordinary answer completion SHALL require no tool. Checkpoints and internal context housekeeping remain available. Selected official planning SHALL expose its observed task states, not invented progress or proof of task correctness. Those states are the arguments of the latest successful `write_todos` call. The desktop checklist presents them. The product MUST NOT keep a second todo list.
 
 #### Scenario: Unexpected restored tool call
 
@@ -192,3 +206,45 @@ Cancellation SHALL prevent further model/tool dispatch, including rejection/resu
 
 - **WHEN** a cancellation arrives during streaming, tool work or an interrupt
 - **THEN** new dispatch stops, the queue pauses and owned cancellation completes only when confirmed, preserving partial and uncertain outcomes.
+
+### Requirement: AGT-019 - Offer only named helpers
+
+Ordinary Chat SHALL keep the general-purpose helper disabled. A person SHALL be able to name saved agents as helpers on a conversation. When that list is empty, no helper tool is offered. When it names agents, only those agents are offered, each with the frozen setup shown in the list, and none of them can gain permissions the conversation does not have. The setup popover SHALL show a Helpers section. Empty copy SHALL say this chat will not hand work to another agent. Each chosen helper is a row with its name and model, and it can be removed. Choosing a helper does not start it.
+
+#### Scenario: No helpers configured
+
+- **WHEN** a conversation has an empty helpers list
+- **THEN** the model cannot call a helper
+- **AND** the setup section says no helper will be used.
+
+#### Scenario: Named helper cannot widen access
+
+- **WHEN** a conversation names one saved agent and that agent attempts a tool the conversation is not allowed
+- **THEN** the tool is refused
+- **AND** the activity row shows that helper by name.
+
+### Requirement: WF-012 - Present a canvas that matches the running workflow
+
+Workflows SHALL be one destination. The screen SHALL show a step palette, a canvas, and an inspector for the selected step. The palette SHALL offer these steps, using ordinary names: sequence, branch, parallel and join, repeat, run an agent, run another workflow, ask a person, typed input, and a registered direct action. A step does nothing until it is placed and the person starts the workflow. The inspector edits that step's setup in the same controls used elsewhere, including the named agent or workflow it calls. A grader is a workflow or agent step the person placed, not a hidden reviewer.
+
+Invalid steps SHALL show the reason on the step before a run starts. Run and a history of earlier runs sit above the canvas. During a run, the active step is marked, and waiting for a person uses the same approval or question card as Chat. Stopping names the work that will stop. An imported graph MUST NOT run arbitrary code. Automatic schedules are not part of this screen. A later schedule would be another step, not a ban on adding one.
+
+The canvas SHALL be the loaded React Flow editor. It MUST NOT be a second workflow engine. The main path MUST NOT require reading raw graph JSON.
+
+#### Scenario: Place a grader and run it
+
+- **WHEN** a person places an agent step and a second workflow step labelled as grading, then starts the workflow
+- **THEN** those steps run in the order shown
+- **AND** the grader does not run unless it was placed.
+
+#### Scenario: Invalid step is visible
+
+- **WHEN** a branch has no outgoing path
+- **THEN** the step shows that reason and the workflow does not pretend to start
+- **AND** the canvas remains editable.
+
+#### Scenario: Imported code is refused
+
+- **WHEN** an imported graph contains an arbitrary code step
+- **THEN** that step is rejected
+- **AND** no code from the graph is executed.
