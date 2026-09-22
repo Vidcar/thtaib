@@ -70,10 +70,13 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
     interaction = service(request)
     options = interaction.subscription(thread_id, body)
     cursor = options.get("since", 0)
+    resume = interaction.resume_view(thread_id, cursor)
 
     async def produce():
         nonlocal cursor
         idle = 0
+        for wire in resume.opening(options):
+            yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
         while not await request.is_disconnected():
             # Display-only edits hide prior display events, never graph state.
             # Their first values record is the new authoritative display.
@@ -92,12 +95,14 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
                 if interaction.matches(item, options):
                     if item["method"] == "values" and not item["params"].get("namespace"):
                         item["params"]["data"] = interaction.display_values(item["params"]["data"])
-                    yield format_sse_event(data_str=json.dumps(item), event="message", id=str(cursor))
+                    for wire in resume.present(item):
+                        yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
             if page:
                 idle = 0
                 continue
-            # No transient queue: replay and live tail share the same durable
-            # cursor. A disconnect closes observation without cancelling work.
+            # A subscriber that passes `since` continues after the snapshot it
+            # painted. Omitting `since` still reads the durable log from the start.
+            # A disconnect closes observation without cancelling work.
             await anyio.sleep(0.1)
             idle += 1
             if idle >= 100:

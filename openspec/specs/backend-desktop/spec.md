@@ -56,13 +56,20 @@ The environment manager SHALL provision workers and access, map project storage,
 
 ### Requirement: API-006 - Stream run and conversation events over SSE
 
-Chat and current live-run consumers SHALL share a versioned upstream-compatible interaction boundary over authenticated loopback HTTP and SSE. Backend registration SHALL bind application conversation, runtime thread, application run and framework execution identities. Submission, hydration, subscription, resume, cancellation and reconnect MUST operate through that binding. Missing tokens MUST return 401 and wrong tokens MUST return 403. The boundary SHALL validate supported command fields and reject unsupported versions, commands, arbitrary state updates, checkpoint selection and workflow jumps. Only controlled public message/state/tool/interrupt projections and declared application extensions SHALL cross the boundary; raw private graph state MUST NOT be exposed.
+Chat and current live-run consumers SHALL share a versioned upstream-compatible interaction boundary over authenticated loopback HTTP and SSE. Backend registration SHALL bind application conversation, runtime thread, application run and framework execution identities. Submission, hydration, subscription, resume, cancellation and reconnect MUST operate through that binding. Missing tokens MUST return 401 and wrong tokens MUST return 403. The boundary SHALL validate supported command fields and reject unsupported versions, commands, arbitrary state updates, checkpoint selection and workflow jumps. Only controlled public message/state/tool/interrupt projections and declared application extensions SHALL cross the boundary; raw private graph state MUST NOT be exposed. Opening or reconnecting a conversation paints the saved snapshot at its interaction cursor and continues the event subscription after that cursor. Historical token events are not played back onto the screen.
 
 #### Scenario: SSE reconnect
 
 - WHEN a live thread is disconnected and reconnected
 - THEN a consistent snapshot/replay boundary MUST restore its ordered projection without duplicate content or a new model invocation
 - AND a replay gap MUST cause explicit controlled resynchronization rather than silently dropping output.
+
+#### Scenario: Open a conversation without replaying tokens
+
+- WHEN a client opens or reconnects to a conversation
+- THEN it paints the saved snapshot at `interaction_cursor` and continues the subscription after that cursor
+- AND historical token events MUST NOT be applied to the screen again
+- AND an answer already in progress MUST be visible from that snapshot before newer tokens arrive.
 
 #### Scenario: Run-local sequences across turns
 

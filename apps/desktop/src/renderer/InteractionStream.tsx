@@ -1,10 +1,10 @@
-import { HttpAgentServerAdapter, useMessages, useStream, useToolCalls, type AssembledToolCall } from "@langchain/react";
+import { useMessages, useStream, useToolCalls, type AssembledToolCall } from "@langchain/react";
 import type { Interrupt } from "@langchain/langgraph-sdk";
 import type { BaseMessage } from "@langchain/core/messages";
 import type React from "react";
 import { useEffect, useMemo } from "react";
 
-import { backendUrl } from "./api";
+import { createResumingInteractionTransport } from "./interactionResume";
 import type { SchemaWorkbenchInteractionMetadata } from "../generated/shared-contracts/openapi";
 import type { AgentRun, PendingInterrupt, PendingInterruptAction } from "./types";
 
@@ -126,10 +126,7 @@ export function InteractionStream(props: {
   onError?: (error: unknown) => void;
 }) {
   const { threadId, children, onError } = props;
-  const transport = useMemo(
-    () => new HttpAgentServerAdapter({ apiUrl: `${backendUrl()}/v1/agent-interaction`, threadId }),
-    [threadId],
-  );
+  const transport = useMemo(() => createResumingInteractionTransport(threadId), [threadId]);
   const stream = useStream<WorkbenchInteractionValues, WorkbenchInterrupt>({
     transport,
     threadId,
