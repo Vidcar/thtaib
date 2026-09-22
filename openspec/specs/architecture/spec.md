@@ -20,6 +20,8 @@ The application SHALL keep coordination responsibilities in one Python FastAPI b
 
 The application SHALL use llama.cpp for supported inference, Deep Agents for each agent loop, LangGraph for runtime checkpoints and outer workflows, and LangChain for model, message, tool and frontend interaction interfaces. Generic frontend message assembly, tool-call presentation state, subscriptions, interrupt projections and scoped selectors SHALL use compatible upstream interaction libraries. The application MUST own model installation/loading/settings, effective configuration, project/session identity, permissions, resource admission, durable application records, confirmed outcomes, retained files and local evaluation. Frontend projections MUST NOT become execution, authorization, scheduling or checkpoint authority. The application MUST NOT implement a second model/tool loop or workflow runtime.
 
+The diff editor, the text editor, and the file-tree widget SHALL be loaded presentation libraries. They are not execution engines. The application owns the dock and the records those views read. It MUST NOT implement its own diff algorithm, syntax highlighter, file-tree widget, agent loop, checkpointer, or MCP host.
+
 #### Scenario: Execution owner trace
 
 - WHEN a model call, tool execution, and workflow step are traced
@@ -31,6 +33,12 @@ The application SHALL use llama.cpp for supported inference, Deep Agents for eac
 - WHEN multiple frontend selectors or subscriptions observe one thread
 - THEN they MUST observe the same backend-owned run without another graph invocation
 - AND their loading or disconnected state MUST NOT establish a durable run outcome.
+
+#### Scenario: Review uses the loaded editor
+
+- **WHEN** a person reviews a recorded project-file change
+- **THEN** the diff view is the loaded editor showing the stored before and after text
+- **AND** opening that view MUST NOT call the model or write a second diff engine.
 
 ### Requirement: ARCH-003 - Shared records across surfaces
 
@@ -118,3 +126,13 @@ Desktop-granted backend authorization SHALL be restricted to the verified applic
 - WHEN untrusted content attempts to open within or replace a trusted desktop document
 - THEN navigation/window policy MUST deny it and backend credential injection MUST independently reject untrusted requesting frames
 - AND an allowed window ID or null origin alone MUST NOT authorize backend access.
+
+### Requirement: ARCH-011 - Leave a door for a later feature
+
+A capability this contract does not include SHALL be described as not in this contract. It MUST NOT be described as forbidden unless it would break a safety rule, such as running arbitrary code from an imported graph or sending audio to an unsaved address. A later image, voice, schedule, evaluation, or helper feature SHALL extend the existing endpoint, workflow step, Lab catalogue, or saved agent. It MUST NOT add a second agent loop, a second workflow engine, or a second media store.
+
+#### Scenario: Voice cloning is later
+
+- **WHEN** a later change adds voice cloning
+- **THEN** it uses the saved speech endpoint or another application the person configures
+- **AND** the current dictation and spoken-reply controls remain the way speech is used until that change exists.

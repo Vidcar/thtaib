@@ -1,10 +1,6 @@
-# Lab Evaluation
+# Spec Delta
 
-## Purpose
-
-Specify Lab as a measurements-first destination on this machine, with a separate memory test and a small expandable set of exact task challenges. Task replay stays distinct from speed measurements.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: LAB-001 - Separate engine measurements from task evaluation
 
@@ -15,36 +11,6 @@ Model Lab SHALL use llama-bench for engine-performance measurements when availab
 - WHEN an engine measurement and agent task evaluation are compared
 - THEN their inputs and results MUST remain distinct
 - AND the task path MUST use the shared harness rather than a separate loop.
-
-### Requirement: LAB-002 - Capture and restore actual starting inputs
-
-Task cases SHALL save the initial project snapshot, task, profile and deployment ids, dependency versions, knowledge versions, tool fixtures, and acceptance checks. Capture from a real run SHALL reuse the run's starting snapshot. A run without one MUST report starting snapshot unavailable rather than presenting current files as original inputs. Restore SHALL create a new workspace and linked branch run.
-
-#### Scenario: Rerun from original inputs
-
-- WHEN a real task is saved as a case, the working project changes, and the case is rerun
-- THEN rerun MUST use the recorded initial state
-- AND restored versions and unavoidable deviations MUST be visible.
-
-### Requirement: LAB-003 - Distinguish recorded-tool and live-tool evaluation
-
-Recorded-tool and live-tool evaluations SHALL be labelled and kept separate. Recorded-tool replay SHALL consume the first unused fixture with equal tool name and canonical arguments, and missing, exhausted, or mismatched fixtures SHALL fail with explicit deviations. Recorded mode MUST NOT fall back to live execution. Case export SHALL sanitize or block detectable secrets in task text, tool fixtures, and included files.
-
-#### Scenario: Fixture mismatch and secret export
-
-- WHEN recorded replay lacks a matching fixture or export detects a secret
-- THEN replay MUST fail with a recorded fixture deviation and no live fallback
-- AND export MUST redact or block the secret before reusable case output.
-
-### Requirement: LAB-004 - Preserve interpretable evidence
-
-Lab results SHALL expose answers, failures, resource use, artifacts, checks, applied configuration, and deviations rather than scores alone. Executable checks SHALL remain distinct from model judgement. Profile differences across Lab, Chat, and Workflows SHALL be visible.
-
-#### Scenario: Compare changed setting
-
-- WHEN two case runs differ by a setting
-- THEN applied configuration and evidence for each outcome MUST be inspectable
-- AND at least one failing executable check MUST remain distinct from model review.
 
 ### Requirement: LAB-005 - Publish an extensible hardware-local trait catalogue
 
@@ -86,16 +52,6 @@ None of the three views SHALL require reading raw JSON or internal identifiers f
 - **THEN** both can be overlaid, with the setup difference labelled
 - **AND** deleting one run removes only that run after confirmation.
 
-### Requirement: LAB-007 - Keep replay writes confined
-
-Recorded replay writes reconstructed `write_file` or `edit_file` bytes only as fixture application inside the replay workspace. Recorded replay SHALL attach no live project, host shell, or retrieval backend. Knowledge routes MAY use scratch or state backend so official memory and skills middleware can download files, but recorded replay MUST NOT write through into durable knowledge.
-
-#### Scenario: Recorded write fixture
-
-- WHEN a recorded replay applies a write fixture
-- THEN the write MUST be labelled fixture application and confined to the replay workspace
-- AND durable knowledge and live project storage MUST remain unchanged.
-
 ### Requirement: LAB-008 - Measure engine traits honestly
 
 Engine measurements SHALL use llama-bench from the managed runtime when available, otherwise report unavailable. A tiny smoke command SHALL prove only runner invocation, not context-performance evidence. Prompt sizes and context depths SHALL be the person's saved settings, not a single hidden default. Context traits SHALL record configured capacity, prompt and past-context occupancy, prefill and decode measurements, applied runtime settings, warmup or cache condition, generated length, repetitions, and resource use. The chart MUST plot those recorded measurements and MUST NOT invent a point the runner did not return.
@@ -105,6 +61,8 @@ Engine measurements SHALL use llama-bench from the managed runtime when availabl
 - WHEN a context trait is run at a named context size
 - THEN measurements MUST include the configured and observed context details and resource use
 - AND a smoke-only run MUST NOT be labelled as performance evidence for that context.
+
+## ADDED Requirements
 
 ### Requirement: LAB-014 - Hold the machine visibly while Lab runs
 

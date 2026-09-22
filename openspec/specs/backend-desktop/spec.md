@@ -180,7 +180,7 @@ The desktop SHALL provide one collapsible sidebar on every page. Destinations SH
 
 Adding a project SHALL ask for a name and one existing folder. It SHALL NOT choose memory or grant edit permission beyond the selected folder. Creating a project SHALL NOT start or move a chat.
 
-Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer and an on-demand right-hand panel for files, previews, changes and detailed activity. Full and half-screen windows SHALL be normal supported layouts; secondary panels SHALL collapse before compromising ordinary conversation/composer use. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
+Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files, previews, and changes open in the dock in API-023, API-024, and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stacks with a bounded height or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
 
 Light and dark themes SHALL follow Windows by default with a user override. Compact controls SHALL retain readable labels, accessible names, visible keyboard focus and usable click targets. Reduced motion SHALL be respected. Settings SHALL expose appearance, notifications, saved grants and manual backup/restore; connection management is added by Packet 04 using the same surface.
 
@@ -202,11 +202,17 @@ Light and dark themes SHALL follow Windows by default with a user override. Comp
 #### Scenario: Compact window and keyboard use
 
 - **WHEN** the application uses a half-screen window, Windows scaling or keyboard-only navigation
-- **THEN** secondary panels can collapse while navigation, readable replies, composer and labelled settings remain accessible without ordinary controls requiring horizontal scrolling.
+- **THEN** secondary panels can collapse or stack while navigation, readable replies, composer and labelled settings remain accessible without ordinary controls requiring horizontal scrolling.
+
+#### Scenario: Dock does not cover the answer
+
+- **WHEN** the dock is open and the conversation actions menu is open
+- **THEN** the transcript and composer remain readable beside or above the dock
+- **AND** neither the dock nor the menu is painted over the answer text.
 
 ### Requirement: API-017 - Expose compact effective model controls and measurements
 
-The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment/tool/permission controls beside the composer and focused popovers for details. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
+The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment/tool/permission controls beside the composer and focused popovers for details. Project, agent, and knowledge setup SHALL open as a compact popover. That popover MUST NOT take height from the transcript, and it SHALL close when the dock opens or when another menu opens. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
 
 Compact status elements SHALL expose current context fill and generation speed in tok/s, with capacity, counting/measurement basis and relevant interval available on expansion. Observed measurements, labelled estimates and unavailable values SHALL remain distinguishable. Stream chunks MUST NOT be counted as tokens; absent usage MUST NOT appear as zero. Context changes/compaction and current versus completed-turn measurements SHALL remain attributable rather than silently showing stale values as current.
 
@@ -224,16 +230,21 @@ Sending with a stopped installed managed model SHALL load the selected setup thr
 - **WHEN** a submitted draft selects an installed stopped model and loading conflicts with existing work or fails
 - **THEN** the draft remains recoverable, the conflict/failure and corrective action are visible, no protected work is silently disrupted and retry cannot duplicate accepted work.
 
+#### Scenario: Setup stays off the transcript
+
+- **WHEN** a person opens project, agent, or knowledge setup during a conversation
+- **THEN** the transcript keeps its height and the setup closes when the dock or another menu opens.
+
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
-Answer text SHALL always appear incrementally. A compact detailed-stream toggle SHALL default off and remember the user's preference across conversations/reopening. When enabled, available returned thinking, tool calls/results, file activity and other output SHALL be distinctly labelled/formatted apart from answers; absent streams MUST NOT be fabricated. When disabled, compact progress with subtle shimmer SHALL replace expanded activity while answer text continues streaming. Motion preferences SHALL be respected.
+Answer text SHALL always appear incrementally. A compact detailed-stream toggle SHALL default off and remember the user's preference across conversations/reopening. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
 
-Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain in the conversation menu. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
+Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain in the conversation menu. That menu SHALL be only as large as those actions and MUST NOT cover the dock. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
 
 #### Scenario: Hide details while an answer streams
 
 - **WHEN** a user disables detailed streams during generation and expands one tool result
-- **THEN** answer text continues, other detailed activity stays compact, the chosen result opens independently and execution/content identity remains unchanged.
+- **THEN** answer text continues, other raw tool input and output stay collapsed, the chosen result opens independently and execution/content identity remains unchanged.
 
 #### Scenario: Interrupt during compact presentation
 
@@ -249,6 +260,12 @@ Each output section SHALL independently expand/collapse through a heading or che
 
 - **WHEN** a user copies a chat code block, tool input, tool output or file difference
 - **THEN** that block's text is copied without changing the conversation.
+
+#### Scenario: Planning stays visible while details are hidden
+
+- **WHEN** detailed streams are off and the agent updates its todo list or edits a file
+- **THEN** the checklist and the one-line activity row stay visible
+- **AND** the raw tool arguments stay collapsed.
 
 ### Requirement: API-019 - Present queued work and scoped attention clearly
 
@@ -281,3 +298,146 @@ Packet 03 SHALL include an early Chat layout review after the basic arrangement 
 
 - **WHEN** Dave explicitly defers a milestone's UX review
 - **THEN** its existing design/PR records the deferral separately from technical evidence and does not claim UX acceptance or waive required live checks.
+
+### Requirement: API-023 - Keep one dock beside the conversation
+
+Chat SHALL use one right-hand dock. Opening it adds a column and narrows the transcript. Closing it returns that width. A splitter SHALL resize the dock within bounds. Exactly one page is open at a time; switching pages replaces the dock and MUST NOT open a second card. The first pages are Changes and Files. Later pages register in this same dock. Widening the dock SHALL keep a readable conversation column. On a narrow conversation column the dock SHALL stack with a bounded height or close. The dock MUST NOT be painted over the transcript or the composer, and it MUST NOT hide the conversation in order to grow. Navigation and the dock keep bounded resize, collapse, and reopen without losing content or run state. Light and dark follow the application theme.
+
+#### Scenario: Open, resize, and close
+
+- **WHEN** a person opens Files, drags the splitter, switches to Changes, and then closes the dock
+- **THEN** the transcript narrows and widens with the dock, only one page is showing, and closing restores the conversation width
+- **AND** the answer text is never covered.
+
+#### Scenario: Narrow window
+
+- **WHEN** the conversation column is about half a screen wide and the dock is open
+- **THEN** the dock stacks with a bounded height or closes
+- **AND** the transcript and composer remain usable.
+
+### Requirement: API-024 - Review changes in the loaded diff editor
+
+The Changes page SHALL list recorded project-file changes for the selected turn and open the selected change in the loaded Monaco diff editor. The editor shows the stored before text and after text, side by side when the dock is wide enough and inline when it is narrow. The editor is read-only. Its assets ship inside the desktop package. The application theme applies. When the text difference is unavailable, the page says why and does not invent a diff. Reverse remains the existing confirmed reverse of that one change. A pending change SHALL be shown when the before text and the proposed result text are both already known. Approval buttons stay on the transcript card. The page MUST NOT implement its own diff algorithm.
+
+#### Scenario: Review an edit
+
+- **WHEN** a turn has a recorded text edit and the person selects it
+- **THEN** Monaco shows the stored before and after text
+- **AND** reverse still requires the existing confirmation that the file matches the recorded result.
+
+#### Scenario: Binary change
+
+- **WHEN** a recorded change has no text difference
+- **THEN** the page says the difference is unavailable
+- **AND** it does not show an empty or invented diff.
+
+### Requirement: API-025 - Browse project files in the loaded editor
+
+The Files page SHALL show the bound project's files in a loaded virtualized tree, using the existing one-directory listing as each folder opens. A filter SHALL narrow names already loaded. Choosing a text file opens it read-only in the loaded Monaco editor. The read is a read-only project-file request with the same confinement as the listing: inside the project, no links, and no framework routes. The read MUST NOT call the model or the agent's read tool. Text follows the existing captured-text limit. Images use the existing image preview. Other files say they cannot be shown. Retained copies on this page stay labelled as retained copies and stay distinct from live project files. The page MUST NOT become a second catalogue of the project, and it MUST NOT implement its own tree widget. The new read is published through the existing shared contract. Opening a file does not require git.
+
+#### Scenario: Open a project file
+
+- **WHEN** a person expands a folder and opens a text file from the dock
+- **THEN** the tree uses the existing listing and Monaco shows the file
+- **AND** the model is not called.
+
+#### Scenario: File outside the project
+
+- **WHEN** a read asks for a path outside the project, through a link, or on a framework route
+- **THEN** the read is refused
+- **AND** no file content is shown.
+
+#### Scenario: Retained copy
+
+- **WHEN** a retained attachment and a live project file are both on the Files page
+- **THEN** the retained copy is labelled as retained and the project file is labelled as the live file.
+
+### Requirement: API-026 - Show planning and file activity as it happens
+
+While an assistant turn runs, and when that turn is reopened, Chat SHALL show planning and tool activity from the projected tool calls. This is visible with detailed streams on or off.
+
+`write_todos` SHALL appear as one checklist for that turn. Each item shows its content and its status: pending, in progress, or completed. The checklist is the arguments of the latest successful `write_todos` call. A later successful call replaces the list. A failed call leaves the previous list and shows the failure. The product MUST NOT keep a second todo list or read private graph state. Raw arguments remain available on expand. The checklist appears only once those arguments parse as the todo list.
+
+Each other filesystem, search, shell, MCP, and memory tool SHALL appear as one line, one per call identity, in order, without a duplicate when live and retained records join:
+
+- Reading or Read, plus the path. When the call includes an offset and limit, the line includes that line range.
+- Creating or Created, Editing or Edited, Deleting or Deleted, Renaming or Renamed, using the recorded operation. A rename shows the source and destination.
+- Listing or Listed, Finding or Found files matching, Searching or Searched for, Running or Ran, Calling or Called, Proposing or Proposed a memory.
+
+The unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line; its full output stays on expand. The underlying tool name stays available on expand.
+
+Choosing a file line opens the dock on that change, or on the file when no change record exists. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
+
+#### Scenario: Todo list updates in place
+
+- **WHEN** the agent writes a todo list and later marks an item complete
+- **THEN** one checklist shows the latest successful items and statuses
+- **AND** detailed streams being off does not hide it.
+
+#### Scenario: File line with counts
+
+- **WHEN** an edit of `thistest.md` finishes and the observed difference is five added lines and four removed lines
+- **THEN** the transcript shows a line equivalent to "Edited thistest.md +5 -4"
+- **AND** choosing it opens that change in the dock.
+
+#### Scenario: Read without a diff
+
+- **WHEN** the agent reads `SKILL.md`
+- **THEN** the transcript shows a line equivalent to "Read SKILL.md"
+- **AND** no added or removed count is shown.
+
+#### Scenario: Counts wait for the observation
+
+- **WHEN** an edit has started and the before/after text is not available yet
+- **THEN** the line shows that the file is being edited
+- **AND** the counts appear only after the observed difference exists.
+
+#### Scenario: Failed todo does not wipe the list
+
+- **WHEN** a todo update fails after a successful list
+- **THEN** the previous checklist remains and the failure is visible.
+
+### Requirement: API-027 - Keep every destination compact and readable
+
+Every destination SHALL use the same compact type, spacing, and icon actions as Chat. Headings stay short. The product name is not repeated on every panel. Help that is not required to act SHALL open on hover or keyboard focus and close on Escape. Primary actions, the current setup, errors, and permissions stay visible without opening a raw detail view. Keyboard focus is visible. Labels stay readable at the person's Windows text size. A disclosure is allowed to use a chevron. Resizing or collapsing navigation and the Chat dock MUST NOT drop content or run state.
+
+#### Scenario: Move between destinations
+
+- **WHEN** a person moves from Chat to Lab, Workflows, and Settings
+- **THEN** the type, spacing, and focus treatment match
+- **AND** the composer or the destination's primary action stays reachable without horizontal scrolling.
+
+### Requirement: API-028 - Confirm before swapping the loaded model
+
+Changing or unloading a model SHALL open a confirmation. The confirmation names the conversation that will be kept and any work that must finish or be stopped. It MUST NOT unload a model as a side effect of choosing a different row. After confirmation, the conversation, its draft, and its history remain. The screen shows waiting, loading, or the failure, and the draft is still there if loading fails.
+
+#### Scenario: Swap during a quiet chat
+
+- **WHEN** a person chooses another model and confirms
+- **THEN** the same conversation stays open
+- **AND** the previous model is not unloaded until that confirmation.
+
+#### Scenario: Swap while work is running
+
+- **WHEN** a reply or a Lab run is still using the model
+- **THEN** the confirmation names that work and does not unload it silently.
+
+### Requirement: API-029 - Show who is working and who is waiting
+
+When a named helper or a workflow step is running, the activity view SHALL show that agent or step by its name under the parent conversation or workflow. Status uses plain words: working, waiting for approval, waiting for a typed answer, waiting for the model, or failed. The reason for a wait is one line. Child tool rows use the same one-line activity labels as API-026 and stay indented under that name. Stopping names what will stop. The view MUST NOT be the only place a person can approve or answer. Those cards stay in the conversation or on the workflow step.
+
+#### Scenario: Helper waits for approval
+
+- **WHEN** a named helper asks to edit a file
+- **THEN** the activity row shows that helper's name and that it is waiting for approval
+- **AND** the approval card remains the control that allows or rejects the edit.
+
+### Requirement: API-030 - Present reusable agents as a calm list
+
+The Agents destination SHALL list saved agents by name and role, with the model and whether anything they need is missing. Opening one shows its instructions, tools, knowledge, and helpers in the same controls as the chat setup popover. Create, duplicate, rename, and remove are explicit actions. Remove keeps past conversations that used an older version and says so. The list is empty with a single create action, not an explanation of storage. Missing dependencies are a short warning on the row, not a blocked page.
+
+#### Scenario: Repair a missing model
+
+- **WHEN** a saved agent points at a model that is no longer installed
+- **THEN** its row says what is missing
+- **AND** the person can open it and choose another model without losing the agent's name.

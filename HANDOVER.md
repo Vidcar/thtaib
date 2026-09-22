@@ -1,8 +1,18 @@
 # Current handover
 
-Updated 2026-09-22. Next session: rewrite the product specs. This checkout is `codex/rewrite-product-specs`, cut from `main` at `6e91057` ([PR 118](https://github.com/Vidcar/thtaib/pull/118)). The spec files here match that main. Treat `openspec/specs/` and the open changes as the reference to rework, not as the intended contract. Rework each capability so it matches what Dave needs. Use the OpenSpec skills. Leave the app code alone unless Dave asks.
+Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. Active changes are `rewrite-loaded-boundaries` and `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay. Leave the app code alone until Dave asks to build.
 
-Capabilities: architecture, agents-workflows, backend-desktop, environments-tools, lab-evaluation, models, registry, shared-contracts, state-recovery. Open changes still in the tree: `04-complete-projects-knowledge-tools`, `05-complete-lab-evaluation`, `06-complete-delegation-coordination`, `07-complete-executable-workflows`, `08-complete-media-voice`, `compact-workbench-experience`, `familiar-chat-sidebar`. `main` keeps this spec text until the rewrite is ready to land. The delivery snapshot for the merged app is the handover on `main` at `6e91057`.
+Build order when implementation starts:
+
+1. Everyday workspace still specified beyond the dock: compact destinations, immediate archive, chat deletion that leaves project files, skill import, document extraction, web search, and connection secrets.
+2. Lab: prefill and decode charts, the configurable needle test, the small exact challenges, and the visible machine reservation.
+3. Named helpers and confirming a model swap.
+4. The Workflows canvas.
+5. ComfyUI image generation, dictation, and spoken replies as configured plugs.
+
+Screens are part of the contract, not a later pass. Lab opens on Measurements. Helpers are an empty section until named. Workflows is a palette, canvas, and inspector. Media controls stay hidden until an address is saved.
+
+The dock, Monaco, the file tree, and the one-line activity rows remain as specified in `rewrite-loaded-boundaries`. Ordinary Chat still has no general-purpose helper. `+N -M` still comes only from the observed file difference.
 
 Retained, and not part of this rewrite: Packet 03 is merged. Packet 04 tasks 2.8/2.9 stay open. Deferred and not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Dave accepted project-file attach/send, the full-screen review, and drop/notifications/tray only. Gemma combined JSON/tool failure remains visible; Qwen can ignore loaded memory without explicit reading.
 
