@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. Active changes are `rewrite-loaded-boundaries` (implemented on `codex/chat-dock`, not yet merged) and `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
+Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. `rewrite-loaded-boundaries` is merged in pull request 123. The remaining active change is `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
 
 `rewrite-loaded-boundaries` is implemented. Ordinary Chat registers a Deep Agents harness profile that turns off the general-purpose helper and the recursive `delete` tool, including for a compiled child. One budgeted summarizer remains. `rename_file` and single-file `delete_file` stay the only custom file mutations. Chat has a dock beside the transcript: Changes uses Monaco on the stored before/after text, Files uses a virtualized tree and a read-only Monaco view backed by `GET /v1/projects/{id}/file`. Setup is a header popover. The conversation menu stays in the header. A narrow conversation stacks the dock. Tool rows are one checklist and one activity line; `+N -M` comes from the stored texts. Choosing a file line opens the dock and does not send a message. Desktop `pnpm run build` passed, including the local Monaco worker check. Focused backend tests passed for the catalogue, one summarizer, file-read confinement, and line counts. `openspec validate --all` passed.
 
@@ -22,7 +22,7 @@ Build order after the dock:
 
 Screens are part of the contract, not a later pass. Lab opens on Measurements. Helpers are an empty section until named. Workflows is a palette, canvas, and inspector. Media controls stay hidden until an address is saved.
 
-The dock, Monaco, the file tree, and the one-line activity rows are implemented on `codex/chat-dock` as specified in `rewrite-loaded-boundaries`. Ordinary Chat still has no general-purpose helper. `+N -M` still comes only from the observed file difference. Half-screen review is still not accepted.
+The dock, Monaco, the file tree, and the one-line activity rows are on main, as specified in `rewrite-loaded-boundaries`. Ordinary Chat still has no general-purpose helper. `+N -M` still comes only from the observed file difference. Half-screen review is still not accepted.
 
 Retained, and not part of this rewrite: Packet 03 is merged. Packet 04 tasks 2.8/2.9 stay open. Deferred and not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Dave accepted project-file attach/send, the full-screen review, and drop/notifications/tray only. Gemma combined JSON/tool failure remains visible; Qwen can ignore loaded memory without explicit reading.
 
