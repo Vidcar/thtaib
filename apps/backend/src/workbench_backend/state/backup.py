@@ -296,6 +296,14 @@ class BackupService:
 
     def _external_references(self) -> list[BackupExternalReference]:
         refs: dict[tuple[str, str], BackupExternalReference] = {}
+        for project in self.app_store.list_projects():
+            refs[("project", project.path)] = BackupExternalReference(kind="project", id=project.id, path=project.path, missing=not Path(project.path).is_dir())
+        from workbench_backend.connections.store import ConnectionStore
+        for connection in ConnectionStore(self.app_store).list():
+            if connection.credential_ref:
+                refs[("credential", connection.credential_ref)] = BackupExternalReference(kind="credential", id=connection.credential_ref, missing=True)
+            if connection.transport == "stdio" and connection.command:
+                refs[("runtime", connection.command)] = BackupExternalReference(kind="runtime", id=connection.id, path=connection.command, missing=not Path(connection.command).is_file())
         for conversation in self.app_store.list_conversations(include_archived=True):
             project = getattr(conversation, "area_project_path", None) or conversation.project_path
             if project:

@@ -43,6 +43,21 @@ function tick() {
 
 try {
   const { AgentMessageFeed } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
+  const { sourceReference } = await vite.ssrLoadModule("/src/renderer/SourceReference.tsx");
+  const sourceUrl = `workbench-source://asset_example/${"a".repeat(64)}?source=row+2&line=1&start=0&end=4`;
+  assert.equal(sourceReference(sourceUrl).source, "row 2");
+  for (const invalid of ["javascript:alert(1)", sourceUrl.replace("start=0", "start=-1"), sourceUrl.replace("asset_example", "../secret")]) assert.equal(sourceReference(invalid), null);
+  const sourceHtml = renderToStaticMarkup(React.createElement(AgentMessageFeed, { sourceScope: { sessionId: "chat_example" }, messages: [new AIMessage({content: `The value is 42. [Source row](${sourceUrl})`})] }));
+  assert.match(sourceHtml, /source-reference-link/, "answer source references open an internal source viewer");
+  assert.doesNotMatch(sourceHtml, /href="workbench-source:/, "internal references must never navigate to a URI handler");
+  const pixels = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7ioAAAAASUVORK5CYII=";
+  const screenshot = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [
+    new AIMessage({ id: "screenshot-call", content: "", tool_calls: [{ id: "screen-1", name: "screenshot", args: {} }] }),
+    new ToolMessage({ id: "screenshot-result", tool_call_id: "screen-1", content: [{ type: "image", source_type: "base64", mime_type: "image/png", data: pixels.split(",")[1] }] }),
+  ] }));
+  assert.match(screenshot, /aria-label="View image /, "screenshot outputs expose a clickable thumbnail even with details collapsed");
+  assert.match(screenshot, /<img[^>]*src="data:image\/png;base64,/, "actual screenshot bytes render as an image");
+  assert.doesNotMatch(screenshot, /<code>[^<]*iVBOR/, "image data must not appear as a wall of base64 output");
   const retainedInput = new HumanMessage({ id: "retained-input", content: "Source retained file: sample.txt\nAsset id: internal-id\nSHA-256: internal-hash\nsource bytes" });
   const retainedHtml = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
     messages: [retainedInput],

@@ -388,7 +388,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
             "/v1/knowledge/entries",
             json={
                 "scope": "project",
-                "scope_id": "proj-57",
+                "scope_id": self.client.post("/v1/projects", json={"path": str(self.project)}).json()["id"],
                 "kind": kind,
                 "content": content,
                 "display_name": f"{kind}-57",
@@ -573,7 +573,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
             },
         )
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["code"], "protected_instruction_denied")
+        self.assertEqual(denied.json()["code"], "knowledge_actor_forged")
         current = self.client.get(f"/v1/knowledge/entries/{protected['id']}").json()
         self.assertEqual(current["content"], PROTECTED_TOKEN)
         scope_denied = self.client.post(
@@ -586,7 +586,17 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
             },
         )
         self.assertEqual(scope_denied.status_code, 403)
-        self.assertEqual(scope_denied.json()["code"], "scope_policy_denied")
+        self.assertEqual(scope_denied.json()["code"], "knowledge_actor_forged")
+        # A real backend-bound actor reaches write policy; the public route's
+        # forged-actor rejection must not replace this separate guarantee.
+        from workbench_backend.errors import KnowledgeError
+        from workbench_backend.knowledge.schemas import KnowledgeCreateRequest, KnowledgeEditRequest
+        with self.assertRaises(KnowledgeError) as scope_policy:
+            self.app.state.knowledge.create(KnowledgeCreateRequest(scope="user", kind="memory", content="agent memory"), actor="agent", run_id=run["id"])
+        self.assertEqual(scope_policy.exception.code, "scope_policy_denied")
+        with self.assertRaises(KnowledgeError) as protected_policy:
+            self.app.state.knowledge.edit(protected["id"], KnowledgeEditRequest(content="overwrite", base_version=protected["current_version_id"]), actor="agent", run_id=run["id"])
+        self.assertEqual(protected_policy.exception.code, "protected_instruction_denied")
 
 
 class EffectiveSetupScriptedChatTests(unittest.TestCase):
@@ -624,6 +634,7 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
             "/v1/knowledge/entries",
             json={
                 "scope": "project",
+                "scope_id": self.client.post("/v1/projects", json={"path": str(self.project)}).json()["id"],
                 "kind": "memory",
                 "content": MEMORY_TOKEN,
                 "provenance": HUMAN,

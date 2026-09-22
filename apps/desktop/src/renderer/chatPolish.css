@@ -73,7 +73,7 @@
 .chat-tools-popover .chat-tools-row input { width: 14px; height: 14px; margin: 0; flex: 0 0 auto; accent-color: var(--accent); }
 .chat-tools-popover .chat-tools-permissions { display: flex; align-items: center; justify-content: flex-start; gap: 7px; width: 100%; min-height: 29px; border: 0; border-top: 1px solid var(--border); border-radius: 0; margin-top: 4px; padding: 8px 0 2px; background: transparent; font-size: 11px; color: var(--muted); }
 .chat-tools-popover .chat-tools-permissions:hover { color: var(--text); }
-.chat-main .packet03-attachments { max-height: 9.5rem; overflow: auto; border: none; gap: .4rem; padding-right: .15rem; }
+.chat-main .packet03-attachments { max-height: 13rem; overflow: auto; border: none; gap: .4rem; padding-right: .15rem; }
 .chat-main .packet03-attachments .packet03-dropzone { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .35rem .6rem; min-height: 3.1rem; border-radius: 12px; padding: .5rem .65rem; }
 .chat-main .packet03-attachments .packet03-dropzone-main { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; color: var(--text); font-size: .82rem; font-weight: 550; }
 .chat-main .packet03-attachments .packet03-dropzone .hint { grid-column: 1 / -1; margin: 0; font-size: .7rem; line-height: 1.35; }
@@ -82,12 +82,12 @@
 .chat-main .packet03-attachments .packet03-file-picker:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 70%, var(--text)); outline-offset: 2px; }
 .chat-main .packet03-attachments .packet03-file-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .chat-main .packet03-attachments .packet03-file-picker:has(input:disabled) { opacity: .5; cursor: not-allowed; }
-.chat-main .packet03-attachments .packet03-list { display: grid; gap: .35rem; max-height: 5.9rem; overflow: auto; padding-right: .1rem; }
+.chat-main .packet03-attachments .packet03-list { display: grid; gap: .35rem; max-height: none; overflow: visible; padding-right: .1rem; }
 .chat-main .packet03-attachments .packet03-item { padding: .35rem .45rem; border-radius: 9px; }
 .chat-main .packet03-attachments .packet03-item .packet03-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; align-items: center; gap: .45rem; }
 .chat-main .packet03-attachments .packet03-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
 .chat-main .packet03-attachments .packet03-item .hint { margin: 0; font-size: .7rem; white-space: nowrap; }
-.chat-main .packet03-attachments .packet03-item .notice { margin: 0; padding: .2rem .45rem; border-radius: 999px; font-size: .7rem; white-space: nowrap; }
+.chat-main .packet03-attachments .packet03-item .notice { margin: 0; padding: .2rem .45rem; border-radius: 6px; font-size: .7rem; white-space: normal; overflow-wrap: anywhere; max-width: 24rem; }
 .chat-main .packet03-attachments .packet03-item .icon-button { width: 28px; height: 28px; min-height: 28px; border-radius: 50%; color: var(--muted); }
 .chat-main .packet03-attachments .packet03-item .icon-button:hover { color: var(--text); background: var(--bg-panel); }
 .chat-main > .notice { margin: .25rem 1.5rem; border-radius: 9px; font-size: .8rem; }

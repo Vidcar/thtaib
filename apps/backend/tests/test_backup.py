@@ -60,6 +60,30 @@ class BackupServiceTests(unittest.TestCase):
             )
         )
 
+    def test_connection_versions_restore_without_credential_values(self) -> None:
+        from workbench_backend.connections.service import ConnectionService
+        from workbench_backend.connections.schemas import ConnectionWrite
+        from tests.test_connections import MemoryVault
+        connections = ConnectionService(self.store, vault=MemoryVault())
+        record = connections.create(ConnectionWrite(name="Private docs", kind="mcp", transport="http", url="https://example.test/mcp"))
+        saved = connections.replace_credential(record.id, "backup-must-never-contain-this-secret")
+        archive = self.root.parent / "connections.zip"
+        created = self.service.create_backup(BackupCreateRequest(destination=str(archive)))
+        self.assertTrue(any(ref.id == saved.credential_ref and ref.kind == "credential" and ref.missing for ref in created.manifest.external_references))
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertFalse(any(b"backup-must-never-contain-this-secret" in bundle.read(name) for name in bundle.namelist() if not name.endswith("/")))
+        target = self.root.parent / "restored-connections"
+        restored = self.service.restore_backup(BackupRestoreRequest(archive_path=str(archive), destination_root=str(target)))
+        self.assertTrue(any(ref.id == saved.credential_ref for ref in restored.missing_dependencies))
+        restored_store = ApplicationStore(WorkbenchPaths(target))
+        try:
+            reopened = ConnectionService(restored_store, vault=MemoryVault()).get(saved.id)
+            self.assertEqual(reopened.version, saved.version)
+            self.assertEqual(reopened.credential_ref, saved.credential_ref)
+            self.assertFalse(reopened.credential_present)
+        finally:
+            restored_store.close()
+
     def test_backup_restore_captures_application_db_checkpoints_assets_and_json_records(self) -> None:
         project = self.root.parent / "missing-project"
         self.put_conversation("chat_backup", project_path=str(project))

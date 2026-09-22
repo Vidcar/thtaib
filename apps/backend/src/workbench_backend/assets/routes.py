@@ -16,7 +16,8 @@ from workbench_backend.assets.schemas import (
     RetainedUploadRequest,
 )
 from workbench_backend.assets.service import RetainedAssetService
-from workbench_backend.inference.user_content import TextContentBlock
+from workbench_backend.assets.sources import SourceRange, SourceRangeRequest, read_source
+from workbench_backend.inference.user_content import UserContentBlock
 
 router = APIRouter(prefix="/v1/assets")
 
@@ -83,9 +84,14 @@ def asset_content(
     return get_assets(request).content(asset_id, session_id=session_id, project_path=project_path)
 
 
-@router.post("/reuse", response_model=list[TextContentBlock])
-def reuse_assets(request: Request, body: RetainedAssetReuseRequest) -> list[TextContentBlock]:
+@router.post("/reuse", response_model=list[UserContentBlock])
+def reuse_assets(request: Request, body: RetainedAssetReuseRequest) -> list[UserContentBlock]:
     return get_assets(request).current_user_content(body)
+
+
+@router.post("/{asset_id}/source", response_model=SourceRange)
+def asset_source(request: Request, asset_id: str, body: SourceRangeRequest) -> SourceRange:
+    return read_source(get_assets(request), asset_id, body)
 
 
 @router.post("/delete-preview", response_model=RetainedAssetDeletionPreview)

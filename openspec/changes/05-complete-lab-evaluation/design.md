@@ -31,3 +31,8 @@ Before substantial Lab UI implementation, obtain Dave's approval of the layout c
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.
 
 - [Inspect solver integration](https://inspect.aisi.org.uk/solvers.html)
+## Shared workspace dependency — 2026-09-22
+
+Reuse Packet 04's canonical project identity, versioned agent setups, Knowledge scope/lifecycle, connections, retained file browser and image viewer. Lab cases keep explicit immutable input/setup references and shared asset consumers; deleting a model or changing a current setup must not silently rewrite historical results. Match the compact selection/detail layout and report actual probe/context evidence through shared components.
+
+Packet 04 now provides `project_id`, immutable `agent_setup_version_id`, explicit connection IDs, sparse setup overrides and source version/range references. Lab must snapshot these resolved choices into each case/run, validate current dependencies when executing, and expose shared deletion consumers without rewriting old evidence. The delivered common async driver also owns ordinary Lab runs; future Lab changes retain its interruption/cancellation and session-lifetime checks. This foundation does not complete any Packet 05 task.

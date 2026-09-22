@@ -347,22 +347,27 @@ class HarnessApiTests(unittest.TestCase):
                 "edit_file",
                 "glob",
                 "grep",
+                "rename_file",
+                "delete_file",
                 "execute",
                 "write_todos",
                 "ask_user",
+                "propose_memory",
+                "read_attachment",
             ],
         )
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
-        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user"])
+        self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
         self.assertEqual(body["presented_tools"], ["echo"])
-        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user"])
-        self.assertEqual(body["model_requests"][0]["presented_tools"], ["echo"])
+        self.assertEqual(body["model_requests"][0]["available_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertCountEqual(body["model_requests"][0]["presented_tools"], ["echo", "read_file"])
+        self.assertEqual(body["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
         project = self.root / "agt-005-project"
         project.mkdir()
         bound = self._start(presented_tools=["echo"], project_path=str(project))
         bound_body = wait_for_run(self.client, bound["id"])
-        self.assertEqual(bound_body["enabled_tools"], catalogue)
+        self.assertEqual(bound_body["enabled_tools"], [name for name in catalogue if name != "read_attachment"])
         self.assertEqual(bound_body["presented_tools"], ["echo"])
         denied = self.client.post(
             "/v1/agent-runs",

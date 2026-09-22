@@ -1,0 +1,44 @@
+import { useEffect, useRef, useState } from "react";
+import type { SchemaConnectionRecord, SchemaConnectionWrite } from "../generated/shared-contracts/openapi";
+import { request } from "./api";
+import { errorMessage } from "./errors";
+import { Icon } from "./Icon";
+import { Notice } from "./Notice";
+import { LifecycleAction } from "./LifecycleAction";
+import "./ConnectionsPanel.css";
+
+type Connection = SchemaConnectionRecord;
+const empty: SchemaConnectionWrite = { name: "", kind: "mcp", transport: "http", enabled: true, args: [] };
+function configuration(item: Connection): SchemaConnectionWrite { return { name: item.name, kind: item.kind, transport: item.transport, enabled: item.enabled, url: item.url, command: item.command, args: item.args }; }
+
+export function ConnectionsPanel() {
+  const [records, setRecords] = useState<Connection[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const [editing, setEditing] = useState<Connection | null | undefined>(undefined);
+  const [form, setForm] = useState<SchemaConnectionWrite>(empty);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [secret, setSecret] = useState("");
+  async function refresh() { setRecords(await request<Connection[]>("/v1/connections")); }
+  useEffect(() => { let cancelled = false; void request<Connection[]>("/v1/connections").then(next => { if (!cancelled) setRecords(next); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); }).finally(() => { if (!cancelled) setLoading(false); }); return () => { cancelled = true; }; }, []);
+  async function action(work: () => Promise<void>) { if (pending.current) return; pending.current = true; setBusy(true); setError(""); try { await work(); } catch (failure) { setError(errorMessage(failure)); } finally { pending.current = false; setBusy(false); } }
+  function update(next: Connection) { setRecords(current => current.some(item => item.id === next.id) ? current.map(item => item.id === next.id ? next : item) : [...current, next]); }
+  function edit(item: Connection | null) { setEditing(item); setForm(item ? configuration(item) : { ...empty }); setSecret(""); }
+  const type = form.kind === "public_web" ? "web" : form.transport;
+  const valid = Boolean(form.name.trim() && (type === "web" || type === "http" && form.url?.trim() || type === "stdio" && form.command?.trim()));
+  return <section className="card connections-panel"><div className="surface-head"><div><h3>Connections</h3><p className="hint">Connect tools once, then choose which agents can use them.</p></div><button type="button" disabled={busy} onClick={() => edit(null)}><Icon name="plus" size={14} /> Add connection</button></div>
+    {loading ? <p role="status">Loading connections…</p> : null}
+    {error ? <Notice tone="error">{error} <button type="button" disabled={busy} onClick={() => void action(refresh)}>Refresh</button></Notice> : null}
+    {editing !== undefined ? <form className="connection-editor" onSubmit={event => { event.preventDefault(); if (!valid) return; void action(async () => { const payload = { ...form, name: form.name.trim(), ...(editing ? { expected_version: editing.version } : {}) }; const next = await request<Connection>(editing ? `/v1/connections/${editing.id}` : "/v1/connections", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) }); update(next); setEditing(undefined); setExpanded(next.id); }); }}><h4>{editing ? "Edit connection" : "New connection"}</h4><div className="connection-form-grid"><label>Name<input value={form.name} disabled={busy} required onChange={event => setForm({ ...form, name: event.target.value })} /></label><label>Type<select value={type} disabled={busy || Boolean(editing?.credential_present)} onChange={event => { const value = event.target.value; setForm({ ...form, kind: value === "web" ? "public_web" : "mcp", transport: value === "web" ? "builtin" : value as "http" | "stdio", url: null, command: null, args: [] }); }}><option value="http">MCP server URL</option><option value="stdio">Local MCP program</option><option value="web">Public web access</option></select></label></div>
+      {type === "http" ? <label>Server URL<input type="url" disabled={busy || Boolean(editing?.credential_present)} value={form.url ?? ""} required onChange={event => setForm({ ...form, url: event.target.value })} placeholder="https://example.com/mcp" /></label> : null}
+      {type === "stdio" ? <><label>Program<input disabled={busy} value={form.command ?? ""} required onChange={event => setForm({ ...form, command: event.target.value })} placeholder="Full path to an executable" /></label><label>Arguments · one per line<textarea disabled={busy} rows={3} value={(form.args ?? []).join("\n")} onChange={event => setForm({ ...form, args: event.target.value.split("\n").filter(Boolean) })} /></label><p className="hint">The program and arguments are passed separately. Shell commands and environment editing are unavailable here.</p></> : null}
+      {editing?.credential_present ? <p className="hint">Remove the saved token before changing the server destination.</p> : null}<div className="actions"><button type="submit" disabled={busy || !valid}>Save connection</button><button type="button" disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button></div></form> : null}
+    {!loading && !records.length ? <p className="hint">No connections yet. Add a server, local tool program or public web access.</p> : null}
+    <ul className="plain-list">{records.map(item => <li key={item.id} className="connection-row"><div className="connection-heading"><button type="button" className="connection-title" aria-expanded={expanded === item.id} onClick={() => { setExpanded(current => current === item.id ? null : item.id); setSecret(""); }}><strong>{item.name}</strong><span className="hint">{item.kind === "public_web" ? "Web" : item.transport === "stdio" ? "Local MCP" : "MCP"} · {!item.enabled ? "Disconnected" : item.last_error ? "Needs attention" : item.last_tested_at ? `${item.tools?.length ?? 0} tools ready` : "Not tested"}</span></button><div className="actions"><button type="button" disabled={busy || !item.enabled} onClick={() => void action(async () => update(await request<Connection>(`/v1/connections/${item.id}/test`, { method: "POST" })))}>Test</button><button type="button" disabled={busy} onClick={() => edit(item)}>Edit</button>{!item.enabled ? <button type="button" disabled={busy} onClick={() => void action(async () => update(await request<Connection>(`/v1/connections/${item.id}`, { method: "PATCH", body: JSON.stringify({ ...configuration(item), enabled: true, expected_version: item.version }) })))}>Reconnect</button> : null}{item.enabled ? <LifecycleAction key={`disconnect:${item.id}`} path={`/v1/connections/${item.id}`} name={item.name} label="Disconnect" confirmLabel="Disconnect connection" disabled={busy} onBusyChange={setBusy} onComplete={async () => { setEditing(undefined); await refresh(); }} /> : null}</div></div>{item.last_error ? <p className="notice notice-error">{item.last_error}</p> : null}
+      {expanded === item.id ? <div className="connection-detail"><p className="hint">{item.url ?? item.command ?? "Built-in public web tools"}</p>{!item.last_tested_at && item.enabled ? <p className="hint">Test this connection before selecting it in an agent setup.</p> : null}{item.tools?.length ? <details><summary>Available tools · {item.tools.length}</summary><ul className="plain-list">{item.tools.map(tool => <li key={tool.id}><strong>{tool.name}</strong><p className="hint">{tool.description}</p></li>)}</ul></details> : null}
+        {item.kind === "mcp" && item.transport === "http" ? <form className="connection-token" onSubmit={event => { event.preventDefault(); if (!secret.trim()) return; void action(async () => { const next = await request<Connection>(`/v1/connections/${item.id}/credential`, { method: "PUT", body: JSON.stringify({ secret }) }); setSecret(""); update(next); }); }}><label>{item.credential_present ? "Replace access token" : "Access token (optional)"}<input type="password" autoComplete="new-password" value={secret} disabled={busy} onChange={event => setSecret(event.target.value)} /></label><div className="actions"><button type="submit" disabled={busy || !secret.trim()}>Save token</button><span className="hint">{item.credential_present ? "Token saved securely; its value is never shown." : "Tokens are kept outside agent instructions."}</span></div></form> : null}{item.credential_present ? <LifecycleAction key={`credential:${item.id}`} path={`/v1/connections/${item.id}/credential`} name={item.name} label="Remove token" disabled={busy} onBusyChange={setBusy} onComplete={async () => { setSecret(""); setEditing(undefined); await refresh(); }} /> : null}
+      </div> : null}</li>)}</ul>
+  </section>;
+}

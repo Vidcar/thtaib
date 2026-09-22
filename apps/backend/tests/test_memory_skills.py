@@ -143,7 +143,7 @@ class MemorySkillsGlueTests(unittest.TestCase):
             project_bound=False,
             knowledge_routes=True,
         )
-        self.assertEqual(presented, ["echo", "time_now", "write_todos", "ask_user", "ls", "read_file"])
+        self.assertEqual(presented, ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "ls", "read_file"])
         self.assertEqual(denied, [])
         self.assertEqual(blocked, [])
         self.assertEqual(shell, [])
@@ -378,6 +378,8 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
             },
         ).json()
         path = f"/memories/user/{memory['id']}.md"
+        project = self.root / "scratch-edit-project"
+        project.mkdir()
         self.scripted = ScriptedChatModel(
             [
                 AIMessage(
@@ -402,7 +404,8 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Edit memory.",
-                "presented_tools": ["echo"],
+                "project_path": str(project),
+                "presented_tools": ["edit_file"],
                 "memory_version_refs": [memory["current_version_id"]],
             },
         )

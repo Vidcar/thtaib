@@ -9,6 +9,8 @@ import threading
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
+from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
+from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration
 from workbench_backend.assets.schemas import RetainedAssetReuseRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
@@ -40,7 +42,7 @@ from workbench_backend.knowledge.schemas import KnowledgeRefs
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.service import LabService
 from workbench_backend.paths import WorkbenchPaths
-from workbench_backend.state.checkpointer import open_sqlite_checkpointer
+from workbench_backend.state.checkpointer import checkpoint_history
 from workbench_backend.state.migrate import open_application_store
 from workbench_backend.state.store import ApplicationStore
 
@@ -130,6 +132,22 @@ class ChatService:
         return ChatStore(self.app_store)
 
     def create(self, request: ChatConversationCreateRequest) -> ChatConversationView:
+        if request.profile_id:
+            self._bind_profile(request.profile_id)
+        selections = self._setups()
+        project = selections.get_project(request.project_id, require_active=True) if request.project_id else None
+        if project:
+            if request.workspace_id or request.project_path and Path(request.project_path).resolve() != Path(project.path).resolve():
+                raise ChatError("The selected folder does not match this project.", code="project_mismatch", status_code=409)
+            request = request.model_copy(update={"project_path": project.path})
+        elif request.project_path and not request.workspace_id:
+            project = selections.create_project(ProjectCreateRequest(path=request.project_path))
+        overrides = configuration_from_request(request)
+        cleared_fields = cleared_configuration_fields(request)
+        selection = selections.resolve(project_id=project.id if project else None, agent_setup_version_id=request.agent_setup_version_id, overrides=overrides, override_cleared_fields=cleared_fields, validate=bool(project or request.agent_setup_version_id))
+        request = request.model_copy(update={k: v for k, v in selection.configuration.model_dump(exclude_none=True).items() if k in type(request).model_fields})
+        if not request.deployment_id:
+            raise ChatError("Choose a model or an agent with a model before starting Chat.", code="setup_deployment_required", status_code=400)
         workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
         profile_id = self._bind_profile(request.profile_id)
         self.manager.get_deployment(request.deployment_id)
@@ -145,11 +163,18 @@ class ChatService:
             id=new_id("chat"),
             title=request.title,
             area_kind="project" if project_text else "general",
-            area_id=workspace_id or project_text or "general",
-            area_label=project_path.name if project_path is not None else "General",
+            area_id=project.id if project else workspace_id or project_text or "general",
+            area_label=project.name if project else project_path.name if project_path is not None else "General",
             area_project_path=project_text,
             area_workspace_id=workspace_id,
             deployment_id=request.deployment_id,
+            project_id=project.id if project else None,
+            agent_setup_version_id=request.agent_setup_version_id,
+            setup_overrides=overrides,
+            setup_cleared_fields=cleared_fields,
+            presented_tools=selection.configuration.presented_tools,
+            connection_ids=selection.configuration.connection_ids,
+            per_request_overrides=selection.configuration.per_request_overrides,
             profile_id=profile_id,
             inherit_deployment_settings=request.inherit_deployment_settings,
             project_path=project_text,
@@ -169,9 +194,13 @@ class ChatService:
         views: list[ChatConversationView] = []
         for item in self.store.list_conversations(include_archived=include_archived):
             with self.store.conversation_lock(item.id):
-                fresh = self._require(item.id)
+                # Deletion can finish after the list snapshot was read. It
+                # removes one row, not access to every surviving conversation.
+                fresh = self.store.get(item.id)
+                if fresh is None or (fresh.archived and not include_archived):
+                    continue
                 self._persist_thread_if_missing(fresh)
-            views.append(self._view(fresh, persist=True))
+                views.append(self._view(fresh, persist=True))
         return views
 
     def search(self, query: str, *, include_archived: bool = False) -> list[ChatSearchResult]:
@@ -319,6 +348,7 @@ class ChatService:
                     merged_config = dict(item.intended_config)
                     merged_config.update(dict(request.intended_config))
                     item.intended_config = merged_config
+                    item.instruction_layers = self._instruction_snapshot(conversation, self._request_from_queue_item(item))
                 item.updated_at = utc_now()
                 updated = self.app_store.update_conversation(conversation)
             return self._view(updated)
@@ -595,18 +625,23 @@ class ChatService:
                         task=request.task.strip(),
                         input_message_id=input_message_id,
                         content_blocks=content_blocks or None,
+                        retained_asset_ids=list(request.attachment_ids),
                         output_schema=request.output_schema,
-                        presented_tools=request.presented_tools,
+                        presented_tools=next_conversation.presented_tools,
                         system_prompt=(
                             CHAT_SYSTEM_PROMPT
                             if next_conversation.project_path
                             else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
                         ),
                         workspace_id=next_conversation.workspace_id,
+                        project_id=next_conversation.project_id,
+                        agent_setup_version_id=next_conversation.agent_setup_version_id,
+                        connection_ids=next_conversation.connection_ids,
+                        instructions=next_conversation.setup_overrides.instructions,
                         project_path=next_conversation.project_path,
                         profile_id=next_conversation.profile_id,
                         inherit_deployment_settings=next_conversation.inherit_deployment_settings,
-                        per_request_overrides=request.per_request_overrides,
+                        per_request_overrides=next_conversation.per_request_overrides,
                         source_surface="chat",
                         thread_id=next_conversation.thread_id,
                         memory_version_refs=next_conversation.memory_version_refs,
@@ -614,7 +649,8 @@ class ChatService:
                         protected_instruction_version_refs=next_conversation.protected_instruction_version_refs,
                         embedding_deployment_id=next_conversation.embedding_deployment_id,
                         retrieval_project_paths=list(next_conversation.retrieval_project_paths),
-                    )
+                    ),
+                    **({"instruction_snapshot": queue_item.instruction_layers} if queue_item is not None and queue_item.instruction_layers is not None else {}),
                 )
             except (HarnessError, ManagerError) as exc:
                 recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
@@ -720,6 +756,7 @@ class ChatService:
                 attachment_ids=list(request.attachment_ids),
                 output_schema=output_schema,
                 intended_config=intended_config,
+                instruction_layers=self._instruction_snapshot(queued, request),
                 created_at=now,
                 updated_at=now,
             )
@@ -806,6 +843,8 @@ class ChatService:
             if message.role == "user" and message.id == dispatching.input_message_id and message.run_id is None:
                 message.run_id = run.id
                 break
+        if accepted == conversation:
+            return conversation
         accepted.updated_at = utc_now()
         return self.store.put(accepted)
 
@@ -928,15 +967,21 @@ class ChatService:
                 status_code=409,
                 details={"deployment_id": conversation.deployment_id},
             ) from exc
+        connection_snapshots = self.harness.connections.snapshot(conversation.connection_ids, tools_enabled=conversation.presented_tools != [])
         _presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
-            request.presented_tools,
+            conversation.presented_tools,
             project_bound=conversation.project_path is not None,
+            external_names=[tool.name for connection in connection_snapshots for tool in connection.tools],
+            attachment_available=bool(request.attachment_ids),
             knowledge_routes=bool(
                 conversation.memory_version_refs
                 or conversation.skill_version_refs
                 or conversation.protected_instruction_version_refs
             ),
         )
+        if conversation.embedding_deployment_id:
+            from workbench_backend.agents.retrieval import SEARCH_KNOWLEDGE_TOOL_NAME
+            denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
         if denied:
             raise ChatError(
                 f"Tools are not in the enabled catalogue: {', '.join(denied)}",
@@ -1033,12 +1078,20 @@ class ChatService:
     ) -> list[object]:
         blocks: list[object] = list(request.content_blocks or [])
         if request.attachment_ids:
+            deployment = self.manager.get_deployment(conversation.deployment_id)
+            capacity = deployment.server_props.n_ctx if deployment.server_props else None
+            # Reserve room for instructions, tool schemas, history and the answer.
+            # The existing context guard still verifies the complete model request.
+            max_chars = min(1_000_000, max(1500, int(capacity * 1.2) - len(request.task))) if capacity else 24000
+            selected_tools = request.presented_tools if "presented_tools" in request.model_fields_set else conversation.presented_tools
             asset_blocks = self.assets.current_user_content(
                 RetainedAssetReuseRequest(
                     asset_ids=list(request.attachment_ids),
                     session_id=conversation.id,
                     project_path=conversation.project_path,
-                )
+                    max_chars=max_chars,
+                ),
+                allow_scoped_read=selected_tools is None or "read_attachment" in selected_tools,
             )
             blocks.extend(asset_blocks)
         if len(blocks) > 32:
@@ -1055,6 +1108,45 @@ class ChatService:
         request: ChatStartRequest,
     ) -> None:
         fields_set = request.model_fields_set
+        if request.profile_id:
+            self._bind_profile(request.profile_id)
+        if not request.deployment_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
+            raise ChatError("The Chat conversation's model setup is no longer available. Select a model to continue.", code="deploy_missing", status_code=409, details={"deployment_id": conversation.deployment_id})
+        has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
+        if not has_layered_setup and "instructions" in fields_set:
+            conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"instructions": request.instructions})
+        if has_layered_setup:
+            if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
+                conversation.agent_setup_version_id = request.agent_setup_version_id
+                conversation.setup_overrides = SetupConfiguration()
+                conversation.setup_cleared_fields = []
+            explicit = configuration_from_request(request).model_dump(exclude_none=True)
+            overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
+            if "profile_id" in fields_set and request.profile_id is None:
+                overrides.pop("profile_id", None)
+            conversation.setup_overrides = SetupConfiguration.model_validate(overrides)
+            for key in ("profile_id", "embedding_deployment_id"):
+                if key in fields_set:
+                    conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
+                    if getattr(request, key) is None:
+                        conversation.setup_cleared_fields.append(key)
+            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields)
+            values = selection.configuration.model_dump(exclude_none=True)
+            values.update({field: None for field in conversation.setup_cleared_fields})
+            for key in ("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"):
+                values.setdefault(key, [])
+            values.setdefault("profile_id", None)
+            values.setdefault("presented_tools", None)
+            values.setdefault("connection_ids", None)
+            values.setdefault("per_request_overrides", None)
+            request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
+            fields_set = request.model_fields_set
+        if "presented_tools" in fields_set:
+            conversation.presented_tools = request.presented_tools
+        if "connection_ids" in fields_set:
+            conversation.connection_ids = request.connection_ids
+        if "per_request_overrides" in fields_set:
+            conversation.per_request_overrides = request.per_request_overrides
         if request.deployment_id:
             self.manager.get_deployment(request.deployment_id)
             conversation.deployment_id = request.deployment_id
@@ -1096,6 +1188,8 @@ class ChatService:
         request: ChatStartRequest,
     ) -> None:
         fields_set = request.model_fields_set
+        if "project_id" in fields_set and request.project_id != conversation.project_id:
+            raise ChatError("A Chat conversation cannot move to another project. Start a new chat in that area.", code="session_area_immutable", status_code=409)
         if "project_path" not in fields_set and "workspace_id" not in fields_set:
             return
         workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
@@ -1122,12 +1216,16 @@ class ChatService:
         self._apply_start_configuration(clone, request)
         return {
             "deployment_id": clone.deployment_id,
+            "project_id": clone.project_id,
+            "agent_setup_version_id": clone.agent_setup_version_id,
+            "connection_ids": clone.connection_ids,
+            "instructions": clone.setup_overrides.instructions,
             "profile_id": clone.profile_id,
             "inherit_deployment_settings": clone.inherit_deployment_settings,
-            "per_request_overrides": request.per_request_overrides,
+            "per_request_overrides": clone.per_request_overrides,
             "project_path": clone.project_path,
             "workspace_id": clone.workspace_id,
-            "presented_tools": request.presented_tools,
+            "presented_tools": clone.presented_tools,
             "attachment_ids": list(request.attachment_ids),
             "memory_version_refs": list(clone.memory_version_refs),
             "skill_version_refs": list(clone.skill_version_refs),
@@ -1141,6 +1239,14 @@ class ChatService:
         if conversation is None:
             raise ChatError("Unknown Chat conversation", code="chat_missing", status_code=404)
         return conversation
+
+    def _setups(self) -> SetupService:
+        return SetupService(self.app_store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.harness.connections.available, connection_tools=lambda ident: [tool.name for tool in self.harness.connections.get(ident).tools])
+
+    def _instruction_snapshot(self, conversation: ChatConversation, request: ChatStartRequest):
+        clone = conversation.model_copy(deep=True)
+        self._apply_start_configuration(clone, request)
+        return self._setups().resolve(project_id=clone.project_id, agent_setup_version_id=clone.agent_setup_version_id, overrides=clone.setup_overrides, override_cleared_fields=clone.setup_cleared_fields).instruction_layers
 
     def _ensure_thread(self, conversation: ChatConversation) -> str:
         """Stable LangGraph thread for this conversation. Legacy rows get one."""
@@ -1318,8 +1424,7 @@ class ChatService:
         retained = set(run.checkpoint_ids)
         if not run.thread_id or not retained:
             return None
-        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
-        for saved in saver.list({"configurable": {"thread_id": run.thread_id, "checkpoint_ns": ""}}):
+        for saved in checkpoint_history(self.manager.paths.checkpoints_db, {"configurable": {"thread_id": run.thread_id, "checkpoint_ns": ""}}):
             ident = saved.config["configurable"]["checkpoint_id"]
             if ident in retained:
                 return ident

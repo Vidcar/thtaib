@@ -60,6 +60,7 @@ assert.equal(fixed.bridge.invalidActivateRestore, "Invalid restored location", "
 assert.equal(fixed.bridge.selectPathNavigation, "This document cannot use desktop actions.", "selectPath should reject if requester navigates while dialog is pending");
 assert.equal(fixed.bridge.saveAssetBackendNavigation, "This document cannot use desktop actions.", "saveAsset should reject if requester navigates while backend content fetch is pending");
 assert.equal(fixed.bridge.saveAssetDialogNavigation, "no write after requester navigation", "saveAsset should not write after requester navigation while save dialog is pending");
+assert.equal(fixed.bridge.binarySave, true, "Save copy must preserve original binary image bytes");
 assert.equal(fixed.bridge.activateRestoreNavigation, "no reload after requester navigation", "activateRestore should not reload windows after requester navigation while backend activation is pending");
 
 console.log("Electron trust-boundary fixture passed");
@@ -145,7 +146,8 @@ function fixtureSource(trustBoundaryPath, backgroundPath, renderedMarkdownHtml) 
   const trustBoundaryUrl = pathToFileURL(trustBoundaryPath).toString();
   const backgroundUrl = pathToFileURL(backgroundPath).toString();
   return `
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -212,7 +214,7 @@ async function main() {
       bridge.contentRequested = true;
       const sendContent = () => {
         response.setHeader("Content-Type", "application/json");
-        response.end(JSON.stringify({
+        response.end(JSON.stringify(bridge.assetPayload ?? {
         text: "retained bridge text",
         filename: "retained.txt",
         sha256: "befb4c67fb75c7b924330157fc898beaa1348ee678ca841ada4fa96430efc66b",
@@ -483,6 +485,19 @@ async function runBridgeTests(appUrl, replacementUrl) {
     saveDialogDeferred.resolve({ canceled: false, filePath: savedPath });
     await waitForHandler("workbench:save-asset");
     bridge.saveAssetDialogNavigation = existsSync(savedPath) ? "wrote after requester navigation" : "no write after requester navigation";
+
+    await trusted.loadURL(appUrl);
+    const binary = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 255, 0, 128]);
+    const binaryPath = path.join(process.cwd(), "saved-original-image.png");
+    bridge.assetPayload = { text: "", encoding: "base64", content_base64: binary.toString("base64"), filename: "image.png", sha256: createHash("sha256").update(binary).digest("hex"), size_bytes: binary.length };
+    saveDialogDeferred = null;
+    delete bridge.handlerResults["workbench:save-asset"];
+    void fireBridgeInvoke(trusted, "workbench:save-asset", { assetId: "asset_image", sessionId: "chat_1" });
+    await waitFor(() => Boolean(saveDialogDeferred), "binary save dialog pending");
+    saveDialogDeferred.resolve({ canceled: false, filePath: binaryPath });
+    const binaryResult = await waitForHandler("workbench:save-asset");
+    bridge.binarySave = binaryResult.status === "resolved" && existsSync(binaryPath) && readFileSync(binaryPath).equals(binary);
+    delete bridge.assetPayload;
 
     await trusted.loadURL(appUrl);
     bridge.activateDeferred = createDeferred();

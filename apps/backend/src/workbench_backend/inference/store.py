@@ -78,13 +78,13 @@ class RecordStore:
                     (f"model-verification:{bundle_id}", f"model-inspection:{bundle_id}:runtime", f"model-inspection:{bundle_id}:full"))
                 conn.commit()
 
-    def set_bundle_disk_matches(self, bundle_id: str, matches: bool) -> ModelBundle | None:
+    def set_bundle_disk_matches(self, bundle_id: str, matches: bool, *, quantization: str | None) -> ModelBundle | None:
         """Verification may finish after deletion; never recreate that record."""
         with _STORE_LOCK:
             bundle = self.get_bundle(bundle_id)
             if bundle is None:
                 return None
-            updated = bundle.model_copy(update={"disk_matches": matches})
+            updated = bundle.model_copy(update={"disk_matches": matches, "quantization": quantization})
             return self.put_bundle(updated) if updated != bundle else bundle
 
     def list_jobs(self) -> list[ImportJob]:
@@ -130,14 +130,24 @@ class RecordStore:
     def delete_job(self, job_id: str) -> None:
         with _STORE_LOCK, closing(self._connect()) as conn:
             conn.execute("DELETE FROM import_jobs WHERE id = ?", (job_id,))
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (f"import_job.{job_id}.copy_files",))
             conn.commit()
 
     def update_job_fields(self, job_id: str, **fields) -> ImportJob:
-        with _STORE_LOCK:
-            current = self.get_job(job_id)
-            if current is None:
-                raise KeyError(job_id)
-            return self.put_job(current.model_copy(update=fields))
+        # The transfer worker can adopt its launcher identity from another
+        # process. Take the SQLite write lock before reading so an unrelated
+        # progress update cannot overwrite that ownership handoff.
+        with _STORE_LOCK, closing(self._connect()) as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT payload FROM import_jobs WHERE id=?", (job_id,)).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                updated = ImportJob.model_validate_json(row["payload"]).model_copy(update=fields)
+                conn.execute("UPDATE import_jobs SET payload=?,status=?,kind=?,updated_at=? WHERE id=?",
+                    (updated.model_dump_json(), updated.status.value, updated.kind.value,
+                     updated.updated_at or updated.created_at, job_id))
+                return updated
 
     def list_active_jobs(self) -> list[ImportJob]:
         active = {"pending", "running", "stopping"}
@@ -171,6 +181,14 @@ class RecordStore:
                 (key, value, utc_now()),
             )
             conn.commit()
+
+    def put_bundle_setting(self, bundle_id: str, key: str, value: str) -> bool:
+        """Finish an in-flight read without resurrecting a deleted model's cache."""
+        with _STORE_LOCK:
+            if self.get_bundle(bundle_id) is None:
+                return False
+            self.put_setting(key, value)
+            return True
 
     def list_profiles(self) -> list[RunProfile]:
         return self._read_list(self.profiles_path, RunProfile)
@@ -233,6 +251,9 @@ class RecordStore:
         with _STORE_LOCK:
             remaining = [item for item in self.list_deployments() if item.id != deployment_id]
             self._write_list(self.deployments_path, remaining)
+            with closing(self._connect()) as conn:
+                conn.execute("DELETE FROM capability_evidence WHERE deployment_id=?", (deployment_id,))
+                conn.commit()
 
     def read_runtime_manifest(self) -> RuntimeManifest | None:
         if not self.runtime_manifest_path.is_file():

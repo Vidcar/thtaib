@@ -57,6 +57,30 @@
     },
     "AgentRun": {
       "properties": {
+        "agent_setup_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Setup Id"
+        },
+        "agent_setup_version_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Setup Version Id"
+        },
         "budgets": {
           "anyOf": [
             {
@@ -85,6 +109,20 @@
             }
           ],
           "default": null
+        },
+        "connection_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Connection Ids",
+          "type": "array"
+        },
+        "connection_snapshots": {
+          "items": {
+            "$ref": "#/$defs/ConnectionSnapshot"
+          },
+          "title": "Connection Snapshots",
+          "type": "array"
         },
         "content_blocks": {
           "anyOf": [
@@ -193,6 +231,13 @@
           "title": "Events",
           "type": "array"
         },
+        "file_changes": {
+          "items": {
+            "$ref": "#/$defs/ProjectFileChange"
+          },
+          "title": "File Changes",
+          "type": "array"
+        },
         "final_snapshot_id": {
           "anyOf": [
             {
@@ -216,6 +261,13 @@
           ],
           "default": null,
           "title": "Finished At"
+        },
+        "framework_read_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Framework Read Paths",
+          "type": "array"
         },
         "generation_observation": {
           "anyOf": [
@@ -335,6 +387,18 @@
           "default": null,
           "title": "Profile Id"
         },
+        "project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
         "project_path": {
           "anyOf": [
             {
@@ -385,6 +449,14 @@
           ],
           "default": null,
           "title": "Resume Checkpoint Id"
+        },
+        "retained_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Retained Asset Ids",
+          "type": "array"
         },
         "retrieval_project_paths": {
           "items": {
@@ -544,6 +616,114 @@
       "title": "CompletionReport",
       "type": "object"
     },
+    "ConnectionSnapshot": {
+      "properties": {
+        "credential_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Ref"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "mcp",
+            "public_web"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ConnectionTool"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "transport": {
+          "enum": [
+            "http",
+            "stdio",
+            "builtin"
+          ],
+          "title": "Transport",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version",
+        "kind",
+        "transport"
+      ],
+      "title": "ConnectionSnapshot",
+      "type": "object"
+    },
+    "ConnectionTool": {
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Schema"
+        },
+        "remote_name": {
+          "title": "Remote Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "remote_name",
+        "description",
+        "input_schema"
+      ],
+      "title": "ConnectionTool",
+      "type": "object"
+    },
     "ContextObservation": {
       "properties": {
         "capacity_source": {
@@ -646,6 +826,13 @@
           "title": "Gaps",
           "type": "array"
         },
+        "instruction_layers": {
+          "items": {
+            "$ref": "#/$defs/InstructionLayer"
+          },
+          "title": "Instruction Layers",
+          "type": "array"
+        },
         "knowledge_binding": {
           "default": "none",
           "title": "Knowledge Binding",
@@ -740,6 +927,37 @@
           "title": "Retrieval Requested",
           "type": "boolean"
         },
+        "selected_agent_setup_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Agent Setup Id"
+        },
+        "selected_agent_setup_version_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Agent Setup Version Id"
+        },
+        "selected_connection_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Selected Connection Ids",
+          "type": "array"
+        },
         "selected_deployment_id": {
           "title": "Selected Deployment Id",
           "type": "string"
@@ -774,6 +992,18 @@
           ],
           "default": null,
           "title": "Selected Profile Id"
+        },
+        "selected_project_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Project Id"
         },
         "selected_protected_instruction_version_ids": {
           "items": {
@@ -817,6 +1047,48 @@
         "system_prompt"
       ],
       "title": "EffectiveSetup",
+      "type": "object"
+    },
+    "FileImage": {
+      "properties": {
+        "exists": {
+          "title": "Exists",
+          "type": "boolean"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "size_bytes": {
+          "default": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "exists"
+      ],
+      "title": "FileImage",
       "type": "object"
     },
     "GenerationObservation": {
@@ -1027,6 +1299,36 @@
         "image_url"
       ],
       "title": "ImageContentBlock",
+      "type": "object"
+    },
+    "InstructionLayer": {
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        }
+      },
+      "required": [
+        "name",
+        "content"
+      ],
+      "title": "InstructionLayer",
       "type": "object"
     },
     "InteractionRecovery": {
@@ -1454,8 +1756,12 @@
           "type": "array"
         },
         "environment": {
-          "const": "windows_host_shell",
           "default": "windows_host_shell",
+          "enum": [
+            "windows_host_shell",
+            "tool_actions",
+            "user_input"
+          ],
           "title": "Environment",
           "type": "string"
         },
@@ -1548,6 +1854,130 @@
         "name"
       ],
       "title": "PendingInterruptAction",
+      "type": "object"
+    },
+    "ProjectFileChange": {
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileImage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "before": {
+          "$ref": "#/$defs/FileImage"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "destination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Destination"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "operation": {
+          "enum": [
+            "created",
+            "modified",
+            "renamed",
+            "deleted"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "reversed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reversed At"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "changed",
+            "unchanged",
+            "failed",
+            "unconfirmed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "title": "Tool Call Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run_id",
+        "tool_call_id",
+        "tool_name",
+        "operation",
+        "path",
+        "before",
+        "created_at"
+      ],
+      "title": "ProjectFileChange",
       "type": "object"
     },
     "RelatedFile": {

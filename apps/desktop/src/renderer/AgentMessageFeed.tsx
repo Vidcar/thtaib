@@ -2,9 +2,11 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Icon } from "./Icon";
+import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
+import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
 
 // Markdown presentation follows the safe ReactMarkdown + remark-gfm pattern from
 // langchain-ai/agent-chat-ui at revision 41926d89c9798cebe45a26886d6e437acc5201c1.
@@ -13,7 +15,7 @@ import { Icon } from "./Icon";
 interface MessageParts {
   answer: string;
   reasoning: string[];
-  attachments: string[];
+  attachments: Array<{ label: string; src?: string }>;
   toolBlocks: ToolBlock[];
 }
 
@@ -64,21 +66,21 @@ function stringifyValue(value: unknown): string {
 
 function toolError(tool: ToolBlock): string | undefined {
   if (tool.error) return tool.error;
-  if (tool.status === "error" || tool.status === "failed") return stringifyValue(tool.result) || "The tool could not complete.";
+  const resultText = Array.isArray(tool.result) ? parseContent(tool.result).answer : stringifyValue(tool.result);
+  if (tool.status === "error" || tool.status === "failed") return resultText || "The tool could not complete.";
   // Successful output can discuss errors, for example a log search.
   if (tool.status) return undefined;
-  const text = stringifyValue(tool.result);
+  const text = resultText;
   return /^\s*(error|failed|exception|traceback)\b/i.test(text) ? text : undefined;
 }
 
-function imageMarker(part: Record<string, unknown>, index: number): string {
-  const source =
-    part.source ||
-    part.url ||
-    part.image_url ||
-    (part.image_url && typeof part.image_url === "object" && "url" in part.image_url ? (part.image_url as { url?: string }).url : undefined);
+function imageMarker(part: Record<string, unknown>, index: number): { label: string; src?: string } {
+  const sourceObject = part.source && typeof part.source === "object" ? part.source as Record<string, unknown> : undefined;
+  const source = part.url || (typeof part.image_url === "string" ? part.image_url : part.image_url && typeof part.image_url === "object" ? (part.image_url as { url?: string }).url : undefined)
+    || (typeof part.source === "string" ? part.source : sourceObject?.url)
+    || (typeof (part.base64 ?? part.data ?? sourceObject?.data) === "string" ? `data:${part.mime_type ?? part.mimeType ?? sourceObject?.media_type};base64,${part.base64 ?? part.data ?? sourceObject?.data}` : undefined);
   const label = typeof source === "string" && source && !source.startsWith("data:") ? source : `image ${index + 1}`;
-  return `Image attachment: ${label}`;
+  return { label: `Image attachment: ${label}`, src: safeImageDataUrl(source) };
 }
 
 function parseContent(content: unknown): MessageParts {
@@ -91,7 +93,7 @@ function parseContent(content: unknown): MessageParts {
 
   const answer: string[] = [];
   const reasoning: string[] = [];
-  const attachments: string[] = [];
+  const attachments: MessageParts["attachments"] = [];
   const toolBlocks: ToolBlock[] = [];
 
   content.forEach((part) => {
@@ -158,8 +160,7 @@ function parseContent(content: unknown): MessageParts {
 function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
   if (messageType(message) !== "tool") return undefined;
   const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
-  const content = parseContent(message.contentBlocks ?? message.content);
-  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: content.answer || stringifyValue(message.content) };
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content };
 }
 
 function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
@@ -256,8 +257,10 @@ function MarkdownMessage({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
+      urlTransform={url => sourceReference(url) ? url : defaultUrlTransform(url)}
       components={{
         a({ children, href }) {
+          if (href && sourceReference(href)) return <SourceLink href={href}>{children}</SourceLink>;
           const allowedHref = safeHref(href);
           if (!allowedHref) {
             return <span>{children}</span>;
@@ -344,14 +347,14 @@ function ReasoningDetails({
   );
 }
 
-function AttachmentList({ attachments }: { attachments: string[] }) {
+function AttachmentList({ attachments }: { attachments: MessageParts["attachments"] }) {
   if (attachments.length === 0) {
     return null;
   }
   return (
     <ul className="message-attachments" aria-label={`${attachments.length} image attachment${attachments.length === 1 ? "" : "s"}`}>
       {attachments.map((item, index) => (
-        <li key={`${item}-${index}`}>{item}</li>
+        <li key={index}>{item.src ? <ImagePreview src={item.src} name={item.label} /> : item.label}</li>
       ))}
     </ul>
   );
@@ -377,6 +380,7 @@ function ToolBlockList({
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
     const target = toolTarget(tool.args);
+    const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
       <DetailSection
         className="message-tools"
@@ -393,10 +397,12 @@ function ToolBlockList({
       >
         <div className="tool-call-details">
           {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><pre className="code-block"><code>{stringifyValue(tool.args)}</code></pre></section> : null}
-          {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span><CodeBlock><code>{stringifyValue(tool.result)}</code></CodeBlock></section> : null}
+          {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
         </div>
       </DetailSection>
+      <AttachmentList attachments={output.attachments} />
+      {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
       {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
     </div>;
   })}</div>;
@@ -461,6 +467,7 @@ export function AgentMessageFeed(props: {
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
   userMessageText?: (message: BaseMessage) => string | undefined;
+  sourceScope?: { sessionId?: string; projectPath?: string };
 }) {
   const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback, detailedStreams = false } = props;
   const rootRef = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
@@ -494,7 +501,7 @@ export function AgentMessageFeed(props: {
   const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
   const renderTools = (tools: ToolBlock[], key: string) => <ToolBlockList defaultOpen={detailedStreams} messageKey={key} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={tools} />;
   return (
-    <div className="message-feed" ref={rootRef}>
+    <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
       {prepared.map(({ message, type, key: messageKey, parts }) => {
         const incomplete = Boolean(message.id && incompleteMessageIds.has(message.id));
         const result = toolResultMessage(message);
@@ -529,6 +536,6 @@ export function AgentMessageFeed(props: {
         );
       })}
       {renderTools(remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)), "live-tools")}
-    </div>
+    </div></SourceScope.Provider>
   );
 }

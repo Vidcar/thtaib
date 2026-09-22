@@ -25,6 +25,20 @@ class RetainedAssetStorage(str, Enum):
 class AssetContentKind(str, Enum):
     text = "text"
     code = "code"
+    image = "image"
+    document = "document"
+
+
+class ExtractedSection(BaseModel):
+    source: str
+    text: str
+
+
+class AssetExtraction(BaseModel):
+    parser: str
+    status: Literal["complete", "no_text"] = "complete"
+    sections: list[ExtractedSection] = Field(default_factory=list)
+    note: str | None = None
 
 
 class RetainedAsset(BaseModel):
@@ -38,7 +52,10 @@ class RetainedAsset(BaseModel):
     filename: str
     content_type: str
     content_kind: AssetContentKind
-    encoding: Literal["utf-8"] = "utf-8"
+    encoding: Literal["utf-8", "base64"] = "utf-8"
+    image_width: int | None = None
+    image_height: int | None = None
+    extraction: AssetExtraction | None = None
     size_bytes: int
     sha256: str
     observed_at: str
@@ -86,6 +103,8 @@ class RetainedAssetPreview(BaseModel):
     sha256: str
     preview: str
     truncated: bool = False
+    image_data_url: str | None = None
+    extraction: AssetExtraction | None = None
     source_status: Literal["retained_only", "unchanged", "changed", "missing", "unavailable"] = "retained_only"
 
 
@@ -93,8 +112,9 @@ class RetainedAssetContent(BaseModel):
     id: str
     filename: str
     content_type: str
-    encoding: Literal["utf-8"] = "utf-8"
+    encoding: Literal["utf-8", "base64"] = "utf-8"
     text: str
+    content_base64: str | None = None
     sha256: str
     size_bytes: int
     source_status: Literal["retained_only", "unchanged", "changed", "missing", "unavailable"] = "retained_only"

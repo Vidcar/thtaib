@@ -10,6 +10,9 @@ CHAT_STATE_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_conversations_updated
 ON conversations(updated_at);
 
+CREATE INDEX IF NOT EXISTS idx_conversations_graph_thread
+ON conversations(json_extract(payload, '$.thread_id'));
+
 CREATE TABLE IF NOT EXISTS chat_submission_cancellations (
     conversation_id TEXT NOT NULL,
     input_message_id TEXT NOT NULL,
@@ -238,6 +241,15 @@ class ChatStateStoreMixin:
         if row is None:
             return None
         return ChatConversation.model_validate_json(row["payload"])
+
+    def conversation_id_for_thread(self, thread_id: str) -> str | None:
+        """Resolve attachment scope without loading unrelated transcripts."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM conversations WHERE json_extract(payload, '$.thread_id') = ? ORDER BY created_at, id LIMIT 1",
+                (thread_id,),
+            ).fetchone()
+        return str(row["id"]) if row is not None else None
 
     def list_conversations(self, *, include_archived: bool = False) -> list[ChatConversation]:
         with self._lock:

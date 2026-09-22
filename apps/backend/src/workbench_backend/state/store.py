@@ -19,6 +19,7 @@ from workbench_backend.state.schemas import ExternalEffect, RelatedFile, RunLink
 from workbench_backend.state.chat_state import CHAT_STATE_SCHEMA, ChatStateStoreMixin, migrate_chat_identity_payload
 from workbench_backend.state.interaction import INTERACTION_SCHEMA, InteractionStoreMixin
 from workbench_backend.state.packet03_schema import ASSET_SCHEMA, PREFERENCE_SCHEMA
+from workbench_backend.state.setup_records import SETUP_SCHEMA, SetupStoreMixin
 
 SCHEMA_VERSION = "2"
 
@@ -85,7 +86,7 @@ CREATE TABLE IF NOT EXISTS external_effects (
 """
 
 
-class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin):
+class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMixin):
     """Owns ``application.sqlite`` only. Never opens ``checkpoints.sqlite``."""
 
     def __init__(self, paths: WorkbenchPaths) -> None:
@@ -110,7 +111,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin):
                 previous = self._conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone() if table else None
                 if previous and previous[0] not in {"1", SCHEMA_VERSION}:
                     raise ValueError("This application database requires a different runtime version.")
-                self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + CHAT_STATE_SCHEMA + INTERACTION_SCHEMA + ASSET_SCHEMA + PREFERENCE_SCHEMA)
+                self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + CHAT_STATE_SCHEMA + INTERACTION_SCHEMA + ASSET_SCHEMA + PREFERENCE_SCHEMA + SETUP_SCHEMA)
                 self._migrate_interaction_replay()
                 if previous is None or previous[0] == "1":
                     self._migrate_chat_identity()

@@ -12,6 +12,8 @@ import {
   type RetainedAssetReuseResult,
 } from "./packet03Api";
 import "./packet03Panels.css";
+import "./fileBrowser.css";
+import { RetainedImage } from "./ImagePreview";
 
 interface LibraryPanelProps {
   sessionId?: string | null;
@@ -86,6 +88,8 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   const [deletionPreview, setDeletionPreview] = useState<RetainedAssetDeletionPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("recent");
   const loadGeneration = useRef(0);
   const detailGeneration = useRef(0);
 
@@ -93,6 +97,10 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
     () => assets.filter((asset) => selectedIds.includes(asset.id)),
     [assets, selectedIds],
   );
+  const visibleAssets = useMemo(() => assets.filter(asset => `${asset.filename} ${asset.project_path ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) =>
+    sort === "name" ? a.filename.localeCompare(b.filename) : sort === "size" ? b.size_bytes - a.size_bytes : b.observed_at.localeCompare(a.observed_at)), [assets, query, sort]);
+  const activeAsset = assets.find(asset => asset.id === preview?.id);
+  const selectable = visibleAssets.filter(asset => !asset.deleted_at);
 
   async function loadAssets(options: { clearMessage?: boolean } = {}): Promise<void> {
     const { clearMessage = true } = options;
@@ -124,7 +132,13 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   }
 
   useEffect(() => {
+    detailGeneration.current += 1;
+    setPreview(null);
+    setFullContent(null);
+    setSelectedIds([]);
+    setDeletionPreview(null);
     void loadAssets();
+    return () => { loadGeneration.current += 1; detailGeneration.current += 1; };
   }, [origin, scope, includeDeleted, sessionId, projectPath]);
 
   async function showPreview(asset: RetainedAsset): Promise<void> {
@@ -233,131 +247,64 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   }
 
   return (
-    <section className="packet03-panel" aria-label="Library">
-      <div className="packet03-row">
-        <div className="entity-head"><h2>Library</h2><HoverHelp title="About saved files">Uploads and verified outputs saved by your chats. Preview a file, reuse it in Chat or save a copy.</HoverHelp></div>
-        <button type="button" disabled={busy} onClick={() => void loadAssets()}>
-          <Icon name="refresh" size={14} /> Refresh
-        </button>
+    <section className="surface file-browser" aria-label="Library">
+      <header className="surface-head">
+        <div className="entity-head"><h2>Library</h2><span className="file-count">{assets.length} files</span><HoverHelp title="About saved files">Files uploaded to chats and saved outputs. These are retained copies; project originals stay in their folders.</HoverHelp></div>
+        <button type="button" className="icon-button" aria-label="Refresh files" disabled={busy} onClick={() => void loadAssets()}><Icon name="refresh" size={16} /></button>
+      </header>
+
+      <div className="file-browser-toolbar" aria-label="Library filters">
+        <label className="file-search"><Icon name="search" size={16} /><input aria-label="Search files" placeholder="Search files…" value={query} onChange={event => setQuery(event.target.value)} /></label>
+        <select aria-label="File location" value={scope} onChange={event => setScope(event.target.value as typeof scope)}>
+          <option value="available">{sessionId || projectPath ? "Available here" : "All files"}</option>
+          {sessionId ? <option value="session">This conversation</option> : null}
+          {projectPath ? <option value="project">This project</option> : null}
+          {sessionId || projectPath ? <option value="all">All files</option> : null}
+        </select>
+        <select aria-label="File type" value={origin} onChange={event => setOrigin(event.target.value as RetainedAssetOrigin | "all")}>
+          <option value="all">All types</option><option value="upload">Uploads</option><option value="verified_output">Outputs</option>
+        </select>
+        <select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Newest first</option><option value="name">Name</option><option value="size">Largest first</option></select>
+        <label className="check-row file-deleted-toggle"><input type="checkbox" checked={includeDeleted} onChange={event => setIncludeDeleted(event.target.checked)} /> Deleted</label>
       </div>
 
-      <div className="packet03-toolbar" aria-label="Library filters">
-        <label>
-          Scope
-          <select value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}>
-            <option value="available">Available here</option>
-            <option value="session">This conversation</option>
-            <option value="project">This project</option>
-            <option value="all">All retained</option>
-          </select>
-        </label>
-        <label>
-          Type
-          <select value={origin} onChange={(event) => setOrigin(event.target.value as RetainedAssetOrigin | "all")}>
-            <option value="all">Uploads and outputs</option>
-            <option value="upload">Uploads</option>
-            <option value="verified_output">Verified outputs</option>
-          </select>
-        </label>
-        <label className="check-row">
-          <input type="checkbox" checked={includeDeleted} onChange={(event) => setIncludeDeleted(event.target.checked)} />
-          Show deleted
-        </label>
+      <div className="file-selection-bar" aria-label="File actions">
+        <span>{selectedIds.length ? `${selectedIds.length} selected` : "Select files to use in Chat or delete"}</span>
+        <button type="button" disabled={busy || !selectedIds.length || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))} onClick={() => void reuseSelected()}><Icon name="plus" size={14} /> Use in Chat</button>
+        <button type="button" disabled={busy || !selectedIds.length} onClick={() => void previewDeletion()}><Icon name="trash" size={14} /> Delete</button>
       </div>
-
       {message ? <p role="status" className="notice">{message}</p> : null}
-      {assets.length === 0 ? <p className="hint">{busy ? "Loading files…" : "No files in this view."}</p> : null}
+      {deletionPreview ? <div className="notice notice-warn file-delete-review" role="group" aria-label="Review file deletion">
+        <strong>Delete {deletionPreview.affected_asset_ids.length} saved {deletionPreview.affected_asset_ids.length === 1 ? "file" : "files"}?</strong>
+        <p>Original project files stay in place.{deletionPreview.preserved_asset_ids.length ? ` ${deletionPreview.preserved_asset_ids.length} shared files will be kept.` : ""}</p>
+        <div className="actions"><button type="button" disabled={busy || !deletionPreview.affected_asset_ids.length} onClick={() => void confirmDelete()}>Delete saved files</button><button type="button" onClick={() => setDeletionPreview(null)}>Cancel</button><HoverHelp title="Deletion details">{deletionPreview.note}</HoverHelp></div>
+      </div> : null}
 
-      <div className="packet03-grid">
-        <ul className="packet03-list">
-          {assets.map((asset) => (
-            <li key={asset.id} className="packet03-item" aria-disabled={asset.deleted_at ? "true" : "false"}>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  disabled={Boolean(asset.deleted_at)}
-                  checked={selectedIds.includes(asset.id)}
-                  onChange={(event) => {
-                    setDeletionPreview(null);
-                    setSelectedIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id));
-                  }}
-                />
-                <Icon name="files" size={15} /><strong>{asset.filename}</strong>
-              </label>
-              <div className="packet03-meta">
-                <span>{assetOriginLabel(asset.origin)}</span>
-                <span>{asset.scope === "project" ? "Project" : "Chat"}</span>
-                <span>{formatBytes(asset.size_bytes)}</span>
-                <HoverHelp title="File source">{asset.mutable_reference ? "Saved copy. The original file may have changed since it was captured." : "This saved copy stays unchanged."}{asset.observation ? ` ${asset.observation}` : ""}</HoverHelp>
-                {asset.deleted_at ? <span>Deleted</span> : null}
-              </div>
-              <div className="packet03-actions">
-                <button type="button" disabled={busy || Boolean(asset.deleted_at)} onClick={() => void showPreview(asset)}>
-                  <Icon name="search" size={14} /> Preview
-                </button>
-                <button type="button" disabled={busy || Boolean(asset.deleted_at)} onClick={() => void showFullContent(asset)}>
-                  <Icon name="expand" size={14} /> Open full text
-                </button>
-                {window.workbench?.saveAsset ? (
-                  <button
-                    type="button"
-                    disabled={busy || Boolean(asset.deleted_at)}
-                    onClick={() => void window.workbench?.saveAsset?.({
-                      assetId: asset.id,
-                      ...assetAccessScope(asset, { sessionId, projectPath }),
-                    })}
-                  >
-                    <Icon name="download" size={14} /> Save copy
-                  </button>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
+      <div className={`file-browser-body${preview ? " has-preview" : ""}`}>
+        <div className="file-table-wrap">
+          <table className="file-table" aria-label="Saved files">
+            <thead><tr><th className="file-check"><input type="checkbox" aria-label="Select all visible files" disabled={!selectable.length} checked={selectable.length > 0 && selectable.every(asset => selectedIds.includes(asset.id))} onChange={event => { setDeletionPreview(null); setSelectedIds(event.target.checked ? selectable.map(asset => asset.id) : []); }} /></th><th>Name</th><th className="file-location">Location</th><th>Size</th><th className="file-date">Added</th></tr></thead>
+            <tbody>{visibleAssets.map(asset => <tr key={asset.id} className={`${preview?.id === asset.id ? "is-active " : ""}${asset.deleted_at ? "is-deleted" : ""}`}>
+              <td className="file-check"><input type="checkbox" aria-label={`Select ${asset.filename}`} disabled={Boolean(asset.deleted_at)} checked={selectedIds.includes(asset.id)} onChange={event => { setDeletionPreview(null); setSelectedIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id)); }} /></td>
+              <td><button type="button" className="file-name" disabled={Boolean(asset.deleted_at)} aria-label={`Preview ${asset.filename}`} onClick={() => void showPreview(asset)}><Icon name="files" size={17} /><span><strong>{asset.filename}</strong><small>{asset.deleted_at ? "Deleted" : assetOriginLabel(asset.origin)}</small></span></button></td>
+              <td className="file-location"><span title={asset.project_path ?? undefined}>{asset.project_path?.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? "Chat"}</span></td>
+              <td className="file-size">{formatBytes(asset.size_bytes)}</td>
+              <td className="file-date">{new Date(asset.observed_at).toLocaleDateString()}</td>
+            </tr>)}</tbody>
+          </table>
+          {!visibleAssets.length ? <div className="file-browser-empty"><Icon name="files" size={28} /><strong>{busy ? "Loading files…" : query ? "No matching files" : "No saved files yet"}</strong><span>{query ? "Try another name or location." : "Files you attach and outputs you save in Chat appear here."}</span></div> : null}
+        </div>
 
-        <aside className="packet03-item" aria-label="Library detail">
-          <h3>Preview</h3>
-          {preview ? (
-            <>
-              <div className="packet03-meta">
-                <span>{preview.filename}</span>
-                <span>{formatBytes(preview.size_bytes)}</span>
-                {preview.truncated ? <span>Preview truncated</span> : null}
-                <span>{sourceStatusLabel(preview.source_status)}</span>
-                {fullContent?.id === preview.id ? <span>Full retained text</span> : null}
-              </div>
-              <pre className="packet03-preview">{preview.preview}</pre>
-            </>
-          ) : (
-            <p className="hint">Select a file to preview.</p>
-          )}
-
-          <div className="packet03-actions">
-            <button
-              type="button"
-              disabled={busy || selectedIds.length === 0 || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))}
-              onClick={() => void reuseSelected()}
-            >
-              <Icon name="plus" size={14} /> Reuse selected{selectedIds.length ? ` (${selectedIds.length})` : ""}
-            </button>
-            <button type="button" disabled={busy || selectedIds.length === 0} onClick={() => void previewDeletion()}>
-              <Icon name="trash" size={14} /> Preview delete
-            </button>
+        {preview ? <aside className="file-preview-pane" aria-label="Library detail">
+          <header><div><strong>{preview.filename}</strong><span>{formatBytes(preview.size_bytes)} · {sourceStatusLabel(preview.source_status)}</span></div><button type="button" className="icon-button" aria-label="Close file preview" onClick={() => { detailGeneration.current += 1; setPreview(null); setFullContent(null); }}><Icon name="close" size={15} /></button></header>
+          <div className="file-preview-actions">
+            {activeAsset && activeAsset.content_kind !== "image" && fullContent?.id !== preview.id ? <button type="button" disabled={busy} onClick={() => void showFullContent(activeAsset)}><Icon name="expand" size={14} /> Open full text</button> : null}
+            {activeAsset && window.workbench?.saveAsset ? <button type="button" disabled={busy} onClick={() => void window.workbench?.saveAsset?.({ assetId: activeAsset.id, ...assetAccessScope(activeAsset, { sessionId, projectPath }) }).catch(error => setMessage(error instanceof Error ? error.message : String(error)))}><Icon name="download" size={14} /> Save copy</button> : null}
           </div>
-
-          {deletionPreview ? (
-            <div className="notice notice-warn">
-              <p>{deletionPreview.note}</p>
-              <p>
-                {deletionPreview.affected_asset_ids.length} item{deletionPreview.affected_asset_ids.length === 1 ? "" : "s"} affected,
-                {" "}{deletionPreview.preserved_asset_ids.length} preserved by other references.
-              </p>
-              <button type="button" disabled={busy || deletionPreview.affected_asset_ids.length === 0} onClick={() => void confirmDelete()}>
-                <Icon name="trash" size={14} /> Delete affected retained copies
-              </button>
-            </div>
-          ) : null}
-        </aside>
+          {preview.truncated ? <p className="hint">Preview shortened. Open full text to read the entire saved file.</p> : null}
+          {activeAsset?.content_kind === "image" ? <RetainedImage asset={activeAsset} sessionId={sessionId ?? undefined} /> : <pre className="file-preview-content">{preview.preview}</pre>}
+          {preview.extraction ? <p className="hint">{preview.extraction.note ?? `Text extracted locally · ${preview.extraction.parser}`}</p> : null}
+        </aside> : null}
       </div>
     </section>
   );

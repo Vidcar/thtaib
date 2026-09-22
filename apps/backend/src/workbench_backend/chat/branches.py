@@ -26,7 +26,7 @@ from workbench_backend.lab.schemas import LabWorkspace, SnapshotManifest
 
 from workbench_backend.lab.snapshot import restore_snapshot_tree
 
-from workbench_backend.state.checkpointer import open_sqlite_checkpointer, delete_checkpoint_thread
+from workbench_backend.state.checkpointer import open_sqlite_checkpointer, delete_checkpoint_thread, checkpoint_history
 
 class BranchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -210,9 +210,8 @@ class ChatBranches:
                 return None
             selected = self.chat.harness.get_run(conversation.run_ids[index - 1])
         retained = set(selected.checkpoint_ids)
-        saver = open_sqlite_checkpointer(self.chat.manager.paths.checkpoints_db)
         # Application linkage is an unordered set. Saver history is newest-first.
-        for saved in saver.list({"configurable": {"thread_id": selected.thread_id, "checkpoint_ns": ""}}):
+        for saved in checkpoint_history(self.chat.manager.paths.checkpoints_db, {"configurable": {"thread_id": selected.thread_id, "checkpoint_ns": ""}}):
             ident = saved.config["configurable"]["checkpoint_id"]
             if ident in retained:
                 return ident
@@ -343,9 +342,8 @@ def find_pre_answer_checkpoint(
     when the source turn used tools, and excludes the final assistant answer
     being regenerated.
     """
-    saver = open_sqlite_checkpointer(path)
     try:
-        history = list(saver.list({"configurable": {"thread_id": source_thread, "checkpoint_ns": ""}}))
+        history = checkpoint_history(path, {"configurable": {"thread_id": source_thread, "checkpoint_ns": ""}})
     except Exception as exc:
         raise ChatError("Could not inspect retained LangGraph checkpoint history.", code="branch_checkpoint_missing", status_code=409) from exc
     retained = [str(saved.config["configurable"].get("checkpoint_id")) for saved in history if saved.config["configurable"].get("checkpoint_id") in retained_checkpoint_ids]

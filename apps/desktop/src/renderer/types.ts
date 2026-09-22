@@ -7,7 +7,7 @@ import type {
 
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "chat" | "models" | "knowledge" | "agent-run" | "lab" | "library" | "settings" | "attention";
+export type WorkbenchTab = "chat" | "projects" | "agents" | "models" | "knowledge" | "agent-run" | "lab" | "library" | "settings" | "attention";
 
 export interface PathsInfo {
   root: string;
@@ -479,6 +479,9 @@ export type ChatQueueItem = SchemaChatQueueItem;
 export type ChatSearchResult = SchemaChatSearchResult;
 
 export interface ChatConversation {
+  project_id?: string | null;
+  agent_setup_version_id?: string | null;
+  setup_overrides?: import("./workspaceApi").SetupConfiguration;
   id: string;
   title?: string | null;
   archived?: boolean;
@@ -527,6 +530,12 @@ export interface KnowledgeProvenance {
 }
 
 export interface KnowledgeEntry {
+  resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
+  package_source?: string | null;
+  active?: boolean;
+  enabled?: boolean;
+  scope_bound?: boolean;
+  scope_label?: string | null;
   id: string;
   scope: KnowledgeScope;
   scope_id: string | null;
@@ -542,6 +551,7 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeVersion {
+  resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
   id: string;
   entry_id: string;
   content: string;
@@ -552,6 +562,7 @@ export interface KnowledgeVersion {
 }
 
 export interface KnowledgeConfig {
+  automatic_save_policies?: Array<{ scope: KnowledgeScope; scope_id?: string | null; automatic_agent_writes: boolean }>;
   context_captures: {
     retention_seconds: number | null;
     redaction_mode: RedactionMode;

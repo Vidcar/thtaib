@@ -5,8 +5,12 @@ import { AgentRunPanel } from "./AgentRunPanel";
 import { AttentionPanel, AttentionButton } from "./AttentionPanel";
 import { api } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import type { ChatWorkspaceLaunch } from "./chatSetup";
 import { errorMessage } from "./errors";
-import { Icon, type IconName } from "./Icon";
+import { Icon } from "./Icon";
+import { ProjectsPanel } from "./ProjectsPanel";
+import { AgentSetupsPanel } from "./AgentSetupsPanel";
+import { workbenchTabs, tabIcons, tabLabel } from "./workspaceNavigation";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
 import { LibraryPanel } from "./LibraryPanel";
@@ -20,42 +24,6 @@ const fallbackPresentation: PresentationSettings = {
   detailed_streams: false,
   attention_notifications: true,
   success_notifications: false,
-};
-
-function tabLabel(tab: WorkbenchTab): string {
-  switch (tab) {
-    case "chat":
-      return "Chat";
-    case "models":
-      return "Models";
-    case "knowledge":
-      return "Knowledge";
-    case "agent-run":
-      return "Workflows";
-    case "lab":
-      return "Lab";
-    case "library":
-      return "Library";
-    case "attention":
-      return "Attention";
-    case "settings":
-      return "Settings";
-    default: {
-      const unexpected: never = tab;
-      return unexpected;
-    }
-  }
-}
-
-const tabIcons: Record<WorkbenchTab, IconName> = {
-  chat: "chat",
-  library: "library",
-  attention: "activity",
-  models: "models",
-  knowledge: "knowledge",
-  "agent-run": "agent-run",
-  lab: "lab",
-  settings: "settings",
 };
 
 export function App() {
@@ -72,6 +40,7 @@ export function App() {
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
   const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
   const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
+  const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { const saved = window.localStorage?.getItem("workbench.navigation.collapsed"); return saved === null || saved === undefined ? window.innerWidth < 900 : saved === "true"; } catch { return window.innerWidth < 900; }
   });
@@ -165,6 +134,8 @@ export function App() {
       case "chat":
         return (
           <ChatPanel
+            workspaceLaunch={workspaceLaunch}
+            onWorkspaceLaunchHandled={() => setWorkspaceLaunch(null)}
             navigationCollapsed={sidebarCollapsed}
             onNavigationCollapsedChange={setSidebarCollapsed}
             navigationWidth={sidebarWidth}
@@ -184,6 +155,10 @@ export function App() {
             productName={productName}
           />
         );
+      case "projects":
+        return <ProjectsPanel onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
+      case "agents":
+        return <AgentSetupsPanel onUse={setup => { setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
         return <ModelsPanel />;
       case "knowledge":
@@ -209,7 +184,7 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["chat", "models", "library", "knowledge", "agent-run", "lab", "attention", "settings"];
+  const tabs = workbenchTabs;
 
   return (
     <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`} style={{ "--navigation-width": `${sidebarWidth}px` } as CSSProperties}>

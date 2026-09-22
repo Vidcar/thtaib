@@ -6,11 +6,12 @@ returned by create_deep_agent — not a second Builder workflow editor.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -27,14 +28,20 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
+from workbench_backend.agents.file_changes import FileChangeRecorder, ProjectFileChangeView, change_view, reverse_change
+from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
+from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
-from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path
+from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
     official_agent_kwargs,
     materialize_onto_backend,
     plan_knowledge_materialization,
+    KnowledgeRefreshMiddleware,
+    clear_derived_knowledge,
+    configured_memory_middleware,
 )
 from workbench_backend.agents.retrieval import (
     RETRIEVAL_INSTRUCTIONS,
@@ -75,14 +82,19 @@ from workbench_backend.contracts.lifecycle import (
 )
 from workbench_backend.state.checkpointer import (
     conversation_state,
-    checkpoint_ids_from_graph,
+    checkpoint_history,
+    acheckpoint_ids_from_graph,
     open_sqlite_checkpointer,
+    run_checkpoint_task,
+    submit_checkpoint_task,
 )
 from workbench_backend.state.schemas import RelatedFile
 from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
     KNOWLEDGE_ROUTE_READ_TOOLS,
     enabled_for_project,
+    memory_proposal_tool,
+    project_mutation_tools,
     resolve_presented_tools,
     tools_for_names,
 )
@@ -152,6 +164,7 @@ class HarnessService:
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._native_streams: dict[str, Any] = {}
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._model_clients: dict[str, httpx.Client] = {}
@@ -270,8 +283,38 @@ class HarnessService:
         with self._lock:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
-    def start(self, request: AgentStartRequest) -> AgentRun:
+    def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None) -> AgentRun:
         self._reconcile_startup_once()
+        selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.connections.available, connection_tools=lambda ident: [tool.name for tool in self.connections.get(ident).tools])
+        if request.project_path and not request.project_id and not request.workspace_id:
+            project = selection_service.create_project(ProjectCreateRequest(path=request.project_path))
+            request = request.model_copy(update={"project_id": project.id})
+        selection = selection_service.resolve(
+            project_id=request.project_id,
+            agent_setup_version_id=request.agent_setup_version_id,
+            overrides=configuration_from_request(request),
+            override_cleared_fields=cleared_configuration_fields(request),
+            validate=bool(request.project_id or request.agent_setup_version_id),
+        )
+        if instruction_snapshot is not None:
+            selection = selection.model_copy(update={"instruction_layers": instruction_snapshot})
+        selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id"})
+        if request.project_id:
+            project = selection_service.get_project(request.project_id, require_active=True)
+            workspace = LabStore(self.manager.paths).get_workspace(request.workspace_id) if request.workspace_id else None
+            # A checkpoint branch keeps its original project identity/defaults,
+            # while its files live in the separately registered restored copy.
+            execution_path = workspace.path if workspace is not None and workspace.origin == "restored" else project.path
+            if request.project_path and Path(request.project_path).resolve() != Path(execution_path).resolve():
+                raise HarnessError("The folder does not match the selected project.", code="project_mismatch", status_code=409)
+            selected["project_path"] = execution_path
+        request = request.model_copy(update=selected)
+        if not request.deployment_id:
+            raise HarnessError("Choose a model or an agent setup with a model.", code="setup_deployment_required", status_code=400)
+        if selection.configuration.requires_project and not (request.project_path or request.workspace_id):
+            raise HarnessError("This agent setup requires a project folder.", code="setup_project_required", status_code=409)
+        if selection.configuration.requires_host_shell and (not (request.project_path or request.workspace_id) or request.presented_tools is not None and "execute" not in request.presented_tools):
+            raise HarnessError("This agent setup requires the host-shell tool in a project. Select it explicitly before running.", code="setup_shell_required", status_code=409)
         admission = self.manager.reserve_deployment(
             request.deployment_id,
             profile_id=request.profile_id,
@@ -296,6 +339,7 @@ class HarnessService:
             knowledge_plan = plan_knowledge_materialization(
                 versions,
                 self._knowledge_display_names(versions),
+                self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
             )
             profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
             project_path = _resolved_project_path(request.project_path)
@@ -303,10 +347,17 @@ class HarnessService:
                 stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
                 if stored is not None:
                     project_path = _resolved_project_path(stored.path)
+            from workbench_backend.assets.tools import validate_retained_selection
+            validate_retained_selection(self.store, request.retained_asset_ids,
+                thread_id=request.thread_id, project_path=str(project_path) if project_path else None)
+            connection_snapshots = self.connections.snapshot(request.connection_ids or [], tools_enabled=request.presented_tools != [])
+            external_names = [tool.name for connection in connection_snapshots for tool in connection.tools]
             presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
                 request.presented_tools,
                 project_bound=project_path is not None,
                 knowledge_routes=knowledge_plan.has_knowledge_routes,
+                external_names=external_names,
+                attachment_available=bool(request.retained_asset_ids),
             )
             retrieval_requested = bool((request.embedding_deployment_id or "").strip())
             recorded = request.tool_mode is ToolMode.recorded_tool
@@ -362,6 +413,10 @@ class HarnessService:
                 for name in KNOWLEDGE_ROUTE_READ_TOOLS:
                     if name not in presented:
                         presented = [*presented, name]
+            framework_read_paths = (
+                ["/large_tool_results/", "/conversation_history/"]
+                if presented and "read_file" not in presented and not recorded else []
+            )
             if retrieval_presented and request.presented_tools == []:
                 raise HarnessError(
                     "Retrieval requires its search tool. Enable tools or remove the retrieval selection.",
@@ -391,7 +446,11 @@ class HarnessService:
             enabled = enabled_for_project(
                 project_path is not None,
                 knowledge_routes=knowledge_plan.has_knowledge_routes,
+                attachment_available=bool(request.retained_asset_ids),
             )
+            enabled = [*enabled, *external_names]
+            if framework_read_paths and "read_file" not in enabled:
+                enabled.append("read_file")
             if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
                 enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
             setup = resolve_effective_setup(
@@ -410,6 +469,11 @@ class HarnessService:
                 retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
                 materialized_knowledge=knowledge_plan.facts,
                 inherit_deployment_settings=request.inherit_deployment_settings,
+                instruction_layers=selection.instruction_layers,
+                selected_project_id=selection.project_id,
+                selected_agent_setup_id=selection.agent_setup_id,
+                selected_agent_setup_version_id=selection.agent_setup_version_id,
+                selected_connection_ids=request.connection_ids,
             )
             _, structured_output = response_format_for_run(
                 output_schema=request.output_schema,
@@ -424,10 +488,17 @@ class HarnessService:
                     id=new_id("agent_validation"),
                     status=AgentRunStatus.queued,
                     deployment_id=deployment.id,
+                    project_id=selection.project_id,
+                    agent_setup_id=selection.agent_setup_id,
+                    agent_setup_version_id=selection.agent_setup_version_id,
+                    connection_ids=list(request.connection_ids or []),
+                    connection_snapshots=connection_snapshots,
+                    retained_asset_ids=list(request.retained_asset_ids),
                     task=request.task,
                     content_blocks=request.content_blocks,
                     enabled_tools=enabled,
                     presented_tools=presented,
+                    framework_read_paths=framework_read_paths,
                     denied_tools=[],
                     system_prompt=setup.system_prompt,
                     criteria=request.criteria or TaskCriteria(),
@@ -460,7 +531,7 @@ class HarnessService:
                     output_schema=request.output_schema,
                     structured_output=structured_output,
                 )
-                validation_agent = self._create_compiled_agent(validation_run, [], None)
+                validation_agent = self._create_compiled_agent(validation_run, [], None, inspection_only=True)
                 snapshot = _graph_checkpoint_snapshot(
                     validation_agent,
                     request.thread_id,
@@ -513,10 +584,17 @@ class HarnessService:
                 id=new_id("agent"),
                 status=AgentRunStatus.queued,
                 deployment_id=deployment.id,
+                    project_id=selection.project_id,
+                    agent_setup_id=selection.agent_setup_id,
+                    agent_setup_version_id=selection.agent_setup_version_id,
+                    connection_ids=list(request.connection_ids or []),
+                    connection_snapshots=connection_snapshots,
+                    retained_asset_ids=list(request.retained_asset_ids),
                 task=request.task,
                 content_blocks=request.content_blocks,
                 enabled_tools=enabled,
                 presented_tools=presented,
+                framework_read_paths=framework_read_paths,
                 denied_tools=[],
                 system_prompt=setup.system_prompt,
                 criteria=request.criteria or TaskCriteria(),
@@ -594,14 +672,16 @@ class HarnessService:
                 cancel.set()
             for ready in self._decision_ready.values():
                 ready.set()
-            clients = list(self._model_clients.values())
             threads = list(self._threads.values())
-        for client in clients:
-            client.close()
+            run_ids = [run_id for run_id, worker in self._threads.items() if worker.is_alive()]
+        for run_id in run_ids:
+            submit_checkpoint_task(self.manager.paths.checkpoints_db, self._abort_native_run(run_id))
         for thread in threads:
             thread.join(timeout=timeout)
         with self._lock:
-            self._threads.clear()
+            self._threads = {run_id: worker for run_id, worker in self._threads.items() if worker.is_alive()}
+            if self._threads:
+                raise RuntimeError("Agent work has not stopped; checkpoint resources remain owned.")
 
     def cancel(self, run_id: str) -> AgentRun:
         """Accept a cancel request. Do not claim cancelled until the worker stops."""
@@ -641,7 +721,10 @@ class HarnessService:
                     )
                 )
                 self._persist_and_notify(run)
+        if client is not None or run_id in self._native_streams:
+            submit_checkpoint_task(self.manager.paths.checkpoints_db, self._abort_native_run(run_id))
         if client is not None:
+            # The optional synchronous transport has no loop-bound resources.
             client.close()
         if reject_after_restart is not None:
             pending, restart_cancel = reject_after_restart
@@ -789,14 +872,12 @@ class HarnessService:
             self._finish(run, AgentRunStatus.cancelled, "cancelled")
             return
         http_sink: list[dict[str, Any]] = []
-        agent = None
         try:
             fixture_bank = (
                 FixtureBank(run.recorded_fixtures)
                 if run.tool_mode is ToolMode.recorded_tool
                 else None
             )
-            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
             if run.resume_checkpoint_id:
                 payload: Any = None
             else:
@@ -809,12 +890,10 @@ class HarnessService:
                     user_message["id"] = input_message_id
                 payload = {"messages": [user_message],
                     **({"structured_response": None} if run.output_schema is not None else {})}
-            self._drive_until_terminal(run, agent, cancel, payload)
+            run_checkpoint_task(self.manager.paths.checkpoints_db,
+                self._run_owned_graph(run, http_sink, fixture_bank, cancel, payload))
         except ReplayError as exc:
-            if agent is not None:
-                self._link_run(run, agent)
-            else:
-                self._collect_related_files(run)
+            self._collect_related_files(run)
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -828,10 +907,7 @@ class HarnessService:
             )
             self._finish(run, AgentRunStatus.failed, "failed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
-            if agent is not None:
-                self._link_run(run, agent)
-            else:
-                self._collect_related_files(run)
+            self._collect_related_files(run)
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -853,26 +929,17 @@ class HarnessService:
         with self._lock:
             run = self._require_run(run_id)
         http_sink: list[dict[str, Any]] = []
-        agent = None
         try:
             fixture_bank = (
                 FixtureBank(run.recorded_fixtures)
                 if run.tool_mode is ToolMode.recorded_tool
                 else None
             )
-            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
-            self._clear_pending_interrupt(run, decisions)
-            self._drive_until_terminal(
-                run,
-                agent,
-                cancel,
-                Command(resume=_resume_value(decisions)),
-            )
+            run_checkpoint_task(self.manager.paths.checkpoints_db,
+                self._run_owned_graph(run, http_sink, fixture_bank, cancel,
+                    Command(resume=_resume_value(decisions)), decisions=decisions))
         except ReplayError as exc:
-            if agent is not None:
-                self._link_run(run, agent)
-            else:
-                self._collect_related_files(run)
+            self._collect_related_files(run)
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -886,10 +953,7 @@ class HarnessService:
             )
             self._finish(run, AgentRunStatus.failed, "failed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
-            if agent is not None:
-                self._link_run(run, agent)
-            else:
-                self._collect_related_files(run)
+            self._collect_related_files(run)
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -911,20 +975,16 @@ class HarnessService:
         with self._lock:
             run = self._require_run(run_id)
         http_sink: list[dict[str, Any]] = []
-        agent = None
         try:
             fixture_bank = (
                 FixtureBank(run.recorded_fixtures)
                 if run.tool_mode is ToolMode.recorded_tool
                 else None
             )
-            agent = self._create_compiled_agent(run, http_sink, fixture_bank)
-            self._resume_reject_then_stop(agent, run, pending, _invoke_config(run))
+            run_checkpoint_task(self.manager.paths.checkpoints_db,
+                self._run_owned_graph(run, http_sink, fixture_bank, cancel, None, reject=pending))
         except Exception as exc:  # noqa: BLE001 - surface failure without replaying approval
-            if agent is not None:
-                self._link_run(run, agent)
-            else:
-                self._collect_related_files(run)
+            self._collect_related_files(run)
             run.error = clarify_connection_error(exc)
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
@@ -933,6 +993,33 @@ class HarnessService:
                 self._pending_decisions[run_id] = None
             self._close_model_client(run_id)
 
+    @asynccontextmanager
+    async def _compiled_agent_context(self, run, http_sink, fixture_bank):
+        # Session-bound tools enter here on the common loop and stay open across
+        # native approval waits. Synchronous setup/file work cannot block it.
+        async with self.connections.open_tools(run) as external_tools:
+            agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
+                external_tools=external_tools)
+            yield agent
+
+    @property
+    def connections(self):
+        from workbench_backend.connections.service import ConnectionService
+        return ConnectionService(self.store)
+
+    async def _run_owned_graph(self, run, http_sink, fixture_bank, cancel, payload, *, decisions=None, reject=None):
+        async with self._compiled_agent_context(run, http_sink, fixture_bank) as agent:
+            try:
+                if reject is not None:
+                    await self._aresume_reject_then_stop(agent, run, reject, _invoke_config(run))
+                else:
+                    if decisions is not None:
+                        await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
+                    await self._adrive_until_terminal(run, agent, cancel, payload)
+            except BaseException:
+                await self._alink_run(run, agent)
+                raise
+
     def _create_compiled_agent(
         self,
         run: AgentRun,
@@ -940,6 +1027,7 @@ class HarnessService:
         fixture_bank: FixtureBank | None,
         *,
         inspection_only: bool = False,
+        external_tools: list[Any] | None = None,
     ) -> Any:
         model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
         agent_kwargs: dict[str, Any] = {}
@@ -948,6 +1036,7 @@ class HarnessService:
         if backend is not None:
             agent_kwargs["backend"] = backend
             if not inspection_only:
+                clear_derived_knowledge(harness_scratch_root(self.manager.paths, run.thread_id or run.id))
                 materialize_onto_backend(backend, knowledge_plan)
         observation = run.context_observation
         usable = observation.usable_input_tokens if observation is not None else None
@@ -982,7 +1071,7 @@ class HarnessService:
             model.set_context_guard(guard)
         summarization = BudgetedSummarizationMiddleware(
             model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
-            allowed_tools=set(run.presented_tools),
+            allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
             trigger=("tokens", max(1, int(usable * 0.75))) if usable else None,
             keep=("tokens", max(1, int(usable * 0.15))) if usable else ("messages", 6),
             token_counter=count_context_tokens,
@@ -997,7 +1086,14 @@ class HarnessService:
         interrupt_on = interrupt_on_for_run(run, PreferenceStore(self.store))
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
-        tools = tools_for_names(run.presented_tools)
+        tools = [*tools_for_names(run.presented_tools), *(external_tools or [])]
+        if run.project_path:
+            tools.extend(tool for tool in project_mutation_tools(run.project_path) if tool.name in run.presented_tools)
+        if "propose_memory" in run.presented_tools and self._knowledge_provider is not None:
+            tools.append(memory_proposal_tool(run.id, self._knowledge_provider()))
+        if "read_attachment" in run.presented_tools and run.retained_asset_ids:
+            from workbench_backend.assets.tools import attachment_tool_for_run
+            tools.append(attachment_tool_for_run(self.store, run))
         retrieval_tool = self._live_search_knowledge_tool(run, backend, inspection_only=inspection_only)
         if retrieval_tool is not None:
             tools = [*tools, retrieval_tool]
@@ -1026,6 +1122,8 @@ class HarnessService:
             system_prompt=run.system_prompt,
             middleware=[
                 summarization,
+                KnowledgeRefreshMiddleware(backend, knowledge_plan),
+                *configured_memory_middleware(backend, knowledge_plan),
                 *([StructuredOutputRepairMiddleware(run.structured_output, on_event=lambda kind, detail: run.events.append(
                     AgentEvent(at=utc_now(), kind=kind, detail=detail)
                 ))] if run.structured_output is not None else []),
@@ -1035,6 +1133,7 @@ class HarnessService:
                     http_sink,
                     settings_provider=self._capture_settings,
                     fixture_bank=fixture_bank,
+                    file_changes=FileChangeRecorder(run, lambda mutation: self._record_file_change(run, mutation)),
                 )
             ],
             name="workbench-embedded-harness",
@@ -1043,7 +1142,7 @@ class HarnessService:
             **agent_kwargs,
         )
 
-    def _drive_until_terminal(
+    async def _adrive_until_terminal(
         self,
         run: AgentRun,
         agent: Any,
@@ -1052,40 +1151,40 @@ class HarnessService:
     ) -> None:
         config = _invoke_config(run)
         current = payload
-        seen_messages = self._seed_native_audit_seen(agent, config)
+        seen_messages = await self._seed_native_audit_seen(agent, config)
         message_nodes: dict[str, str] = {}
         while True:
             if cancel.is_set():
-                self._link_run(run, agent)
-                self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                await self._alink_run(run, agent)
+                await asyncio.to_thread(self._finish, run, AgentRunStatus.cancelled, "cancelled")
                 return
-            pending = self._stream_until_pause(agent, run, current, cancel, config, seen_messages, message_nodes)
+            pending = await self._stream_until_pause(agent, run, current, cancel, config, seen_messages, message_nodes)
             if cancel.is_set():
                 if pending is not None:
-                    self._resume_reject_then_stop(agent, run, pending, config, message_nodes)
+                    await self._aresume_reject_then_stop(agent, run, pending, config, message_nodes)
                 else:
-                    self._link_run(run, agent)
-                    self._finish(run, AgentRunStatus.cancelled, "cancelled")
+                    await self._alink_run(run, agent)
+                    await asyncio.to_thread(self._finish, run, AgentRunStatus.cancelled, "cancelled")
                 return
             if pending is None:
-                self._link_run(run, agent)
+                await self._alink_run(run, agent)
                 if run.structured_output is not None and run.structured_output.validation_status != "valid":
                     run.error = run.structured_output.error or "The model did not produce a valid structured result."
-                    self._finish(run, AgentRunStatus.failed, "structured_output_invalid")
+                    await asyncio.to_thread(self._finish, run, AgentRunStatus.failed, "structured_output_invalid")
                     return
                 run.completion = build_completion(run)
-                self._finish(run, AgentRunStatus.completed, "completed")
+                await asyncio.to_thread(self._finish, run, AgentRunStatus.completed, "completed")
                 return
-            self._link_run(run, agent)
-            self._publish_interrupt(run, pending)
-            decisions = self._wait_for_interrupt_decisions(run.id, cancel)
+            await self._alink_run(run, agent)
+            await asyncio.to_thread(self._publish_interrupt, run, pending)
+            decisions = await asyncio.to_thread(self._wait_for_interrupt_decisions, run.id, cancel)
             if decisions is None:
-                self._resume_reject_then_stop(agent, run, pending, config, message_nodes)
+                await self._aresume_reject_then_stop(agent, run, pending, config, message_nodes)
                 return
-            self._clear_pending_interrupt(run, decisions)
+            await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
             current = Command(resume=_resume_value(decisions))
 
-    def _stream_until_pause(
+    async def _stream_until_pause(
         self,
         agent: Any,
         run: AgentRun,
@@ -1097,15 +1196,18 @@ class HarnessService:
     ) -> Any:
         stream = None
         try:
-            stream = agent.stream_events(payload, config=config, version="v3")
-            for event in stream:
-                self._observe_interaction(run, event)
+            stream = await agent.astream_events(payload, config=config, version="v3")
+            self._native_streams[run.id] = stream
+            if cancel.is_set():
+                return None
+            async for event in stream:
+                await asyncio.to_thread(self._observe_interaction, run, event)
                 found = _pending_from_native_event(event)
                 if found is not None:
                     return found
                 if cancel.is_set():
                     return None
-                self._ingest_native_event(run, event, seen_messages, message_nodes)
+                await asyncio.to_thread(self._ingest_native_event, run, event, seen_messages, message_nodes)
         except Exception as exc:  # noqa: BLE001 - interrupt may surface as GraphInterrupt
             run.structured_output = mark_structured_failure(run.structured_output, str(exc))
             found = pending_interrupt_from_raw(exc) or pending_interrupt_from_raw(
@@ -1115,9 +1217,10 @@ class HarnessService:
                 return found
             raise
         finally:
-            self._close_native_stream(stream)
+            self._native_streams.pop(run.id, None)
+            await self._close_native_stream(stream)
         try:
-            state = agent.get_state(config)
+            state = await agent.aget_state(config)
         except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
             return None
         return pending_interrupt_from_raw(getattr(state, "interrupts", None))
@@ -1178,7 +1281,7 @@ class HarnessService:
                     return None
                 return decisions
 
-    def _resume_reject_then_stop(
+    async def _aresume_reject_then_stop(
         self,
         agent: Any,
         run: AgentRun,
@@ -1187,27 +1290,27 @@ class HarnessService:
         message_nodes: dict[str, str] | None = None,
     ) -> None:
         payloads = reject_decisions_for(pending)
-        self._clear_pending_interrupt(run, payloads)
-        seen_messages = self._seed_native_audit_seen(agent, config)
+        await asyncio.to_thread(self._clear_pending_interrupt, run, payloads)
+        seen_messages = await self._seed_native_audit_seen(agent, config)
         message_nodes = message_nodes if message_nodes is not None else {}
         stream = None
         try:
-            stream = agent.stream_events(
+            stream = await agent.astream_events(
                 Command(resume=_resume_value(payloads)),
                 config=config,
                 version="v3",
             )
-            for chunk in stream:
-                self._observe_interaction(run, chunk)
+            async for chunk in stream:
+                await asyncio.to_thread(self._observe_interaction, run, chunk)
                 if _pending_from_native_event(chunk) is not None:
                     break
-                self._ingest_native_event(run, chunk, seen_messages, message_nodes)
+                await asyncio.to_thread(self._ingest_native_event, run, chunk, seen_messages, message_nodes)
         except Exception:  # noqa: BLE001 - cancel still wins if reject resume fails
             pass
         finally:
-            self._close_native_stream(stream)
-        self._link_run(run, agent)
-        self._finish(run, AgentRunStatus.cancelled, "cancelled")
+            await self._close_native_stream(stream)
+        await self._alink_run(run, agent)
+        await asyncio.to_thread(self._finish, run, AgentRunStatus.cancelled, "cancelled")
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
@@ -1251,9 +1354,9 @@ class HarnessService:
             )
             self._persist_and_notify(run)
 
-    def _seed_native_audit_seen(self, agent: Any, config: dict[str, Any]) -> set[tuple[str, str]]:
+    async def _seed_native_audit_seen(self, agent: Any, config: dict[str, Any]) -> set[tuple[str, str]]:
         try:
-            state = agent.get_state(config)
+            state = await agent.aget_state(config)
             values = getattr(state, "values", {}) or {}
         except Exception:
             return set()
@@ -1332,16 +1435,16 @@ class HarnessService:
         safe = apply_run_diagnostic_policy(run, self._capture_settings())
         self._interaction_observer(safe.model_copy(deep=True), event, **({"telemetry": True} if telemetry else {}))
 
-    def _close_native_stream(self, stream: Any) -> None:
+    async def _close_native_stream(self, stream: Any) -> None:
         if stream is None:
             return
         abort = getattr(stream, "abort", None)
         if callable(abort):
-            abort()
+            await abort()
             return
-        close = getattr(stream, "close", None)
+        close = getattr(stream, "aclose", None)
         if callable(close):
-            close()
+            await close()
 
     def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str | None) -> bool:
         if isinstance(message, AIMessage) and message.invalid_tool_calls:
@@ -1414,7 +1517,14 @@ class HarnessService:
         if client is not None:
             client.close()
         if model is not None:
-            model.close()
+            run_checkpoint_task(self.manager.paths.checkpoints_db, model.aclose())
+
+    async def _abort_native_run(self, run_id: str) -> None:
+        # AsyncGraphRunStream.abort cancels the in-flight graph pull and settles
+        # its checkpoint writes. The driver then records confirmed cancellation.
+        stream = self._native_streams.get(run_id)
+        if stream is not None:
+            await stream.abort()
 
     def _live_search_knowledge_tool(self, run: AgentRun, backend: Any, *, inspection_only: bool = False) -> Any:
         """Build the official search tool, or none for recorded-tool / no retrieval."""
@@ -1508,14 +1618,14 @@ class HarnessService:
             protected_instruction_version_refs=run.protected_instruction_version_refs,
         )
         versions = self._load_knowledge_versions(refs)
-        return plan_knowledge_materialization(versions, self._knowledge_display_names(versions))
+        return plan_knowledge_materialization(versions, self._knowledge_display_names(versions), self._knowledge_provider().resource_bytes if self._knowledge_provider else None)
 
-    def _link_run(self, run: AgentRun, agent: object) -> None:
+    async def _alink_run(self, run: AgentRun, agent: object) -> None:
         """Record checkpoint ids and related files in application records only."""
 
-        run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
+        run.checkpoint_ids = await acheckpoint_ids_from_graph(agent, _invoke_config(run))
         try:
-            state = agent.get_state(_invoke_config(run))
+            state = await agent.aget_state(_invoke_config(run))
             values = getattr(state, "values", {}) or {}
         except Exception:
             values = {}
@@ -1554,11 +1664,11 @@ class HarnessService:
                 # Replace the whole channel so the synthetic tool result stays
                 # after the matching AI tool call even when abort races the
                 # native stream's final checkpoint write.
-                agent.update_state(
+                await agent.aupdate_state(
                     _invoke_config(run),
                     {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *repaired_messages, *results]},
                 )
-                run.checkpoint_ids = checkpoint_ids_from_graph(agent, _invoke_config(run))
+                run.checkpoint_ids = await acheckpoint_ids_from_graph(agent, _invoke_config(run))
                 run.events.append(AgentEvent(at=utc_now(), kind="cancelled_tool_results", detail={"tool_call_ids": list(pending_calls), "execution_confirmed": False}))
         compaction = values.get(SUMMARIZATION_EVENT_KEY)
         if isinstance(compaction, dict):
@@ -1570,7 +1680,7 @@ class HarnessService:
                 }))
         if run.structured_output is not None:
             try:
-                state = agent.get_state(_invoke_config(run))
+                state = await agent.aget_state(_invoke_config(run))
                 values = getattr(state, "values", None)
                 run.structured_output = update_structured_result_from_state(
                     run.structured_output,
@@ -1609,6 +1719,51 @@ class HarnessService:
             seen.add(key)
             unique.append(item)
         run.related_files = unique
+
+    def _record_file_change(self, run: AgentRun, mutation: Callable[[], None]) -> None:
+        with self._lock:
+            mutation()
+            run.updated_at = utc_now()
+            self._persist_and_notify(run)
+
+    def _project_is_active(self, run: AgentRun) -> bool:
+        if not run.project_path:
+            return False
+        root = Path(run.project_path).resolve()
+        for other in self.list_runs():
+            if not other.project_path or Path(other.project_path).resolve() != root:
+                continue
+            worker = self._threads.get(other.id)
+            if is_run_lifecycle_live(other.status) or worker is not None and worker.is_alive():
+                return True
+        return False
+
+    def file_changes(self, run_id: str) -> list[ProjectFileChangeView]:
+        with self._lock:
+            run = self._require_run(run_id)
+            if not run.project_path:
+                return []
+            active = self._project_is_active(run)
+            return [change_view(Path(run.project_path), change, run_active=active) for change in run.file_changes]
+
+    def reverse_file_change(self, run_id: str, change_id: str) -> ProjectFileChangeView:
+        with self._lock:
+            run = self._require_run(run_id)
+            change = next((item for item in run.file_changes if item.id == change_id), None)
+            if change is None or not run.project_path:
+                raise HarnessError("Unknown project file change.", code="file_change_missing", status_code=404)
+            if self._project_is_active(run):
+                raise HarnessError("Wait for work in this project to stop before reversing a file change.", code="file_reversal_active", status_code=409)
+            try:
+                reverse_change(Path(run.project_path), change)
+            except OSError as exc:
+                raise HarnessError(f"The file could not be restored: {exc}", code="file_reversal_failed", status_code=409) from exc
+            change.reversed_at = utc_now()
+            run.events.append(AgentEvent(at=change.reversed_at, kind="file_change_reversed",
+                detail={"change_id": change.id, "path": change.path, "actor": "human"}))
+            run.updated_at = change.reversed_at
+            self._persist_and_notify(run)
+            return change_view(Path(run.project_path), change, run_active=False)
 
     def wait_after(
         self,
@@ -1705,13 +1860,12 @@ class HarnessService:
         thread_id = (run.thread_id or "").strip()
         if not thread_id or not run.checkpoint_ids:
             return False
-        saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
         try:
-            latest = next(
-                saver.list(
+            latest = next(iter(
+                checkpoint_history(self.manager.paths.checkpoints_db,
                     {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
                     limit=1,
-                ),
+                )),
                 None,
             )
         except Exception:  # noqa: BLE001 - missing/unreadable checkpoint is not resumable

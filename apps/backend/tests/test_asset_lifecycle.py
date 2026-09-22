@@ -305,6 +305,34 @@ class AssetLifecycleTests(unittest.TestCase):
         self.assertEqual(second.skipped[0]["reason"], "already_collected")
         self.assertEqual(len(self.assets.list_assets()), 1)
 
+    def test_screenshot_output_keeps_pixels_and_requires_verified_local_file(self) -> None:
+        import base64
+        import hashlib
+        from PIL import Image
+        project = (self.root / "image-project").resolve()
+        project.mkdir()
+        path = project / "capture.png"
+        Image.new("RGB", (30, 20), "purple").save(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        run = self.put_run("run_image", project_path=str(project))
+        run.related_files = [RelatedFile(path=str(path), kind="artifact")]
+        run.events = [AgentEvent(at=utc_now(), kind="tool_result", detail={"tool_call": {"id": "capture_1", "name": "capture_screen", "status": "success", "result": {"path": str(path), "sha256": digest}}})]
+        self.store.put_run(run)
+        self.put_conversation("chat_image", project_path=str(project), run_ids=[run.id])
+        result = self.lifecycle.collect_verified_outputs_for_run("chat_image", run.id)
+        self.assertEqual(len(result.created_assets), 1, result.skipped)
+        asset = result.created_assets[0]
+        self.assertEqual(asset.content_kind.value, "image")
+        self.assertTrue(self.assets.preview(asset.id, session_id="chat_image").image_data_url)
+        self.assertEqual(base64.b64decode(self.assets.content(asset.id, session_id="chat_image").content_base64), path.read_bytes())
+        run.id = "run_unverified"
+        run.related_files = []
+        self.store.put_run(run)
+        self.put_conversation("chat_unverified", project_path=str(project), run_ids=[run.id])
+        rejected = self.lifecycle.collect_verified_outputs_for_run("chat_unverified", run.id)
+        self.assertEqual(rejected.created_assets, [])
+        self.assertIn("exact observed", rejected.skipped[0]["reason"])
+
     def test_collector_idempotence_key_includes_run_identity(self) -> None:
         project = (self.root / "project").resolve()
         project.mkdir()

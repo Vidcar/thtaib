@@ -14,7 +14,8 @@ import { Help } from "./ModelControls";
 import { Icon } from "./Icon";
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
-import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
+import { HuggingFaceImport } from "./HuggingFaceImport";
+import "./ModelsPanel.css";
 
 export function ModelsPanel() {
   const [libraryWidth, setLibraryWidth] = usePanelWidth("models-library", 220, 180, 400);
@@ -27,16 +28,6 @@ export function ModelsPanel() {
   const [localPath, setLocalPath] = useState("");
   const [localName, setLocalName] = useState("");
   const [copyLocal, setCopyLocal] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [searchError, setSearchError] = useState("");
-  const [repoId, setRepoId] = useState("");
-  const [hub, setHub] = useState<SchemaHubRepository | null>(null);
-  const [variant, setVariant] = useState("");
-  const [projector, setProjector] = useState("");
-  const [hubBusy, setHubBusy] = useState(false);
-  const [hubMessage, setHubMessage] = useState("");
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -72,10 +63,6 @@ export function ModelsPanel() {
   }, []);
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
-  const selectedVariant = hub?.variants.find((item) => item.name === variant);
-  const selectedProjector = hub?.projectors.find((item) => item.name === projector);
-  const selectedHubFiles = [...(selectedVariant?.files ?? []), ...(selectedProjector?.files ?? []), ...(hub?.guidance_files ?? [])];
-
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
   }
@@ -108,9 +95,14 @@ export function ModelsPanel() {
       </nav>
       {message ? <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
       {view === "add" ? <>
-      <div className="grid">
+      <HuggingFaceImport onStarted={async job => {
+        setImportRevision(value => value + 1);
+        if (job.bundle_id) { setSelectedId(job.bundle_id); setView("library"); setMessage("Model added to your library."); }
+        await refresh();
+      }} />
+      <details className="card local-model-import"><summary>From your computer</summary>
         <form
-          className="card"
+          className="local-model-form"
           onSubmit={(event) => {
             event.preventDefault();
             setLocalBusy(true);
@@ -130,7 +122,7 @@ export function ModelsPanel() {
               .catch(fail).finally(() => setLocalBusy(false));
           }}
         >
-          <div className="setting-title"><h3>From your computer</h3><Help label="Local model">Add a downloaded GGUF file or a folder containing its complete shards.</Help></div>
+          <div className="setting-title"><span>Add a GGUF file or folder</span><Help label="Local model">A folder can include a complete set of split files and a compatible vision companion.</Help></div>
           <label>
             Model file or folder
             <input
@@ -150,81 +142,7 @@ export function ModelsPanel() {
           </button>
         </form>
 
-        <form
-          className="card"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setHubBusy(true);
-            setHubMessage("Reading available model files…");
-            setHub(null);
-            void api.inspectHf(repoId).then((result) => {
-              setHub(result);
-              setVariant(result.variants.length === 1 && result.variants[0].complete ? result.variants[0].name : "");
-              setProjector(result.projectors.length ? "" : "text-only");
-              setHubMessage("");
-            }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
-          }}
-        >
-          <h3>From Hugging Face</h3>
-          <label>
-            Hugging Face link or repository
-            <input
-              value={repoId}
-              onChange={(event) => { setRepoId(event.target.value); setHub(null); }}
-              disabled={hubBusy}
-              placeholder="unsloth/Qwen3.8-27B-GGUF"
-            />
-          </label>
-          <button type="submit" disabled={!repoId.trim() || hubBusy}>
-            Find model files
-          </button>
-          {hub ? <>
-            <label>Model variant
-              <select value={variant} disabled={hubBusy} onChange={(event) => setVariant(event.target.value)}>
-                <option value="">Choose a GGUF variant</option>
-                {hub.variants.map((item) => <option key={item.name} value={item.name} disabled={!item.complete}>
-                  {item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}
-                </option>)}
-              </select>
-            </label>
-            {hub.projectors.length ? <label>Vision companion
-              <select value={projector} disabled={hubBusy} onChange={(event) => setProjector(event.target.value)}>
-                <option value="">Choose a projector or text-only</option>
-                <option value="text-only">Text-only — no projector</option>
-                {hub.projectors.map((item) => <option key={item.name} value={item.name}>{item.name} · compatibility unverified</option>)}
-              </select>
-            </label> : null}
-            {hub.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
-            <div className="setting-title"><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide</a><Help label="Download space">Allow room for temporary and installed copies, roughly twice the selected file size on a shared disk. Free space is checked before copying.</Help></div>
-            <details><summary>Files and recorded revision</summary>
-              <p className="hint">{hub.resolved_revision}</p>
-              <ul>{selectedHubFiles.map((file) => <li key={file}>{file}</li>)}</ul>
-            </details>
-            <button type="button" disabled={hubBusy || !selectedVariant || !projector} onClick={() => {
-              setHubBusy(true);
-              setHubMessage("Starting your selected download…");
-              const exactFiles = selectedHubFiles.map((file) => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
-              void api.importHf(hub.repo_id, hub.resolved_revision, exactFiles).then((job) => {
-                setHubMessage(job.error ? `Import ${job.status}: ${job.error}` : job.status === "complete" ? "Model added to your library." : "Download started. Progress and recovery controls are below.");
-                setImportRevision(value => value + 1);
-                if (job.bundle_id) { setSelectedId(job.bundle_id); setView("library"); setMessage("Model added to your library."); }
-                return refresh();
-              }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
-            }}>Download selected variant</button>
-          </> : null}
-          {hubMessage ? <p role="status">{hubMessage}</p> : null}
-        </form>
-      </div>
-      <form className="card" onSubmit={event => {
-        event.preventDefault(); setSearchBusy(true); setSearchError("");
-        void api.searchHf(searchQuery).then(results => { setSearchResults(results); if (!results.length) setSearchError("No matching repositories found. Try a different name or enter a repository directly above."); }).catch(error => setSearchError(errorMessage(error))).finally(() => setSearchBusy(false));
-      }}>
-        <div className="setting-title"><h3>Find a model</h3><Help label="Model search">Up to 20 repositories. Select a repository to choose a complete GGUF variant. Search results alone do not verify compatibility.</Help></div>
-        <label>Model name or publisher<input value={searchQuery} maxLength={200} onChange={event => setSearchQuery(event.target.value)} placeholder="Model name, GGUF, publisher…" /></label>
-        <button disabled={searchBusy || !searchQuery.trim()}>{searchBusy ? "Searching…" : "Search Hugging Face"}</button>
-        {searchError ? <p role="status">{searchError}</p> : null}
-        <ul className="plain-list">{searchResults.map(result => <li className="entity" key={result.repo_id}><strong>{result.repo_id}</strong>{result.downloads != null ? <p className="hint">{result.downloads.toLocaleString()} reported downloads</p> : null}<button type="button" onClick={() => { setRepoId(result.repo_id); setHub(null); setHubMessage("Repository selected. Use Find model files to inspect its available variants."); }}>Select repository</button></li>)}</ul>
-      </form>
+      </details>
       </> : null}
       {view === "library" ? <div className="models-workspace" style={{ gridTemplateColumns: `${libraryWidth}px minmax(0, 1fr)` }}>
       <aside className="model-library" aria-label="Your models" style={{ position: "relative" }}>
@@ -264,7 +182,8 @@ export function ModelsPanel() {
         <PanelResize label="Resize model library" width={libraryWidth} onResize={setLibraryWidth} min={180} max={400} reset={220} />
       </aside>
       <div className="model-detail">
-      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} initialBundles={bundles} initialProfiles={profiles} />
+      {selected ? <header className="model-selected-heading" aria-label="Selected model"><h3>{selected.display_name}</h3><div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div></header> : null}
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} />
       {selected ? (
           <details className="card technical-details"><summary>Files &amp; metadata</summary>
             <p className="hint">Model ID: <code>{selected.id}</code></p>
@@ -288,7 +207,6 @@ export function ModelsPanel() {
             {!selected.disk_matches ? (
               <Notice tone="warn">Recorded files do not match what is on disk.</Notice>
             ) : null}
-            <ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} />
             <div className="actions"><button type="button" disabled={verifyBusy} onClick={() => {
               setVerifyBusy(true); void api.verifyModel(selected.id).then(result => { setMessage(result.disk_matches ? "All recorded model files match their hashes." : "Files are missing or changed. Repair the recorded installation or restore your original local files."); return refresh(); }).catch(fail).finally(() => setVerifyBusy(false));
             }}>{verifyBusy ? "Checking files…" : "Verify installed files"}</button>

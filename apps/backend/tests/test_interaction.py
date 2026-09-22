@@ -75,6 +75,9 @@ class InteractionApiTests(unittest.TestCase):
         from tests.test_harness import wait_for_run
         finished = wait_for_run(self.client, following.json()["current_run_id"])
         self.assertEqual(finished["status"], "completed", finished)
+        self.assertEqual(finished["project_id"], source["project_id"])
+        self.assertEqual(Path(finished["project_path"]).resolve(), Path(branch["project_path"]).resolve())
+        self.assertNotEqual(Path(finished["project_path"]).resolve(), Path(source["project_path"]).resolve())
         original = self.client.get(f"/v1/chat/conversations/{conversation_id}").json()
         self.assertEqual(original["current_run_id"], source_run["id"])
         self.assertNotIn("A separate follow-up", str(original["transcript"]))

@@ -6,6 +6,8 @@ import copy
 import json
 import tempfile
 import unittest
+import httpx
+from openai import BadRequestError
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -120,7 +122,7 @@ class ToolRoundTripModel:
                 }],
             )
         self.exchange = messages
-        return AIMessage(content="workbench-echo-42")
+        return AIMessage(content=json.loads(messages[-1].content)["receipt"])
 
     def close(self) -> None:
         self.closed = True
@@ -203,6 +205,10 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertNotEqual(baseline, setup_fingerprint(changed), "runtime build changes must invalidate evidence")
 
         changed = copy.deepcopy(self.deployment)
+        changed.server_props.default_generation_settings = {"params": {"temperature": 2, "reasoning_format": "none"}}
+        self.assertNotEqual(baseline, setup_fingerprint(changed), "observed generation defaults must invalidate evidence")
+
+        changed = copy.deepcopy(self.deployment)
         changed.inference_identity["bundle_files"][1]["sha256"] = "new-projector-hash"
         self.assertNotEqual(baseline, setup_fingerprint(changed), "projector identity changes must invalidate evidence")
 
@@ -261,7 +267,9 @@ class CapabilityProbeTests(unittest.TestCase):
         self.assertEqual(evidence.observations["tool_call_id"], "call_probe_42")
         self.assertEqual(model.tool_declarations, [PROBE_TOOL])
         self.assertEqual(model.invoke_count, 2)
-        self.assertEqual(model.exchange[-1], ToolMessage(content="workbench-echo-42", tool_call_id="call_probe_42"))
+        self.assertEqual(model.exchange[-1].tool_call_id, "call_probe_42")
+        self.assertEqual(json.loads(model.exchange[-1].content)["text"], "workbench-echo-42")
+        self.assertTrue(evidence.observations["tool_result_consumed"])
         self.assertTrue(model.closed)
 
         restored = self.store.get_deployment(self.deployment.id)
@@ -305,6 +313,62 @@ class CapabilityProbeTests(unittest.TestCase):
         persisted = self.store.list_capability_evidence(self.deployment.id)
         self.assertEqual(len(persisted), 1)
         self.assertEqual(persisted[0]["observations"]["answer"], "READY so far")
+
+    def test_tool_probe_rejects_repeating_prompt_without_reading_tool_result(self) -> None:
+        class IgnoredResult(ToolRoundTripModel):
+            def invoke(self, messages):
+                result = super().invoke(messages)
+                return AIMessage(content="workbench-echo-42") if self.invoke_count > 1 else result
+        evidence = run_capability_probe(FakeManager(self.store, self.deployment), self.deployment.id,
+            CapabilityProbeRequest(capability="tools"), model_factory=lambda *args, **kwargs: IgnoredResult())
+        self.assertEqual(evidence.status, "failed")
+        self.assertFalse(evidence.observations["tool_result_consumed"])
+
+    def test_image_probe_requires_both_distinct_images_and_rejects_wrong_substring(self) -> None:
+        class Images:
+            def __init__(self, answers):
+                self.answers = iter(answers)
+                self.images = []
+            def invoke(self, messages):
+                self.images.append(messages[0].content[1]["image_url"]["url"])
+                return AIMessage(content=next(self.answers))
+        for answers, expected in ((["red", "blue"], "passed"), (["red", "red"], "failed"),
+                                  (["The image is blue, not red.", "blue"], "failed")):
+            with self.subTest(answers=answers):
+                model = Images(answers)
+                evidence = run_capability_probe(FakeManager(self.store, self.deployment), self.deployment.id,
+                    CapabilityProbeRequest(capability="image"), model_factory=lambda *args, **kwargs: model)
+                self.assertEqual(evidence.status, expected)
+                self.assertEqual(len(set(model.images)), 2)
+
+    def test_cleanup_failure_still_saves_rerunnable_inconclusive_evidence(self) -> None:
+        class CloseFailure:
+            def stream(self, messages):
+                yield AIMessageChunk(content="READY")
+            def close(self):
+                raise RuntimeError("fixture cleanup failure")
+        manager = FakeManager(self.store, self.deployment)
+        for _ in range(2):
+            evidence = run_capability_probe(manager, self.deployment.id, CapabilityProbeRequest(capability="text_stream"),
+                model_factory=lambda *args, **kwargs: CloseFailure())
+            self.assertEqual(evidence.status, "inconclusive")
+            self.assertEqual(evidence.observations["observed_status"], "passed")
+            self.assertEqual(evidence.observations["cleanup_error_type"], "RuntimeError")
+        restored = RecordStore(self.paths).list_capability_evidence(self.deployment.id)
+        self.assertEqual(len(restored), 2)
+        self.assertNotEqual(restored[0]["id"], restored[1]["id"])
+
+    def test_rejected_feature_request_preserves_actionable_setup_specific_failure(self) -> None:
+        class Rejected(StructuredModel):
+            def invoke(self, messages):
+                raise BadRequestError("Tools and native grammar cannot be combined", response=httpx.Response(400,
+                    request=httpx.Request("POST", "http://fixture/chat/completions")), body={"error": "unsupported combination"})
+        record = run_capability_probe(FakeManager(self.store, self.deployment), self.deployment.id,
+            CapabilityProbeRequest(capability="structured_native"), model_factory=lambda *args, **kwargs: Rejected(""))
+        self.assertEqual(record.status, "failed")
+        self.assertEqual(record.observations["status_code"], 400)
+        self.assertIn("cannot be combined", record.observations["error"])
+        self.assertIn("does not establish universal", record.note)
 
 
 class UserContentBoundaryTests(unittest.TestCase):

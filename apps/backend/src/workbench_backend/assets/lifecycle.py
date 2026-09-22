@@ -22,6 +22,7 @@ from workbench_backend.assets.service import (
     _event_tool_calls,
     _tool_invocation_succeeded,
     _tool_result_paths,
+    _tool_result_hash,
 )
 from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
@@ -339,7 +340,7 @@ def _successful_file_calls(run: AgentRun) -> list[dict[str, Any]]:
     calls = [
         item
         for item in [*run.tool_invocations, *_event_tool_calls(run)]
-        if _tool_name(item) in WRITE_TOOLS and _tool_invocation_succeeded(item)
+        if (_tool_name(item) in WRITE_TOOLS or (_tool_result_hash(item) and _tool_result_paths(item))) and _tool_invocation_succeeded(item)
     ]
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []

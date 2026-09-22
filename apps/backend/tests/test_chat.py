@@ -149,6 +149,21 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_listing_skips_conversation_deleted_after_list_snapshot(self) -> None:
+        removed = self._create(title='Deleted during refresh')
+        retained = self._create(title='Still available')
+        store = self.app.state.chat.store
+        listed = store.list_conversations()
+        response = self.client.request('DELETE', f'/v1/chat/conversations/{removed["id"]}', json={'execute': True})
+        self.assertEqual(response.status_code, 200, response.text)
+        # A concurrent list may already have read the pre-deletion snapshot.
+        with patch.object(self.app.state.app_store, 'list_conversations', return_value=listed):
+            response = self.client.get('/v1/chat/conversations')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item['id'] for item in response.json()], [retained['id']])
+        self.assertIsNone(store.get(removed['id']))
+        self.assertEqual(self.client.get(f'/v1/chat/conversations/{removed["id"]}').status_code, 404)
+
     def test_chat_calls_the_same_embedded_harness(self) -> None:
         conversation = self._create()
         self.assertEqual(conversation["harness"], "deepagents")
@@ -383,14 +398,15 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIsNone(conversation["project_path"])
         self.assertFalse(conversation["filesystem_tools_available"])
         self.assertFalse(conversation["shell_tools_available"])
-        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user"])
+        self.assertEqual(conversation["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
         started = self._start(conversation["id"], task="Echo no-project.")
         self.assertFalse(started["filesystem_tools_available"])
         self.assertFalse(started["shell_tools_available"])
-        self.assertEqual(started["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user"])
+        self.assertEqual(started["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
         run = started["current_run"]
-        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user"])
-        self.assertEqual(run["presented_tools"], ["echo", "time_now", "write_todos", "ask_user"])
+        self.assertEqual(run["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
+        self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/"])
+        self.assertEqual(run["presented_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory"])
         self.assertIsNone(run["project_path"])
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
@@ -1345,6 +1361,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(body["current_run"]["status"], "completed")
 
     def test_start_rejected_while_cancel_requested(self) -> None:
+        import asyncio
         hold = threading.Event()
         previous = self.app.state.harness
         set_generate_hold(hold)
@@ -1352,8 +1369,19 @@ class ChatHarnessTests(unittest.TestCase):
         self.addCleanup(hold.set)
         self.addCleanup(previous.close)
 
+        class SettlingCancellationModel(ScriptedChatModel):
+            async def _agenerate(self, *args, **kwargs):
+                # Keep cancellation cleanup pending deliberately. Native async
+                # cancellation otherwise settles before the later API reads.
+                operation = asyncio.create_task(super()._agenerate(*args, **kwargs))
+                try:
+                    return await asyncio.shield(operation)
+                except asyncio.CancelledError:
+                    await operation
+                    raise
+
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
-            return ScriptedChatModel(write_then_reply(), hold=hold)
+            return SettlingCancellationModel(write_then_reply(), hold=hold)
 
         self.app.state.harness = HarnessService(
             lambda: self.manager,
@@ -1429,15 +1457,13 @@ class ChatHarnessTests(unittest.TestCase):
             for call in message.tool_calls
             if call.get("id") == "call_write"
         ]
-        self.assertEqual(len(calls), 1, "the original model tool call remains in durable history")
+        self.assertEqual(calls, [], "a model aborted before completion must not invent a durable tool call")
         results = [
             message
             for message in messages
             if isinstance(message, ToolMessage) and message.tool_call_id == "call_write"
         ]
-        self.assertEqual(len(results), 1, "cancelled tool call receives one durable protocol result")
-        self.assertEqual(results[0].status, "error")
-        self.assertIn("Completion is unconfirmed", results[0].content)
+        self.assertEqual(results, [], "no synthetic result exists for a tool call the model never delivered")
         follow = self._start(conversation["id"], task="Follow-up after confirmed cancel.")
         self.assertNotEqual(follow["current_run"]["id"], first_run_id)
         self.assertEqual(follow["current_run_id"], follow["current_run"]["id"])
@@ -1505,7 +1531,7 @@ class ChatHarnessTests(unittest.TestCase):
         reopened = self.client.get(f"/v1/chat/conversations/{conversation['id']}")
         self.assertEqual(reopened.status_code, 200, reopened.text)
         self.assertEqual(reopened.json()["area_project_path"], original_path)
-        self.assertEqual(reopened.json()["area_id"], original_path)
+        self.assertEqual(reopened.json()["area_id"], conversation["area_id"])
         self.assertEqual(reopened.json()["area_label"], self.project.name)
 
         branch = self.client.post(
@@ -1517,7 +1543,7 @@ class ChatHarnessTests(unittest.TestCase):
         body = branch.json()
         self.assertEqual(body["source_conversation_id"], conversation["id"])
         self.assertEqual(body["area_project_path"], original_path)
-        self.assertEqual(body["area_id"], original_path)
+        self.assertEqual(body["area_id"], conversation["area_id"])
         self.assertEqual(body["area_label"], self.project.name)
         self.assertNotEqual(body["project_path"], original_path)
         branch_project_path = Path(body["project_path"])
@@ -2286,7 +2312,8 @@ class ChatHarnessTests(unittest.TestCase):
         first_run_id = resumed.json()["current_run_id"]
         wait_for_status(self.client, first_run_id, "running")
 
-        reconciled = self.app.state.chat.reconcile_saved_queue_on_startup()
+        with patch("workbench_backend.chat.service.utc_now", return_value="2099-01-01T00:00:00+00:00"):
+            reconciled = self.app.state.chat.reconcile_saved_queue_on_startup()
         self.assertEqual(reconciled, 0)
         dispatched = self.app.state.chat.dispatch_idle_queued(conversation["id"])
         self.assertEqual(dispatched, 0)
@@ -2326,7 +2353,7 @@ class ChatHarnessTests(unittest.TestCase):
             deployment_id=self.deployment_id,
             task="Recover missing run id.",
             input_message_id="queue-recover-input",
-            enabled_tools=["echo", "time_now", "write_todos", "ask_user"],
+            enabled_tools=["echo", "time_now", "write_todos", "ask_user", "propose_memory"],
             presented_tools=[],
             created_at=now,
             updated_at=now,
@@ -2404,7 +2431,7 @@ class ChatHarnessTests(unittest.TestCase):
             deployment_id=self.deployment_id,
             task="Uncertain retry.",
             input_message_id="uncertain-retry",
-            enabled_tools=["echo", "time_now", "write_todos", "ask_user"],
+            enabled_tools=["echo", "time_now", "write_todos", "ask_user", "propose_memory"],
             presented_tools=[],
             created_at=utc_now(),
             updated_at=utc_now(),
@@ -2496,7 +2523,7 @@ class ChatHarnessTests(unittest.TestCase):
             deployment_id=self.deployment_id,
             task="Already completed.",
             input_message_id="startup-head",
-            enabled_tools=["echo", "time_now", "write_todos", "ask_user"],
+            enabled_tools=["echo", "time_now", "write_todos", "ask_user", "propose_memory"],
             presented_tools=[],
             created_at=utc_now(),
             updated_at=utc_now(),

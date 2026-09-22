@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.agents.structured import OutputSchemaRequest
+from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 
@@ -27,7 +28,13 @@ class ChatMessage(BaseModel):
 
 
 class ChatConversationCreateRequest(BaseModel):
-    deployment_id: str
+    deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    presented_tools: list[str] | None = None
+    per_request_overrides: dict[str, Any] | None = None
+    connection_ids: list[str] | None = None
+    instructions: str | None = None
     project_path: str | None = None
     workspace_id: str | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -50,6 +57,10 @@ class ChatStartRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     output_schema: OutputSchemaRequest | None = None
     deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] | None = None
+    instructions: str | None = None
     profile_id: str | None = None
     inherit_deployment_settings: bool = True
     per_request_overrides: dict[str, Any] | None = None
@@ -95,6 +106,7 @@ class ChatDraftUpdateRequest(BaseModel):
 
 
 class ChatQueueItem(BaseModel):
+    instruction_layers: list[InstructionLayer] | None = None
     id: str
     task: str
     run_id: str | None = None
@@ -189,6 +201,13 @@ class ChatConversation(BaseModel):
     source_checkpoint_id: str | None = None
     branch_head_checkpoint_id: str | None = None
     deployment_id: str
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    setup_overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
+    setup_cleared_fields: list[str] = Field(default_factory=list)
+    presented_tools: list[str] | None = None
+    connection_ids: list[str] | None = None
+    per_request_overrides: dict[str, Any] | None = None
     profile_id: str | None = None
     inherit_deployment_settings: bool = True
     project_path: str | None = None

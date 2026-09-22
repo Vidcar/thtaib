@@ -425,17 +425,16 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
       await tick();
     });
 
-    assert.ok(button(renderer, "Reuse selected").props.disabled, "reuse must be disabled without a destination callback");
+    assert.ok(button(renderer, "Use in Chat").props.disabled, "reuse must be disabled without a destination callback");
 
     await act(async () => {
-      button(renderer, "Preview").props.onClick();
+      renderer.root.findByProps({ "aria-label": "Preview a.txt" }).props.onClick();
       await tick();
     });
     assert.ok(previewCalls.at(-1).address.includes("session_id=source_session"), "preview should use selected asset source session scope");
 
-    const previewButtons = renderer.root.findAll((node) => node.type === "button" && textOf(node).includes("Preview"));
     await act(async () => {
-      previewButtons[1].props.onClick();
+      renderer.root.findByProps({ "aria-label": "Preview b.txt" }).props.onClick();
       await tick();
     });
     assert.ok(previewCalls.at(-1).address.includes("session_id=other_session"), "all-retained preview should not omit access scope");
@@ -467,7 +466,11 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("second"), "latest preview should stay visible");
-    assert.ok(!textOf(renderer.root).includes("first"), "stale preview response should be ignored");
+    assert.equal(textOf(renderer.root.findByProps({ className: "file-preview-content" })), "second", "stale preview response should be ignored");
+
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Preview a.txt" }).props.onClick(); await tick(); });
+    previewDefers.get("asset_a").resolve(jsonResponse({ id: "asset_a", filename: "a.txt", content_type: "text/plain", size_bytes: 5, sha256: "sha", preview: "first", truncated: false, source_status: "changed" }));
+    await act(async () => { await tick(); });
 
     await act(async () => {
       button(renderer, "Open full text").props.onClick();
@@ -476,17 +479,16 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
     assert.ok(textOf(renderer.root).includes("full retained text"));
     assert.ok(textOf(renderer.root).includes("Source changed; showing retained copy"));
 
-    const checkboxes = renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox");
     await act(async () => {
-      checkboxes[0].props.onChange({ target: { checked: true } });
-      checkboxes[1].props.onChange({ target: { checked: true } });
+      renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } });
+      renderer.root.findByProps({ "aria-label": "Select b.txt" }).props.onChange({ target: { checked: true } });
     });
     await act(async () => {
-      button(renderer, "Preview delete").props.onClick();
+      button(renderer, "Delete").props.onClick();
       await tick();
     });
     await act(async () => {
-      button(renderer, "Delete affected retained copies").props.onClick();
+      button(renderer, "Delete saved files").props.onClick();
       await tick();
     });
     assert.deepEqual(deleteRequestedIds, ["asset_a"], "delete confirmation must request only deletable affected ids");

@@ -197,6 +197,8 @@ function makeHarness(options = {}) {
     createdConversation: conversation("conv_new", "New conversation", null),
     requests: {
       commands: [],
+      creates: [],
+      resolutions: [],
       registers: [],
       cancels: [],
       streams: [],
@@ -245,6 +247,7 @@ function makeHarness(options = {}) {
     assets: new Map(options.assets ? options.assets.map((asset) => [asset.id, asset]) : []),
     chatGetCounts: new Map(),
     deploymentRequests: 0,
+    conversationListError: options.conversationListError ?? null,
   };
 
   const server = createServer((req, res) => {
@@ -255,6 +258,9 @@ function makeHarness(options = {}) {
     req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       try {
+        if (req.method === "GET" && url.pathname === "/v1/projects") { json(res, 200, options.projects ?? []); return; }
+        if (req.method === "GET" && url.pathname === "/v1/agent-setups") { json(res, 200, options.agentSetups ?? []); return; }
+        if (req.method === "POST" && url.pathname === "/v1/setup-resolution") { const payload = JSON.parse(body); state.requests.resolutions.push(payload); json(res, 200, await options.resolveSetup?.(payload) ?? { configuration: {}, instruction_layers: [] }); return; }
         if (req.method === "GET" && url.pathname === "/v1/deployments") {
           state.deploymentRequests += 1;
           const override = typeof options.deployments === "function"
@@ -334,6 +340,7 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/chat/conversations") {
+          if (state.conversationListError) { json(res, state.conversationListError.status, { error: state.conversationListError.message }); return; }
           json(res, 200, Object.values(state.conversations)
             .filter(item => url.searchParams.get("include_archived") === "true" || !item.archived));
           return;
@@ -375,7 +382,7 @@ function makeHarness(options = {}) {
           if (barrier) {
             await barrier.promise;
           }
-          json(res, 200, responseConversation);
+          json(res, responseConversation ? 200 : 404, responseConversation ?? { error: "Unknown Chat conversation", code: "chat_missing" });
           return;
         }
         if (req.method === "PATCH" && conversationMatch) {
@@ -480,6 +487,10 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "POST" && url.pathname === "/v1/chat/conversations") {
+          const payload = JSON.parse(body);
+          state.requests.creates.push(payload);
+          const project = options.projects?.find(item => item.id === payload.project_id);
+          if (project) state.createdConversation = { ...state.createdConversation, project_id: project.id, project_path: project.path, area_project_path: project.path, area_id: project.id, area_label: project.name, area_kind: "project" };
           const barrier = state.barriers.chatConversation.get("create");
           if (barrier) {
             await barrier.promise;
@@ -723,7 +734,7 @@ function activeConversationTitle(renderer) {
 
 function assertFreshConversation(renderer, message) {
   assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.className === "nav-item active").length, 0, message);
-  assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false, message);
+  assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false, message);
   assert.equal(selectedRunId(renderer), null, message);
 }
 
@@ -834,6 +845,39 @@ async function waitFor(assertion, label) {
     }
   }
   throw new Error(`${label}: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+async function testStartupRefreshFailureRemainsUsable(vite) {
+  const navigated = [];
+  const harness = makeHarness({ conversationListError: { status: 503, message: "History is temporarily unavailable" } });
+  const renderer = await renderChat(vite, harness, { onNavigate: next => navigated.push(next) });
+  try {
+    await waitFor(() => assert.match(allText(renderer), /History is temporarily unavailable/), "initial history error visible");
+    assert.ok(buttonByAriaLabel(renderer, "New chat"), "history failure retains New chat");
+    assert.ok(buttonByAriaLabel(renderer, "Models"), "history failure retains navigation");
+    assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false, "independent model data remains usable");
+    await act(async () => { buttonByAriaLabel(renderer, "Models").props.onClick(); });
+    await waitFor(() => assert.deepEqual(navigated, ["models"]), "navigation works after load failure");
+    harness.state.conversationListError = null;
+    await act(async () => { button(renderer, "Retry").props.onClick(); });
+    await waitFor(() => button(renderer, "Conversation A"), "retry restores history");
+    assert.doesNotMatch(allText(renderer), /History is temporarily unavailable/);
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testDeletedHistorySelectionRecoversToNewChat(vite) {
+  const harness = makeHarness();
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "history loaded before external deletion");
+    delete harness.state.conversations.conv_a;
+    await act(async () => { button(renderer, "Conversation A").props.onClick(); });
+    await waitFor(() => assert.match(allText(renderer), /no longer available/i), "missing selected chat has clear recovery");
+    assertFreshConversation(renderer, "deleted selection returns to New chat");
+    assert.equal(buttons(renderer, "Conversation A").length, 0, "deleted history entry removed");
+    assert.equal(harness.state.requests.registers.length, 0, "missing chat never registers an interaction thread");
+    assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false);
+  } finally { await closeHarness(renderer, harness); }
 }
 
 async function testHeldRegistrationDoesNotBindOldThread(vite) {
@@ -1367,6 +1411,40 @@ async function testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear(vit
   }
 }
 
+async function testProjectAttachmentScope(vite) {
+  const project = { id: "project_review", name: "Workspace review", path: "D:\\Projects\\Review", canonical_path: "d:\\projects\\review", defaults: { deployment_id: "dep_1" }, active: true };
+  for (const mode of ["picker", "drop"]) {
+    const harness = makeHarness({ aRun: null, threadARun: null, threadNewRun: null, projects: [project], commandRejects: true,
+      resolveSetup: payload => ({ configuration: payload.project_id ? project.defaults : {}, instruction_layers: [] }) });
+    const renderer = await renderChat(vite, harness, { workspaceLaunch: { id: `project-${mode}`, projectId: project.id } });
+    try {
+      await waitFor(() => { const select = renderer.root.findByProps({ "aria-label": "Chat project" }); assert.equal(select.props.value, project.id); assert.equal(select.props.disabled, false); assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false); }, "project launch setup ready");
+      if (mode === "picker") {
+        await act(async () => buttonByAriaLabel(renderer, "Attach files").props.onClick());
+        await waitFor(() => assert.equal(inputByType(renderer, "file").props.disabled, false), "new project attachment picker ready");
+        await act(async () => inputByType(renderer, "file").props.onChange({ target: { files: [testFile("review.csv", "topic,count\nreview,2\n", "text/csv")] }, currentTarget: { value: "review.csv" } }));
+      } else {
+        await act(async () => renderer.root.findByProps({ className: "chat-main" }).props.onDrop({ preventDefault() {}, stopPropagation() {}, dataTransfer: { types: ["Files"], files: [testFile("review.csv", "topic,count\nreview,2\n", "text/csv")] } }));
+      }
+      await waitFor(() => assert.match(allText(renderer), /Attached/), "project upload ready");
+      assert.equal(harness.state.requests.creates[0].project_id, project.id, "attachment preparation creates the selected canonical project conversation");
+      assert.equal(harness.state.requests.assetUploads[0].session_id, "conv_new");
+      await act(async () => textarea(renderer).props.onChange({ target: { value: "Use the attached review table." } }));
+      await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+      await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "project attachment submitted");
+      const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+      assert.equal(submitted.project_id, project.id);
+      assert.equal(Object.hasOwn(submitted, "workspace_id"), false, "canonical project submission must not assert a null workspace without its project path");
+      assert.deepEqual(submitted.attachment_ids, ["asset_1"]);
+      assert.equal(harness.state.requests.draftUpdates.at(-1).payload.intended_config.project_id, project.id);
+      await waitFor(() => assert.match(allText(renderer), /Model startup failed before a run was accepted/), "failed project submission remains actionable");
+      assert.equal(textarea(renderer).props.value, "Use the attached review table.", "failed submission preserves project draft text");
+      assert.match(allText(renderer), /review\.csv/, "failed submission preserves the staged source");
+      assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, project.id);
+    } finally { await closeHarness(renderer, harness); }
+  }
+}
+
 async function testWholeChatDropStagesFiles(vite, fresh = false) {
   const harness = makeHarness({ aRun: null, threadARun: null });
   const renderer = await renderChat(vite, harness);
@@ -1415,6 +1493,7 @@ async function testAttentionActivationDoesNotPinConversation(vite) {
   });
   try {
     await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "notification conversation selected");
+    await waitFor(() => assert.ok(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream" && node.props.conversation.id === "conv_a").length), "notification conversation fully bound before switching");
     assert.deepEqual(handled, ["conv_a"], "notification selection is consumed once");
     const previousReads = harness.state.chatGetCounts.get("conv_a");
     await act(async () => { button(renderer, "Conversation B").props.onClick(); });
@@ -2207,7 +2286,7 @@ async function testArchivePreservesDraftBeforeLeaving(vite) {
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "A selected");
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "A selected");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep this newly typed draft" } }));
     await act(async () => button(renderer, "Archive").props.onClick());
     await waitFor(() => assert.equal(harness.state.requests.archives.length, 1), "archive saved");
@@ -2242,7 +2321,7 @@ async function testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation(vit
     assert.equal(buttons(renderer, "Conversation A").length, 0);
     assert.equal(harness.state.requests.registers.some(item => item.conversation_id === "conv_a"), false,
       "late selection must not register a deleted conversation");
-    assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false,
+    assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false,
       "deleting the loading selection returns to a fresh chat");
   } finally {
     held.resolve();
@@ -2258,7 +2337,7 @@ async function testLateDraftSaveCannotRestoreDeletedChat(vite) {
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "A selected");
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "A selected");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Draft response arrives after delete" } }));
     await act(async () => button(renderer, "New chat").props.onClick());
     await waitFor(() => assert.equal(harness.state.requests.draftUpdates.length, 1), "save accepted and response held");
@@ -2283,7 +2362,7 @@ async function testEarlyShellActions(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
-    assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false, "new conversation project field starts editable");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false, "new conversation project field starts editable");
     await act(async () => {
       inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Conversation B" } });
       await Promise.resolve();
@@ -2295,7 +2374,7 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_b")), "B bound for shell actions");
-    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "saved conversation project field is read-only");
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "saved conversation project field is read-only");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "remember this draft" } });
       await Promise.resolve();
@@ -2342,7 +2421,7 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.match(activeConversationTitle(renderer), /Renamed B/), "renamed conversation selected");
-    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, true), "reopened saved conversation project field remains read-only");
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "reopened saved conversation project field remains read-only");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "queue this follow-up" } });
       await Promise.resolve();
@@ -2358,7 +2437,7 @@ async function testEarlyShellActions(vite) {
       button(renderer, "New").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.equal(inputByPlaceholder(renderer, "Leave empty to chat without a project").props.readOnly, false), "new conversation project field is editable");
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false), "new conversation project field is editable");
   } finally {
     await closeHarness(renderer, harness);
   }
@@ -2388,6 +2467,38 @@ async function testProjectionOwnershipLeakReproduction(vite) {
     heldRegister.resolve();
     await closeHarness(renderer, harness);
   }
+}
+
+async function testAgentSetupInheritanceAndFutureTurn(vite) {
+  const setups = ["one", "two"].map(id => ({ id, name: `Agent ${id}`, current_version_id: `${id}-version`, missing_dependencies: [] }));
+  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: false, agentSetups: setups,
+    resolveSetup: payload => ({ agent_setup_version_id: payload.agent_setup_version_id, configuration: { deployment_id: "dep_1", presented_tools: [], memory_version_refs: ["saved-memory-version"], per_request_overrides: { temperature: 0.4 } }, instruction_layers: [{ name: "Agent instructions", content: "Keep these instructions intact" }] }) });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => assert.ok(allText(renderer).includes("Agent one")), "saved agent choices");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "one-version" } }));
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "one-version"), "agent applied");
+    assert.equal(toolsAllowedCheckbox(renderer).props.checked, false, "effective tools-off choice is visible");
+    assert.ok(allText(renderer).includes("Keep these instructions intact"));
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "First task" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "setup-backed submission");
+    const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    assert.equal(submitted.agent_setup_version_id, "one-version");
+    assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "one-version");
+    for (const key of ["deployment_id", "profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "per_request_overrides"]) {
+      assert.equal(Object.hasOwn(submitted, key), false, `untouched ${key} must inherit instead of overwriting the saved setup`);
+    }
+    await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "two-version" } }));
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "two-version"), "next-turn agent selected");
+    assert.equal(harness.state.requests.commands[0].payload.params.metadata.workbench.agent_setup_version_id, "one-version", "changing next-turn setup cannot mutate the in-flight request");
+    await act(async () => { toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: true } }); textarea(renderer).props.onChange({ target: { value: "Queue the next task" } }); });
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "next task queued");
+    const queued = harness.state.requests.queues[0].payload;
+    assert.equal(queued.agent_setup_version_id, "two-version");
+    assert.deepEqual(queued.presented_tools, ["echo"], "an explicit tools-on edit must replace an inherited empty list");
+  } finally { await closeHarness(renderer, harness); }
 }
 
 const vite = await createViteServer({
@@ -2420,6 +2531,9 @@ try {
     console.log("Projection ownership leak reproduction exposed the broken state.");
   } else {
     const cases = [
+    ["startup refresh failure remains usable", testStartupRefreshFailureRemainsUsable],
+    ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
+    ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],
     ["attention selection consumed", testAttentionActivationDoesNotPinConversation],
     ["attention navigation saves current draft", testExternalAttentionNavigationPreservesDraft],
     ["whole-chat file drop", testWholeChatDropStagesFiles],
@@ -2444,6 +2558,7 @@ try {
     ["accepted draft next save uses incremented revision", testAcceptedDraftNextSaveUsesIncrementedRevision],
     ["queued draft clear preserves later draft", testQueuedDraftClearDoesNotEraseLaterDraft],
     ["attachment-only SDK submit metadata", testAttachmentOnlySdkSubmitKeepsMetadata],
+    ["project attachment immutable scope", testProjectAttachmentScope],
     ["queued submit attachment/config capture", testQueuedSubmitKeepsAttachmentsToolsAndOverrides],
     ["persisted draft attachment/config reload", testPersistedDraftRestoresAttachmentsAndIntendedConfig],
     ["late upload navigation guard", testLateUploadAfterNavigationDoesNotAttachToNewConversation],

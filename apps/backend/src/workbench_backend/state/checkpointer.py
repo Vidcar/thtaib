@@ -7,16 +7,71 @@ id, recorded in ``application.sqlite``.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
+from concurrent.futures import Future
 from pathlib import Path
+from typing import Any, Coroutine, TypeVar
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+import aiosqlite
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from workbench_backend.paths import CHECKPOINTS_DB_NAME
 
-_HOLDERS: dict[str, tuple[sqlite3.Connection, SqliteSaver]] = {}
+_HOLDERS: dict[str, _CheckpointOwner] = {}
 _LOCK = threading.Lock()
+T = TypeVar("T")
+
+
+class _CheckpointOwner:
+    """One loop for the shared graph driver, saver and loop-bound clients."""
+
+    def __init__(self, path: Path) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._serve, name="workbench-agent-loop", daemon=True)
+        self.thread.start()
+        try:
+            self.saver = self.submit(self._open(path)).result()
+        except BaseException:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join()
+            raise
+
+    def _serve(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+        self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+        self.loop.run_until_complete(self.loop.shutdown_default_executor())
+        self.loop.close()
+
+    async def _open(self, path: Path) -> AsyncSqliteSaver:
+        conn = await aiosqlite.connect(str(path))
+        try:
+            saver = AsyncSqliteSaver(conn)
+            await saver.setup()
+            return saver
+        except BaseException:
+            await conn.close()
+            raise
+
+    def submit(self, coroutine: Coroutine[Any, Any, T]) -> Future[T]:
+        return asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+
+    def close(self) -> None:
+        try:
+            self.submit(self._close()).result()
+        finally:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self.thread.join()
+
+    async def _close(self) -> None:
+        # Harness shutdown settles owned graph tasks before this boundary.
+        try:
+            async with self.saver.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)"):
+                pass
+        finally:
+            await self.saver.conn.close()
 
 
 def conversation_state(path: Path, thread_id: str) -> dict:
@@ -38,7 +93,7 @@ def conversation_state(path: Path, thread_id: str) -> dict:
     return dict(compiled.get_state({"configurable": {"thread_id": thread_id}}).values or {})
 
 
-def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
+def open_sqlite_checkpointer(path: Path) -> AsyncSqliteSaver:
     """Return the LangGraph saver for ``checkpoints.sqlite``.
 
     This is the only module that opens the checkpointer database. Callers must
@@ -56,13 +111,37 @@ def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
     with _LOCK:
         holder = _HOLDERS.get(key)
         if holder is not None:
-            return holder[1]
-        conn = sqlite3.connect(key, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        saver = SqliteSaver(conn)
-        saver.setup()
-        _HOLDERS[key] = (conn, saver)
-        return saver
+            return holder.saver
+        holder = _CheckpointOwner(resolved)
+        _HOLDERS[key] = holder
+        return holder.saver
+
+
+def submit_checkpoint_task(path: Path, coroutine: Coroutine[Any, Any, T]) -> Future[T]:
+    """Schedule common execution on the saver's owning loop."""
+    saver = open_sqlite_checkpointer(path)
+    return asyncio.run_coroutine_threadsafe(coroutine, saver.loop)
+
+
+def run_checkpoint_task(path: Path, coroutine: Coroutine[Any, Any, T]) -> T:
+    """Bridge synchronous application entry points, never create a second driver."""
+    saver = open_sqlite_checkpointer(path)
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+    if current_loop is saver.loop:
+        coroutine.close()
+        raise RuntimeError("Checkpoint owner must await async graph operations directly.")
+    return submit_checkpoint_task(path, coroutine).result()
+
+
+def checkpoint_history(path: Path, config: dict, *, limit: int | None = None) -> list:
+    """Materialize history on its owner; partial sync iteration leaks cursors."""
+    saver = open_sqlite_checkpointer(path)
+    async def read() -> list:
+        return [item async for item in saver.alist(config, limit=limit)]
+    return run_checkpoint_task(path, read())
 
 
 def close_sqlite_checkpointer(path: Path) -> None:
@@ -88,15 +167,12 @@ def copy_checkpoints_for_backup(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         holder = _HOLDERS.get(str(resolved))
-        if holder is not None:
-            src_conn = holder[0]
-            dest_conn = sqlite3.connect(str(destination))
-            try:
-                src_conn.backup(dest_conn)
-                dest_conn.commit()
-            finally:
-                dest_conn.close()
-            return
+    if holder is not None:
+        async def backup() -> None:
+            async with aiosqlite.connect(str(destination)) as target:
+                await holder.saver.conn.backup(target)
+        holder.submit(backup()).result()
+        return
     if not resolved.exists():
         return
     src_conn = sqlite3.connect(str(resolved))
@@ -125,39 +201,15 @@ def _close_holder(key: str) -> None:
         holder = _HOLDERS.pop(key, None)
     if holder is None:
         return
-    conn, _saver = holder
-    try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.commit()
-    except sqlite3.Error:
-        pass
-    conn.close()
+    holder.close()
 
 
-def checkpoint_ids_from_graph(agent: object, config: dict[str, object]) -> list[str]:
-    """Collect checkpoint ids via LangGraph public APIs only."""
-
-    ids: list[str] = []
-    history = getattr(agent, "get_state_history", None)
-    if callable(history):
-        for snapshot in history(config):
-            cid = _checkpoint_id(snapshot)
-            if cid:
-                ids.append(cid)
-    if not ids:
-        get_state = getattr(agent, "get_state", None)
-        if callable(get_state):
-            cid = _checkpoint_id(get_state(config))
-            if cid:
-                ids.append(cid)
-    seen: set[str] = set()
-    unique: list[str] = []
-    for item in ids:
-        if item in seen:
-            continue
-        seen.add(item)
-        unique.append(item)
-    return unique
+async def acheckpoint_ids_from_graph(agent: object, config: dict[str, object]) -> list[str]:
+    """Read durable linkage through the public async graph API."""
+    ids = [_checkpoint_id(snapshot) async for snapshot in agent.aget_state_history(config)]
+    if not any(ids):
+        ids = [_checkpoint_id(await agent.aget_state(config))]
+    return list(dict.fromkeys(item for item in ids if item))
 
 
 def _checkpoint_id(snapshot: object) -> str | None:

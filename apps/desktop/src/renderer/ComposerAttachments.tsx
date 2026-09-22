@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Icon } from "./Icon";
+import { RetainedImage } from "./ImagePreview";
 import { packet03Api, type AssetContentKind, type RetainedAsset } from "./packet03Api";
 import "./packet03Panels.css";
 
@@ -176,14 +177,14 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
       >
         <div className="packet03-dropzone-main">
           <Icon name="files" size={18} />
-          <span>Drop text or code here</span>
+          <span>Attach files or images</span>
         </div>
         <label className="packet03-file-picker">
           <span>Choose files</span>
           <input
             type="file"
             multiple
-            aria-label="Attach text or code files"
+            aria-label="Attach files or images"
             disabled={cannotAttach}
             onChange={(event) => {
               if (event.target.files) {
@@ -194,7 +195,7 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
           />
         </label>
         <p className="hint">
-          Up to 1 MB per file. A copy stays with this conversation.
+          Images 8 MB · PDF / Word 16 MB · Text / code 1 MB
         </p>
       </div>
 
@@ -203,7 +204,7 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
           {items.map((item) => (
             <li key={item.id} className="packet03-item">
               <div className="packet03-row">
-                <Icon name="files" size={16} />
+                {item.asset?.content_kind === "image" ? <RetainedImage asset={item.asset} sessionId={sessionId ?? undefined} small /> : <Icon name="files" size={16} />}
                 <strong title={item.filename}>{item.filename}</strong>
                 <span className="hint">{formatBytes(item.size)}</span>
                 <span className={item.status === "error" ? "notice notice-warn" : "hint"}>
@@ -226,10 +227,14 @@ async function prepareFile(file: File): Promise<{ contentBase64: string; content
   if (file.size === 0) {
     throw new Error("Empty files cannot be attached.");
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error(`File is too large. Attach text/code files up to ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+  const contentType = normalizedContentType(file);
+  const kind: AssetContentKind = ["image/png", "image/jpeg", "image/webp"].includes(contentType) ? "image" : ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(contentType) ? "document" : codeLike(file.name, contentType) ? "code" : "text";
+  const limit = kind === "image" ? 8_000_000 : kind === "document" ? 16_000_000 : MAX_UPLOAD_BYTES;
+  if (file.size > limit) {
+    throw new Error(`This file is too large. The limit is ${formatBytes(limit)}.`);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (kind === "image" || kind === "document") return { contentBase64: bytesToBase64(bytes), contentType, kind };
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -239,19 +244,18 @@ async function prepareFile(file: File): Promise<{ contentBase64: string; content
   if (hasControlBytes(text)) {
     throw new Error("File looks like binary data. Attach a text or code file.");
   }
-  const contentType = normalizedContentType(file);
   if (!isSupportedTextType(contentType, file.name)) {
     throw new Error("Unsupported attachment type. Attach plain text, Markdown, JSON, YAML, XML, CSV or source code.");
   }
   return {
     contentBase64: bytesToBase64(bytes),
     contentType,
-    kind: codeLike(file.name, contentType) ? "code" : "text",
+    kind,
   };
 }
 
 function normalizedContentType(file: File): string {
-  return file.type || contentTypeFromName(file.name) || "text/plain";
+  return (file.type && file.type !== "application/octet-stream" ? file.type : contentTypeFromName(file.name)) || "text/plain";
 }
 
 function isSupportedTextType(contentType: string, filename: string): boolean {
@@ -270,11 +274,13 @@ function codeLike(filename: string, contentType: string): boolean {
 
 function contentTypeFromName(filename: string): string | null {
   const extension = filename.toLowerCase().split(".").pop() ?? "";
+  const binaryTypes: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
+  if (binaryTypes[extension]) return binaryTypes[extension];
   if (extension === "md") return "text/markdown";
   if (extension === "csv") return "text/csv";
   if (extension === "json") return "application/json";
   if (extension === "xml") return "application/xml";
-  if (extension === "yaml" || extension === "yml") return "application/yaml";
+  if (extension === "yaml" || extension === "yml") return "application/x-yaml";
   if (codeLike(filename, "")) return "text/plain";
   return null;
 }

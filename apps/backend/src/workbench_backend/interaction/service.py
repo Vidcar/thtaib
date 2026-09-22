@@ -30,6 +30,15 @@ def fields(value: Any, allowed: set[str], label: str) -> dict[str, Any]:
     return value
 
 
+def _without_file_preimages(data: dict[str, Any]) -> dict[str, Any]:
+    # Full preimages belong to the run's file review, not every replay event.
+    for change in data.get("file_changes", []):
+        for image in (change.get("before"), change.get("after")):
+            if image is not None:
+                image["text"] = None
+    return data
+
+
 class InteractionService:
     def __init__(self, store: Any, harness: Any, chat: Any) -> None:
         self.store = store
@@ -52,14 +61,14 @@ class InteractionService:
         # Captured model context keeps its existing redaction/expiry owner.
         # Never create non-expiring copies in the protocol replay log.
         data["model_requests"] = []
-        return data
+        return _without_file_preimages(data)
 
     def display_values(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         result = copy.deepcopy(snapshot)
         workbench = result.get("workbench", {})
         run = workbench.get("run")
         if run and run.get("id"):
-            workbench["run"] = self.harness.get_run(run["id"]).model_dump(mode="json")
+            workbench["run"] = _without_file_preimages(self.harness.get_run(run["id"]).model_dump(mode="json"))
         result["workbench"] = WorkbenchInteractionMetadata.model_validate(workbench).model_dump(
             mode="json",
             exclude_none=True,

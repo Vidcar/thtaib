@@ -8,6 +8,7 @@ import {
 } from "./packet03Api";
 import "./ChatRetainedFiles.css";
 import { Icon } from "./Icon";
+import { RetainedImage } from "./ImagePreview";
 
 export interface ChatRetainedFilesProps {
   conversationId: string;
@@ -258,6 +259,7 @@ export function ChatRetainedFiles({
             <ul>
               {assets.map((asset) => (
                 <li key={asset.id} className="chat-retained-file-card">
+                  {asset.content_kind === "image" ? <RetainedImage asset={asset} sessionId={conversationId} /> : null}
                   {compact ? <button className="retained-file-name" type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)} title={`Preview ${asset.filename}`}><Icon name="files" /><span>{asset.filename}</span><small>{formatBytes(asset.size_bytes)}</small></button> : <label className="check-row">
                     <input type="checkbox" checked={selectedIds.includes(asset.id)} onChange={(event) => toggle(asset.id, event.target.checked)} />
                     <strong>{asset.filename}</strong>
@@ -271,7 +273,7 @@ export function ChatRetainedFiles({
                   {asset.observation ? <p className="hint">{asset.observation}</p> : null}
                   <div className="chat-retained-files-actions">
                     {compact ? <button type="button" onClick={() => onReuse([asset.id])}>Use again</button> : <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)}>Preview</button>}
-                    <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset, true)}>Open text</button>
+                    {asset.content_kind !== "image" ? <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset, true)}>Open text</button> : null}
                     {window.workbench?.saveAsset ? (
                       <button type="button" disabled={busy === asset.id} onClick={() => void saveCopy(asset)}>Save copy</button>
                     ) : null}

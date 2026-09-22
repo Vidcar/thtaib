@@ -8,9 +8,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from workbench_backend.agents.context import ContextObservation
+from workbench_backend.agents.file_changes import ProjectFileChange
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
+from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.knowledge.schemas import KnowledgeBinding, RedactionMode
 from workbench_backend.state.schemas import RelatedFile
@@ -158,7 +160,7 @@ class PendingInterrupt(BaseModel):
     interrupt_id: str | None = None
     namespace: list[str] = Field(default_factory=list)
     kind: Literal["deepagents_interrupt_on", "ask_user"] = "deepagents_interrupt_on"
-    environment: Literal["windows_host_shell"] = "windows_host_shell"
+    environment: Literal["windows_host_shell", "tool_actions", "user_input"] = "windows_host_shell"
     isolation: Literal["none"] = "none"
     note: str = HOST_SHELL_NOTE
     action_requests: list[PendingInterruptAction] = Field(default_factory=list)
@@ -182,7 +184,12 @@ class InterruptDecisionRequest(BaseModel):
 class AgentStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    deployment_id: str
+    deployment_id: str | None = None
+    project_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] | None = None
+    retained_asset_ids: list[str] = Field(default_factory=list, max_length=32)
+    instructions: str | None = None
     per_request_overrides: dict[str, Any] | None = None
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -228,11 +235,18 @@ class AgentRun(BaseModel):
     id: str
     status: AgentRunStatus = AgentRunStatus.queued
     deployment_id: str
+    project_id: str | None = None
+    agent_setup_id: str | None = None
+    agent_setup_version_id: str | None = None
+    connection_ids: list[str] = Field(default_factory=list)
+    connection_snapshots: list[ConnectionSnapshot] = Field(default_factory=list)
+    retained_asset_ids: list[str] = Field(default_factory=list, max_length=32)
     task: str
     input_message_id: str | None = None
     content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]
+    framework_read_paths: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None
     criteria: TaskCriteria = Field(default_factory=TaskCriteria)
@@ -240,6 +254,7 @@ class AgentRun(BaseModel):
     events: list[AgentEvent] = Field(default_factory=list)
     model_requests: list[ModelRequestCapture] = Field(default_factory=list)
     tool_invocations: list[dict[str, Any]] = Field(default_factory=list)
+    file_changes: list[ProjectFileChange] = Field(default_factory=list)
     completion: CompletionReport | None = None
     output_schema: OutputSchemaRequest | None = None
     structured_output: StructuredOutputResult | None = None

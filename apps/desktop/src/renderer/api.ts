@@ -1,4 +1,4 @@
-import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
+import type { SchemaBundleProjectors, SchemaCapabilityEvidence, SchemaCapabilityProbeReport, SchemaHubRepository, SchemaChatConversationCreateRequest, SchemaChatStartRequest } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
   BundleConfigurationOptions,
@@ -14,7 +14,6 @@ import type {
   LabCase,
   LabRestore,
   LabResult,
-  KnowledgeActor,
   KnowledgeConfig,
   KnowledgeEntry,
   KnowledgeKind,
@@ -47,7 +46,14 @@ export function backendUrl(): string {
   return window.workbench?.backendUrl ?? "http://127.0.0.1:8000";
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Electron main injects X-Workbench-Local-Token. The renderer must not.
   const response = await fetch(`${backendUrl()}${path}`, {
     ...init,
@@ -58,7 +64,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const body = (await response.json().catch(() => ({}))) as T & { error?: string; code?: string };
   if (!response.ok) {
-    throw new Error(body.error ?? `${response.status} ${path}`);
+    throw new ApiError(body.error ?? `${response.status} ${path}`, response.status, body.code);
   }
   return body;
 }
@@ -116,8 +122,10 @@ export const api = {
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
   modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
-  capabilityProbe: (id: string, capability: string) => request<{ id: string; capability: string; status: string; tested_at: string; note?: string | null; observations: Record<string, unknown> }>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
-  capabilityStatus: (id: string) => request<{ current_support: Record<string, string> }>(`/v1/compatibility/deployments/${id}/probes`),
+  modelProjectors: (id: string) => request<SchemaBundleProjectors>(`/v1/bundles/${id}/projectors`),
+  selectModelProjector: (id: string, path: string | null) => request<ModelBundle>(`/v1/bundles/${id}/projector`, { method: "PUT", body: JSON.stringify({ path }) }),
+  capabilityProbe: (id: string, capability: string) => request<SchemaCapabilityEvidence>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
+  capabilityStatus: (id: string) => request<SchemaCapabilityProbeReport>(`/v1/compatibility/deployments/${id}/probes`),
   previewSettings: (startup: object, per_request: object, agent: object) =>
     request<SettingsBags>("/v1/settings/preview", {
       method: "POST",
@@ -135,8 +143,8 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   profiles: () => request<RunProfile[]>("/v1/profiles"),
-  deletionPreview: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview`),
-  deleteModelRecord: (kind: "bundle" | "profile", id: string) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}`, { method: "DELETE" }),
+  deletionPreview: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview${kind === "bundle" && permanent ? "?permanent=true" : ""}`),
+  deleteModelRecord: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}${kind === "bundle" && permanent ? "?permanent=true" : ""}`, { method: "DELETE" }),
   deploymentProfileChanges: (id: string) => request<DeploymentProfileChanges>(`/v1/deployments/${id}/profile-changes`),
   updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object }) =>
     request<RunProfile>(`/v1/profiles/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
@@ -201,19 +209,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  createChatConversation: (payload: {
-    deployment_id: string;
-    profile_id?: string;
-    inherit_deployment_settings?: boolean;
-    project_path?: string;
-    workspace_id?: string;
-    memory_version_refs?: string[];
-    skill_version_refs?: string[];
-    protected_instruction_version_refs?: string[];
-    knowledge_version_refs?: string[];
-    embedding_deployment_id?: string;
-    retrieval_project_paths?: string[];
-  }) =>
+  createChatConversation: (payload: Omit<SchemaChatConversationCreateRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean }) =>
     request<ChatConversation>("/v1/chat/conversations", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -232,21 +228,7 @@ export const api = {
     request<ChatConversation>(`/v1/chat/conversations/${id}/draft`, { method: "PUT", body: JSON.stringify(payload) }),
   startChat: (
     id: string,
-    payload: {
-      task: string;
-      presented_tools?: string[];
-      deployment_id?: string;
-      profile_id?: string | null;
-      inherit_deployment_settings?: boolean;
-      project_path?: string | null;
-      workspace_id?: string | null;
-      memory_version_refs?: string[];
-      skill_version_refs?: string[];
-      protected_instruction_version_refs?: string[];
-      knowledge_version_refs?: string[];
-      embedding_deployment_id?: string | null;
-      retrieval_project_paths?: string[];
-    },
+    payload: Omit<SchemaChatStartRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean },
   ) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/start`, {
       method: "POST",
@@ -254,21 +236,7 @@ export const api = {
     }),
   enqueueChatTurn: (
     id: string,
-    payload: {
-      task: string;
-      presented_tools?: string[];
-      deployment_id?: string;
-      profile_id?: string | null;
-      inherit_deployment_settings?: boolean;
-      project_path?: string | null;
-      workspace_id?: string | null;
-      memory_version_refs?: string[];
-      skill_version_refs?: string[];
-      protected_instruction_version_refs?: string[];
-      knowledge_version_refs?: string[];
-      embedding_deployment_id?: string | null;
-      retrieval_project_paths?: string[];
-    },
+    payload: Omit<SchemaChatStartRequest, "inherit_deployment_settings"> & { inherit_deployment_settings?: boolean },
   ) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/queue`, {
       method: "POST",
@@ -335,21 +303,20 @@ export const api = {
     content: string;
     scope_id?: string;
     display_name?: string;
-    provenance: { actor: KnowledgeActor; run_id?: string; note?: string };
   }) =>
     request<KnowledgeEntry>("/v1/knowledge/entries", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  editKnowledgeEntry: (id: string, content: string, base_version: string, actor: KnowledgeActor) =>
+  editKnowledgeEntry: (id: string, content: string, base_version: string) =>
     request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/edit`, {
       method: "POST",
-      body: JSON.stringify({ content, base_version, provenance: { actor } }),
+      body: JSON.stringify({ content, base_version }),
     }),
-  revertKnowledgeEntry: (id: string, target_version_id: string, base_version: string, actor: KnowledgeActor) =>
+  revertKnowledgeEntry: (id: string, target_version_id: string, base_version: string) =>
     request<KnowledgeEntry>(`/v1/knowledge/entries/${id}/revert`, {
       method: "POST",
-      body: JSON.stringify({ target_version_id, base_version, provenance: { actor } }),
+      body: JSON.stringify({ target_version_id, base_version }),
     }),
   knowledgeVersions: (id: string) => request<KnowledgeVersion[]>(`/v1/knowledge/entries/${id}/versions`),
   createContextCapture: (content: string) =>

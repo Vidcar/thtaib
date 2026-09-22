@@ -1,0 +1,8 @@
+.lifecycle-action { min-width: 0; }
+.actions > .lifecycle-action:has(.lifecycle-preview) { flex-basis: 100%; }
+.lifecycle-preview { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); overflow-wrap: anywhere; }
+.lifecycle-preview :is(p, ul) { margin: 0; }
+.lifecycle-preview > strong { font-size: 13px; }
+.lifecycle-consumers { display: grid; gap: 8px; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; }
+.lifecycle-consumers > li { display: grid; gap: 3px; font-size: 12px; }
+.lifecycle-consumers > li > span { color: var(--muted); }

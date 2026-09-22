@@ -35,9 +35,35 @@ DEFAULT_OUTPUT_RESERVATION = 512
 TOKEN_MARGIN_RATIO = 0.08
 _stream_chunk_count: contextvars.ContextVar[int] = contextvars.ContextVar("adapter_stream_chunk_count", default=0)
 _request_telemetry: contextvars.ContextVar[RequestTelemetry | None] = contextvars.ContextVar("adapter_request_telemetry", default=None)
+_async_observer: contextvars.ContextVar[_AsyncObservation | None] = contextvars.ContextVar("adapter_async_observer", default=None)
 _SECRET_TEXT_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b")
 _SECRET_KEYS = {"api_key", "authorization", "token", "access_token", "refresh_token", "secret", "password"}
 _pending_async_closes: set[asyncio.Task[None]] = set()
+
+
+class _AsyncObservation:
+    """Keep bounded measurement publication off the graph/saver loop.
+
+    RequestTelemetry already limits updates to four per second. Chain these
+    callbacks in order and drain them before finishing the model call, so final
+    measurements cannot race lifecycle publication or the next request's reset.
+    """
+
+    def __init__(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        self.callback = callback
+        self.pending: asyncio.Task[None] | None = None
+
+    def __call__(self, sample: dict[str, Any]) -> None:
+        previous = self.pending
+        async def publish() -> None:
+            if previous is not None:
+                await previous
+            await asyncio.to_thread(self.callback, sample)
+        self.pending = asyncio.create_task(publish())
+
+    async def flush(self) -> None:
+        if self.pending is not None:
+            await asyncio.shield(self.pending)
 
 DIRECT_CHAT_KEYS = (
     "temperature",
@@ -206,7 +232,8 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             _add_reasoning_replay(payload, args[0])
         if self._context_guard is not None:
             self._context_guard(payload)
-        _request_telemetry.set(RequestTelemetry(self._generation_observer) if self._generation_observer else None)
+        observer = _async_observer.get() or self._generation_observer
+        _request_telemetry.set(RequestTelemetry(observer) if observer else None)
         return payload
 
     def _create_chat_result(
@@ -250,6 +277,8 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             _reset_context_token(telemetry_token)
 
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
+        observer = _AsyncObservation(self._generation_observer) if self._generation_observer else None
+        observer_token = _async_observer.set(observer)
         token = _stream_chunk_count.set(0)
         telemetry_token = _request_telemetry.set(None)
         combined: ChatGenerationChunk | None = None
@@ -258,6 +287,8 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             async for chunk in super()._astream(*args, **kwargs):
                 telemetry = _request_telemetry.get()
                 combined = chunk if combined is None else combined + chunk
+                if observer is not None:
+                    await observer.flush()
                 yield chunk
             _raise_for_invalid_completed_tool_calls(combined)
             if telemetry is not None:
@@ -268,8 +299,25 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             _capture_stream_error(self._capture_sink, exc, _stream_chunk_count.get())
             raise
         finally:
-            _reset_context_token(token)
-            _reset_context_token(telemetry_token)
+            try:
+                if observer is not None:
+                    await observer.flush()
+            finally:
+                _reset_context_token(observer_token)
+                _reset_context_token(token)
+                _reset_context_token(telemetry_token)
+
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> ChatResult:
+        observer = _AsyncObservation(self._generation_observer) if self._generation_observer else None
+        observer_token = _async_observer.set(observer)
+        try:
+            return await super()._agenerate(*args, **kwargs)
+        finally:
+            try:
+                if observer is not None:
+                    await observer.flush()
+            finally:
+                _reset_context_token(observer_token)
 
     def _convert_chunk_to_generation_chunk(
         self,

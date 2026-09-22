@@ -87,6 +87,28 @@ class ModelBundle(BaseModel):
     disk_matches: bool = True
 
 
+class ProjectorSelectionRequest(BaseModel):
+    path: str | None
+
+
+class ProjectorCandidate(BaseModel):
+    path: str
+    name: str
+    size_bytes: int
+    selected: bool = False
+    metadata_name: str | None = None
+    architecture: str | None = None
+    projector_type: str | None = None
+    compatibility: Literal["unverified"] = "unverified"
+    inspection_error: str | None = None
+
+
+class BundleProjectors(BaseModel):
+    bundle_id: str
+    selected_path: str | None = None
+    candidates: list[ProjectorCandidate] = Field(default_factory=list)
+
+
 class ImportProgress(BaseModel):
     stage: ImportStage = ImportStage.queued
     message: str | None = None
@@ -243,11 +265,13 @@ class DuplicateProfileRequest(BaseModel):
 
 
 class LifecycleConsumer(BaseModel):
-    kind: Literal["profile", "deployment", "chat", "lab_case", "agent_run"]
+    kind: Literal["profile", "deployment", "chat", "lab_case", "agent_run", "import_job", "file", "project", "agent_setup_version", "knowledge", "knowledge_version", "setup_defaults", "chat_queue", "memory_proposal", "automatic_save_policy"]
     id: str
     label: str | None = None
     live: bool = False
     retained: bool = True
+    future_use: bool = False
+    effect: str | None = None
 
 
 class DeleteFilePlan(BaseModel):
@@ -258,8 +282,10 @@ class DeleteFilePlan(BaseModel):
 
 
 class DeletePreview(BaseModel):
-    target_kind: Literal["profile", "bundle"]
+    target_kind: Literal["profile", "bundle", "project", "agent_setup", "knowledge", "skill_package", "connection", "credential"]
     target_id: str
+    target_label: str | None = None
+    summary: str | None = None
     blockers: list[LifecycleConsumer] = Field(default_factory=list)
     consumers: list[LifecycleConsumer] = Field(default_factory=list)
     files: list[DeleteFilePlan] = Field(default_factory=list)

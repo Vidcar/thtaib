@@ -127,7 +127,7 @@ class ChatContinuityTests(unittest.TestCase):
                 "scope": "project",
                 "kind": "memory",
                 "content": content,
-                "scope_id": "proj-continuity",
+                "scope_id": self.client.post("/v1/projects", json={"path": str(self.project)}).json()["id"],
                 "display_name": "continuity-memory",
                 "provenance": HUMAN,
             },

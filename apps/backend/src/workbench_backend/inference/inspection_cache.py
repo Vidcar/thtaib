@@ -21,7 +21,7 @@ INSPECTION_SCHEMA = 1
 def bundle_identity(bundle: ModelBundle) -> list[Any]:
     """Stat plus a small edge fingerprint invalidates edited/replaced files."""
     return [bundle.managed_root, bundle.primary_path, [[item.sha256, item.size_bytes, item.role.value,
-        item.ownership, list(_cache_key(Path(item.path)))] for item in bundle.files]]
+        item.ownership, list(_cache_key(Path(item.path)))] for item in {item.path: item for item in [*bundle.files, *bundle.companions]}.values()]]
 
 
 def cached_inspection(
@@ -53,6 +53,6 @@ def cached_inspection(
     if not unchanged:
         raise ManagerError("Model files changed during inspection. Refresh the model details to retry.",
                            code="model_changed_during_inspection", status_code=409)
-    store.put_setting(key, json.dumps({"schema": INSPECTION_SCHEMA, "identity": identity,
+    store.put_bundle_setting(bundle.id, key, json.dumps({"schema": INSPECTION_SCHEMA, "identity": identity,
         "value": value.model_dump(mode="json"), "inspected_at": inspected_at}))
     return value, False, inspected_at

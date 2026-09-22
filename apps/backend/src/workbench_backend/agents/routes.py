@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentStartRequest, InterruptDecisionRequest
+from workbench_backend.agents.file_changes import ProjectFileChangeView
 from workbench_backend.agents.tools import enabled_catalogue
 from workbench_backend.chat.service import ChatService
 
@@ -40,6 +41,16 @@ def start_agent_run(request: Request, body: AgentStartRequest) -> object:
 @router.get("/agent-runs/{run_id}")
 def get_agent_run(request: Request, run_id: str) -> object:
     return get_harness(request).get_run(run_id)
+
+
+@router.get("/agent-runs/{run_id}/file-changes", response_model=list[ProjectFileChangeView])
+def list_file_changes(request: Request, run_id: str) -> list[ProjectFileChangeView]:
+    return get_harness(request).file_changes(run_id)
+
+
+@router.post("/agent-runs/{run_id}/file-changes/{change_id}/reverse", response_model=ProjectFileChangeView)
+def reverse_file_change(request: Request, run_id: str, change_id: str) -> ProjectFileChangeView:
+    return get_harness(request).reverse_file_change(run_id, change_id)
 
 
 @router.post("/agent-runs/{run_id}/cancel")

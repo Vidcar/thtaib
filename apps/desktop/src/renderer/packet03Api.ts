@@ -24,7 +24,7 @@ export async function packet03Request<T>(path: string, init?: RequestInit): Prom
 
 export type RetainedAssetOrigin = "upload" | "verified_output";
 export type RetainedAssetScope = "session" | "project";
-export type AssetContentKind = "text" | "code";
+export type AssetContentKind = "text" | "code" | "image" | "document";
 export type RetainedAssetSourceStatus = "retained_only" | "unchanged" | "changed" | "missing" | "unavailable";
 
 export interface RetainedAsset {
@@ -38,7 +38,10 @@ export interface RetainedAsset {
   filename: string;
   content_type: string;
   content_kind: AssetContentKind;
-  encoding: "utf-8";
+  encoding: "utf-8" | "base64";
+  image_width?: number | null;
+  image_height?: number | null;
+  extraction?: { parser: string; status: "complete" | "no_text"; note?: string | null } | null;
   size_bytes: number;
   sha256: string;
   observed_at: string;
@@ -58,6 +61,8 @@ export interface RetainedAssetPreview {
   sha256: string;
   preview: string;
   truncated: boolean;
+  image_data_url?: string | null;
+  extraction?: RetainedAsset["extraction"];
   source_status: RetainedAssetSourceStatus;
 }
 
@@ -65,8 +70,9 @@ export interface RetainedAssetContent {
   id: string;
   filename: string;
   content_type: string;
-  encoding: "utf-8";
+  encoding: "utf-8" | "base64";
   text: string;
+  content_base64?: string | null;
   sha256: string;
   size_bytes: number;
   source_status: RetainedAssetSourceStatus;
@@ -89,7 +95,7 @@ export interface RetainedAssetDeletionPreview {
   note: string;
 }
 
-export type RetainedAssetReuseResult = components["schemas"]["TextContentBlock"][];
+export type RetainedAssetReuseResult = (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[];
 
 export interface RetainedUploadRequest {
   session_id: string;

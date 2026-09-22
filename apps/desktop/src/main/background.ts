@@ -62,7 +62,9 @@ export async function installBackground(openWindow: () => void): Promise<void> {
   ipcMain.handle("workbench:select-path", async (event, kind: unknown) => {
     requireTrustedIpc(event);
     if (kind !== "file" && kind !== "folder") throw new Error("Unsupported selection");
-    const result = await dialog.showOpenDialog({ properties: [kind === "folder" ? "openDirectory" : "openFile"] });
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) throw new Error("The requesting window is unavailable");
+    const result = await dialog.showOpenDialog(parent, { properties: [kind === "folder" ? "openDirectory" : "openFile"] });
     requireTrustedIpc(event);
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
@@ -79,14 +81,17 @@ export async function installBackground(openWindow: () => void): Promise<void> {
     const query = new URLSearchParams();
     if (typeof value.sessionId === "string") query.set("session_id", value.sessionId);
     if (typeof value.projectPath === "string") query.set("project_path", value.projectPath);
-    const asset = await backend<{ text: string; filename: string; sha256: string; size_bytes: number }>(
+    const asset = await backend<{ text: string; encoding: "utf-8" | "base64"; content_base64?: string; filename: string; sha256: string; size_bytes: number }>(
       `assets/${encodeURIComponent(value.assetId)}/content?${query}`);
     requireTrustedIpc(event);
-    const bytes = Buffer.from(asset.text, "utf8");
+    if (asset.encoding === "base64" && typeof asset.content_base64 !== "string") throw new Error("Retained file content is missing");
+    const bytes = asset.encoding === "base64" ? Buffer.from(asset.content_base64!, "base64") : Buffer.from(asset.text, "utf8");
     if (bytes.length !== asset.size_bytes || createHash("sha256").update(bytes).digest("hex") !== asset.sha256) {
       throw new Error("Retained file verification failed");
     }
-    const result = await dialog.showSaveDialog({ title: "Save retained file", defaultPath: path.basename(asset.filename),
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) throw new Error("The requesting window is unavailable");
+    const result = await dialog.showSaveDialog(parent, { title: "Save retained file", defaultPath: path.basename(asset.filename),
       properties: ["showOverwriteConfirmation"] });
     requireTrustedIpc(event);
     if (result.canceled || !result.filePath) return null;

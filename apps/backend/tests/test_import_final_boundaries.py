@@ -147,6 +147,12 @@ class FinalImportBoundaryTests(unittest.TestCase):
         self.assertEqual(bundle.id, finished.bundle_id)
         self.assertTrue(Path(bundle.primary_path or "").is_relative_to(future.resolve()))
 
+        override_path = write_tiny_gguf(self.root / "chosen-projector.gguf", name="selected companion")
+        override = BundleFile(role=FileRole.companion, name=override_path.name, path=str(override_path),
+            sha256=hashlib.sha256(override_path.read_bytes()).hexdigest(), size_bytes=override_path.stat().st_size,
+            ownership="external")
+        self.store.put_bundle(bundle.model_copy(update={"companions": [override]}))
+
         Path(bundle.primary_path or "").write_bytes(b"corrupt")
         repair_job = self.store.put_job(
             ImportJob(
@@ -176,6 +182,8 @@ class FinalImportBoundaryTests(unittest.TestCase):
         self.assertEqual(repaired.status, ImportStatus.complete)
         self.assertEqual(repaired.bundle_id, bundle.id)
         self.assertEqual(Path(bundle.primary_path or "").read_bytes(), files[primary.name])
+        self.assertEqual(self.store.get_bundle(bundle.id).companions, [override])
+        self.assertTrue(override_path.exists())
 
     def test_cancel_during_hash_or_copy_leaves_no_owned_partial_install(self) -> None:
         source = self.root / "source"

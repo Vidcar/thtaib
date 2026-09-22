@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   packet03Api,
@@ -10,8 +10,10 @@ import type { PresentationSettings, PresentationTheme } from "./types";
 import { HoverHelp } from "./HoverHelp";
 import { Icon } from "./Icon";
 import "./packet03Panels.css";
+import "./RecoverySettingsPanel.css";
 
 interface RecoverySettingsPanelProps {
+  children?: ReactNode;
   onPreferencesChanged?: (preferences: PresentationSettings) => void;
   onRestoreCompleted?: (result: BackupRestoreResult) => void;
 }
@@ -42,7 +44,7 @@ function argumentSummary(value: Record<string, unknown>): string {
   return entries.slice(0, 4).map(([key, item]) => `${key}: ${String(item)}`).join(", ");
 }
 
-export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted }: RecoverySettingsPanelProps) {
+export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted, children }: RecoverySettingsPanelProps) {
   const [preferences, setPreferences] = useState<PresentationSettings>(fallbackPresentation);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [preferencesBusy, setPreferencesBusy] = useState(false);
@@ -213,7 +215,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   const preferenceControlsDisabled = !preferencesLoaded || preferencesBusy || refreshInFlight.current;
 
   return (
-    <section className="packet03-panel" aria-label="Recovery and settings">
+    <section className="packet03-panel settings-surface" aria-label="Recovery and settings">
       <div className="packet03-row">
         <h2>Settings</h2>
         <button type="button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
@@ -223,10 +225,10 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
       {message ? <p role="status" className="notice">{message}</p> : null}
 
-      <div className="packet03-grid">
+      <div className="packet03-grid settings-preferences-grid">
         <section className="packet03-item">
           <h3>Appearance</h3>
-          <label>
+          <label className="settings-theme">
             Theme
             <select
               value={preferences.theme}
@@ -245,9 +247,11 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ detailed_streams: event.target.checked })}
             />
-            Expand reasoning and tool details
+            Show reasoning and tool details by default
           </label>
-          <h4>Notifications</h4>
+        </section>
+        <section className="packet03-item">
+          <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
           <label className="check-row">
             <input
               type="checkbox"
@@ -255,7 +259,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
             />
-            Approvals, questions and failures
+            Notify when work needs attention
           </label>
           <label className="check-row">
             <input
@@ -264,14 +268,19 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
             />
-            Completed work
+            Notify when work finishes
           </label>
+          <p className="hint">Attention includes approvals, questions and failures.</p>
         </section>
+      </div>
 
-        <section className="packet03-item">
+      {children}
+
+        <details className="packet03-item settings-permissions">
+          <summary>Saved permissions <span className="hint">{grants.length || "None"}</span></summary>
           <div className="entity-head"><h3>Permissions</h3><HoverHelp title="About saved permissions">Saved approvals are limited to their recorded action, arguments and project. Revoke one to require approval again.</HoverHelp></div>
           {grants.length === 0 ? (
-            <p className="hint">No saved grants.</p>
+            <p className="hint">No saved approvals. Tools will ask when permission is needed.</p>
           ) : (
             <ul className="packet03-list">
               {grants.map((grant) => (
@@ -286,8 +295,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               ))}
             </ul>
           )}
-        </section>
-      </div>
+        </details>
 
       <details className="packet03-item">
         <summary><Icon name="download" size={15} /> Backup</summary>

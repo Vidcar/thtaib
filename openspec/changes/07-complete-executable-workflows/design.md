@@ -27,3 +27,8 @@ The primary journey must be understandable without raw JSON, internal identifier
 Use the checkout's locked versions; these are integration entry points, not permission to upgrade the stack.
 
 - [LangGraph graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)
+## Shared workspace dependency — 2026-09-22
+
+Reuse Packet 04's canonical project identity, versioned setups, Knowledge and skill references, connection lifecycle and common async harness. Workflow nodes select explicit versions and validate missing dependencies at dispatch; they do not create another project, knowledge, credential or file store. Present files, diffs, image outputs and scoped proposals through the shared workspace components, preserving source provenance and dependency-aware deletion.
+
+Packet 04 delivers canonical project IDs, immutable setup versions, backend-owned Knowledge proposal provenance, tested connection IDs and shared lifecycle previews. Workflow configuration and historical run records must reference these identities, freeze intended per-run setup and revalidate current execution dependencies. Shared async model/tool sessions and scoped file-change/source-reference views remain the execution/presentation owners. No executable-workflow task is completed by this foundation.

@@ -8,6 +8,8 @@ import { Notice } from "./Notice";
 import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import { Icon } from "./Icon";
+import { ModelCapabilities } from "./ModelCapabilities";
+import { ModelProjectorControls } from "./ModelProjectorControls";
 import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
 import "./deploymentReadouts.css";
 
@@ -30,16 +32,21 @@ export function DeploymentsPanel({
   bundlesVersion = "",
   initialBundles = EMPTY_BUNDLES,
   initialProfiles = EMPTY_PROFILES,
+  onBundlesChanged,
+  onSelectBundle,
 }: {
   selectedBundleId?: string;
   bundlesVersion?: string;
   initialBundles?: ModelBundle[];
   initialProfiles?: RunProfile[];
+  onBundlesChanged?: () => Promise<void>;
+  onSelectBundle?: (id: string) => void;
 } = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const selection = useRef(selectedBundleId); selection.current = selectedBundleId;
   const hydrated = useRef({ bundle: "", deployment: "" });
   const dirty = useRef(false);
+  const actionPending = useRef(false);
   const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -50,7 +57,6 @@ export function DeploymentsPanel({
   const [loaded, setLoaded] = useState(false);
   const [settings, setSettings] = useState({ ...initialSettings });
   const [configuration, setConfiguration] = useState<BundleConfigurationOptions | null>(null);
-  const [probeResults, setProbeResults] = useState<Record<string, Record<string, string>>>({});
   const [maximumContext, setMaximumContext] = useState<number | null>(null);
   const [layers, setLayers] = useState<number | null>(null);
   const [contextChoices, setContextChoices] = useState<Array<{ value: string; label: string }>>([]);
@@ -71,7 +77,11 @@ export function DeploymentsPanel({
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
   const visibleCurrent = current.filter(d => !extraConnections.includes(d));
-  const history = deployments.filter(d => d.status === "stopped");
+  const selectedCurrent = visibleCurrent.filter(d => d.bundle_id === selectedBundleId);
+  const otherCurrent = visibleCurrent.filter(d => d.bundle_id !== selectedBundleId && bundles.some(bundle => bundle.id === d.bundle_id));
+  const externalCurrent = visibleCurrent.filter(d => d.bundle_id !== selectedBundleId && !bundles.some(bundle => bundle.id === d.bundle_id));
+  const selectedConnections = extraConnections.filter(d => selectedCurrent.some(model => model.endpoint === d.endpoint));
+  const history = deployments.filter(d => d.status === "stopped" && d.bundle_id === selectedBundleId);
   const selectedRunning = current.find(d => d.bundle_id === selectedBundleId && d.health?.healthy);
   const selectedActive = current.find(d => d.bundle_id === selectedBundleId && d.scope === "managed" && d.status !== "failed");
   const connectedAlready = current.some(d => d.endpoint?.replace(/\/$/, "") === endpoint.trim().replace(/\/$/, ""));
@@ -94,10 +104,6 @@ export function DeploymentsPanel({
   async function refresh() {
     const [r, d] = await Promise.all([api.runtime(), api.deployments()]);
     setRuntime(r); setDeployments(d); setLoaded(true); setLoadError("");
-    await Promise.all(d.filter(item => item.health?.healthy).map(async item => {
-      const result = await api.capabilityStatus(item.id);
-      setProbeResults(previous => ({ ...previous, [item.id]: result.current_support }));
-    }));
   }
   useEffect(() => { void refresh().catch(error => setLoadError(errorMessage(error))); }, [bundlesVersion]);
   useEffect(() => {
@@ -163,8 +169,10 @@ export function DeploymentsPanel({
     setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
   }
   async function action(key: string, operation: () => Promise<unknown>) {
+    if (actionPending.current) return;
+    actionPending.current = true;
     setBusy(key); setMessage("");
-    try { await operation(); } catch (error) { setMessage(errorMessage(error)); setMessageTone("error"); } finally { setBusy(""); }
+    try { await operation(); } catch (error) { setMessage(errorMessage(error)); setMessageTone("error"); } finally { actionPending.current = false; setBusy(""); }
   }
   function startup(): Record<string, unknown> {
     const values = startupPayload(settings, advancedStartup, profiles.find(profile => profile.id === profileId)?.bags.startup.requested, changedStartup.current);
@@ -210,17 +218,7 @@ export function DeploymentsPanel({
         {d.health?.healthy ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(`test-${d.id}`, async () => { const result = await api.smoke(d.id); setGeneration(previous => ({ ...previous, [d.id]: result.ok ? result.detail ?? "Text generation succeeded for this check." : `Generation check failed: ${result.detail ?? "No completed response"}` })); })}>Test text generation</button> : null}
       </div>
       {generation[d.id] ? <p role="status">{generation[d.id]}</p> : null}
-      {d.health?.healthy ? <div className="model-probes"><div className="setting-title"><span>Capability probes</span><Help label="Capability probes">Runs a small real request. Results apply to this exact setup; changing the model or settings makes previous results untested.</Help></div><div className="actions">
-        {[["tools", "Tools"], ["text_stream", "Streaming"], ["reasoning", "Thinking"], ["structured_native", "Structured output"], ["image", "Vision"]].map(([capability, label]) => {
-          const unavailable = capability === "image" && d.server_props?.modalities?.vision === false;
-          const status = unavailable ? "unavailable" : probeResults[d.id]?.[capability] ?? "untested";
-          return <button type="button" key={capability} className={`probe-button probe-${status}`} title={`${label}: ${status}.${unavailable ? " This server reports no vision input." : " Run probe."}`} disabled={Boolean(busy) || unavailable} onClick={() => void action(`probe-${d.id}-${capability}`, async () => {
-            const result = await api.capabilityProbe(d.id, capability);
-            setProbeResults(previous => ({ ...previous, [d.id]: { ...previous[d.id], [capability]: result.status } }));
-            setMessageTone(result.status === "passed" ? "ok" : "info"); setMessage(`${label}: ${result.status}${typeof result.observations.error === "string" ? ` · ${result.observations.error}` : ""}`);
-          })}><Icon name={status === "passed" ? "check" : "lab"} size={14} />{label}<span className="hint">{busy === `probe-${d.id}-${capability}` ? "Testing…" : status}</span></button>;
-        })}
-      </div></div> : null}
+      <ModelCapabilities deployment={d} busy={busy} action={action} />
       <details className="technical-details"><summary>Details &amp; applied settings</summary>
         <dl className="model-facts"><div><dt>Connection</dt><dd>{d.endpoint}</dd></div><div><dt>Deployment ID</dt><dd><code>{d.id}</code></dd></div><div><dt>Context reported by server</dt><dd>{ctx ? `${ctx.toLocaleString()} tokens` : "Not reported"}</dd></div><div><dt>Concurrent requests reported by server</dt><dd>{d.server_props?.total_slots ?? "Not reported"}</dd></div><div><dt>Engine version</dt><dd>{d.server_props?.build_info ?? "Not reported"}</dd></div><div><dt>Settings last reported</dt><dd>{d.server_props?.fetched ? new Date(d.server_props.fetched).toLocaleString() : "Not reported"}</dd></div></dl>
         <h4>Launch settings</h4><p className="hint">Values sent when this model was started. Automatic choices may be adjusted by the engine.</p>{readout(d.applied_startup)}
@@ -236,8 +234,10 @@ export function DeploymentsPanel({
   }
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
-    {current.length ? <section className="card running-section"><div className="section-heading"><h3>In use</h3><span className="hint">Available across your workspace</span></div><ul className="plain-list">{visibleCurrent.map(renderDeployment)}</ul>{extraConnections.length ? <details className="technical-details"><summary>Additional connections to these models <span>{extraConnections.length}</span></summary><ul className="plain-list">{extraConnections.map(renderDeployment)}</ul></details> : null}</section> : null}
-    {selected ? <form ref={formRef} className="card model-settings" onSubmit={event => {
+    {otherCurrent.length ? <aside className="other-active-models" aria-label="Other active models"><span className="hint">Also active</span>{otherCurrent.map(d => <button type="button" key={d.id} disabled={!onSelectBundle} onClick={() => onSelectBundle?.(d.bundle_id!)}><span>{bundles.find(bundle => bundle.id === d.bundle_id)?.display_name}</span><StatusBadge {...stateOf(d)} /></button>)}</aside> : null}
+    {selectedCurrent.length ? <section className="card running-section"><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <details className="technical-details"><summary>Additional connections <span>{selectedConnections.length}</span></summary><ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul></details> : null}</section> : null}
+    {selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}
+    {selected ? <details className="card model-setup" open={!selectedActive}><summary>Startup settings <span>· {selected.display_name}</span></summary><form ref={formRef} className="model-settings" onSubmit={event => {
       event.preventDefault(); void action("start", async () => {
         await preview(); const result = await api.startManaged(selectedBundleId, profileId || undefined, startup());
         if (result.status !== "failed") dirty.current = false;
@@ -245,7 +245,6 @@ export function DeploymentsPanel({
         setMessage(result.error ?? (result.health?.healthy ? `${selected.display_name} is ready. Open Chat to get started.` : "Loading your model. Its status will update automatically.")); await refresh();
       });
     }}>
-      <div className="section-heading"><h3>{selected.display_name}</h3><span className="model-format">{selected.quantization ?? "GGUF"}</span></div>
       <div className="section-heading"><span className="hint model-capacity">{modelInfo}</span><button type="button" className="icon-button" aria-label="Refresh model details" title="Re-read model metadata and supported controls" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true)); })}><Icon name="refresh" size={16} /></button></div>
       <label>Saved preset<select value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}><option value="">Custom setup</option>{profiles.filter(profile => !profile.bundle_id || profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}</option>)}</select></label>
       {selectedActive ? <div className="inline-note">{selectedRunning ? `Running with ${selectedRunning.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context` : "the settings shown in Details"}.` : "This model is loading or waiting for a connection."} Stop it before applying a new setup.</div> : null}
@@ -255,10 +254,10 @@ export function DeploymentsPanel({
         {field("fit", "Memory fitting", "Adjust settings that have not been fixed explicitly to fit GPU memory. Large explicit settings can still exceed available memory.", switches)}
         {field("flash_attn", "Flash attention", "Faster, more memory-efficient attention when supported by your GPU and model. Auto lets the engine choose.", [...switches, { value: "auto", label: "Automatic" }])}
       </div>
-      <section className="settings-group"><div className="setting-title"><h4>Performance</h4><Help label="Speculative decoding">MTP is available when the file contains a compatible draft head. Other compatible draft models can be configured in additional settings. Runtime support does not guarantee a speed increase.</Help></div><div className="model-settings-grid">
+      <details className="settings-group"><summary>Speculative decoding <span>{settings.spec_type === "none" ? "Off" : settings.spec_type}</span></summary><div className="setting-title"><Help label="Speculative decoding">MTP is available when the file contains a compatible draft head. Other compatible draft models can be configured in additional settings. Runtime support does not guarantee a speed increase.</Help></div><div className="model-settings-grid">
         {field("spec_type", "Speculative decoding", configuration?.startup_defaults.spec_type?.description ?? "Loading supported modes…", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
         {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens to draft per step. The runtime default is 3.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
-      </div></section>
+      </div></details>
       <details className="settings-group"><summary>Memory &amp; processing</summary><div className="model-settings-grid">
         {field("cache_type_k", "Key cache precision", "Stores attention keys. f16 uses half precision; q8_0 and q4_0 reduce memory use with a possible quality trade-off.", choices(cacheTypes))}
         {field("cache_type_v", "Value cache precision", "Stores attention values. Lower precision saves memory; some combinations require Flash attention.", choices(cacheTypes))}
@@ -288,8 +287,9 @@ export function DeploymentsPanel({
         <button type="submit" className="primary-button" disabled={Boolean(busy) || !runtimeReady || !selected.disk_matches || Boolean(selectedActive)}>{busy === "start" ? "Loading model…" : selectedActive ? "Model is active" : "Start model"}</button>
       </div></footer>
       {settingsPreview ? <details className="technical-details" open><summary>Checked launch settings</summary><p className="hint">Applies on the next start. Final context and memory use are reported after loading.</p>{readout(settingsPreview.startup.applied)}<SettingsNotes unsupported={settingsPreview.startup.unsupported} retired={settingsPreview.startup.retired} /></details> : null}
-    </form> : <div className="card"><h3>Choose a model to get started</h3><p className="hint">Select one from your library, or add a new model.</p></div>}
+    </form></details> : <div className="card"><h3>Choose a model to get started</h3><p className="hint">Select one from your library, or add a new model.</p></div>}
     {message ? <Notice tone={messageTone}>{message}</Notice> : null}
+    {externalCurrent.length ? <details className="card"><summary>Other model servers <span>{externalCurrent.length}</span></summary><ul className="plain-list">{externalCurrent.map(renderDeployment)}</ul></details> : null}
     <details className="card connection-settings"><summary>Connect an existing server</summary><form onSubmit={event => { event.preventDefault(); void action("connect", async () => { const result = await api.attachConnected(endpoint, connectionName || undefined, connectedEmbedder ? { ...DEFAULT_EMBEDDING_STARTUP } : undefined); await refresh(); setMessageTone(result.health?.healthy ? "ok" : "info"); setMessage(result.health?.healthy ? "Server connected and ready." : "Server saved. Check that it is running at this address."); }); }}>
       <p className="hint">Use a model served by another app. Manage its start and stop controls in that app.</p>
       <label>Server address<input type="url" required value={endpoint} onChange={event => setEndpoint(event.target.value)} /></label><label>Name (optional)<input value={connectionName} onChange={event => setConnectionName(event.target.value)} placeholder="My model server" /></label>

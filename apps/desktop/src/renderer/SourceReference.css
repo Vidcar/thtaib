@@ -1,0 +1,12 @@
+.source-reference-link { display: inline-flex; align-items: center; gap: .3rem; border: 0; padding: .08rem .3rem; color: var(--accent); background: var(--bg-raised); font-size: inherit; vertical-align: baseline; max-width: 100%; overflow-wrap: anywhere; }
+.source-reference-link:hover { text-decoration: underline; }
+.read-sources { margin: .2rem 0 .5rem 1.5rem; font-size: .8rem; color: var(--muted); }
+.read-sources ul { list-style: none; padding: .3rem 0; margin: 0; display: grid; gap: .25rem; }
+.source-viewer { width: min(760px, calc(100vw - 40px)); max-height: calc(100vh - 48px); border: 1px solid var(--border); border-radius: 14px; color: var(--text); background: var(--bg-panel); padding: 0; }
+.source-viewer::backdrop { background: #0009; }
+.source-viewer header, .source-viewer footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; }
+.source-viewer header div { display: grid; gap: .25rem; min-width: 0; overflow-wrap: anywhere; }
+.source-viewer header span, .source-viewer footer span { color: var(--muted); font-size: .8rem; }
+.source-viewer pre { padding: 1rem; margin: 0; overflow: auto; max-height: 55vh; white-space: pre-wrap; overflow-wrap: anywhere; border-block: 1px solid var(--border); }
+.source-viewer > p { padding: 0 1rem; }
+.source-viewer footer { flex-wrap: wrap; }

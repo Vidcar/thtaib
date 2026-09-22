@@ -396,11 +396,11 @@ class HostShellHarnessTests(unittest.TestCase):
         def skip_persist(_run: AgentRun) -> None:
             return None
 
-        def skip_resume_reject(*_args: Any, **_kwargs: Any) -> None:
+        async def skip_resume_reject(*_args: Any, **_kwargs: Any) -> None:
             return None
 
         old_harness._persist_and_notify = skip_persist  # type: ignore[method-assign]
-        old_harness._resume_reject_then_stop = skip_resume_reject  # type: ignore[method-assign]
+        old_harness._aresume_reject_then_stop = skip_resume_reject  # type: ignore[method-assign]
         self._retire_old_waiting_harness(old_harness, run_id)
         thread = old_harness._threads.get(run_id)
         self.assertTrue(thread is None or not thread.is_alive())

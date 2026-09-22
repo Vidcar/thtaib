@@ -61,6 +61,7 @@ class RetainedAssetStore:
         project_path: str | None = None,
         origin: str | None = None,
         include_deleted: bool = False,
+        include_extraction_sections: bool = True,
     ) -> list[RetainedAsset]:
         clauses: list[str] = []
         params: list[object] = []
@@ -90,7 +91,10 @@ class RetainedAssetStore:
             params.append(origin)
         if not include_deleted:
             clauses.append("deleted_at IS NULL")
-        sql = "SELECT payload FROM retained_assets"
+        # The Library needs metadata, not every extracted document in memory.
+        # Keep the full immutable record available to reads and backup callers.
+        projection = "payload" if include_extraction_sections else "json_remove(payload, '$.extraction.sections') AS payload"
+        sql = f"SELECT {projection} FROM retained_assets"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY json_extract(payload, '$.observed_at'), id"

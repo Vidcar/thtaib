@@ -305,8 +305,6 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for ``execute`` whenever LocalShellBackend is attached."""
 
-    if not host_shell_requested(run):
-        return None
     def requires_approval(request: ToolCallRequest) -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
@@ -314,7 +312,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             return False
         return execute_requires_approval(request)
 
-    return {
+    result = {
         "execute": {
             "allowed_decisions": ["approve", "reject"],
             "when": requires_approval,
@@ -323,7 +321,30 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
                 "in the bound project working directory."
             ),
         }
-    }
+    } if host_shell_requested(run) else {}
+    for name in ("rename_file", "delete_file"):
+        if name not in run.presented_tools:
+            continue
+        def file_approval(request: ToolCallRequest, name=name) -> bool:
+            call = request.tool_call
+            args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+            return grants is None or not grants.matches(run, name, args)
+        result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
+            "description": "Change a file in this project. Review the exact source and destination before allowing it."}
+    for connection in run.connection_snapshots:
+        if connection.kind != "mcp":
+            continue
+        for selected in connection.tools:
+            name = selected.name
+            if name not in run.presented_tools:
+                continue
+            def external_approval(request: ToolCallRequest, name=name) -> bool:
+                call = request.tool_call
+                args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+                return grants is None or not grants.matches(run, name, args)
+            result[name] = {"allowed_decisions": ["approve", "reject"], "when": external_approval,
+                "description": f"Use {selected.remote_name} through {connection.name}. Review the exact inputs before allowing this external action."}
+    return result or None
 
 
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
@@ -333,7 +354,7 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     if value is None:
         return None
     if value.get("kind") == "ask_user":
-        return PendingInterrupt(kind="ask_user", question=value.get("question"), note="A user answer is required. This is not a permission approval.")
+        return PendingInterrupt(kind="ask_user", question=value.get("question"), environment="user_input", note="A user answer is required. This is not a permission approval.")
     requests = value.get("action_requests")
     reviews = value.get("review_configs")
     if not isinstance(requests, list) or not requests:
@@ -366,7 +387,10 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
         )
     if not actions:
         return None
-    return PendingInterrupt(action_requests=actions)
+    if all(action.name == "execute" for action in actions):
+        return PendingInterrupt(action_requests=actions)
+    return PendingInterrupt(action_requests=actions, environment="tool_actions",
+        note="Review each selected action and its exact inputs. Approval does not grant other tools or allow automatic memory saving.")
 
 
 def reject_decisions_for(pending: PendingInterrupt) -> list[dict[str, str]]:
@@ -375,7 +399,7 @@ def reject_decisions_for(pending: PendingInterrupt) -> list[dict[str, str]]:
     return [
         {
             "type": "reject",
-            "message": "Run cancelled before the host-shell command was approved.",
+            "message": "Run cancelled before this action was approved.",
         }
         for _ in pending.action_requests
     ]

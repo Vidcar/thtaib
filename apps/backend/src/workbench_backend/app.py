@@ -17,6 +17,10 @@ from fastapi.responses import JSONResponse
 from workbench_backend import __version__
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.routes import router as agent_router
+from workbench_backend.agents.setup_routes import router as setup_router
+from workbench_backend.agents.setup_service import SetupService
+from workbench_backend.connections.service import ConnectionService
+from workbench_backend.connections.routes import router as connections_router
 from workbench_backend.chat.routes import router as chat_router
 from workbench_backend.chat.branch_routes import router as branch_router
 from workbench_backend.chat.service import ChatService
@@ -128,7 +132,10 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         application.state.app_store,
         run_lookup=_lookup_run,
     )
-    application.state.knowledge = KnowledgeService(application.state.manager.paths)
+    application.state.knowledge = KnowledgeService(application.state.manager.paths, app_store=application.state.app_store)
+    application.state.connections = ConnectionService(application.state.app_store)
+    application.state.setups = SetupService(application.state.app_store, application.state.manager, application.state.knowledge, connection_available=application.state.connections.available, connection_tools=lambda ident: [tool.name for tool in application.state.connections.get(ident).tools])
+    application.include_router(connections_router)
     application.state.interaction = InteractionService(
         application.state.app_store,
         lambda: application.state.harness,
@@ -181,6 +188,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(preference_router)
     application.include_router(desktop_router)
     application.include_router(agent_router)
+    application.include_router(setup_router)
     application.include_router(lab_router)
     application.include_router(knowledge_router)
     application.include_router(chat_router)

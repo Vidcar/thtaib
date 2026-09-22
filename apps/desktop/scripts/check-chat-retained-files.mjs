@@ -157,7 +157,7 @@ async function checkLibraryMultiSelectReuse(LibraryPanel) {
       updatedChecks[1].props.onChange({ target: { checked: true } });
     });
     await act(async () => {
-      button(renderer, "Reuse selected (2)").props.onClick();
+      button(renderer, "Use in Chat").props.onClick();
     });
     assert.deepEqual(reused.at(-1), ["asset_one", "asset_two"], "library reuse should preserve the full multi-selection");
   } finally {
@@ -209,7 +209,7 @@ function assetCheckboxes(renderer) {
     node.type === "input" &&
     node.props.type === "checkbox" &&
     !node.props.disabled &&
-    node.parent?.findAllByType("strong").length > 0
+    (String(node.props["aria-label"] ?? "").startsWith("Select ") && node.props["aria-label"] !== "Select all visible files" || node.parent?.findAllByType("strong").length > 0)
   ));
 }
 

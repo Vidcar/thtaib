@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from typing import Any, ClassVar
@@ -148,4 +149,4 @@ class ScriptedChatModel(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> ChatResult:
-        return self._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        return await asyncio.to_thread(self._generate, messages, stop=stop, run_manager=run_manager, **kwargs)
