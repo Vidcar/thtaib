@@ -13,4 +13,4 @@
 
 - [x] 2.1 Run backend default/integration, desktop build/regressions, generated contract freshness, strict OpenSpec and diff checks; resolve relevant failures.
 - [x] 2.2 Exercise the built Windows application with real model/tool activity and isolated archive/deletion/metadata checks; record observations and limitations separately from visual acceptance.
-- [ ] 2.3 Review final diff, update handover, commit/push/PR and deliver the rebuilt local application; preserve Packet 03 outstanding acceptance status and owned data.
+- [x] 2.3 Review final diff, update handover, commit/push/PR and deliver the rebuilt local application; preserve Packet 03 outstanding acceptance status and owned data.
