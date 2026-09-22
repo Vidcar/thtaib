@@ -10,10 +10,14 @@ import { ProfilesPanel } from "./ProfilesPanel";
 import { ImportJobsPanel } from "./ImportJobsPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
+import { Help } from "./ModelControls";
+import { Icon } from "./Icon";
+import { PanelResize, usePanelWidth } from "./PanelResize";
 import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 
 export function ModelsPanel() {
+  const [libraryWidth, setLibraryWidth] = usePanelWidth("models-library", 220, 180, 400);
   const [view, setView] = useState<"library" | "add" | "presets">("library");
   const [localBusy, setLocalBusy] = useState(false);
   const [paths, setPaths] = useState<PathsInfo | null>(null);
@@ -75,6 +79,10 @@ export function ModelsPanel() {
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
   }
+  async function browse(kind: "file" | "folder") {
+    try { const path = await window.workbench?.selectPath?.(kind); if (path) setLocalPath(path); }
+    catch (error) { fail(error); }
+  }
 
   if (loadError) {
     return (
@@ -91,9 +99,8 @@ export function ModelsPanel() {
   return (
     <section className="surface models-surface">
       <header className="models-heading">
-        <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Models</h2>
-        <p className="lede">Find your model. Make it your own.</p></div>
-        <button type="button" className="primary-button" onClick={() => setView(view === "add" ? "library" : "add")}>{view === "add" ? "Back to library" : "+ Add model"}</button>
+        <h2>Models</h2>
+        <button type="button" className="primary-button" onClick={() => setView(view === "add" ? "library" : "add")}><Icon name={view === "add" ? "close" : "plus"} size={16} />{view === "add" ? "Close" : "Add model"}</button>
       </header>
       <nav className="model-tabs" aria-label="Model sections">
         <button type="button" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}>My models <span>{bundles.length}</span></button>
@@ -123,8 +130,7 @@ export function ModelsPanel() {
               .catch(fail).finally(() => setLocalBusy(false));
           }}
         >
-          <h3>Add from your computer</h3>
-          <p className="hint">Use a GGUF model you’ve already downloaded.</p>
+          <div className="setting-title"><h3>From your computer</h3><Help label="Local model">Add a downloaded GGUF file or a folder containing its complete shards.</Help></div>
           <label>
             Model file or folder
             <input
@@ -133,12 +139,12 @@ export function ModelsPanel() {
               placeholder="C:\Users\…\Qwen3.8-27B-UD-IQ4_XS.gguf"
             />
           </label>
+          <div className="actions"><button type="button" disabled={!window.workbench?.selectPath || localBusy} onClick={() => void browse("file")}><Icon name="files" size={16} />Browse file</button><button type="button" disabled={!window.workbench?.selectPath || localBusy} onClick={() => void browse("folder")}><Icon name="folder" size={16} />Browse folder</button></div>
           <label>
             Display name (optional)
             <input value={localName} onChange={(event) => setLocalName(event.target.value)} />
           </label>
-          <label className="check-row"><input type="checkbox" checked={copyLocal} onChange={event => setCopyLocal(event.target.checked)} />Copy into managed storage</label>
-          <p className="hint">Turn this off to use your original files in place without another copy. They remain yours and are not deleted when you remove the library entry.</p>
+          <div className="setting-title"><label className="check-row"><input type="checkbox" checked={copyLocal} onChange={event => setCopyLocal(event.target.checked)} />Copy into model storage</label><Help label="Copy model">Turn off to use the original files without another copy. External originals are preserved when this library entry is removed.</Help></div>
           <button type="submit" className="primary-button" disabled={!localPath.trim() || localBusy}>
             {localBusy ? "Adding model…" : "Add model"}
           </button>
@@ -159,8 +165,7 @@ export function ModelsPanel() {
             }).catch((error: unknown) => setHubMessage(errorMessage(error))).finally(() => setHubBusy(false));
           }}
         >
-          <h3>Download from Hugging Face</h3>
-          <p className="hint">Choose the version and size that suit your computer.</p>
+          <h3>From Hugging Face</h3>
           <label>
             Hugging Face link or repository
             <input
@@ -190,8 +195,7 @@ export function ModelsPanel() {
               </select>
             </label> : null}
             {hub.warnings.map((warning) => <p className="hint" key={warning}>{warning}</p>)}
-            <p className="hint">Downloads use temporary space as well as the installed copy. When both locations share a disk, allow roughly twice the selected file size, plus download metadata. Available space is checked before copying.</p>
-            <p className="hint">Read the publisher’s <a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">model guide</a> for recommended settings and supported features.</p>
+            <div className="setting-title"><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide</a><Help label="Download space">Allow room for temporary and installed copies, roughly twice the selected file size on a shared disk. Free space is checked before copying.</Help></div>
             <details><summary>Files and recorded revision</summary>
               <p className="hint">{hub.resolved_revision}</p>
               <ul>{selectedHubFiles.map((file) => <li key={file}>{file}</li>)}</ul>
@@ -215,19 +219,19 @@ export function ModelsPanel() {
         event.preventDefault(); setSearchBusy(true); setSearchError("");
         void api.searchHf(searchQuery).then(results => { setSearchResults(results); if (!results.length) setSearchError("No matching repositories found. Try a different name or enter a repository directly above."); }).catch(error => setSearchError(errorMessage(error))).finally(() => setSearchBusy(false));
       }}>
-        <h3>Search model repositories</h3><p className="hint">Shows up to 20 matches. Inspect a repository’s files before choosing a GGUF variant; search results do not establish compatibility.</p>
+        <div className="setting-title"><h3>Find a model</h3><Help label="Model search">Up to 20 repositories. Select a repository to choose a complete GGUF variant. Search results alone do not verify compatibility.</Help></div>
         <label>Model name or publisher<input value={searchQuery} maxLength={200} onChange={event => setSearchQuery(event.target.value)} placeholder="Model name, GGUF, publisher…" /></label>
         <button disabled={searchBusy || !searchQuery.trim()}>{searchBusy ? "Searching…" : "Search Hugging Face"}</button>
         {searchError ? <p role="status">{searchError}</p> : null}
         <ul className="plain-list">{searchResults.map(result => <li className="entity" key={result.repo_id}><strong>{result.repo_id}</strong>{result.downloads != null ? <p className="hint">{result.downloads.toLocaleString()} reported downloads</p> : null}<button type="button" onClick={() => { setRepoId(result.repo_id); setHub(null); setHubMessage("Repository selected. Use Find model files to inspect its available variants."); }}>Select repository</button></li>)}</ul>
       </form>
       </> : null}
-      {view === "library" ? <div className="models-workspace">
-      <aside className="model-library" aria-label="Your models">
-        <div className="section-heading"><h3>Your library</h3><span className="hint">{bundles.length} models</span></div>
+      {view === "library" ? <div className="models-workspace" style={{ gridTemplateColumns: `${libraryWidth}px minmax(0, 1fr)` }}>
+      <aside className="model-library" aria-label="Your models" style={{ position: "relative" }}>
+        <div className="section-heading"><h3>Installed</h3><span className="hint">{bundles.length}</span></div>
         {loading ? (
           <EmptyState title="Loading your models">
-            Checking model files. This may take a moment.
+            Loading saved model details.
           </EmptyState>
         ) : bundles.length === 0 ? (
           <EmptyState title="Your first model starts here">
@@ -257,11 +261,12 @@ export function ModelsPanel() {
           </ul>
         )}
         {paths ? <details className="library-storage"><summary>Storage location</summary><code>{paths.models}</code></details> : null}
+        <PanelResize label="Resize model library" width={libraryWidth} onResize={setLibraryWidth} min={180} max={400} reset={220} />
       </aside>
       <div className="model-detail">
       <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => bundle.id).join(",")} initialBundles={bundles} initialProfiles={profiles} />
       {selected ? (
-          <details className="card technical-details"><summary>Model files &amp; technical details</summary>
+          <details className="card technical-details"><summary>Files &amp; metadata</summary>
             <p className="hint">Model ID: <code>{selected.id}</code></p>
             <p>
               {selected.files.length} files
@@ -302,7 +307,7 @@ export function ModelsPanel() {
                 void api.inspect(selected.id).then(setInspect).catch(fail);
               }}
             >
-              Read model metadata
+              Inspect metadata
             </button>
             {inspect && inspect.bundle_id === selected.id ? (
               <dl className="meta compact">

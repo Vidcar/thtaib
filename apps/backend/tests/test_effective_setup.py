@@ -24,6 +24,7 @@ from workbench_backend.agents.effective_setup import (
 from workbench_backend.agents.harness import DEFAULT_SYSTEM_PROMPT, HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
+from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import (
@@ -31,6 +32,8 @@ from workbench_backend.inference.schemas import (
     DeploymentStatus,
     ManagementScope,
     ProfileWriteRequest,
+    RunProfile,
+    ServerProperties,
     SettingsBags,
 )
 from workbench_backend.inference.service import ModelManager
@@ -142,6 +145,61 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
 
 class EffectiveSetupResolverTests(unittest.TestCase):
+    def test_model_effort_constraints_apply_to_inherited_presets_and_explicit_overrides(self) -> None:
+        now = utc_now()
+        template = """
+            {%- set resolved_reasoning_effort = reasoning_effort|default('xhigh') -%}
+            {%- if resolved_reasoning_effort == 'high' -%}
+                {%- set resolved_reasoning_effort = 'xhigh' -%}
+            {%- endif -%}
+            {%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') -%}
+                {{- raise_exception('Unsupported reasoning_effort') -}}
+            {%- endif -%}
+        """
+        deployment = Deployment(id="deploy_effort", display_name="effort", scope=ManagementScope.connected,
+            status=DeploymentStatus.running, endpoint="http://127.0.0.1:9/v1", created_at=now, updated_at=now,
+            server_props=ServerProperties(fetched=now, source_url="http://127.0.0.1:9/props", chat_template=template,
+                chat_template_caps={"supports_reasoning_effort": True}),
+            settings=SettingsBags(per_request=resolve_bag({"reasoning_effort": "max"}, PER_REQUEST_KEYS)))
+        profile = RunProfile(id="profile_effort", display_name="effort", bags=deployment.settings,
+            created_at=now, updated_at=now)
+
+        def resolve(*, selected=profile, overrides=None):
+            return resolve_effective_setup(deployment=deployment, profile=selected, knowledge_refs=KnowledgeRefs(),
+                knowledge_versions=[], surface_system_prompt=None, default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+                per_request_overrides=overrides)
+
+        for selected in (None, profile):
+            with self.subTest(source="deployment" if selected is None else "preset"):
+                with self.assertRaises(HarnessError) as raised:
+                    resolve(selected=selected)
+                self.assertEqual(raised.exception.code, "model_reasoning_effort_unsupported")
+                self.assertEqual(raised.exception.details["supported"], ["low", "medium", "xhigh"])
+        for value in ("low", "medium", "xhigh", "high", "default"):
+            with self.subTest(effort=value):
+                setup = resolve(overrides={"reasoning_effort": value})
+                self.assertEqual(setup.bags.per_request.applied["reasoning_effort"], value)
+        for value in ("minimal", [], {"bad": "value"}):
+            with self.subTest(invalid=value), self.assertRaises(HarnessError):
+                resolve(overrides={"reasoning_effort": value})
+
+        deployment.applied_startup = {"reasoning_effort": "max"}
+        with self.assertRaises(HarnessError):
+            resolve(overrides={"reasoning_effort": "default"})
+        setup = resolve(overrides={"reasoning_effort": "low"})
+        self.assertEqual(setup.bags.per_request.applied["reasoning_effort"], "low")
+        deployment.applied_startup = {}
+
+        deployment.server_props.chat_template = None
+        deployment.server_props.chat_template_caps = {}
+        unknown = resolve()
+        self.assertEqual(unknown.bags.per_request.applied["reasoning_effort"], "max")
+        self.assertIn("reasoning_effort", unknown.bags.per_request.unverified)
+        deployment.server_props.chat_template_caps = {"supports_reasoning_effort": False}
+        with self.assertRaises(HarnessError):
+            resolve(overrides={"reasoning_effort": "low"})
+        resolve(overrides={"reasoning_effort": "default"})
+
     def test_compose_includes_protected_content_not_id_only(self) -> None:
         version = KnowledgeVersion(
             id="knv_prot",

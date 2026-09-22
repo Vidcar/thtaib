@@ -21,6 +21,11 @@ try {
   await checkStoppedManagedCopy(ChatModelControls);
   await checkMissingThinkingEffortOptions(ChatModelControls);
   await checkUnsupportedThinkingEffort(ChatModelControls);
+  await checkLoadedSettingsDoNotFollowSelectedProfile(ChatModelControls);
+  await checkThinkingModesAndStaleModelFetch(ChatModelControls);
+  await checkUnsupportedSavedThinkingReset(ChatModelControls);
+  await checkInvalidLoadedThinkingCannotReset(ChatModelControls);
+  await checkAcceptedThinkingAliasAndExplicitDefault(ChatModelControls);
 } finally {
   await vite.close();
 }
@@ -49,8 +54,8 @@ async function checkCompactControls(ChatModelControls) {
   const text = textOf(renderer.toJSON());
   assert.match(text, /Qwen/, "compact button should show selected model");
   assert.match(text, /32k tokens reported by server/, "context readout should use reported server context");
-  assert.match(text, /Thinking effortHigh/, "thinking effort readout should come from selected profile per-request settings");
-  assert.match(text, /4k tokens/, "thinking budget readout should reflect selected profile startup settings");
+  assert.equal(input(renderer, "range").props.value, 2, "thinking effort should come from selected profile per-request settings");
+  assert.match(text, /Loaded thinking budget1k tokens/, "thinking budget must show the loaded model, not the selected response preset");
   const slider = input(renderer, "range");
   assert.equal(slider.props.disabled, false, "supported thinking effort slider should be functional");
   await act(async () => {
@@ -69,7 +74,7 @@ async function checkFetchedThinkingEffortOptions(ChatModelControls) {
   const restore = mockConfigurationOptions({
     per_request_defaults: {
       reasoning_effort: {
-        options: effortOptions(["default", "minimal", "low", "medium", "high", "xhigh", "max"]),
+        options: effortOptions(["low", "medium", "high"]),
       },
     },
   });
@@ -77,7 +82,7 @@ async function checkFetchedThinkingEffortOptions(ChatModelControls) {
   try {
     await act(async () => {
       renderer = create(React.createElement(ChatModelControls, {
-        deployments: [deployment("dep_running", "managed:Qwen", "running", { n_ctx: 32768 })],
+        deployments: [deployment("dep_running", "managed:Gpt-oss", "running", { n_ctx: 32768 })],
         profiles: [],
         selectedDeploymentId: "dep_running",
         selectedProfileId: "",
@@ -94,11 +99,13 @@ async function checkFetchedThinkingEffortOptions(ChatModelControls) {
     });
     const slider = input(renderer, "range");
     assert.equal(slider.props.disabled, false, "configuration-options effort values should enable the thinking slider");
-    assert.equal(slider.props.max, 6, "fetched thinking slider should use the runtime-reported effort count");
+    assert.equal(slider.props.max, 2, "fetched thinking slider should use only the selected model's reported levels");
     await act(async () => {
-      slider.props.onChange({ target: { value: "5" } });
+      slider.props.onChange({ target: { value: "2" } });
     });
-    assert.deepEqual(changes.at(-1), { reasoning_effort: "xhigh" }, "fetched options should emit the selected runtime effort value");
+    assert.deepEqual(changes.at(-1), { reasoning_effort: "high" }, "fetched options should emit the selected model's effort value");
+    assert.equal(renderer.root.findByProps({ className: "chat-model-controls-efforts" }).children.length, 3,
+      "unreported levels must not be added to the model's choices");
   } finally {
     restore();
   }
@@ -196,7 +203,7 @@ async function checkMissingThinkingEffortOptions(ChatModelControls) {
         selectedDeploymentId: "dep_basic",
         selectedProfileId: "",
         inheritDeploymentSettings: true,
-        perRequestOverrides: {},
+        perRequestOverrides: { reasoning_effort: "high" },
         onDeploymentChange: () => {},
         onProfileChange: () => {},
         onInheritDeploymentSettingsChange: () => {},
@@ -206,8 +213,12 @@ async function checkMissingThinkingEffortOptions(ChatModelControls) {
     await act(async () => {
       await Promise.resolve();
     });
-    assert.match(textOf(renderer.toJSON()), /no reported per-message thinking effort options/, "missing affirmative options should disable thinking effort");
-    assert.equal(input(renderer, "range").props.disabled, true, "missing thinking effort options disables slider");
+    assert.match(helpMessage(renderer, "Thinking availability"), /no reported per-message thinking effort options/,
+      "missing affirmative options should explain model-controlled thinking in help");
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0,
+      "unverified thinking effort must not appear as a control");
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Use model default thinking" }).length, 0,
+      "missing capability evidence must not claim that a saved effort is unsupported");
   } finally {
     restore();
   }
@@ -230,8 +241,170 @@ async function checkUnsupportedThinkingEffort(ChatModelControls) {
       onPerRequestOverridesChange: () => { throw new Error("unsupported thinking effort should not emit changes"); },
     }));
   });
-  assert.match(textOf(renderer.toJSON()), /reports that per-message thinking effort is unavailable/, "unsupported thinking effort should explain why slider is unavailable");
-  assert.equal(input(renderer, "range").props.disabled, true, "unsupported thinking effort slider is disabled");
+  assert.match(helpMessage(renderer, "Thinking availability"), /reports that per-message thinking effort is unavailable/,
+    "unsupported thinking effort should explain why it is unavailable in help");
+  assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0,
+    "unsupported thinking effort slider must be absent");
+}
+
+async function checkLoadedSettingsDoNotFollowSelectedProfile(ChatModelControls) {
+  const loaded = deployment("dep_loaded", "managed:Loaded", "running", null);
+  loaded.applied_startup = { ctx_size: 16384, reasoning_budget: 2048 };
+  const props = {
+    deployments: [loaded], profiles: [profile("new_preset", "Large next reply", { ctx_size: 65536, reasoning_budget: 8192 })],
+    selectedDeploymentId: loaded.id, selectedProfileId: "", inheritDeploymentSettings: true,
+    thinkingEffortOptions: effortOptions(["default", "low"]),
+    onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {}, onPerRequestOverridesChange() {},
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
+    const before = renderer.root.findByProps({ className: "chat-model-controls-facts" });
+    assert.match(textOf(before), /Context16k tokens/);
+    assert.match(textOf(before), /Loaded thinking budget2k tokens/);
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, selectedProfileId: "new_preset" })); });
+    const after = renderer.root.findByProps({ className: "chat-model-controls-facts" });
+    assert.match(textOf(after), /Context16k tokens/, "selecting a response preset must not claim the loaded context changed");
+    assert.match(textOf(after), /Loaded thinking budget2k tokens/, "selecting a response preset must not claim the loaded budget changed");
+    assert.doesNotMatch(textOf(after), /64k|8k/);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+  }
+}
+
+async function checkThinkingModesAndStaleModelFetch(ChatModelControls) {
+  const first = deferred();
+  const changes = [];
+  const restore = mockConfigurationOptionsForUrl(async (url) => {
+    if (String(url).includes("deployment_id=dep_effort")) {
+      await first.promise;
+      return configurationOptions(effortOptions(["low", "medium", "high"]));
+    }
+    return { per_request_defaults: { reasoning: { options: [
+      { value: "auto", label: "Model default" }, { value: "on", label: "On" }, { value: "off", label: "Off" },
+    ] }, reasoning_effort: { options: [] } } };
+  });
+  const props = {
+    deployments: [deployment("dep_effort", "managed:Effort model", "running", null), deployment("dep_mode", "managed:On-off model", "running", null)],
+    profiles: [], selectedDeploymentId: "dep_effort", selectedProfileId: "", inheritDeploymentSettings: true,
+    perRequestOverrides: { temperature: 0.7 },
+    onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {},
+    onPerRequestOverridesChange: value => changes.push(value),
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, selectedDeploymentId: "dep_mode" })); });
+    const mode = () => renderer.root.findByProps({ "aria-label": "Thinking mode for this message" });
+    assert.deepEqual(mode().findAllByType("option").map(node => node.props.value), ["default", "on", "off"]);
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0,
+      "an on-off model must not offer effort levels");
+    await act(async () => { first.resolve(); await first.promise; });
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0,
+      "the old model's late response must not add unsupported effort levels to the new selection");
+    assert.deepEqual(mode().findAllByType("option").map(node => node.props.value), ["default", "on", "off"]);
+    for (const value of ["off", "on", "default"]) {
+      await act(async () => mode().props.onChange({ target: { value } }));
+      assert.deepEqual(changes.at(-1), { temperature: 0.7, reasoning: value === "default" ? "auto" : value },
+        "thinking mode must preserve other overrides and explicitly reset to model default");
+    }
+  } finally {
+    first.resolve();
+    if (renderer) await act(async () => renderer.unmount());
+    restore();
+  }
+}
+
+async function checkUnsupportedSavedThinkingReset(ChatModelControls) {
+  const changes = [];
+  const restore = mockConfigurationOptions({ per_request_defaults: {
+    reasoning_effort: { supported: false, source: "unavailable", options: [] },
+    reasoning: { supported: false, source: "unavailable", options: [] },
+  } });
+  const props = {
+    deployments: [deployment("dep_basic", "managed:Basic", "running", null)],
+    profiles: [profile("old_preset", "Other model preset", {}, { reasoning_effort: "high", reasoning: "on" })],
+    selectedDeploymentId: "dep_basic", selectedProfileId: "old_preset", inheritDeploymentSettings: true,
+    perRequestOverrides: { temperature: 0.65, top_p: 0.85 },
+    onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {},
+    onPerRequestOverridesChange: value => changes.push(value),
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
+    assert.match(textOf(renderer.toJSON()), /Thinking settings don't match this model/,
+      "a hidden unsupported inherited effort must have an actionable explanation");
+    assert.equal(renderer.root.findAllByProps({ className: "thinking-chip" }).length, 0,
+      "unsupported inherited thinking must not appear as an applied chip");
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0);
+    const reset = renderer.root.findByProps({ "aria-label": "Use model default thinking" });
+    await act(async () => reset.props.onClick());
+    assert.deepEqual(changes.at(-1), { temperature: 0.65, top_p: 0.85, reasoning_effort: "default", reasoning: "auto" },
+      "reset must explicitly override inherited thinking while preserving sampling");
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, perRequestOverrides: changes.at(-1) })); });
+    assert.doesNotMatch(textOf(renderer.toJSON()), /Thinking settings don't match this model/);
+    assert.equal(renderer.root.findAllByProps({ className: "thinking-chip" }).length, 0);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    restore();
+  }
+}
+
+async function checkInvalidLoadedThinkingCannotReset(ChatModelControls) {
+  const restore = mockConfigurationOptions({ per_request_defaults: {
+    reasoning_effort: { supported: false, source: "unavailable", options: [] },
+  } });
+  const loaded = deployment("dep_loaded_invalid", "managed:Basic", "running", null);
+  loaded.applied_startup.reasoning_effort = "high";
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, {
+      deployments: [loaded], profiles: [], selectedDeploymentId: loaded.id, selectedProfileId: "", inheritDeploymentSettings: true,
+      onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {},
+      onPerRequestOverridesChange() { throw new Error("a message reset cannot repair loaded startup settings"); },
+    })); });
+    assert.match(textOf(renderer.toJSON()), /Loaded thinking needs attention/);
+    assert.match(helpMessage(renderer, "Loaded thinking mismatch"), /Models.*reload/i);
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Use model default thinking" }).length, 0,
+      "reset to loaded default cannot repair an invalid loaded effort");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    restore();
+  }
+}
+
+async function checkAcceptedThinkingAliasAndExplicitDefault(ChatModelControls) {
+  const changes = [];
+  const restore = mockConfigurationOptions({ per_request_defaults: {
+    reasoning_effort: { supported: true, accepted_values: ["low", "medium", "xhigh", "high"], options: effortOptions(["default", "low", "medium", "xhigh"]) },
+  } });
+  const props = {
+    deployments: [deployment("dep_alias", "managed:Template aliases", "running", null)],
+    profiles: [profile("alias_preset", "Saved high", {}, { reasoning_effort: "high" })],
+    selectedDeploymentId: "dep_alias", selectedProfileId: "alias_preset", inheritDeploymentSettings: true,
+    perRequestOverrides: { temperature: 0.45 },
+    onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {},
+    onPerRequestOverridesChange: value => changes.push(value),
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
+    assert.doesNotMatch(textOf(renderer.toJSON()), /Thinking settings don't match this model/,
+      "a template-confirmed alias must not be called unsupported");
+    assert.equal(textOf(renderer.root.findByProps({ className: "thinking-chip" })), "High",
+      "the applied alias must not be mislabeled as model default");
+    assert.equal(input(renderer, "range").props.value, 4, "the slider must represent the applied valid alias");
+    await act(async () => input(renderer, "range").props.onChange({ target: { value: "0" } }));
+    assert.deepEqual(changes.at(-1), { temperature: 0.45, reasoning_effort: "default" },
+      "choosing default must override the inherited effort rather than inherit it again");
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, perRequestOverrides: { temperature: 0.45, reasoning_effort: "max" } })); });
+    assert.match(textOf(renderer.toJSON()), /Thinking settings don't match this model/,
+      "a proven closed template must identify unaccepted inherited or explicit levels");
+    assert.equal(renderer.root.findAllByProps({ className: "thinking-chip" }).length, 0);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    restore();
+  }
 }
 
 function effortOptions(values) {
@@ -249,7 +422,9 @@ function mockConfigurationOptions(body) {
 function mockConfigurationOptionsForUrl(handler) {
   const previous = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    assert.match(String(url), /\/v1\/bundles\/bundle_1\/configuration-options\?deployment_id=dep_/, "component should fetch configuration-options for the selected deployment bundle");
+    const target = new URL(String(url));
+    assert.equal(target.pathname, "/v1/bundles/bundle_1/configuration-options");
+    assert.match(target.searchParams.get("deployment_id") ?? "", /^dep_/, "component should fetch configuration-options for the selected deployment bundle");
     return {
       ok: true,
       json: async () => handler(url),
@@ -340,6 +515,14 @@ function bag(settings, options = {}) {
 
 function selects(renderer) {
   return renderer.root.findAll((node) => node.type === "select");
+}
+
+function helpMessage(renderer, title) {
+  assert.ok(renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === title).length,
+    "the explanation must have a named keyboard-accessible trigger");
+  const help = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "HoverHelp" && node.props.title === title);
+  assert.equal(help.length, 1);
+  return String(help[0].props.children);
 }
 
 function input(renderer, type) {

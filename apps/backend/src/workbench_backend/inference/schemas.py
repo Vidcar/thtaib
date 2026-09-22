@@ -379,6 +379,8 @@ class RuntimeControlDescriptor(BaseModel):
     recommended: Any = None
     observed: Any = None
     maximum: int | None = None
+    supported: bool | None = None
+    accepted_values: list[str] | None = None
     options: list[RuntimeControlOption] = Field(default_factory=list)
 
 
@@ -387,6 +389,9 @@ class GgufRuntimeMetadata(BaseModel):
     name: str | None = None
     context_length: int | None = None
     block_count: int | None = None
+    chat_template: str | None = None
+    nextn_predict_layers: int | None = None
+    has_mtp_tensors: bool = False
 
 
 class BundleConfigurationOptions(BaseModel):

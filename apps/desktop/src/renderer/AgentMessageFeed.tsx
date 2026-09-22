@@ -4,6 +4,7 @@ import type React from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Icon } from "./Icon";
 
 // Markdown presentation follows the safe ReactMarkdown + remark-gfm pattern from
 // langchain-ai/agent-chat-ui at revision 41926d89c9798cebe45a26886d6e437acc5201c1.
@@ -17,10 +18,12 @@ interface MessageParts {
 }
 
 interface ToolBlock {
+  id?: string;
   name: string;
   args?: unknown;
   status?: string;
   result?: unknown;
+  error?: string;
 }
 
 interface DetailSectionProps {
@@ -59,9 +62,13 @@ function stringifyValue(value: unknown): string {
   return value == null ? "" : JSON.stringify(value, null, 2);
 }
 
-function isErrorLike(value: unknown): boolean {
-  const text = stringifyValue(value).toLowerCase();
-  return /\b(error|failed|exception|traceback)\b/.test(text);
+function toolError(tool: ToolBlock): string | undefined {
+  if (tool.error) return tool.error;
+  if (tool.status === "error" || tool.status === "failed") return stringifyValue(tool.result) || "The tool could not complete.";
+  // Successful output can discuss errors, for example a log search.
+  if (tool.status) return undefined;
+  const text = stringifyValue(tool.result);
+  return /^\s*(error|failed|exception|traceback)\b/i.test(text) ? text : undefined;
 }
 
 function imageMarker(part: Record<string, unknown>, index: number): string {
@@ -109,13 +116,26 @@ function parseContent(content: unknown): MessageParts {
       attachments.push(imageMarker(block, attachments.length));
       return;
     }
-    if (blockType === "tool_call" || blockType === "tool_result" || blockType === "tool") {
-      toolBlocks.push({
-        name: String(block.name ?? block.tool_name ?? block.id ?? "tool"),
+    if (["tool_call", "tool_call_chunk", "invalid_tool_call", "tool_result", "tool", "server_tool_call", "server_tool_call_result"].includes(blockType)) {
+      const id = block.tool_call_id ?? block.toolCallId ?? block.callId ?? block.id;
+      const tool: ToolBlock = {
+        id: typeof id === "string" ? id : undefined,
+        name: String(block.name ?? block.tool_name ?? "Tool"),
         args: block.args ?? block.input,
-        status: typeof block.status === "string" ? block.status : undefined,
+        status: typeof block.status === "string" ? block.status : blockType === "tool_call_chunk" ? "preparing" : undefined,
         result: block.result ?? block.output ?? block.content,
-      });
+        error: typeof block.error === "string" ? block.error : undefined,
+      };
+      const previous = tool.id ? toolBlocks.find(item => item.id === tool.id) : undefined;
+      if (previous) {
+        if (tool.name !== "Tool") previous.name = tool.name;
+        if (tool.args !== undefined) previous.args = tool.args;
+        if (tool.result !== undefined) previous.result = tool.result;
+        if (tool.status) previous.status = tool.status;
+        if (tool.error) previous.error = tool.error;
+      } else {
+        toolBlocks.push(tool);
+      }
       return;
     }
     if (typeof block.text === "string") {
@@ -133,6 +153,42 @@ function parseContent(content: unknown): MessageParts {
     attachments,
     toolBlocks,
   };
+}
+
+function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
+  if (messageType(message) !== "tool") return undefined;
+  const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
+  const content = parseContent(message.contentBlocks ?? message.content);
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: content.answer || stringifyValue(message.content) };
+}
+
+function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
+  return {
+    ...block,
+    name: live?.name || (block.name !== "Tool" ? block.name : retained?.name) || "Tool",
+    args: live?.input ?? live?.args ?? block.args,
+    status: retained ? retained.status ?? (toolError(retained) ? "error" : "success") : live?.status ?? block.status,
+    result: retained ? retained.result : live?.status === "finished" ? live.output : block.result,
+    error: retained?.status === "success" ? undefined : live?.error ?? block.error,
+  };
+}
+
+function toolTarget(args: unknown): string {
+  if (typeof args === "string") return args.replace(/\s+/g, " ").slice(0, 100);
+  if (!args || typeof args !== "object") return "";
+  const fields = args as Record<string, unknown>;
+  for (const key of ["file_path", "path", "command", "query", "q", "pattern", "url", "prompt", "description", "text"]) {
+    if (typeof fields[key] === "string" && fields[key]) return fields[key].replace(/\s+/g, " ").slice(0, 100);
+  }
+  return "";
+}
+
+function toolStatus(tool: ToolBlock): string {
+  if (toolError(tool)) return "Failed";
+  if (["finished", "success", "completed"].includes(tool.status ?? "") || tool.result !== undefined) return "Done";
+  if (tool.status === "running") return "Running";
+  if (tool.status === "preparing") return "Preparing";
+  return "Requested";
 }
 
 function safeHref(href: string | undefined): string | undefined {
@@ -249,6 +305,7 @@ function DetailSection({ children, className, defaultOpen, id, onToggle, openSta
         }}
       >
         {summary}
+        <span className="activity-toggle" aria-hidden="true">{open ? "−" : "+"}</span>
       </summary>
       {children}
     </details>
@@ -278,11 +335,11 @@ function ReasoningDetails({
       id={`${messageKey}:reasoning`}
       onToggle={onToggle}
       openStates={openStates}
-      summary="Reasoning"
+      summary={<><Icon name="activity" size={14} /><span className="activity-name">Reasoning</span></>}
     >
-      {reasoning.map((item, index) => (
+      <div className="reasoning-content">{reasoning.map((item, index) => (
         <MarkdownMessage key={index} text={item} />
-      ))}
+      ))}</div>
     </DetailSection>
   );
 }
@@ -316,37 +373,39 @@ function ToolBlockList({
   if (toolBlocks.length === 0) {
     return null;
   }
-  return (
-    <DetailSection
-      className="message-tools"
-      defaultOpen={defaultOpen}
-      id={`${messageKey}:tools`}
-      onToggle={onToggle}
-      openStates={openStates}
-      summary={`Tool activity (${toolBlocks.length})`}
-    >
-      <ul className="plain-list">
-        {toolBlocks.map((tool, index) => (
-          <li key={`${tool.name}-${index}`}>
-            <strong>{tool.name}</strong>
-            {tool.status ? <span className="message-state">{tool.status}</span> : null}
-            {!defaultOpen && isErrorLike(tool.result) ? <p className="notice notice-error">{stringifyValue(tool.result)}</p> : null}
-            {tool.args !== undefined ? (
-              <pre className="code-block">
-                <code>{JSON.stringify(tool.args, null, 2)}</code>
-              </pre>
-            ) : null}
-            {tool.result !== undefined ? <MarkdownMessage text={stringifyValue(tool.result)} /> : null}
-          </li>
-        ))}
-      </ul>
-    </DetailSection>
-  );
+  return <div className="tool-call-list">{toolBlocks.map((tool, index) => {
+    const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
+    const error = toolError(tool);
+    const target = toolTarget(tool.args);
+    return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
+      <DetailSection
+        className="message-tools"
+        defaultOpen={defaultOpen}
+        id={id}
+        onToggle={onToggle}
+        openStates={openStates}
+        summary={<>
+          <Icon name={tool.name === "execute" ? "terminal" : /file|glob|grep|^ls$/.test(tool.name) ? "files" : "activity"} size={14} />
+          <span className="tool-call-name" title={`Inspect ${tool.name} input and output`}>{tool.name}</span>
+          {target ? <span className="tool-call-target" title={target}>{target}</span> : null}
+          <span className="tool-call-state" data-state={error ? "error" : tool.status ?? "requested"}>{toolStatus(tool)}</span>
+        </>}
+      >
+        <div className="tool-call-details">
+          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><pre className="code-block"><code>{stringifyValue(tool.args)}</code></pre></section> : null}
+          {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span><CodeBlock><code>{stringifyValue(tool.result)}</code></CodeBlock></section> : null}
+          {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
+        </div>
+      </DetailSection>
+      {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
+    </div>;
+  })}</div>;
 }
 
-function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>) {
+function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>, toolCalls: AssembledToolCall[]) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const shouldFollow = useRef(true);
+  const hasContent = messages.length > 0 || toolCalls.length > 0;
   const signature = useMemo(
     () =>
       messages
@@ -354,8 +413,8 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
           const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
           return `${message.id ?? ""}:${content.length}:${incompleteMessageIds.has(message.id ?? "") ? "partial" : "done"}`;
         })
-        .join("|"),
-    [incompleteMessageIds, messages],
+        .join("|") + toolCalls.map(call => `${call.callId}:${call.status}:${stringifyValue(call.output).length}:${call.error ?? ""}`).join("|"),
+    [incompleteMessageIds, messages, toolCalls],
   );
 
   useLayoutEffect(() => {
@@ -371,7 +430,7 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     transcript.addEventListener("scroll", onScroll, { passive: true });
     shouldFollow.current = nearBottom();
     return () => transcript.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasContent]);
 
   useLayoutEffect(() => {
     const transcript = rootRef.current?.closest(".transcript");
@@ -404,7 +463,7 @@ export function AgentMessageFeed(props: {
   userMessageText?: (message: BaseMessage) => string | undefined;
 }) {
   const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback, detailedStreams = false } = props;
-  const rootRef = useFollowTranscript(messages, incompleteMessageIds);
+  const rootRef = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
   const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
   const handleDetailToggle = (id: string, open: boolean) => {
     setOpenStates((current) => {
@@ -416,41 +475,44 @@ export function AgentMessageFeed(props: {
       return next;
     });
   };
-  if (messages.length === 0) {
+  if (messages.length === 0 && toolCalls.length === 0) {
     return fallback;
   }
+  const prepared = messages.map((message, index) => {
+    const type = messageType(message);
+    const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
+    return { message, type, key: message.id ?? `${type}-${index}`, parts: parseContent(submittedText ?? message.contentBlocks ?? message.content) };
+  });
+  const resultById = new Map<string, ToolBlock>();
+  const callIds = new Set<string>();
+  for (const item of prepared) {
+    const result = toolResultMessage(item.message);
+    if (result?.id) resultById.set(result.id, result);
+    if (item.type !== "tool") for (const call of item.parts.toolBlocks) if (call.id) callIds.add(call.id);
+  }
+  const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
+  const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
+  const renderTools = (tools: ToolBlock[], key: string) => <ToolBlockList defaultOpen={detailedStreams} messageKey={key} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={tools} />;
   return (
     <div className="message-feed" ref={rootRef}>
-      {messages.map((message, index) => {
-        const type = messageType(message);
+      {prepared.map(({ message, type, key: messageKey, parts }) => {
         const incomplete = Boolean(message.id && incompleteMessageIds.has(message.id));
-        const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
-        const parts = parseContent(submittedText ?? message.contentBlocks ?? message.content);
-        const messageKey = message.id ?? `${type}-${index}`;
-        const compactToolMessage = type === "tool" && !detailedStreams;
-        const toolMessageText = compactToolMessage ? stringifyValue(message.content) : "";
+        const result = toolResultMessage(message);
+        if (result) {
+          // A completed ToolMessage and the SDK's live handle describe the same
+          // call. Keep its result beside the original call in transcript order.
+          if (result.id && callIds.has(result.id)) return null;
+          return <div className="tool-message" key={messageKey}>{renderTools([mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)], messageKey)}</div>;
+        }
+        const messageTools = parts.toolBlocks.map(block => mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined));
+        if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
         return (
           <article key={messageKey} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
             <header>
-              <strong>{type === "tool" && message.name ? `Tool: ${message.name}` : roleLabel(type)}</strong>
+              <strong>{roleLabel(type)}</strong>
               {incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
             </header>
             <div className="message-body">
-              {compactToolMessage ? (
-                <>
-                  {isErrorLike(toolMessageText) ? <p className="notice notice-error">{toolMessageText}</p> : null}
-                  <ToolBlockList
-                    defaultOpen={detailedStreams}
-                    messageKey={`${messageKey}:tool-message`}
-                    onToggle={handleDetailToggle}
-                    openStates={openStates}
-                    toolBlocks={[{ name: message.name ?? "tool", result: toolMessageText }]}
-                  />
-                </>
-              ) : (
-                <MarkdownMessage text={parts.answer} />
-              )}
-              <AttachmentList attachments={parts.attachments} />
               <ReasoningDetails
                 defaultOpen={detailedStreams}
                 messageKey={messageKey}
@@ -458,41 +520,15 @@ export function AgentMessageFeed(props: {
                 openStates={openStates}
                 reasoning={parts.reasoning}
               />
-              <ToolBlockList
-                defaultOpen={detailedStreams}
-                messageKey={messageKey}
-                onToggle={handleDetailToggle}
-                openStates={openStates}
-                toolBlocks={parts.toolBlocks}
-              />
+              <MarkdownMessage text={parts.answer} />
+              <AttachmentList attachments={parts.attachments} />
+              {renderTools(messageTools, messageKey)}
             </div>
             {props.renderMessageFooter?.(message)}
           </article>
         );
       })}
-      {toolCalls.length > 0 ? (
-        <DetailSection
-          className="card"
-          defaultOpen={detailedStreams}
-          id="live-tool-calls"
-          onToggle={handleDetailToggle}
-          openStates={openStates}
-          summary={`Tool activity (${toolCalls.length})`}
-        >
-          <ul className="plain-list">
-            {toolCalls.map((call, index) => (
-              <li key={`${call.id ?? call.name}-${index}`}>
-                <strong>{call.name}</strong>
-                {"status" in call && typeof call.status === "string" ? <span className="message-state">{call.status}</span> : null}
-                {"result" in call && isErrorLike(call.result) ? <p className="notice notice-error">{stringifyValue(call.result)}</p> : null}
-                <pre className="code-block">
-                  <code>{JSON.stringify({ args: call.args ?? {}, result: "result" in call ? call.result : undefined }, null, 2)}</code>
-                </pre>
-              </li>
-            ))}
-          </ul>
-        </DetailSection>
-      ) : null}
+      {renderTools(remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)), "live-tools")}
     </div>
   );
 }

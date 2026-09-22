@@ -596,6 +596,8 @@ export interface RuntimeControlDescriptor {
   observed: string | number | boolean | null;
   maximum: number | null;
   recommended?: number | null;
+  supported?: boolean | null;
+  accepted_values?: string[] | null;
   options: Array<{ value: string | number | boolean | null; label: string; description?: string }>;
 }
 
@@ -605,5 +607,6 @@ export interface BundleConfigurationOptions {
   context_size: RuntimeControlDescriptor;
   gpu_layers: RuntimeControlDescriptor;
   startup_defaults: Record<string, RuntimeControlDescriptor>;
+  per_request_defaults: Record<string, RuntimeControlDescriptor>;
   metadata: Record<string, unknown>;
 }

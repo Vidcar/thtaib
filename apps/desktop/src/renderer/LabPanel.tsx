@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
 import { deploymentOptionLabel, shortId } from "./display";
+import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 import { InteractionStream, useWorkbenchProjection, type WorkbenchStream } from "./InteractionStream";
 import {
   isAgentRunLive,
@@ -147,15 +149,12 @@ export function LabPanel() {
   }
 
   return (
-    <section className="panel">
-      <h2>Lab</h2>
-      <p className="lede">
-        Capture a task, restore it into a clean workspace, and compare a live rerun with a recorded
-        replay.
-      </p>
+    <section className="surface">
+      <header className="surface-head"><div className="entity-head"><h2>Lab</h2><HoverHelp title="About Lab">Capture a task in an isolated workspace, then compare a live rerun with recorded tool replay.</HoverHelp></div></header>
 
+      <div className="grid">
       <div className="card">
-        <h3>Project workspace</h3>
+        <div className="entity-head"><h3>Workspace</h3><HoverHelp title="About the Lab workspace">Create an isolated project containing notes.md. Saving the source changes this Lab workspace, not your everyday project.</HoverHelp></div>
         <label>
           notes.md
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
@@ -176,7 +175,7 @@ export function LabPanel() {
                 .catch(fail);
             }}
           >
-            Create workspace
+            <Icon name="plus" size={14} /> Create workspace
           </button>
           <button
             type="button"
@@ -194,18 +193,18 @@ export function LabPanel() {
                 .catch(fail);
             }}
           >
-            Change parent files
+            <Icon name="edit" size={14} /> Save source
           </button>
         </div>
         {workspace ? (
           <details>
-            <summary>Workspace details</summary>
+            <summary><Icon name="folder" size={14} /> Files and location</summary>
             <p className="hint">
               ID: {workspace.id} · source: {workspace.origin} · path: {workspace.path}
             </p>
+            <pre className="json">{JSON.stringify(files, null, 2)}</pre>
           </details>
         ) : null}
-        <pre className="json">{JSON.stringify(files, null, 2)}</pre>
       </div>
 
       <form
@@ -225,8 +224,7 @@ export function LabPanel() {
             .catch(fail);
         }}
       >
-        <h3>Check tool use</h3>
-        <p className="hint">Ask the model to echo a short message with a tool.</p>
+        <div className="entity-head"><h3>Tool check</h3><HoverHelp title="About the tool check">Asks the selected model to echo a short message using the echo tool. This checks basic tool use, not general model quality.</HoverHelp></div>
         <label>
           Model
           <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
@@ -238,7 +236,7 @@ export function LabPanel() {
           </select>
         </label>
         <button type="submit" disabled={!deploymentId || !workspace}>
-          Run tool check
+          <Icon name="send" size={14} /> Run tool check
         </button>
         {run ? (
           <p>
@@ -246,10 +244,12 @@ export function LabPanel() {
             <span className="badge">{run.status}</span>
           </p>
         ) : null}
+        {run?.error ? <p className="notice notice-error">{run.error}</p> : null}
       </form>
+      </div>
 
       <div className="card">
-        <h3>Capture / restore / rerun</h3>
+        <div className="entity-head"><h3>Compare runs</h3><HoverHelp title="About comparisons">Capture the task, restore a clean copy, then rerun with live tools or replay recorded results. Replay supports comparison; it does not prove live tool capability.</HoverHelp></div>
         <div className="actions">
           <button
             type="button"
@@ -267,7 +267,7 @@ export function LabPanel() {
                 .catch(fail);
             }}
           >
-            Capture case
+            <Icon name="copy" size={14} /> Capture case
           </button>
           <button
             type="button"
@@ -289,7 +289,7 @@ export function LabPanel() {
                 .catch(fail);
             }}
           >
-            Restore into new workspace
+            <Icon name="restore" size={14} /> Restore a copy
           </button>
           <RerunButton
             label={toolModeLabel("live-tool")}
@@ -319,7 +319,7 @@ export function LabPanel() {
                 .catch(fail);
             }}
           >
-            Engine measurement
+            <Icon name="activity" size={14} /> Measure engine
           </button>
         </div>
         {labCase ? (
@@ -336,7 +336,7 @@ export function LabPanel() {
 
       {restore ? (
         <div className="card">
-          <h3>Restore / branch</h3>
+          <h3>Restored workspace</h3>
           <p>
             Parent workspace {restore.parent_unchanged ? "unchanged" : "changed"} · branch {restore.branch.kind}
           </p>
@@ -350,19 +350,13 @@ export function LabPanel() {
       {result ? (
         <div className="card">
           <h3>
-            Task evaluation
+            Results
             <span className="badge">{result.tool_mode_label}</span>
           </h3>
-          <p>
-            Harness: {result.harness} · second agent loop: {result.second_agent_loop ? "yes" : "no"} · recorded
-            replay is supporting evidence only
-          </p>
-          <h3>Applied config</h3>
-          <pre className="json">{JSON.stringify(result.applied_config, null, 2)}</pre>
-          <h3>Evidence (not judgement)</h3>
-          <pre className="json">{JSON.stringify(result.evidence, null, 2)}</pre>
-          <h3>Judgement</h3>
-          <pre className="json">{JSON.stringify(result.judgement, null, 2)}</pre>
+          <HoverHelp title="About this result">Harness: {result.harness}. Second agent loop: {result.second_agent_loop ? "yes" : "no"}. Recorded replay is supporting evidence only.</HoverHelp>
+          <details><summary><Icon name="tune" size={14} /> Applied settings</summary><pre className="json">{JSON.stringify(result.applied_config, null, 2)}</pre></details>
+          <details><summary><Icon name="check" size={14} /> Test evidence</summary><pre className="json">{JSON.stringify(result.evidence, null, 2)}</pre></details>
+          <details><summary><Icon name="activity" size={14} /> Model assessment</summary><pre className="json">{JSON.stringify(result.judgement, null, 2)}</pre></details>
         </div>
       ) : null}
 
@@ -373,7 +367,7 @@ export function LabPanel() {
             <span className="badge">{engine.available ? "available" : "unavailable"}</span>
           </h3>
           <p>{engine.note}</p>
-          <pre className="json">{JSON.stringify(engine, null, 2)}</pre>
+          <details><summary><Icon name="activity" size={14} /> Measurements</summary><pre className="json">{JSON.stringify(engine, null, 2)}</pre></details>
         </div>
       ) : null}
 
@@ -388,7 +382,7 @@ export function LabPanel() {
         />
       ) : null}
 
-      {message ? <p className="status">{message}</p> : null}
+      {message ? <p className="status" role="status">{message}</p> : null}
     </section>
   );
 }
@@ -419,7 +413,7 @@ function RerunButton({
         void api.rerunCase(labCase.id, mode, restore.workspace.id).then(onResult).catch(onError);
       }}
     >
-      {label}
+      <Icon name="refresh" size={14} /> {label}
     </button>
   );
 }

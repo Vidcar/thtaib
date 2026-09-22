@@ -4,6 +4,8 @@ import { api } from "./api";
 import { formatWhen, shortId } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
+import { HoverHelp } from "./HoverHelp";
+import { Icon } from "./Icon";
 import { knowledgeActorLabel, knowledgeKindLabel, knowledgeScopeLabel, redactionModeLabel } from "./labels";
 import { Notice } from "./Notice";
 import { StatusBadge } from "./StatusBadge";
@@ -34,10 +36,12 @@ export function KnowledgePanel() {
   const [editContent, setEditContent] = useState("");
   const [captureText, setCaptureText] = useState("");
   const [redactionMode, setRedactionMode] = useState<RedactionMode>("redact_secrets");
+  const [creating, setCreating] = useState(false);
 
   async function refresh(): Promise<void> {
     const [nextEntries, nextConfig] = await Promise.all([api.knowledgeEntries(), api.knowledgeConfig()]);
     setEntries(nextEntries);
+    if (!config) setCreating(nextEntries.length === 0);
     setConfig(nextConfig);
     setRedactionMode(nextConfig.context_captures.redaction_mode);
     setSelected((current) => nextEntries.find((item) => item.id === current?.id) ?? nextEntries[0] ?? null);
@@ -85,15 +89,13 @@ export function KnowledgePanel() {
   return (
     <section className="surface">
       <header className="surface-head">
-        <h2>Knowledge</h2>
-        <p className="lede">
-          Save reusable context for Chat, then choose exactly which memories, skills, and protected
-          instructions a conversation should use.
-        </p>
+        <div className="entity-head"><h2>Knowledge</h2><HoverHelp title="About Knowledge">Save memories, skills and instructions here. Choose which entries each chat uses.</HoverHelp></div>
       </header>
 
+      <details className="card" open={creating}>
+        <summary onClick={event => { event.preventDefault(); setCreating(!creating); }} aria-expanded={creating}><Icon name="plus" size={15} /> New entry</summary>
       <form
-        className="card"
+        className="compact-form"
         onSubmit={(event) => {
           event.preventDefault();
           if (!content.trim()) {
@@ -113,11 +115,11 @@ export function KnowledgePanel() {
               setContent("");
               await refresh();
               setSelected(next);
+              setCreating(false);
             })
             .catch(fail);
         }}
       >
-        <h3>New entry</h3>
         <div className="setup-grid">
           <label>
             Kind
@@ -152,15 +154,16 @@ export function KnowledgePanel() {
           Content
           <textarea value={content} onChange={(event) => setContent(event.target.value)} />
         </label>
-        <button type="submit">Create</button>
+        <button type="submit"><Icon name="plus" size={14} /> Create</button>
       </form>
+      </details>
 
       <div className="grid">
         <div className="card">
           <h3>Entries</h3>
           {entries.length === 0 ? (
-            <EmptyState title="No durable entries">
-              Create a memory, skill or protected instruction. Chat can run without any.
+            <EmptyState title="No entries yet">
+              Add a memory, skill or instruction.
             </EmptyState>
           ) : (
             <ul className="nav-list">
@@ -217,10 +220,10 @@ export function KnowledgePanel() {
                       .catch(fail);
                   }}
                 >
-                  Save new version
+                  <Icon name="check" size={14} /> Save
                 </button>
               </div>
-              <h4>History</h4>
+              <details><summary><Icon name="restore" size={14} /> Version history <span className="badge">{versions.length}</span></summary>
               {versions.length === 0 ? (
                 <p className="hint">No versions loaded.</p>
               ) : (
@@ -249,25 +252,24 @@ export function KnowledgePanel() {
                               .catch(fail);
                           }}
                         >
-                          Revert to this version
+                          <Icon name="restore" size={14} /> Restore version
                         </button>
                       ) : null}
                     </li>
                   ))}
                 </ul>
               )}
+              </details>
             </>
           ) : (
-            <EmptyState title="Select an entry">Choose one on the left to edit or revert.</EmptyState>
+            <EmptyState title="Select an entry">Edit content and review its history.</EmptyState>
           )}
         </div>
       </div>
 
-      <div className="card">
-        <h3>Context capture</h3>
-        <p className="hint">
-          Save request context for troubleshooting. Secrets are redacted by default.
-        </p>
+      <details className="card">
+        <summary><Icon name="files" size={15} /> Context capture</summary>
+        <div className="entity-head"><h3>Capture settings</h3><HoverHelp title="About context capture">Save request text for troubleshooting. Secrets are redacted by default.</HoverHelp></div>
         <label>
           Redaction
           <select
@@ -279,6 +281,7 @@ export function KnowledgePanel() {
             <option value="discard">{redactionModeLabel("discard")}</option>
           </select>
         </label>
+        {redactionMode === "retain" ? <p className="notice notice-warn">Unredacted captures can include secrets.</p> : null}
         <label>
           Text to capture
           <textarea value={captureText} onChange={(event) => setCaptureText(event.target.value)} />
@@ -296,7 +299,7 @@ export function KnowledgePanel() {
                 .catch(fail);
             }}
           >
-            Save capture setting
+            <Icon name="check" size={14} /> Save setting
           </button>
           <button
             type="button"
@@ -317,7 +320,7 @@ export function KnowledgePanel() {
                 .catch(fail);
             }}
           >
-            Capture
+            <Icon name="files" size={14} /> Capture
           </button>
         </div>
         {config ? (
@@ -336,7 +339,7 @@ export function KnowledgePanel() {
             {capture.expired ? " · expired" : ""}
           </p>
         ) : null}
-      </div>
+      </details>
 
       {message ? <Notice tone={/fail|error|conflict/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
     </section>

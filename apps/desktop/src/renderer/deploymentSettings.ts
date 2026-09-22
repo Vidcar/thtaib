@@ -9,7 +9,7 @@ export function startupPayload(settings: Record<string, string>, advanced: strin
     const duplicate = Object.keys(extra).find(key => key in settings);
     if (duplicate) throw new Error(`Use the ${duplicate.replaceAll("_", " ")} control above instead of repeating it in additional settings.`);
   }
-  const numeric = ["ctx_size", "n_gpu_layers", "threads", "threads_batch", "parallel", "port", "batch_size", "ubatch_size", "reasoning_budget"];
+  const numeric = ["ctx_size", "n_gpu_layers", "threads", "threads_batch", "parallel", "port", "batch_size", "ubatch_size", "reasoning_budget", "spec_draft_n_max", "spec_draft_n_min"];
   if (profileStartup) {
     const edits: Record<string, unknown> = {};
     for (const key of new Set([...Object.keys(extra), ...Object.keys(profileStartup).filter(key => !(key in settings))])) {
@@ -19,7 +19,7 @@ export function startupPayload(settings: Record<string, string>, advanced: strin
   }
   for (const [key, value] of Object.entries(settings)) {
     if (profileStartup && !changedKeys.has(key)) continue;
-    if (value === "" || (key === "pooling" && settings.embedding !== "on")) {
+    if (value === "" || (key === "pooling" && settings.embedding !== "on") || (key.startsWith("spec_draft_") && !settings.spec_type?.startsWith("draft-"))) {
       if (profileStartup) extra[key] = null;
       continue;
     }

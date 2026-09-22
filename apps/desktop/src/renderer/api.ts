@@ -115,7 +115,9 @@ export const api = {
       body: JSON.stringify({ repo_id, revision, allow_patterns }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
-  modelConfiguration: (bundleId: string, deploymentId?: string) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options${deploymentId ? `?deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  capabilityProbe: (id: string, capability: string) => request<{ id: string; capability: string; status: string; tested_at: string; note?: string | null; observations: Record<string, unknown> }>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
+  capabilityStatus: (id: string) => request<{ current_support: Record<string, string> }>(`/v1/compatibility/deployments/${id}/probes`),
   previewSettings: (startup: object, per_request: object, agent: object) =>
     request<SettingsBags>("/v1/settings/preview", {
       method: "POST",

@@ -3070,6 +3070,8 @@ export interface components {
         };
         /** RuntimeControlDescriptor */
         RuntimeControlDescriptor: {
+            /** Accepted Values */
+            accepted_values?: string[] | null;
             /** Applied */
             applied?: unknown;
             /** Description */
@@ -3090,6 +3092,8 @@ export interface components {
             recommended?: unknown;
             /** Source */
             source: string;
+            /** Supported */
+            supported?: boolean | null;
         };
         /** RuntimeControlOption */
         RuntimeControlOption: {
@@ -4035,6 +4039,7 @@ export interface operations {
         parameters: {
             query?: {
                 deployment_id?: string | null;
+                refresh?: boolean;
             };
             header?: never;
             path: {
@@ -4097,7 +4102,9 @@ export interface operations {
     };
     inspect_bundle_v1_bundles__bundle_id__inspect_get: {
         parameters: {
-            query?: never;
+            query?: {
+                refresh?: boolean;
+            };
             header?: never;
             path: {
                 bundle_id: string;

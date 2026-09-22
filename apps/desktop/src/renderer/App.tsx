@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { PanelResize, usePanelWidth } from "./PanelResize";
 
 import { AgentRunPanel } from "./AgentRunPanel";
-import { AttentionPanel } from "./AttentionPanel";
+import { AttentionPanel, AttentionButton } from "./AttentionPanel";
 import { api } from "./api";
 import { ChatPanel } from "./ChatPanel";
 import { errorMessage } from "./errors";
@@ -21,17 +22,6 @@ const fallbackPresentation: PresentationSettings = {
   success_notifications: false,
 };
 
-function surfaceLabel(surface: WorkbenchSurface): string {
-  switch (surface) {
-    case "managed-inference":
-      return "Local models";
-    default: {
-      const unexpected: never = surface;
-      return unexpected;
-    }
-  }
-}
-
 function tabLabel(tab: WorkbenchTab): string {
   switch (tab) {
     case "chat":
@@ -41,7 +31,7 @@ function tabLabel(tab: WorkbenchTab): string {
     case "knowledge":
       return "Knowledge";
     case "agent-run":
-      return "Agent run";
+      return "Workflows";
     case "lab":
       return "Lab";
     case "library":
@@ -77,7 +67,11 @@ export function App() {
   const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
   const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { const saved = window.localStorage?.getItem("workbench.navigation.collapsed"); return saved === null || saved === undefined ? window.innerWidth < 900 : saved === "true"; } catch { return window.innerWidth < 900; }
+  });
+  const [sidebarWidth, setSidebarWidth] = usePanelWidth("workbench.navigation.width", 232, 190, 380);
+  useEffect(() => { try { window.localStorage?.setItem("workbench.navigation.collapsed", String(sidebarCollapsed)); } catch { /* Optional layout preference. */ } }, [sidebarCollapsed]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = presentation.theme;
@@ -87,12 +81,12 @@ export function App() {
     let cancelled = false;
     async function check(): Promise<void> {
       try {
-        const health = await api.health();
+        await api.health();
         if (cancelled) {
           return;
         }
         setBackendOk(true);
-        setBackendStatus(`${health.product} · ${surfaceLabel(surface)}`);
+        setBackendStatus("Local services connected");
       } catch (error: unknown) {
         if (cancelled) {
           return;
@@ -154,6 +148,10 @@ export function App() {
       case "chat":
         return (
           <ChatPanel
+            navigationCollapsed={sidebarCollapsed}
+            onNavigationCollapsedChange={setSidebarCollapsed}
+            navigationWidth={sidebarWidth}
+            onNavigationWidthChange={setSidebarWidth}
             activeTab="chat"
             backendOk={backendOk}
             backendStatus={backendStatus}
@@ -192,16 +190,15 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["chat", "library", "attention", "models", "knowledge", "agent-run", "lab", "settings"];
+  const tabs: WorkbenchTab[] = ["chat", "models", "library", "knowledge", "agent-run", "lab", "attention", "settings"];
 
   return (
-    <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`}>
+    <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`} style={{ "--navigation-width": `${sidebarWidth}px` } as CSSProperties}>
       {tab === "chat" ? null : (
         <aside className="app-nav" aria-label="Workbench">
           <div className="app-nav-head">
             <div>
-              <p className="eyebrow">Local AI Workbench</p>
-              <h1>{productName}</h1>
+              <h1>Workbench</h1>
             </div>
             <button
               type="button"
@@ -210,11 +207,11 @@ export function App() {
               aria-expanded={!sidebarCollapsed}
               onClick={() => setSidebarCollapsed((value) => !value)}
             >
-              {sidebarCollapsed ? "›" : "‹"}
+              <Icon name="panel" size={18} />
             </button>
           </div>
           <nav className="side-tabs">
-            {tabs.map((item) => (
+            {tabs.map((item) => item === "attention" ? <AttentionButton key={item} active={tab === item} collapsed={sidebarCollapsed} onOpen={() => setTab("attention")} /> : (
               <button
                 key={item}
                 type="button"
@@ -228,7 +225,8 @@ export function App() {
               </button>
             ))}
           </nav>
-          <p className={backendOk === false ? "notice notice-error" : "hint"}>{backendStatus}</p>
+          <div className="service-indicator" title={backendStatus}><span className={`status-dot${backendOk ? " ready" : ""}`} /><span>{backendOk === false ? "Service unavailable" : "Local"}</span></div>
+          {!sidebarCollapsed ? <PanelResize label="Resize navigation" width={sidebarWidth} onResize={setSidebarWidth} reset={232} /> : null}
         </aside>
       )}
       <main className="app-main">{renderTab(tab)}</main>

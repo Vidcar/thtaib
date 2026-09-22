@@ -10,6 +10,7 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
+from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.capabilities import CapabilityEvidence, CapabilityProbeRequest, setup_fingerprint, setup_identity
 from workbench_backend.inference.ids import new_id, utc_now
@@ -56,13 +57,14 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
             # A transport/runtime failure is not evidence of unsupported model capability.
             record.status = "inconclusive"
             record.observations["error_type"] = type(exc).__name__
-            record.observations["error"] = "The probe did not complete. Check endpoint health and retry this setup."
+            record.observations["error"] = (str(exc) if isinstance(exc, HarnessError) else
+                "The probe did not complete. Check endpoint health and retry this setup.")
         finally:
             if model is not None and callable(getattr(model, "close", None)):
                 model.close()
         record.observations["wire_requests"] = [{
             "model": entry.get("body", {}).get("model"),
-            "settings": {key: entry.get("body", {}).get(key) for key in bag.applied if key in entry.get("body", {})},
+            "settings": {key: entry.get("body", {}).get(key) for key in (*bag.applied, "chat_template_kwargs") if key in entry.get("body", {})},
             "status_code": entry.get("response_status_code"),
             "reasoning_replayed": any("reasoning_content_preview" in message for message in entry.get("body", {}).get("messages", [])),
         } for entry in wire[:4]]

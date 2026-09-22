@@ -42,7 +42,6 @@ export function ChatHistoryActions({
   const [actionsError, setActionsError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyAction>(null);
   const [deletePreview, setDeletePreview] = useState<ConversationDeletePreview | null>(null);
-  const [includeDiagnostics, setIncludeDiagnostics] = useState(false);
   const [editedTask, setEditedTask] = useState("");
 
   useEffect(() => {
@@ -152,7 +151,7 @@ export function ChatHistoryActions({
     }
     setBusy("delete");
     try {
-      const result = await chatHistoryActionsApi.deleteConversation(conversation.id, includeDiagnostics);
+      const result = await chatHistoryActionsApi.deleteConversation(conversation.id, true);
       if (!result.can_delete && result.blockers.length) {
         setDeletePreview(result);
         onError("Conversation still has live work and cannot be deleted yet.");
@@ -170,8 +169,7 @@ export function ChatHistoryActions({
     <section className="chat-history-actions" aria-label="Conversation history actions">
       <div className="chat-history-actions-head">
         <div>
-          <p className="chat-history-actions-kicker">History</p>
-          <h3>Branch, retry, export or delete</h3>
+          <h3>Chat actions</h3>
         </div>
         <span className="chat-history-actions-badge">{options.length ? `${options.length} saved ${options.length === 1 ? "turn" : "turns"}` : "No saved turns"}</span>
       </div>
@@ -227,7 +225,7 @@ export function ChatHistoryActions({
           onClick={() => void runAction("edit")}
         />
         <HistoryActionButton
-          icon="chevron"
+          icon="restore"
           title="Regenerate answer"
           description="Answer-only regeneration with tools disabled when the backend has a supported checkpoint."
           disabled={blocked || !selectedRunId || !actions?.regenerate_available}
@@ -278,10 +276,6 @@ export function ChatHistoryActions({
               ))}
             </ul>
           ) : null}
-          <label className="chat-history-actions-check">
-            <input type="checkbox" checked={includeDiagnostics} disabled={blocked} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />
-            <span>Also delete retained diagnostics for this conversation</span>
-          </label>
           <button type="button" className="chat-history-danger" disabled={blocked || !deletePreview.can_delete} onClick={() => void confirmDelete()}>
             {busy === "delete" ? "Deleting..." : "Delete conversation"}
           </button>
@@ -306,7 +300,7 @@ function HistoryActionButton(props: {
       <Icon name={props.icon} size={18} />
       <span>
         <strong>{props.busy ? "Working..." : props.title}</strong>
-        <small>{props.unavailableReason ?? props.description}</small>
+        <span className="sr-only">{props.unavailableReason ?? props.description}</span>
       </span>
     </button>
   );

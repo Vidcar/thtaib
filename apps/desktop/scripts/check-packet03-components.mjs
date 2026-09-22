@@ -22,15 +22,141 @@ try {
   const { ComposerAttachments } = await vite.ssrLoadModule("/src/renderer/ComposerAttachments.tsx");
   const { LibraryPanel } = await vite.ssrLoadModule("/src/renderer/LibraryPanel.tsx");
   const { ChatHistoryActions } = await vite.ssrLoadModule("/src/renderer/ChatHistoryActions.tsx");
+  const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
+  const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
 
   await checkComposerUploadStaleGuard(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
   await checkChatHistoryActions(ChatHistoryActions);
+  await checkPanelResize(PanelResize, usePanelWidth);
+  await checkHoverHelp(HoverHelp);
 } finally {
   await vite.close();
 }
 
 console.log("Packet03 component checks passed.");
+
+async function checkHoverHelp(HoverHelp) {
+  const originals = { window: globalThis.window, document: globalThis.document, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
+  const listeners = new Map();
+  const timers = new Map();
+  let timerId = 0;
+  let anchor = { left: 900, top: 750, bottom: 772 };
+  const buttonNode = { getBoundingClientRect: () => anchor, contains: target => target === buttonNode };
+  const tooltipNode = { getBoundingClientRect: () => ({ width: 282, height: 210 }), contains: target => target === tooltipNode };
+  const events = { addEventListener: (name, handler) => listeners.set(name, handler), removeEventListener: name => listeners.delete(name) };
+  globalThis.window = { ...originals.window, innerWidth: 1024, innerHeight: 800, ...events };
+  globalThis.document = { body: { nodeType: 1, children: [], createNodeMock: () => tooltipNode }, ...events };
+  globalThis.setTimeout = handler => { timers.set(++timerId, handler); return timerId; };
+  globalThis.clearTimeout = id => timers.delete(id);
+  let renderer;
+  const tooltips = () => renderer.root.findAllByProps({ role: "tooltip" });
+  const help = () => renderer.root.findByProps({ className: "hover-help" });
+  const button = () => renderer.root.findByType("button");
+  const flushTimers = () => act(async () => { for (const [id, handler] of [...timers]) { timers.delete(id); handler(); } });
+  try {
+    await act(async () => { renderer = create(React.createElement(HoverHelp, { title: "About context" }, "A long help explanation"), {
+      createNodeMock: element => element.type === "button" ? buttonNode : tooltipNode,
+    }); });
+    await act(async () => button().props.onFocus());
+    assert.equal(tooltips()[0].props.style.left, 734, "tooltip is constrained by its measured width");
+    assert.equal(tooltips()[0].props.style.top, 532, "long tooltip flips above its trigger without leaving the viewport");
+    assert.equal(button().props["aria-describedby"], tooltips()[0].props.id);
+    await act(async () => help().props.onMouseLeave());
+    await flushTimers();
+    assert.equal(tooltips().length, 1, "mouse leaving does not dismiss keyboard-focused help");
+    await act(async () => button().props.onBlur());
+    await act(async () => tooltips()[0].props.onMouseEnter());
+    await flushTimers();
+    assert.equal(tooltips().length, 1, "moving into the bubble keeps it available to read and select");
+    await act(async () => tooltips()[0].props.onMouseLeave());
+    await flushTimers();
+    assert.equal(tooltips().length, 0);
+
+    await act(async () => help().props.onMouseEnter());
+    anchor = { left: 24, top: 120, bottom: 142 };
+    await act(async () => listeners.get("scroll")());
+    assert.equal(tooltips()[0].props.style.top, 150, "scrolling follows the trigger");
+    await act(async () => listeners.get("keydown")({ key: "Escape", stopPropagation() {} }));
+    assert.equal(tooltips().length, 0, "Escape dismisses hovered help");
+    assert.equal(listeners.size, 0, "closed help removes document listeners");
+    await act(async () => button().props.onClick());
+    await act(async () => listeners.get("pointerdown")({ target: {} }));
+    assert.equal(tooltips().length, 0, "touch-opened help closes on an outside tap");
+    await act(async () => help().props.onMouseEnter());
+    await act(async () => help().props.onMouseLeave());
+    assert.equal(timers.size, 1);
+    await act(async () => renderer.unmount());
+    renderer = null;
+    assert.equal(timers.size, 0, "unmount cancels delayed state changes");
+    assert.equal(listeners.size, 0);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    Object.assign(globalThis, originals);
+  }
+}
+
+async function checkPanelResize(PanelResize, usePanelWidth) {
+  const savedWindow = globalThis.window;
+  const stored = new Map([["review.panel.width", "250"]]);
+  globalThis.window = { ...savedWindow, localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value) } };
+  function ResizablePanel({ reverse = false }) {
+    const [width, setWidth] = usePanelWidth("review.panel.width", 232, 190, 380);
+    return React.createElement(PanelResize, { label: "Resize review panel", width, onResize: setWidth, min: 190, max: 380, reset: 232, reverse });
+  }
+  let renderer;
+  const captures = new Set();
+  const target = {
+    setPointerCapture: id => captures.add(id),
+    hasPointerCapture: id => captures.has(id),
+    releasePointerCapture: id => captures.delete(id),
+  };
+  const pointer = (clientX, button = 0) => ({ clientX, button, pointerId: 4, currentTarget: target, preventDefault() {} });
+  const separator = () => renderer.root.findByProps({ role: "separator" });
+  const width = () => separator().props["aria-valuenow"];
+  const keyboard = key => act(async () => separator().props.onKeyDown({ key, preventDefault() {} }));
+  try {
+    await act(async () => { renderer = create(React.createElement(ResizablePanel)); });
+    assert.equal(width(), 250, "panel restores its saved width");
+    await keyboard("ArrowRight");
+    assert.equal(width(), 266);
+    await keyboard("End");
+    await keyboard("ArrowRight");
+    assert.equal(width(), 380, "keyboard resizing stays within its maximum");
+    await keyboard("Home");
+    await keyboard("ArrowLeft");
+    assert.equal(width(), 190, "keyboard resizing stays within its minimum");
+    await act(async () => separator().props.onDoubleClick());
+    assert.equal(width(), 232);
+
+    await act(async () => separator().props.onPointerDown(pointer(100)));
+    assert.ok(captures.has(4), "resize owns pointer while dragging outside its narrow handle");
+    await act(async () => separator().props.onPointerMove(pointer(158)));
+    assert.equal(width(), 290);
+    await act(async () => separator().props.onPointerUp(pointer(158)));
+    assert.ok(!captures.has(4));
+    await act(async () => separator().props.onPointerMove(pointer(200)));
+    assert.equal(width(), 290, "movement after release does not resize");
+    assert.equal(stored.get("review.panel.width"), "290");
+
+    await act(async () => { renderer.unmount(); renderer = create(React.createElement(ResizablePanel, { reverse: true })); });
+    assert.equal(width(), 290, "width survives unmount and reopening");
+    await keyboard("ArrowLeft");
+    assert.equal(width(), 306, "left edge of a right-hand panel expands toward the left");
+    await act(async () => separator().props.onPointerDown(pointer(200)));
+    await act(async () => separator().props.onPointerMove(pointer(180)));
+    assert.equal(width(), 326);
+    await act(async () => separator().props.onLostPointerCapture());
+    await act(async () => separator().props.onPointerMove(pointer(140)));
+    assert.equal(width(), 326, "losing capture cancels the drag");
+    await act(async () => separator().props.onPointerDown(pointer(200, 2)));
+    await act(async () => separator().props.onPointerMove(pointer(160)));
+    assert.equal(width(), 326, "secondary pointer buttons do not begin resizing");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.window = savedWindow;
+  }
+}
 
 async function checkComposerUploadStaleGuard(ComposerAttachments) {
   const originalFetch = globalThis.fetch;
@@ -240,6 +366,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
     });
     assert.deepEqual(deleteRequestedIds, ["asset_a"], "delete confirmation must request only deletable affected ids");
     assert.ok(textOf(renderer.root).includes("1 shared item preserved"));
+    assert.ok(!textOf(renderer.root).includes("full retained text"), "deleting the previewed retained asset must clear its content immediately");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -394,10 +521,7 @@ async function checkChatHistoryActions(ChatHistoryActions) {
     assert.ok(textOf(renderer.root).includes("1 retained asset"));
     assert.ok(textOf(renderer.root).includes("Project files and model files are retained."));
 
-    const diagnostic = renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox")[0];
-    await act(async () => {
-      diagnostic.props.onChange({ target: { checked: true } });
-    });
+    assert.equal(renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox").length, 0, "chat deletion always removes owned diagnostics without an optional partial-deletion toggle");
     await act(async () => {
       button(renderer, "Delete conversation").props.onClick();
       await tick();

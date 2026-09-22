@@ -89,7 +89,12 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     await act(async () => {
       await tick();
     });
-    assert.ok(textOf(renderer.root).includes("256k token model capacity"), "deferred configuration result should hydrate model capacity");
+    assert.ok(textOf(renderer.root).includes("256k context"), "deferred configuration result should hydrate model capacity");
+    const speculation = renderer.root.findAllByType("select").find(select => select.props.id === "model-spec_type");
+    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["none", "draft-mtp"]);
+    await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
+    assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "3", "MTP exposes the runtime default draft count");
+    assert.deepEqual(renderer.root.findByProps({ id: "model-reasoning_effort" }).findAllByType("option").map(option => option.props.value), ["", "low", "medium", "xhigh"], "Only model-specific thinking levels are offered");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -138,7 +143,11 @@ function configurationOptions() {
     },
     startup_defaults: {
       threads: { recommended: 8, options: [{ value: 8, label: "8 threads" }] },
+      spec_type: { options: [{ value: "none", label: "Off" }, { value: "draft-mtp", label: "MTP" }] },
+      spec_draft_n_max: { options: [{ value: 3, label: "3" }, { value: 6, label: "6" }] },
     },
+    metadata: { architecture: "qwen", inspection_cached: true },
+    per_request_defaults: { reasoning_effort: { supported: true, options: ["default", "low", "medium", "xhigh"].map(value => ({ value, label: value })) } },
     notes: [],
   };
 }

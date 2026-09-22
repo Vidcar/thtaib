@@ -42,6 +42,7 @@ function createWindow(): void {
     title: "Local AI Workbench",
     width: 1280,
     height: 860,
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: preloadScriptPath(),

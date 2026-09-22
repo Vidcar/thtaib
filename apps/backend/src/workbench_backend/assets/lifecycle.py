@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -46,7 +48,7 @@ class ConversationExport(BaseModel):
 
 class ConversationDeleteRequest(BaseModel):
     execute: bool = False
-    include_diagnostics: bool = False
+    include_diagnostics: bool = True
 
 
 class ConversationDeletePreview(BaseModel):
@@ -79,10 +81,11 @@ class OutputCollectionResult(BaseModel):
 
 
 class AssetLifecycleService:
-    def __init__(self, paths: WorkbenchPaths, app_store: ApplicationStore) -> None:
+    def __init__(self, paths: WorkbenchPaths, app_store: ApplicationStore, *, harness_provider: Callable[[], Any] | None = None) -> None:
         self.paths = paths.ensure()
         self.app_store = app_store
         self.assets = RetainedAssetService(app_store)
+        self._harness_provider = harness_provider
 
     def export_conversation(self, conversation_id: str) -> ConversationExport:
         conversation = self.app_store.get_conversation(conversation_id)
@@ -142,7 +145,7 @@ class AssetLifecycleService:
         self,
         conversation_id: str,
         *,
-        include_diagnostics: bool = False,
+        include_diagnostics: bool = True,
     ) -> ConversationDeletePreview:
         preview = self.preview_conversation_delete(conversation_id)
         if preview.blockers:
@@ -153,15 +156,18 @@ class AssetLifecycleService:
         runs = [run for run_id in conversation.run_ids if (run := self.app_store.get_run(run_id)) is not None]
         shared_run_ids = self._surviving_run_ids(conversation.id, {run.id for run in runs})
         deletable_run_ids = [run.id for run in runs if run.id not in shared_run_ids]
-        asset_preview = self.assets.mark_deletable_assets_deleted(
-            RetainedAssetDeletionRequest(session_ids=[conversation_id], run_ids=deletable_run_ids)
-        )
-        scratch_deleted = self._delete_owned_scratch(preview.checkpoint_threads_deleted)
-        deleted_threads: list[str] = []
-        for thread_id in preview.checkpoint_threads_deleted:
-            if delete_checkpoint_thread(self.paths.checkpoints_db, thread_id):
-                deleted_threads.append(thread_id)
-        self._delete_application_rows(conversation_id, deletable_run_ids, include_diagnostics=include_diagnostics)
+        guard = self._harness_provider().deleting_idle_runs(deletable_run_ids) if self._harness_provider else nullcontext()
+        with guard:
+            asset_preview = self.assets.mark_deletable_assets_deleted(
+                RetainedAssetDeletionRequest(session_ids=[conversation_id], run_ids=deletable_run_ids)
+            )
+            scratch_deleted = self._delete_owned_scratch(preview.checkpoint_threads_deleted)
+            deleted_threads: list[str] = []
+            for thread_id in preview.checkpoint_threads_deleted:
+                if delete_checkpoint_thread(self.paths.checkpoints_db, thread_id):
+                    deleted_threads.append(thread_id)
+            self._delete_application_rows(conversation_id, deletable_run_ids,
+                deleted_thread_ids=deleted_threads, include_diagnostics=include_diagnostics)
         return preview.model_copy(
             update={
                 "affected_assets": asset_preview.affected_asset_ids,
@@ -295,19 +301,22 @@ class AssetLifecycleService:
         conversation_id: str,
         run_ids: list[str],
         *,
+        deleted_thread_ids: list[str],
         include_diagnostics: bool,
     ) -> None:
         with self.app_store._lock:
+            selectors = ["conversation_id = ?"]
+            parameters = [conversation_id]
+            if deleted_thread_ids:
+                selectors.append(f"graph_thread_id IN ({','.join('?' for _ in deleted_thread_ids)})")
+                parameters.extend(deleted_thread_ids)
             thread_rows = self.app_store._conn.execute(
-                "SELECT id FROM interaction_threads WHERE conversation_id = ?",
-                (conversation_id,),
+                "SELECT id FROM interaction_threads WHERE " + " OR ".join(selectors),
+                parameters,
             ).fetchall()
             for row in thread_rows:
                 self.app_store._conn.execute("DELETE FROM interaction_events WHERE thread_id = ?", (row["id"],))
-            self.app_store._conn.execute(
-                "DELETE FROM interaction_threads WHERE conversation_id = ?",
-                (conversation_id,),
-            )
+                self.app_store._conn.execute("DELETE FROM interaction_threads WHERE id = ?", (row["id"],))
             for run_id in run_ids:
                 self.app_store._conn.execute("DELETE FROM run_checkpoints WHERE run_id = ?", (run_id,))
                 self.app_store._conn.execute("DELETE FROM run_files WHERE run_id = ?", (run_id,))
@@ -317,6 +326,11 @@ class AssetLifecycleService:
             self.app_store._conn.execute(
                 "DELETE FROM chat_submission_cancellations WHERE conversation_id = ?", (conversation_id,),
             )
+            for thread_id in deleted_thread_ids:
+                self.app_store._conn.execute(
+                    "DELETE FROM permission_grants WHERE json_extract(payload, '$.scope') = 'session' "
+                    "AND json_extract(payload, '$.thread_id') = ?", (thread_id,),
+                )
             self.app_store._conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
             self.app_store._conn.commit()
 

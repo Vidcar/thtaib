@@ -136,8 +136,8 @@ def get_bundle(request: Request, bundle_id: str) -> object:
 
 
 @router.get("/bundles/{bundle_id}/inspect", response_model=InspectReport)
-def inspect_bundle(request: Request, bundle_id: str) -> object:
-    return get_manager(request).inspect_bundle(bundle_id)
+def inspect_bundle(request: Request, bundle_id: str, refresh: bool = False) -> object:
+    return get_manager(request).inspect_bundle(bundle_id, refresh=refresh)
 
 
 @router.get("/bundles/{bundle_id}/configuration-options", response_model=BundleConfigurationOptions)
@@ -145,10 +145,12 @@ def bundle_configuration_options(
     request: Request,
     bundle_id: str,
     deployment_id: str | None = None,
+    refresh: bool = False,
 ) -> object:
     return get_manager(request).get_bundle_configuration_options(
         bundle_id,
         deployment_id=deployment_id,
+        refresh=refresh,
     )
 
 
