@@ -753,7 +753,7 @@ function buttonByAriaLabel(renderer, label) {
 
 function toolsAllowedCheckbox(renderer) {
   const found = renderer.root.findAll(
-    (node) => node.type === "label" && typeof node.props.className === "string" && node.props.className.includes("check-row") && textOf(node).includes("Allow available tools"),
+    (node) => node.type === "label" && typeof node.props.className === "string" && node.props.className.includes("check-row") && textOf(node).includes("Use tools"),
   );
   assert.ok(found.length > 0, "expected tools allowed checkbox");
   return found[0].findByType("input");
@@ -1882,6 +1882,74 @@ async function testUnknownProjectionRequiresAuthoritativeCurrentRun(vite) {
   }
 }
 
+async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
+  const context = estimatedInput => ({
+    schema_version: 1,
+    capacity_tokens: 8192,
+    capacity_source: "server_props.n_ctx",
+    output_reservation_tokens: 1024,
+    estimated_input_tokens: estimatedInput,
+    margin_tokens: 64,
+    fits: true,
+    counting_method: "estimate",
+    summarization_path: "deepagents-upstream",
+    notes: [],
+  });
+  const initial = { ...run("run_a"), generation_observation: null, context_observation: context(1000) };
+  const other = { ...run("run_b"), generation_observation: null, context_observation: context(300) };
+  const measured = {
+    ...initial,
+    generation_observation: { input_tokens: 1200, output_tokens: 456, elapsed_seconds: 10, tokens_per_second: 45.6, context_limit: 8192, measured_at: now() },
+    context_observation: initial.context_observation,
+  };
+  const harness = makeHarness({ aRun: initial, bRun: other });
+  const renderer = await renderChat(vite, harness);
+  const measurements = () => renderer.root.find(node => typeof node.type === "function" && node.type.name === "ChatMeasurements");
+  const publish = async (threadId, projected) => {
+    const stream = harness.state.openStreams.get(threadId);
+    assert.ok(stream, `expected open ${threadId} SDK stream`);
+    await act(async () => {
+      stream.write(`data: ${JSON.stringify(streamFrame(projected))}\n\n`);
+      await Promise.resolve();
+    });
+  };
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a")), "A SDK stream connected");
+    await waitFor(() => assert.equal(measurements().props.run?.context_observation?.estimated_input_tokens, 1000), "initial A context");
+    assert.equal(measured.id, initial.id);
+    assert.equal(measured.status, initial.status);
+    assert.equal(measured.events.length, initial.events.length, "the update has no new audit event");
+    await publish("thread_a", measured);
+    await waitFor(() => assert.match(textOf(measurements()), /45\.6 tok\/s/), "same-event-count measurement reaches visible composer");
+    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 1000, "generation-only update preserves its prepared request context");
+
+    await publish("thread_a", { ...measured, context_observation: context(1700) });
+    await waitFor(() => assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 1700), "context-only update reaches composer without a new generation or audit event");
+
+    const nextRequest = { ...measured, generation_observation: null, context_observation: context(2100) };
+    await publish("thread_a", nextRequest);
+    await waitFor(() => assert.equal(measurements().props.run.generation_observation, null), "next model request clears previous generation");
+    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 2100);
+    assert.doesNotMatch(textOf(measurements()), /45\.6 tok\/s/, "pending call must not show the preceding call's speed");
+
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.equal(measurements().props.run?.id, other.id), "B owns composer measurements");
+    await waitFor(() => assert.ok(harness.state.openStreams.has("thread_b")), "B SDK stream connected");
+    const priorReads = harness.state.chatGetCounts.get("conv_b") ?? 0;
+    await publish("thread_b", measured);
+    await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_b") ?? 0) > priorReads), "stale other-conversation projection ownership checked");
+    await flush();
+    assert.equal(measurements().props.run.id, other.id);
+    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 300);
+    assert.equal(measurements().props.run.generation_observation, null);
+    assert.doesNotMatch(textOf(measurements()), /45\.6 tok\/s/, "A's late telemetry cannot bleed into B's composer");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testUnknownProjectionAdoptsAuthoritativeNewCurrentRun(vite) {
   const known = run("run_known_previous", "completed", "old-input", "previous answer");
   const nextRun = run("run_authoritative_new", "running", "new-input", "new queued answer");
@@ -1903,7 +1971,8 @@ async function testUnknownProjectionAdoptsAuthoritativeNewCurrentRun(vite) {
     });
     await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "unknown projection authoritative lookup");
     await waitFor(() => assert.equal(selectedRunId(renderer), nextRun.id), "authoritative new run adopted from ownership lookup");
-    assert.match(allText(renderer), /Working(?:(?!This can continue).)*Running/s, "authoritative new run shows active progress");
+    assert.match(allText(renderer), /Activity\s*Running/, "authoritative new run shows active progress in its Activity summary");
+    assert.doesNotMatch(allText(renderer), /Working/, "an observed active run has no duplicate generic progress row");
     assert.match(allText(renderer), /new queued answer/, "authoritative new stream output renders");
   } finally {
     await closeHarness(renderer, harness);
@@ -2380,6 +2449,7 @@ try {
     ["late upload navigation guard", testLateUploadAfterNavigationDoesNotAttachToNewConversation],
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],
     ["unknown projection requires authoritative current run", testUnknownProjectionRequiresAuthoritativeCurrentRun],
+    ["measurement-only projection refresh and isolation", testMeasurementOnlyProjectionRefreshesCurrentConversation],
     ["unknown projection adopts authoritative new current run", testUnknownProjectionAdoptsAuthoritativeNewCurrentRun],
     ["older unknown projection lookup cannot overwrite newer adopted run", testOlderUnknownProjectionLookupCannotOverwriteNewerAdoptedRun],
     ["rejected submit keeps draft", testRejectedSubmitWithOnlyStagedInputKeepsDraftAndError],

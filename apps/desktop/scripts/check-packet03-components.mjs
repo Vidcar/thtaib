@@ -24,6 +24,7 @@ try {
   const { ChatHistoryActions } = await vite.ssrLoadModule("/src/renderer/ChatHistoryActions.tsx");
   const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
   const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
+  const { ChatMeasurements } = await vite.ssrLoadModule("/src/renderer/ChatMeasurements.tsx");
   const { AttentionPanel } = await vite.ssrLoadModule("/src/renderer/AttentionPanel.tsx");
 
   await checkComposerUploadStaleGuard(ComposerAttachments);
@@ -32,12 +33,64 @@ try {
   await checkChatHistoryActions(ChatHistoryActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
+  await checkChatMeasurements(ChatMeasurements);
   await checkAttentionTargets(AttentionPanel);
 } finally {
   await vite.close();
 }
 
 console.log("Packet03 component checks passed.");
+
+async function checkChatMeasurements(ChatMeasurements) {
+  const originals = { window: globalThis.window, document: globalThis.document };
+  const listeners = new Map();
+  const events = { addEventListener: (key, handler) => listeners.set(key, handler), removeEventListener: key => listeners.delete(key) };
+  const anchor = { getBoundingClientRect: () => ({ left: 710, top: 520, bottom: 548 }), contains: () => false };
+  const tip = { getBoundingClientRect: () => ({ width: 272, height: 180 }), contains: () => false };
+  globalThis.window = { ...originals.window, innerWidth: 800, innerHeight: 600, ...events };
+  globalThis.document = { body: { nodeType: 1, children: [], createNodeMock: () => tip }, ...events };
+  const context = { estimated_input_tokens: 2516, capacity_tokens: 65536 };
+  let run = { id: "usage", status: "running", context_observation: context };
+  let renderer;
+  const tipText = () => textOf(renderer.root.findByProps({ role: "tooltip" }));
+  const update = async observation => {
+    run = { ...run, generation_observation: observation };
+    await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatMeasurements, { run }), { createNodeMock: node => node.type === "button" ? anchor : tip }); });
+    const trigger = renderer.root.findByProps({ "aria-label": "Context and speed" });
+    assert.equal(trigger.props.title, undefined, "usage uses a real hover/focus popover, not a native title");
+    await act(async () => renderer.root.findByProps({ className: "hover-help" }).props.onMouseEnter());
+    assert.match(tipText(), /Estimated/);
+    assert.match(tipText(), /2,516/);
+    assert.equal(renderer.root.findByProps({ role: "tooltip" }).props.style.left, 520, "usage is kept inside a narrow window");
+    await update({ request_id: "call-a", phase: "generating", input_tokens: 1946, output_tokens: 59, context_used_tokens: 2005, context_limit: 65536, tokens_per_second: 43.29, basis: "llama_cpp_timings", interval: "current_model_call_generation" });
+    assert.match(tipText(), /Live/);
+    assert.match(tipText(), /2,005/);
+    assert.doesNotMatch(tipText(), /Estimated|2,516/);
+    assert.match(tipText(), /43.3 tok\/s/);
+    await update({ ...run.generation_observation, phase: "completed", interval: "last_model_call_generation" });
+    assert.match(tipText(), /Last request/);
+    assert.doesNotMatch(tipText(), /Live/);
+    await update(null);
+    assert.match(tipText(), /Estimated/);
+    assert.doesNotMatch(tipText(), /43.3|2,005/, "a new request cannot keep the prior call's live counters");
+    await update({ phase: "prompt_processing", input_tokens: 0, output_tokens: null, context_used_tokens: 0, context_limit: 65536, tokens_per_second: null, basis: "llama_cpp_timings" });
+    assert.match(tipText(), /Preparing/);
+    assert.doesNotMatch(tipText(), /Estimated|0.0 tok\/s/, "zero reported context is real; missing speed is not zero");
+    await update({ phase: "completed", input_tokens: 1946, output_tokens: 59, tokens_per_second: 38.7, basis: "reported_tokens_model_call_wall_time" });
+    assert.match(tipText(), /Including prompt processing/);
+    assert.match(tipText(), /2,005/, "reported legacy usage is actual even without native timing fields");
+    await act(async () => listeners.get("keydown")({ key: "Escape", stopPropagation() {} }));
+    assert.equal(renderer.root.findAllByProps({ role: "tooltip" }).length, 0);
+    await act(async () => trigger.props.onFocus());
+    assert.equal(renderer.root.findAllByProps({ role: "tooltip" }).length, 1, "keyboard focus opens the same context details");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    Object.assign(globalThis, originals);
+  }
+}
 
 async function checkAttentionTargets(AttentionPanel) {
   const originalFetch = globalThis.fetch;

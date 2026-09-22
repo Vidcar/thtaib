@@ -25,6 +25,7 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.configuration_options import validate_model_reasoning
 from workbench_backend.inference.schemas import Deployment, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
+from workbench_backend.inference.telemetry import RequestTelemetry
 
 # Transport timeout only — not a product task budget (AGT-003).
 DEFAULT_ADAPTER_TIMEOUT = 120.0
@@ -33,6 +34,7 @@ CAPTURE_EVENT_LIMIT = 64
 DEFAULT_OUTPUT_RESERVATION = 512
 TOKEN_MARGIN_RATIO = 0.08
 _stream_chunk_count: contextvars.ContextVar[int] = contextvars.ContextVar("adapter_stream_chunk_count", default=0)
+_request_telemetry: contextvars.ContextVar[RequestTelemetry | None] = contextvars.ContextVar("adapter_request_telemetry", default=None)
 _SECRET_TEXT_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b")
 _SECRET_KEYS = {"api_key", "authorization", "token", "access_token", "refresh_token", "secret", "password"}
 _pending_async_closes: set[asyncio.Task[None]] = set()
@@ -144,6 +146,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     _reasoning_replay_supported: bool = PrivateAttr(default=False)
     _capture_sink: list[dict[str, Any]] | None = PrivateAttr(default=None)
     _context_guard: Callable[[dict[str, Any]], None] | None = PrivateAttr(default=None)
+    _generation_observer: Callable[[dict[str, Any]], None] | None = PrivateAttr(default=None)
 
     def set_adapter_ownership(
         self,
@@ -162,6 +165,9 @@ class WorkbenchChatOpenAI(ChatOpenAI):
 
     def set_context_guard(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         self._context_guard = callback
+
+    def set_generation_observer(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self._generation_observer = callback
 
     def invoke(self, *args: Any, **kwargs: Any) -> BaseMessage:
         result = super().invoke(*args, **kwargs)
@@ -200,6 +206,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             _add_reasoning_replay(payload, args[0])
         if self._context_guard is not None:
             self._context_guard(payload)
+        _request_telemetry.set(RequestTelemetry(self._generation_observer) if self._generation_observer else None)
         return payload
 
     def _create_chat_result(
@@ -209,6 +216,10 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     ) -> ChatResult:
         result = super()._create_chat_result(response, generation_info)
         response_dict = response if isinstance(response, dict) else response.model_dump(warnings=False)
+        telemetry = _request_telemetry.get()
+        if telemetry is not None:
+            telemetry.receive(response_dict)
+            telemetry.finish()
         for generation, choice in zip(result.generations, response_dict.get("choices", []), strict=False):
             message = choice.get("message") or {}
             _attach_reasoning(generation.message, message)
@@ -218,31 +229,47 @@ class WorkbenchChatOpenAI(ChatOpenAI):
 
     def _stream(self, *args: Any, **kwargs: Any) -> Any:
         token = _stream_chunk_count.set(0)
+        telemetry_token = _request_telemetry.set(None)
         combined: ChatGenerationChunk | None = None
+        telemetry: RequestTelemetry | None = None
         try:
             for chunk in super()._stream(*args, **kwargs):
+                telemetry = _request_telemetry.get()
                 combined = chunk if combined is None else combined + chunk
                 yield chunk
             _raise_for_invalid_completed_tool_calls(combined)
+            if telemetry is not None:
+                telemetry.finish()
         except BaseException as exc:
+            if telemetry is not None:
+                telemetry.finish(interrupted=True)
             _capture_stream_error(self._capture_sink, exc, _stream_chunk_count.get())
             raise
         finally:
-            _stream_chunk_count.reset(token)
+            _reset_context_token(token)
+            _reset_context_token(telemetry_token)
 
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
         token = _stream_chunk_count.set(0)
+        telemetry_token = _request_telemetry.set(None)
         combined: ChatGenerationChunk | None = None
+        telemetry: RequestTelemetry | None = None
         try:
             async for chunk in super()._astream(*args, **kwargs):
+                telemetry = _request_telemetry.get()
                 combined = chunk if combined is None else combined + chunk
                 yield chunk
             _raise_for_invalid_completed_tool_calls(combined)
+            if telemetry is not None:
+                telemetry.finish()
         except BaseException as exc:
+            if telemetry is not None:
+                telemetry.finish(interrupted=True)
             _capture_stream_error(self._capture_sink, exc, _stream_chunk_count.get())
             raise
         finally:
-            _stream_chunk_count.reset(token)
+            _reset_context_token(token)
+            _reset_context_token(telemetry_token)
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -250,6 +277,8 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         default_chunk_class: type,
         base_generation_info: dict | None,
     ) -> ChatGenerationChunk | None:
+        if telemetry := _request_telemetry.get():
+            telemetry.receive(chunk)
         generation = super()._convert_chunk_to_generation_chunk(
             chunk,
             default_chunk_class,
@@ -265,6 +294,16 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         _stream_chunk_count.set(_stream_chunk_count.get() + 1)
         _capture_converted_chunk(self._capture_sink, generation, chunk)
         return generation
+
+
+def _reset_context_token(token: contextvars.Token[Any]) -> None:
+    try:
+        token.var.reset(token)
+    except ValueError:
+        # Python may finalize a partially-consumed async generator in a fresh
+        # cleanup Context. Its original token has no state to restore there.
+        # The stream's captured telemetry still belongs to its original call.
+        pass
 
 
 def chat_model_for_deployment(
@@ -297,6 +336,11 @@ def chat_model_for_deployment(
     validate_model_reasoning(deployment, per_request)
     kwargs = _direct_kwargs(per_request)
     extra_body = _extra_body(per_request)
+    generation_defaults = deployment.server_props.default_generation_settings if deployment.server_props else {}
+    native_params = generation_defaults.get("params", generation_defaults)
+    if deployment.scope == "managed" or (isinstance(native_params, dict) and "timings_per_token" in native_params):
+        # These extensions belong to llama.cpp, not arbitrary compatible APIs.
+        extra_body.update(timings_per_token=True, return_progress=True)
     client = http_client
     async_client = http_async_client
     owned_client: httpx.Client | None = None

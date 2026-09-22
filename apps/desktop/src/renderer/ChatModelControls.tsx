@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { api } from "./api";
 import { Icon } from "./Icon";
 import { HoverHelp } from "./HoverHelp";
 import { tokenLabel } from "./ModelControls";
 import { StatusBadge } from "./StatusBadge";
+import { useDismissibleDetails } from "./useDismissibleDetails";
 import type { Deployment, RunProfile } from "./types";
 import "./ChatModelControls.css";
 
@@ -44,6 +45,8 @@ export interface ChatModelControlsProps {
 }
 
 export function ChatModelControls(props: ChatModelControlsProps) {
+  const menuRef = useDismissibleDetails();
+  const presetId = useId();
   const {
     deployments,
     profiles,
@@ -77,7 +80,7 @@ export function ChatModelControls(props: ChatModelControlsProps) {
     ? "No preset"
     : selectedProfile?.display_name ?? (selectedProfileId ? "Preset unavailable" : "Saved setup");
   const context = selectedDeployment?.server_props?.n_ctx ?? numericSetting(effectiveStartup.ctx_size);
-  const reasoning = reasoningSummary(effectiveStartup);
+  const loadedBudget = numericSetting(effectiveStartup.reasoning_budget);
   const requestEffort = stringSetting(perRequestOverrides.reasoning_effort) ?? stringSetting(basePerRequest.reasoning_effort) ?? "default";
   const loadedEffort = stringSetting(effectiveStartup.reasoning_effort) ?? "default";
   const effectiveEffort = requestEffort === "default" ? loadedEffort : requestEffort;
@@ -93,16 +96,20 @@ export function ChatModelControls(props: ChatModelControlsProps) {
   );
   const needsLoadedFix = effortMismatch && loadedEffortMismatch;
   const canResetThinking = (effortMismatch && !loadedEffortMismatch) || modeMismatch;
+  const thinkingIsOff = (thinkingMode === "default" ? stringSetting(effectiveStartup.reasoning) : thinkingMode) === "off";
+  const hasThinkingModes = fetchedThinkingOptions.modes.length > 0;
+  const showEffort = !thinkingIsOff && (thinking.supported || fetchedThinkingOptions.loading);
+  const chip = thinkingIsOff ? "Thinking off" : thinking.supported && effectiveEffort !== "default" ? thinking.label : supportedThinkingMode && thinkingMode === "on" ? "Thinking on" : null;
 
   return (
-    <details className="chat-model-controls">
+    <details ref={menuRef} name="chat-composer-controls" className="chat-model-controls">
       <summary className="chat-model-controls-trigger" aria-label={`Chat model settings: ${modelName}`}>
         <span className="chat-model-controls-icon" aria-hidden="true">
           <Icon name="models" size={16} />
         </span>
         <span className="chat-model-controls-main">
           <span className="chat-model-controls-model">{modelName}</span>
-          {!effortMismatch && !modeMismatch && thinking.supported ? <span className="thinking-chip">{thinking.label === "Model default" ? "Default" : thinking.label}</span> : !effortMismatch && supportedThinkingMode && thinkingMode !== "default" ? <span className="thinking-chip">Thinking {thinkingMode}</span> : null}
+          {!effortMismatch && !modeMismatch && chip ? <span className="thinking-chip">{chip}</span> : null}
           <span className="chat-model-controls-subtitle">{summary} / {presetName}</span>
         </span>
         {selectedDeployment ? <StatusBadge label={deploymentStatusLabel(selectedDeployment)} tone={deploymentTone(selectedDeployment)} /> : null}
@@ -111,8 +118,8 @@ export function ChatModelControls(props: ChatModelControlsProps) {
       <div className="chat-model-controls-panel" role="group" aria-label="Model and preset controls">
         <div className="chat-model-controls-grid">
           <label>
-            Model
-            <select value={selectedDeploymentId} disabled={disabled || locked} onChange={(event) => onDeploymentChange(event.target.value)}>
+            <span>Model</span>
+            <select aria-label="Model" value={selectedDeploymentId} disabled={disabled || locked} onChange={(event) => onDeploymentChange(event.target.value)}>
               {selectedDeploymentId && !selectedDeployment ? <option value={selectedDeploymentId}>{missingDeploymentLabel}</option> : null}
               {deployments.length === 0 ? <option value="">No model available</option> : null}
               {deployments.map((deployment) => (
@@ -121,9 +128,9 @@ export function ChatModelControls(props: ChatModelControlsProps) {
             </select>
           </label>
 
-          <label>
-            Preset
-            <select value={selectedProfileId} disabled={disabled || locked} onChange={(event) => {
+          <div className="chat-model-control-row">
+            <span className="chat-model-control-label"><label htmlFor={presetId}>Preset</label><HoverHelp title="About presets">Saved setup uses this model's saved response settings and instructions. No preset skips both. Choosing a preset does not reload the model.</HoverHelp></span>
+            <select id={presetId} aria-label="Preset" value={selectedProfileId} disabled={disabled || locked} onChange={(event) => {
               const next = event.target.value;
               onProfileChange(next);
               onInheritDeploymentSettingsChange(next !== "!none");
@@ -135,36 +142,26 @@ export function ChatModelControls(props: ChatModelControlsProps) {
                 <option key={profile.id} value={profile.id}>{profile.display_name}</option>
               ))}
             </select>
-          </label>
+          </div>
         </div>
 
         <dl className="chat-model-controls-facts">
-          <div>
-            <dt>Context</dt>
-            <dd>{context ? `${tokenLabel(context)} tokens${selectedDeployment?.server_props?.n_ctx ? " reported by server" : " from setup"}` : "Not reported yet"}</dd>
-          </div>
-          <div>
-            <dt>Loaded thinking budget</dt>
-            <dd>{reasoning.budgetLabel}</dd>
-          </div>
-          <div>
-            <dt>Endpoint</dt>
-            <dd>{selectedDeployment?.scope === "managed" ? "Local managed model" : selectedDeployment?.endpoint ?? "Not selected"}</dd>
-          </div>
+          {context ? <div><dt>Context</dt><dd>{tokenLabel(context)} tokens</dd></div> : null}
+          {loadedBudget != null && loadedBudget >= 0 ? <div><dt>Thinking limit</dt><dd>{tokenLabel(loadedBudget)} tokens</dd></div> : null}
+          {selectedDeployment ? <div><dt className="sr-only">Loaded model details</dt><dd><HoverHelp title="About the loaded model">{`${context ? `Context: ${tokenLabel(context)} tokens, ${selectedDeployment.server_props?.n_ctx ? "reported by the running model" : "from its saved load settings"}. ` : "Context size is not reported yet. "}${loadedBudget != null ? `Thinking limit: ${loadedBudget < 0 ? "unrestricted" : `${tokenLabel(loadedBudget)} tokens`}. ` : ""}${selectedDeployment.scope === "managed" ? "Runs locally on this computer." : `Connection: ${selectedDeployment.endpoint ?? "unavailable"}.`} Load settings stay unchanged when you choose a response preset.`}</HoverHelp></dd></div> : null}
         </dl>
 
-        {fetchedThinkingOptions.modes.length ? <label>
-          <span>Thinking <HoverHelp title="About thinking">Applies to your next message. Active and queued messages keep their settings.</HoverHelp></span>
+        {hasThinkingModes || showEffort ? <div className="chat-model-controls-thinking" aria-label="Thinking for the next message">
+        <div className="chat-model-controls-thinking-head">
+          <span>{hasThinkingModes ? "Thinking" : "Thinking effort"}<HoverHelp title="About thinking">Use more effort for harder questions. Choices come from this model. Applies to your next message; active and queued messages keep their settings.</HoverHelp></span>
+          {hasThinkingModes ?
           <select aria-label="Thinking mode for this message" value={supportedThinkingMode ? thinkingMode : "default"} disabled={disabled} onChange={event => onPerRequestOverridesChange(updateOverride(perRequestOverrides, "reasoning", event.target.value === "default" ? "auto" : event.target.value))}>
-            {fetchedThinkingOptions.modes.map(mode => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+            {fetchedThinkingOptions.modes.map(mode => <option key={mode.value} value={mode.value}>{mode.value === "default" ? "Model default" : mode.label}</option>)}
           </select>
-        </label> : null}
-        {thinking.supported || fetchedThinkingOptions.loading ? (
-        <div className="chat-model-controls-thinking" aria-label="Saved thinking setup">
-          <div className="chat-model-controls-thinking-head">
-            <span>Thinking effort<HoverHelp title="About thinking effort">These levels come from this model's template. Applies to the next message, without changing active or queued work.</HoverHelp></span>
-            <strong>{effortMismatch ? "Unsupported setting" : thinking.label}</strong>
-          </div>
+          : <strong>{effortMismatch ? "Unsupported setting" : thinking.label}</strong>}
+        </div>
+        {showEffort ? <>
+          {hasThinkingModes ? <div className="chat-model-controls-effort-value"><span>Effort</span><strong>{effortMismatch ? "Unsupported setting" : thinking.label}</strong></div> : null}
           <input
             aria-label="Thinking effort for this message"
             type="range"
@@ -172,6 +169,7 @@ export function ChatModelControls(props: ChatModelControlsProps) {
             max={Math.max(0, thinking.options.length - 1)}
             step="1"
             value={thinking.index}
+            aria-valuetext={effortMismatch ? "Unsupported setting" : thinking.label}
             disabled={disabled || !thinking.supported}
             onChange={(event) => {
               const next = thinking.options[Number(event.target.value)]?.value ?? thinking.options[0]?.value ?? "";
@@ -180,11 +178,11 @@ export function ChatModelControls(props: ChatModelControlsProps) {
           />
           <div className="chat-model-controls-efforts" aria-hidden="true">
             {thinking.options.length > 0
-              ? thinking.options.map((item) => <span key={item.value}>{item.label}</span>)
+              ? thinking.options.map((item) => <span key={item.value}>{item.value === "default" ? "Default" : item.label}</span>)
               : <span>{fetchedThinkingOptions.loading ? "Loading" : "Unavailable"}</span>}
           </div>
-        </div>
-        ) : null}
+        </> : null}
+        </div> : null}
         {canResetThinking ? <div className="chat-model-controls-note">
           <span>Thinking settings don't match this model <HoverHelp title="Thinking settings mismatch">A saved preset or message setting uses thinking options this model doesn't support. Use the model default for this message; other settings stay unchanged.</HoverHelp></span>
           <button type="button" className="ghost" aria-label="Use model default thinking" disabled={disabled} onClick={() => onPerRequestOverridesChange({
@@ -195,7 +193,6 @@ export function ChatModelControls(props: ChatModelControlsProps) {
         </div> : null}
         {needsLoadedFix ? <span className="chat-model-controls-note">Loaded thinking needs attention <HoverHelp title="Loaded thinking mismatch">The loaded model has an unsupported thinking effort. Choose a supported level here, or open Models, change its load settings, and reload it. A message reset cannot change loaded settings.</HoverHelp></span> : null}
         {!thinking.supported && !fetchedThinkingOptions.loading && !fetchedThinkingOptions.modes.length ? <span className="chat-model-controls-note">Model-controlled thinking <HoverHelp title="Thinking availability">{thinking.reason}</HoverHelp></span> : null}
-        <span className="chat-model-controls-note">Next message settings <HoverHelp title="About saved setups">Saved response settings and instructions apply together. No preset skips both. Loaded model settings stay unchanged.</HoverHelp></span>
       </div>
     </details>
   );
@@ -322,26 +319,6 @@ function deploymentTone(deployment: Deployment): "neutral" | "live" | "warn" | "
 
 function deploymentOptionLabel(deployment: Deployment): string {
   return `${deploymentName(deployment)} / ${deploymentStatusLabel(deployment)}`;
-}
-
-function reasoningSummary(settings: Record<string, unknown>): { label: string; budgetLabel: string } {
-  const mode = stringSetting(settings.reasoning);
-  const effort = stringSetting(settings.reasoning_effort);
-  const format = stringSetting(settings.reasoning_format);
-  const budget = numericSetting(settings.reasoning_budget);
-  const enabled = mode && mode !== "off" && mode !== "none";
-  if (!enabled && !effort && budget == null && !format) {
-    return { label: "Model default", budgetLabel: "Default" };
-  }
-  const parts = [
-    mode ? `mode ${mode}` : null,
-    effort && effort !== "default" ? `effort ${effort}` : null,
-    format && format !== "auto" ? `format ${format}` : null,
-  ].filter(Boolean);
-  return {
-    label: parts.length ? parts.join(" / ") : "Model default",
-    budgetLabel: budget == null ? "Default" : budget < 0 ? "Unrestricted" : `${tokenLabel(budget)} tokens`,
-  };
 }
 
 function thinkingControl(

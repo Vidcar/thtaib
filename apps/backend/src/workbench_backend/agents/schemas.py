@@ -211,14 +211,17 @@ class AgentStartRequest(BaseModel):
 
 
 class GenerationObservation(BaseModel):
+    request_id: str | None = None
+    phase: Literal["prompt_processing", "generating", "completed", "interrupted"] = "completed"
     input_tokens: int | None = None
     output_tokens: int | None = None
     context_limit: int | None = None
+    context_used_tokens: int | None = None
     elapsed_seconds: float
     tokens_per_second: float | None = None
     measured_at: str
-    basis: Literal["reported_tokens_model_call_wall_time"] = "reported_tokens_model_call_wall_time"
-    interval: Literal["last_completed_model_call_including_prompt_processing"] = "last_completed_model_call_including_prompt_processing"
+    basis: Literal["reported_tokens_model_call_wall_time", "llama_cpp_timings"] = "reported_tokens_model_call_wall_time"
+    interval: Literal["last_completed_model_call_including_prompt_processing", "current_model_call_generation", "last_model_call_generation"] = "last_completed_model_call_including_prompt_processing"
 
 
 class AgentRun(BaseModel):

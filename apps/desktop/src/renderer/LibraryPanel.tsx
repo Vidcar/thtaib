@@ -322,7 +322,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
               <div className="packet03-meta">
                 <span>{preview.filename}</span>
                 <span>{formatBytes(preview.size_bytes)}</span>
-                <span>{preview.truncated ? "Preview truncated" : "Complete preview"}</span>
+                {preview.truncated ? <span>Preview truncated</span> : null}
                 <span>{sourceStatusLabel(preview.source_status)}</span>
                 {fullContent?.id === preview.id ? <span>Full retained text</span> : null}
               </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps,
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import { HoverHelp } from "./HoverHelp";
 import { DeleteChatDialog } from "./DeleteChatDialog";
+import { useDismissibleDetails } from "./useDismissibleDetails";
 
 import { api } from "./api";
 import { Icon } from "./Icon";
@@ -265,6 +266,8 @@ function ChatInteractionStreamContent(props: {
       runId: run?.id ?? null,
       runStatus: run?.status ?? null,
       eventCount: run?.events.length ?? null,
+      generation: run.generation_observation,
+      context: run.context_observation,
     });
     if (projectionSignature.current === signature) {
       return;
@@ -569,6 +572,7 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel(props: ChatPanelProps = {}) {
+  const toolsMenuRef = useDismissibleDetails();
   const {
     activeTab = "chat",
     attentionConversationId = null,
@@ -1681,7 +1685,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               </article>
             ))
           )}
-          {runBusy && !pendingInterrupt ? (
+          {runBusy && !pendingInterrupt && (pendingStopActive || pendingSubmissionActive || !(canObserveInteraction && conversation?.current_run && isAgentRunLive(conversation.current_run.status))) ? (
             <p className="hint">
               Working… {pendingStopActive ? (
                 <StatusBadge label="Stopping submission" tone="warn" />
@@ -1746,11 +1750,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             event.currentTarget.querySelectorAll<HTMLDetailsElement>("details[open]").forEach(menu => { menu.open = false; });
             void sendTurn();
           }}
-          onKeyDown={event => {
-            if (event.key === "Escape") {
-              event.currentTarget.querySelectorAll<HTMLDetailsElement>("details[open]").forEach(menu => { menu.open = false; });
-            }
-          }}
         >
           {conversation ? <div hidden={!attachmentsOpen}><ComposerAttachments
             key={conversation.id}
@@ -1785,17 +1784,21 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           </label>
           <div className="actions">
             <button type="button" className="icon-button" aria-label="Attach files" title="Attach files" aria-expanded={attachmentsOpen} disabled={!selectedDeployment || sending || selectionBusy} onClick={() => void openAttachments()}><Icon name="plus" /></button>
-            <details className="composer-menu">
-              <summary title="Tools and permissions"><Icon name="shield" /><span>{toolsAllowed ? "Ask for approval" : "Tools off"}</span></summary>
-              <div className="composer-popover">
-                <h3>Tools and permissions</h3>
-                <label className="check-row"><input type="checkbox" checked={toolsAllowed} onChange={event => setToolsAllowed(event.target.checked)} /> Allow available tools for future messages</label>
-                <p className="hint">Sensitive actions ask first unless you have saved a matching permission. Turning tools off also disables previously allowed actions.</p>
-                <button type="button" onClick={() => navigateAway("settings")}>Review saved permissions</button>
-                <label className="check-row"><input type="checkbox" checked={presentation.detailed_streams} onChange={event => {
+            <details ref={toolsMenuRef} name="chat-composer-controls" className="composer-menu">
+              <summary title="Tools and permissions" aria-label="Tools and permissions"><Icon name="shield" /><span>{toolsAllowed ? "Tools on" : "Tools off"}</span></summary>
+              <div className="composer-popover chat-tools-popover" role="group" aria-label="Tools and activity settings">
+                <div className="chat-tools-row">
+                  <label className="check-row"><input type="checkbox" aria-label="Use tools" checked={toolsAllowed} onChange={event => setToolsAllowed(event.target.checked)} /> Use tools</label>
+                  <HoverHelp title="About tool permissions">Applies to future messages. Sensitive actions ask first unless you saved a matching permission. Turning tools off blocks previously allowed actions too.</HoverHelp>
+                </div>
+                <div className="chat-tools-row">
+                <label className="check-row"><input type="checkbox" aria-label="Detailed activity" checked={presentation.detailed_streams} onChange={event => {
                   const next = { detailed_streams: event.target.checked };
                   void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail);
-                }} /> Show detailed activity by default</label>
+                }} /> Detailed activity</label>
+                <HoverHelp title="About detailed activity">Expand reasoning and tool output by default. Your choice is saved across chats. Approvals, questions and errors always stay visible.</HoverHelp>
+                </div>
+                <button type="button" className="chat-tools-permissions" onClick={() => navigateAway("settings")}><Icon name="settings" size={14} /> Saved permissions</button>
               </div>
             </details>
             <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={chooseDeployment} onProfileChange={setProfileId} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={setPerRequestOverrides} onInheritDeploymentSettingsChange={inherit => { if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />

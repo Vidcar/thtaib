@@ -9,6 +9,7 @@ import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import { Icon } from "./Icon";
 import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
+import "./deploymentReadouts.css";
 
 const cacheTypes = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
 const choices = (values: string[]) => values.map(value => ({ value, label: value }));
@@ -187,15 +188,19 @@ export function DeploymentsPanel({
     const state = stateOf(d), ctx = d.server_props?.n_ctx;
     const sampling = Object.fromEntries(Object.entries(d.server_props?.default_generation_settings?.params ?? {}).filter(([key]) => ["temperature", "top_p", "top_k", "min_p", "repeat_penalty", "n_predict"].includes(key)));
     const name = bundles.find(b => b.id === d.bundle_id)?.display_name ?? d.display_name.replace(/^(managed|connected):/, "");
+    const gpuLayers = d.applied_startup.n_gpu_layers;
+    const speculation = d.applied_startup.spec_type;
+    const thinking = d.applied_startup.reasoning_effort ?? d.applied_startup.reasoning;
+    const hasSpeculation = speculation != null && !["", "none", "off"].includes(String(speculation));
+    const hasThinkingOverride = thinking != null && !["", "auto", "default"].includes(String(thinking));
     return <li key={d.id} className="running-model">
       <div className="section-heading"><div><strong>{name}</strong><p className="hint">{d.scope === "managed" ? "On this computer" : "External server"}{ctx ? ` · ${tokenLabel(ctx)} context` : ""}{d.resource_usage?.available ? ` · ${formatBytes(d.resource_usage.rss_bytes)} RAM` : ""}</p></div><StatusBadge label={state.label} tone={state.tone} /></div>
       {d.error && d.status !== "stopped" ? <Notice tone="error">{d.error}</Notice> : null}
-      <dl className="settings-readout applied-summary" aria-label="Applied model settings">
-        <div title="Context observed from the running server"><dt>Context</dt><dd>{ctx ? tokenLabel(ctx) : "Not reported"}</dd></div>
-        <div title="GPU layers requested when this model was launched"><dt>GPU layers</dt><dd>{d.applied_startup.n_gpu_layers === -1 ? "All requested" : String(d.applied_startup.n_gpu_layers ?? "Auto")}</dd></div>
-        <div title="Speculative decoding launch setting"><dt>Speculation</dt><dd>{String(d.applied_startup.spec_type ?? "Off")}{d.applied_startup.spec_type?.toString().startsWith("draft-") ? ` · ${d.applied_startup.spec_draft_n_max ?? 3} tokens` : ""}</dd></div>
-        <div title="Thinking launch setting. Per-message controls can override it."><dt>Thinking</dt><dd>{String(d.applied_startup.reasoning_effort ?? d.applied_startup.reasoning ?? "Model default")}</dd></div>
-      </dl>
+      {gpuLayers != null || hasSpeculation || hasThinkingOverride ? <dl className="model-applied-facts" aria-label="Applied model settings">
+        {gpuLayers != null ? <div title="GPU layers requested at launch; memory fitting may adjust this"><dt>GPU layers</dt><dd>{gpuLayers === -1 ? "All requested" : String(gpuLayers)}</dd></div> : null}
+        {hasSpeculation ? <div title="Speculative decoding launch setting"><dt>Speculation</dt><dd>{String(speculation)}{String(speculation).startsWith("draft-") ? ` · ${d.applied_startup.spec_draft_n_max ?? 3} tokens` : ""}</dd></div> : null}
+        {hasThinkingOverride ? <div title="Thinking launch setting. Per-message controls can override it."><dt>Thinking</dt><dd>{String(thinking)}</dd></div> : null}
+      </dl> : null}
       <div className="actions">
         {d.scope === "managed" && d.status !== "stopped" ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(d.id, async () => { await api.stop(d.id); await refresh(); })}>{busy === d.id ? "Unloading…" : "Unload model"}</button> : null}
         {d.scope === "managed" && d.status === "stopped" ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(d.id, async () => { await api.start(d.id); await refresh(); })}>Load saved setup</button> : null}

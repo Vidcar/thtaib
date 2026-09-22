@@ -311,7 +311,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
       <details className="packet03-item">
         <summary><Icon name="restore" size={15} /> Restore</summary>
-        <div className="entity-head"><h3>Restore a backup</h3><HoverHelp title="How restore works">Restores into an empty folder and reports missing models, runtimes or other external files. Switch to it using Activate restore when you're ready.</HoverHelp></div>
+        <div className="entity-head"><h3>Restore a backup</h3><HoverHelp title="Restore dependencies">Missing models, runtimes and external files are reported before activation.</HoverHelp></div>
         <p className="hint">Restores to an empty folder. Activation restarts the app; previous actions are never replayed.</p>
         {activeRunIds.length ? (
           <p className="notice notice-warn">{activeRunIds.length} active run{activeRunIds.length === 1 ? "" : "s"} detected. Restore is safest after work is stopped or complete.</p>

@@ -5,7 +5,8 @@ from __future__ import annotations
 import threading
 import unittest
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
@@ -13,6 +14,17 @@ from workbench_backend.interaction.projection import archive_messages, message_d
 
 
 class InteractionProjectionTests(unittest.TestCase):
+    def test_tool_command_projects_matching_reply_without_graph_state_or_routing(self) -> None:
+        command = Command(update={"messages": [ToolMessage(content="other reply", tool_call_id="other"),
+            ToolMessage(content="Updated todo list", tool_call_id="todo", name="write_todos")],
+            "private_state": "must stay private"}, goto="private_route")
+        raw = {"method": "tools", "params": {"namespace": [], "data": {
+            "event": "tool-finished", "tool_call_id": "todo", "output": command}}}
+        projected = native_event(raw)[0]
+        self.assertEqual(projected["params"]["data"]["output"]["content"], "Updated todo list")
+        self.assertNotIn("private", str(projected))
+        self.assertNotIn("other reply", str(projected))
+
     def test_nested_lifecycle_keeps_identity_cause_but_not_checkpoint(self) -> None:
         raw = {"method": "lifecycle", "params": {"namespace": ["worker:instance-1"], "node": "worker",
             "timestamp": 123, "data": {"event": "running", "graph_name": "researcher",

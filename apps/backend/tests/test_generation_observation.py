@@ -9,7 +9,8 @@ from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 class GenerationObservationTests(unittest.TestCase):
     def observe(self, usage, *, unverified=False):
         startup = SimpleNamespace(applied={"ctx_size": 8192}, unverified=["ctx_size"] if unverified else [])
-        run = SimpleNamespace(effective_setup=SimpleNamespace(bags=SimpleNamespace(startup=startup)))
+        run = SimpleNamespace(effective_setup=SimpleNamespace(bags=SimpleNamespace(startup=startup)),
+                              context_observation=SimpleNamespace(capacity_tokens=None if unverified else 8192))
         middleware = WorkbenchHarnessMiddleware(run)
         response = SimpleNamespace(result=[SimpleNamespace(usage_metadata=usage)])
         middleware._observe_generation(response, 2.0)
@@ -22,6 +23,7 @@ class GenerationObservationTests(unittest.TestCase):
         self.assertEqual(observed.tokens_per_second, 15)
         self.assertEqual(observed.elapsed_seconds, 2)
         self.assertEqual(observed.context_limit, 8192)
+        self.assertEqual(observed.context_used_tokens, 150)
 
     def test_missing_or_invalid_usage_remains_unavailable(self):
         for usage in (None, {}, {"input_tokens": True, "output_tokens": False},

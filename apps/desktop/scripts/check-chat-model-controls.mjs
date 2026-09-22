@@ -15,6 +15,8 @@ globalThis.window = { workbench: { backendUrl: "http://chat-model-controls.test"
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
+  const { useDismissibleDetails } = await vite.ssrLoadModule("/src/renderer/useDismissibleDetails.ts");
+  await checkPopoverDismissal(useDismissibleDetails);
   await checkCompactControls(ChatModelControls);
   await checkFetchedThinkingEffortOptions(ChatModelControls);
   await checkThinkingEffortLoadingAndDeploymentChange(ChatModelControls);
@@ -26,6 +28,7 @@ try {
   await checkUnsupportedSavedThinkingReset(ChatModelControls);
   await checkInvalidLoadedThinkingCannotReset(ChatModelControls);
   await checkAcceptedThinkingAliasAndExplicitDefault(ChatModelControls);
+  await checkAdaptiveThinkingControls(ChatModelControls);
 } finally {
   await vite.close();
 }
@@ -52,10 +55,19 @@ async function checkCompactControls(ChatModelControls) {
   });
 
   const text = textOf(renderer.toJSON());
+  assert.equal(renderer.root.findByType("details").props.name, "chat-composer-controls", "model and tools use native mutually exclusive menus");
+  const presetSelect = renderer.root.findByProps({ "aria-label": "Preset" });
+  assert.equal(renderer.root.findByProps({ htmlFor: presetSelect.props.id }).type, "label", "Preset retains an explicit accessible label");
+  let helpParent = renderer.root.findByProps({ "aria-label": "About presets" }).parent;
+  while (helpParent) {
+    assert.notEqual(helpParent.type, "label", "opening preset help must not activate the select through an enclosing label");
+    helpParent = helpParent.parent;
+  }
   assert.match(text, /Qwen/, "compact button should show selected model");
-  assert.match(text, /32k tokens reported by server/, "context readout should use reported server context");
+  assert.match(text, /Context32k tokens/, "context readout should use reported server context");
+  assert.match(helpMessage(renderer, "About the loaded model"), /reported by the running model/, "loaded context provenance stays available without repeating it in the control");
   assert.equal(input(renderer, "range").props.value, 2, "thinking effort should come from selected profile per-request settings");
-  assert.match(text, /Loaded thinking budget1k tokens/, "thinking budget must show the loaded model, not the selected response preset");
+  assert.match(text, /Thinking limit1k tokens/, "thinking budget must show the loaded model, not the selected response preset");
   const slider = input(renderer, "range");
   assert.equal(slider.props.disabled, false, "supported thinking effort slider should be functional");
   await act(async () => {
@@ -261,11 +273,11 @@ async function checkLoadedSettingsDoNotFollowSelectedProfile(ChatModelControls) 
     await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
     const before = renderer.root.findByProps({ className: "chat-model-controls-facts" });
     assert.match(textOf(before), /Context16k tokens/);
-    assert.match(textOf(before), /Loaded thinking budget2k tokens/);
+    assert.match(textOf(before), /Thinking limit2k tokens/);
     await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, selectedProfileId: "new_preset" })); });
     const after = renderer.root.findByProps({ className: "chat-model-controls-facts" });
     assert.match(textOf(after), /Context16k tokens/, "selecting a response preset must not claim the loaded context changed");
-    assert.match(textOf(after), /Loaded thinking budget2k tokens/, "selecting a response preset must not claim the loaded budget changed");
+    assert.match(textOf(after), /Thinking limit2k tokens/, "selecting a response preset must not claim the loaded budget changed");
     assert.doesNotMatch(textOf(after), /64k|8k/);
   } finally {
     if (renderer) await act(async () => renderer.unmount());
@@ -407,8 +419,91 @@ async function checkAcceptedThinkingAliasAndExplicitDefault(ChatModelControls) {
   }
 }
 
+async function checkAdaptiveThinkingControls(ChatModelControls) {
+  const changes = [];
+  const restore = mockConfigurationOptions({ per_request_defaults: {
+    reasoning_effort: { supported: true, accepted_values: ["low", "medium", "high"], options: effortOptions(["default", "low", "medium", "high"]) },
+    reasoning: { supported: true, options: [{ value: "auto", label: "Model default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
+  } });
+  const selected = deployment("dep_adaptive", "managed:Adaptive", "running", { n_ctx: 65536 });
+  selected.applied_startup = {};
+  const props = {
+    deployments: [selected], profiles: [], selectedDeploymentId: selected.id, selectedProfileId: "", inheritDeploymentSettings: true,
+    perRequestOverrides: { temperature: 0.4, reasoning_effort: "high" },
+    onDeploymentChange() {}, onProfileChange() {}, onInheritDeploymentSettingsChange() {},
+    onPerRequestOverridesChange: value => changes.push(value),
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
+    assert.equal(input(renderer, "range").props["aria-valuetext"], "High", "keyboard and screen reader users get the named effort level");
+    assert.doesNotMatch(textOf(renderer.root.findByProps({ className: "chat-model-controls-facts" })), /Default|Endpoint|Thinking limit/,
+      "unknown/default load facts do not fill the popover with status cards");
+    const mode = () => renderer.root.findByProps({ "aria-label": "Thinking mode for this message" });
+    await act(async () => mode().props.onChange({ target: { value: "off" } }));
+    assert.deepEqual(changes.at(-1), { temperature: 0.4, reasoning_effort: "high", reasoning: "off" }, "turning thinking off preserves the chosen effort for later reuse");
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, perRequestOverrides: changes.at(-1) })); });
+    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props.type === "range").length, 0, "thinking off hides the irrelevant effort slider");
+    assert.equal(textOf(renderer.root.findByProps({ className: "thinking-chip" })), "Thinking off", "the trigger reports the actual mode instead of a dormant effort");
+    await act(async () => mode().props.onChange({ target: { value: "on" } }));
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, perRequestOverrides: changes.at(-1) })); });
+    assert.equal(input(renderer, "range").props["aria-valuetext"], "High", "reenabling thinking retains its chosen effort");
+    await act(async () => { renderer.update(React.createElement(ChatModelControls, { ...props, perRequestOverrides: {} })); });
+    assert.equal(renderer.root.findAllByProps({ className: "thinking-chip" }).length, 0, "model-default thinking does not add a redundant Default badge");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    restore();
+  }
+}
+
 function effortOptions(values) {
   return values.map((value) => ({ value, label: value === "default" ? "Default" : value[0].toUpperCase() + value.slice(1) }));
+}
+
+async function checkPopoverDismissal(useDismissibleDetails) {
+  const originalDocument = globalThis.document;
+  const listeners = new Map();
+  let focusCount = 0;
+  const inside = {};
+  const menu = {
+    open: true,
+    contains: target => target === inside,
+    querySelectorAll: () => [{ getAttribute: () => "description own-help" }],
+    querySelector: () => ({ focus: () => { focusCount += 1; } }),
+  };
+  globalThis.document = {
+    addEventListener: (name, handler) => listeners.set(name, handler),
+    removeEventListener: name => listeners.delete(name),
+  };
+  function Fixture() { return React.createElement("details", { ref: useDismissibleDetails() }); }
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Fixture), { createNodeMock: () => menu }); });
+    listeners.get("pointerdown")({ target: inside });
+    assert.equal(menu.open, true, "clicking controls inside the menu keeps it open");
+    listeners.get("pointerdown")({ target: { closest: () => ({ id: "own-help" }) } });
+    assert.equal(menu.open, true, "the menu owns its portalled help via aria-describedby");
+    listeners.get("pointerdown")({ target: { closest: () => ({ id: "another-control-help" }) } });
+    assert.equal(menu.open, false, "an unrelated help popover remains an outside click");
+    assert.equal(focusCount, 0, "outside clicks keep focus at their new destination");
+    menu.open = true;
+    listeners.get("pointerdown")({ target: {} });
+    assert.equal(menu.open, false, "clicking the conversation dismisses the menu");
+    menu.open = true;
+    listeners.get("keydown")({ key: "ArrowRight" });
+    assert.equal(menu.open, true, "normal keyboard control input is unaffected");
+    let prevented = false;
+    listeners.get("keydown")({ key: "Escape", preventDefault: () => { prevented = true; } });
+    assert.equal(menu.open, false);
+    assert.equal(focusCount, 1, "Escape returns focus to the menu summary");
+    assert.equal(prevented, true);
+    await act(async () => renderer.unmount());
+    renderer = null;
+    assert.equal(listeners.size, 0, "closing the component removes document listeners");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.document = originalDocument;
+  }
 }
 
 function mockConfigurationOptions(body) {

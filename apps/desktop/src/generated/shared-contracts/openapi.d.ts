@@ -2201,11 +2201,13 @@ export interface components {
             /**
              * Basis
              * @default reported_tokens_model_call_wall_time
-             * @constant
+             * @enum {string}
              */
-            basis: "reported_tokens_model_call_wall_time";
+            basis: "reported_tokens_model_call_wall_time" | "llama_cpp_timings";
             /** Context Limit */
             context_limit?: number | null;
+            /** Context Used Tokens */
+            context_used_tokens?: number | null;
             /** Elapsed Seconds */
             elapsed_seconds: number;
             /** Input Tokens */
@@ -2213,13 +2215,21 @@ export interface components {
             /**
              * Interval
              * @default last_completed_model_call_including_prompt_processing
-             * @constant
+             * @enum {string}
              */
-            interval: "last_completed_model_call_including_prompt_processing";
+            interval: "last_completed_model_call_including_prompt_processing" | "current_model_call_generation" | "last_model_call_generation";
             /** Measured At */
             measured_at: string;
             /** Output Tokens */
             output_tokens?: number | null;
+            /**
+             * Phase
+             * @default completed
+             * @enum {string}
+             */
+            phase: "prompt_processing" | "generating" | "completed" | "interrupted";
+            /** Request Id */
+            request_id?: string | null;
             /** Tokens Per Second */
             tokens_per_second?: number | null;
         };

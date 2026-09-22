@@ -13,13 +13,13 @@ Additional prerequisite: `repair-local-interaction-boundaries` must be delivered
 - [x] 1.3 Integrate Chat with the prerequisite's verified `@langchain/react` message/tool/state projections, scoped subscription and interrupt boundary; reconcile incremental answers/reasoning/tool results by application run/call identity, preserve durable terminal hydration and expose observed planning/context. Verify migration compatibility and do not extend the superseded custom `snapshot` / `run_event` / `stream_end` transport.
 - [x] 1.4 Verify existing tools-off, host-shell parsing, framework approvals and resume/cancel protections in `agents/host_shell.py` and `agents/harness.py`; complete missing presentation/execution guards, four scoped approval choices, revocation, exact resume identities and typed ask-user interruptions.
 - [x] 1.5 Implement supported checkpoint branches, explicit effectful retry and answer-only regeneration or a truthful unavailable state where unsupported.
-- [ ] 1.6 Add text/code picker and drag/drop, attachment-only send, scoped immutable originals, fitting source-labelled input and verified shared artifact references.
+- [x] 1.6 Add text/code picker and drag/drop, attachment-only send, scoped immutable originals, fitting source-labelled input and verified shared artifact references.
 - [x] 1.7 Implement dependency-aware retention/deletion, readable export and consistent versioned manual backup/clean restore.
 - [ ] 1.8 Complete cancellation, tray/reopen and explicit Quit handling; preserve partial results, safe rendering and accessible existing controls.
 - [x] 1.9 Implement the shared collapsible project/conversation sidebar, fixed-area header, on-demand Files/activity panel, functional destination rollout and Settings entry; support system/light/dark themes, full/half-screen layouts, keyboard access and reduced motion.
 - [x] 1.10 Implement compact model/reasoning/setup and composer controls, truthful context/tok/s indicators and stopped-installed-model start from Chat using existing lifecycle/admission protections; preserve draft and actionable conflicts/failures.
 - [x] 1.11 Implement remembered detailed-stream visibility (default off), independent output expansion, always-streamed answers, compact progress and visible interrupts/errors; present distinct branch/retry/regenerate actions.
-- [ ] 1.12 Implement Queue/Stop presentation and editable queue above the composer, inline scoped approvals, saved-grant Settings controls, sidebar attention/list and background Windows notifications without focus stealing or success alerts by default.
+- [x] 1.12 Implement Queue/Stop presentation and editable queue above the composer, inline scoped approvals, saved-grant Settings controls, sidebar attention/list and background Windows notifications without focus stealing or success alerts by default.
 - [x] 1.13 Implement the initial retained-file Library with scope filters/provenance and shared inline/panel previews/actions; expose manual backup/restore in Settings without a parallel store.
 
 ## 2. Verify
@@ -33,7 +33,7 @@ Additional prerequisite: `repair-local-interaction-boundaries` must be delivered
 - [x] 2.7 Test shared-branch/case asset deletion, checkpoint API cleanup, diagnostic retention separation, backup integrity and clean restore with missing external dependencies and no automatic replay.
 - [ ] 2.8 Run a real local-model conversation across reopen/restart, a disposable file task with approval/denial/cancel, and Windows drag/drop, scrolling, tray and Quit checks.
 - [x] 2.9 Verify observed versus estimated/unavailable context and tok/s, unsupported reasoning controls, setting changes versus queued/live setup, model-start failure/conflicts and no duplicated submission after recovery.
-- [ ] 2.10 Exercise stream toggle persistence and per-output expansion during generation, text selection/links, reduced motion, visible approvals/questions/errors, queue edits/reopen, Library scope/access and notifications without changing run ownership or stealing focus.
+- [x] 2.10 Exercise stream toggle persistence and per-output expansion during generation, text selection/links, reduced motion, visible approvals/questions/errors, queue edits/reopen, Library scope/access and notifications without changing run ownership or stealing focus.
 
 ## 3. Human UX checkpoints
 
@@ -42,6 +42,6 @@ Additional prerequisite: `repair-local-interaction-boundaries` must be delivered
 
 Specification approval does not complete these tasks. UX acceptance is pending until Dave accepts the built experience or explicitly defers review; mark a deferral as deferred, not accepted, and retain every required technical/live check.
 
-Implementation status (2026-09-22):19/25 tasks verified. Backend495/default and150/integration, full desktop build, contracts and strict OpenSpec15/15 pass. Native verification and repaired findings are recorded in design.md. Remaining six tasks depend on Windows notification activation/tray click and Explorer drag checks plus Dave final3.2 acceptance or explicit visual-review deferral. These checks are requested, not waived. Preserve review fixtures until completed, then perform cleanup, final checks, commit/PR/merge and rebuilt local verification. Do not archive or claim packet completion yet.
+Implementation status (2026-09-22): 22/25 tasks verified. Dave accepted actual Explorer drop and Windows notification activation. Tray reopening confirmation remains outstanding. Requested compact model/permission/usage popovers, hover/focus context details, actual request counts/live speed and cross-surface cleanup are implemented and verified in the built Windows application. Backend 522/default, 155/integration, complete desktop build/regressions, generated contracts and strict OpenSpec 16/16 pass; live Qwen measurements match native wire, saved state and visible UI. See design.md for actual conditions and evidence. Task 3.2 retains final UX acceptance separately. Do not archive or claim completion until remaining checks finish.
 
 Use the repository validation commands in `AGENTS.md`. Keep actual test outcomes and any blocker in this change/its PR; do not create another tracker. Required real checks stay incomplete when the necessary runtime, endpoint or Windows device is unavailable.

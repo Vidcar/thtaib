@@ -64,6 +64,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
+        self.run.generation_observation = None
         before = len(self.http_sink)
         started = time.perf_counter()
         try:
@@ -94,6 +95,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
+        self.run.generation_observation = None
         before = len(self.http_sink)
         started = time.perf_counter()
         try:
@@ -117,16 +119,19 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return response
 
     def _observe_generation(self, response: ModelResponse, elapsed: float) -> None:
+        native = getattr(self.run, "generation_observation", None)
+        if native is not None and native.basis == "llama_cpp_timings":
+            return
         usages = [getattr(message, "usage_metadata", None) for message in response.result]
         reported = [usage.get("output_tokens") for usage in usages if isinstance(usage, dict)]
         tokens = sum(reported) if reported and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in reported) else None
         inputs = [usage.get("input_tokens") for usage in usages if isinstance(usage, dict)]
         input_tokens = sum(inputs) if inputs and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in inputs) else None
-        limit = self.run.effective_setup.bags.startup.applied.get("ctx_size") if self.run.effective_setup else None
-        if self.run.effective_setup and "ctx_size" in self.run.effective_setup.bags.startup.unverified:
-            limit = None
+        context = getattr(self.run, "context_observation", None)
+        limit = context.capacity_tokens if context is not None else None
         self.run.generation_observation = GenerationObservation(output_tokens=tokens,
             input_tokens=input_tokens, context_limit=limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None,
+            context_used_tokens=input_tokens + tokens if input_tokens is not None and tokens is not None else None,
             elapsed_seconds=elapsed, tokens_per_second=tokens / elapsed if tokens is not None and elapsed > 0 else None,
             measured_at=utc_now())
 

@@ -60,6 +60,7 @@ from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
     AgentStartRequest,
+    GenerationObservation,
     HostShellFacts,
     InterruptDecisionRequest,
     UserAnswerRequest,
@@ -126,7 +127,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 ModelFactory = Callable[[AgentRun, list[dict[str, Any]]], BaseChatModel]
 EmbeddingsFactory = Callable[[Deployment], Embeddings]
-InteractionObserver = Callable[[AgentRun, dict[str, Any] | None], None]
+InteractionObserver = Callable[..., None]
 
 
 class HarnessService:
@@ -952,6 +953,27 @@ class HarnessService:
         usable = observation.usable_input_tokens if observation is not None else None
         # Override provider-name defaults; only observed runtime capacity is a fact.
         model.profile = {"max_input_tokens": usable} if usable else {}
+        if not inspection_only and callable(getattr(model, "set_generation_observer", None)):
+            latest_request_id: str | None = None
+
+            def observe_generation(sample: dict[str, Any]) -> None:
+                nonlocal latest_request_id
+                with self._lock:
+                    if not is_run_lifecycle_live(run.status):
+                        return
+                    if sample.get("reset"):
+                        latest_request_id = sample["request_id"]
+                        run.generation_observation = None
+                    elif sample["request_id"] == latest_request_id:
+                        run.generation_observation = GenerationObservation(
+                            **sample, context_limit=observation.capacity_tokens if observation else None,
+                        )
+                    else:
+                        return
+                    run.updated_at = utc_now()
+                    self._persist_and_notify(run, telemetry=True)
+
+            model.set_generation_observer(observe_generation)
         if observation is not None and callable(getattr(model, "set_context_guard", None)):
             def guard(payload: dict[str, Any]) -> None:
                 observed = observe_payload(observation, payload)
@@ -1208,6 +1230,10 @@ class HarnessService:
             run.stop_reason = stop_reason
             run.finished_at = utc_now()
             run.updated_at = run.finished_at
+            if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
+                run.generation_observation = run.generation_observation.model_copy(update={
+                    "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
+                })
             event_detail: dict[str, Any] = {
                 "stop_reason": stop_reason,
                 "error": run.error,
@@ -1300,11 +1326,11 @@ class HarnessService:
         additional = getattr(message, "additional_kwargs", None)
         return isinstance(additional, dict) and additional.get("lc_source") == "summarization"
 
-    def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None) -> None:
+    def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         if self._interaction_observer is None:
             return
         safe = apply_run_diagnostic_policy(run, self._capture_settings())
-        self._interaction_observer(safe.model_copy(deep=True), event)
+        self._interaction_observer(safe.model_copy(deep=True), event, **({"telemetry": True} if telemetry else {}))
 
     def _close_native_stream(self, stream: Any) -> None:
         if stream is None:
@@ -1657,6 +1683,10 @@ class HarnessService:
             )
             live.finished_at = utc_now()
             live.updated_at = live.finished_at
+            if live.generation_observation is not None and live.generation_observation.phase in {"prompt_processing", "generating"}:
+                live.generation_observation = live.generation_observation.model_copy(update={
+                    "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": live.finished_at,
+                })
             live.events.append(
                 AgentEvent(
                     at=live.updated_at,
@@ -1699,9 +1729,9 @@ class HarnessService:
         run.model_requests = sanitized.model_requests
         self.store.put_run(run.model_copy(deep=True))
 
-    def _persist_and_notify(self, run: AgentRun) -> None:
+    def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
         self._persist(run)
-        self._observe_interaction(run, None)
+        self._observe_interaction(run, None, telemetry=telemetry)
         self._updates.notify_all()
 
     def _capture_settings(self) -> ContextCaptureSettings:

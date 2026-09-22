@@ -319,7 +319,7 @@ class InteractionService:
             return content
         return "".join(block.get("text", "") for block in content or [] if isinstance(block, dict) and block.get("type") == "text")
 
-    def observe(self, run: AgentRun, raw: dict[str, Any] | None) -> None:
+    def observe(self, run: AgentRun, raw: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         with self._projection_lock:
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
@@ -384,7 +384,24 @@ class InteractionService:
                     outgoing.append(event("lifecycle", {"event": state, "run_id": run.id,
                         "graph_name": "local-ai-workbench", "app_status": run.status.value,
                         **({"error": run.error} if run.error else {})}))
-            self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id)
+            observation = run.generation_observation
+            replaceable = (
+                telemetry and raw is None and len(outgoing) == 1 and is_run_lifecycle_live(run.status)
+                and (observation is None or observation.phase in {"prompt_processing", "generating"})
+                and self._measurement_only(binding["snapshot"], snapshot)
+            )
+            self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id,
+                                          replaceable_measurement=replaceable)
+
+    @staticmethod
+    def _measurement_only(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+        def without_measurement(snapshot: dict[str, Any]) -> dict[str, Any]:
+            workbench = snapshot.get("workbench", {})
+            run = workbench.get("run") or {}
+            return {**snapshot, "workbench": {**workbench, "run": {
+                key: value for key, value in run.items() if key not in {"generation_observation", "updated_at"}
+            }}}
+        return without_measurement(previous) == without_measurement(current)
 
     def replay(self, thread_id: str, since: int, through: int):
         while since < through:

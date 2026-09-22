@@ -21,6 +21,7 @@ from workbench_backend.agents.harness import HarnessService, _graph_checkpoint_s
 from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
+    GenerationObservation,
     PendingInterrupt,
     PendingInterruptAction,
 )
@@ -576,6 +577,9 @@ class HarnessApiTests(unittest.TestCase):
             created_at=now,
             updated_at=now,
             workspace_id="ws_orphan",
+            generation_observation=GenerationObservation(request_id="lost-request", phase="generating",
+                input_tokens=100, output_tokens=7, context_used_tokens=107, elapsed_seconds=.5,
+                tokens_per_second=12, measured_at=now, basis="llama_cpp_timings", interval="current_model_call_generation"),
         )
         self.app.state.harness.store.put_run(run)
 
@@ -586,6 +590,10 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(observed.stop_reason, "orphaned")
         self.assertIn("restarted", observed.error or "")
         self.assertEqual(restarted.active_workspace_run_ids("ws_orphan"), [])
+        self.assertEqual(observed.generation_observation.phase, "interrupted")
+        self.assertEqual(observed.generation_observation.output_tokens, 7)
+        self.assertEqual(observed.generation_observation.interval, "last_model_call_generation")
+        self.assertEqual(restarted.store.get_run(run.id).generation_observation, observed.generation_observation)
 
     def test_restart_reconciles_orphan_queued_and_running_runs_as_failed(self) -> None:
         for status in (AgentRunStatus.queued, AgentRunStatus.running):

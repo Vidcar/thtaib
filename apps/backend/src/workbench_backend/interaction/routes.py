@@ -80,8 +80,7 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
             cutover = interaction.binding(thread_id)["snapshot"].get("workbench", {}).get("display_cutover_seq", 0)
             if cursor < cutover - 1:
                 cursor = cutover - 1
-            page, high_water = interaction.store.interaction_page(thread_id, cursor)
-            gap = cursor > high_water or any(item["seq"] != cursor + index + 1 for index, item in enumerate(page)) or (not page and cursor < high_water)
+            page, _high_water, gap = interaction.store.interaction_page(thread_id, cursor)
             if gap:
                 # Released SDKs do not interpret a special gap control frame.
                 # Resynchronize via ordinary upstream values/lifecycle events

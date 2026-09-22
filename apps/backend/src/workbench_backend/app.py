@@ -134,10 +134,10 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.harness,
         lambda: application.state.chat,
     )
-    def _observe_run(run, event):
-        application.state.interaction.observe(run, event)
+    def _observe_run(run, event, *, telemetry=False):
+        application.state.interaction.observe(run, event, telemetry=telemetry)
         coordinator = getattr(application.state, "chat_coordinator", None)
-        if coordinator is not None and event is None:
+        if coordinator is not None and event is None and not telemetry:
             coordinator.observe(run)
 
     application.state.harness = HarnessService(

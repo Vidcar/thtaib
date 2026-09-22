@@ -111,6 +111,7 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin):
                 if previous and previous[0] not in {"1", SCHEMA_VERSION}:
                     raise ValueError("This application database requires a different runtime version.")
                 self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + CHAT_STATE_SCHEMA + INTERACTION_SCHEMA + ASSET_SCHEMA + PREFERENCE_SCHEMA)
+                self._migrate_interaction_replay()
                 if previous is None or previous[0] == "1":
                     self._migrate_chat_identity()
                 self._conn.execute(

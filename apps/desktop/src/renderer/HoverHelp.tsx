@@ -3,10 +3,17 @@ import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
 /** Help is available to pointer, keyboard and touch without occupying the page. */
-export function HoverHelp({ title = "About this setting", children }: { title?: string; children: ReactNode }) {
+export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below" }: {
+  title?: string;
+  children: ReactNode;
+  triggerContent?: ReactNode;
+  triggerClassName?: string;
+  bubbleClassName?: string;
+  placement?: "above" | "below";
+}) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
-  const bubble = useRef<HTMLSpanElement>(null);
+  const bubble = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hovered = useRef(false);
   const focused = useRef(false);
@@ -30,13 +37,14 @@ export function HoverHelp({ title = "About this setting", children }: { title?: 
     const tip = bubble.current?.getBoundingClientRect();
     if (!anchor || !tip) return;
     const below = anchor.bottom + 8;
-    const top = below + tip.height <= window.innerHeight - 8 ? below : anchor.top - tip.height - 8;
+    const above = anchor.top - tip.height - 8;
+    const top = placement === "above" && above >= 8 ? above : below + tip.height <= window.innerHeight - 8 ? below : above;
     const next = {
       left: Math.max(8, Math.min(anchor.left, window.innerWidth - tip.width - 8)),
       top: Math.max(8, Math.min(top, window.innerHeight - tip.height - 8)),
     };
     setPosition(current => current?.left === next.left && current.top === next.top ? current : next);
-  }, []);
+  }, [placement]);
   useLayoutEffect(() => { if (open) locate(); }, [open, children, locate]);
   useEffect(() => {
     if (!open) return;
@@ -60,10 +68,10 @@ export function HoverHelp({ title = "About this setting", children }: { title?: 
   }, [open, locate, dismiss]);
   useEffect(() => clearClose, [clearClose]);
   return <span className="hover-help" onMouseEnter={() => { hovered.current = true; show(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>
-    <button ref={trigger} type="button" className="help-icon" aria-label={title} aria-describedby={open ? id : undefined}
-      onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}><Icon name="info" size={14} /></button>
-    {open && typeof document !== "undefined" ? createPortal(<span ref={bubble} id={id} role="tooltip" className="hover-help-bubble"
+    <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={title} aria-describedby={open ? id : undefined}
+      onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}>{triggerContent ?? <Icon name="info" size={14} />}</button>
+    {open && typeof document !== "undefined" ? createPortal(<div ref={bubble} id={id} role="tooltip" className={["hover-help-bubble", bubbleClassName].filter(Boolean).join(" ")}
       style={{ left: position?.left ?? 8, top: position?.top ?? 8, visibility: position ? "visible" : "hidden" }}
-      onMouseEnter={() => { hovered.current = true; clearClose(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>{children}</span>, document.body) : null}
+      onMouseEnter={() => { hovered.current = true; clearClose(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>{children}</div>, document.body) : null}
   </span>;
 }

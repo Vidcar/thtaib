@@ -822,8 +822,11 @@
     "GenerationObservation": {
       "properties": {
         "basis": {
-          "const": "reported_tokens_model_call_wall_time",
           "default": "reported_tokens_model_call_wall_time",
+          "enum": [
+            "reported_tokens_model_call_wall_time",
+            "llama_cpp_timings"
+          ],
           "title": "Basis",
           "type": "string"
         },
@@ -838,6 +841,18 @@
           ],
           "default": null,
           "title": "Context Limit"
+        },
+        "context_used_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Used Tokens"
         },
         "elapsed_seconds": {
           "title": "Elapsed Seconds",
@@ -856,8 +871,12 @@
           "title": "Input Tokens"
         },
         "interval": {
-          "const": "last_completed_model_call_including_prompt_processing",
           "default": "last_completed_model_call_including_prompt_processing",
+          "enum": [
+            "last_completed_model_call_including_prompt_processing",
+            "current_model_call_generation",
+            "last_model_call_generation"
+          ],
           "title": "Interval",
           "type": "string"
         },
@@ -876,6 +895,29 @@
           ],
           "default": null,
           "title": "Output Tokens"
+        },
+        "phase": {
+          "default": "completed",
+          "enum": [
+            "prompt_processing",
+            "generating",
+            "completed",
+            "interrupted"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
         },
         "tokens_per_second": {
           "anyOf": [

@@ -1,0 +1,37 @@
+.chat-measurements { display: inline-flex; flex-shrink: 0; }
+.chat-measurements .chat-usage-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chat-measurements .chat-usage-trigger:hover,
+.chat-measurements .chat-usage-trigger:focus-visible { background: var(--bg-raised); color: var(--text); }
+.hover-help-bubble.chat-usage-bubble { width: 272px; padding: 13px 15px; line-height: 1.4; }
+.chat-usage-bubble .usage-heading,
+.chat-usage-bubble .usage-context-value,
+.chat-usage-bubble .usage-speed { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.chat-usage-bubble .usage-heading { margin-bottom: 11px; }
+.chat-usage-bubble .usage-heading strong { font-size: 13px; }
+.chat-usage-bubble .usage-state { color: var(--muted); font-size: 11px; }
+.chat-usage-bubble .usage-state.is-live { color: var(--accent); }
+.chat-usage-bubble .usage-context-value { font-variant-numeric: tabular-nums; }
+.chat-usage-bubble .usage-context-value > :last-child:not(:first-child) { color: var(--muted); font-size: 11px; }
+.chat-usage-bubble .usage-meter { height: 4px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: var(--border); }
+.chat-usage-bubble .usage-meter > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.chat-usage-bubble .usage-caption { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+.chat-usage-bubble .usage-token-counts { display: flex; gap: 18px; margin: 12px 0 0; font-variant-numeric: tabular-nums; }
+.chat-usage-bubble .usage-token-counts > div { display: flex; gap: 7px; }
+.chat-usage-bubble .usage-token-counts dt { color: var(--muted); font-size: 11px; }
+.chat-usage-bubble .usage-token-counts dd { margin: 0; font-size: 12px; }
+.chat-usage-bubble .usage-speed { padding-top: 11px; margin-top: 11px; border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.chat-usage-bubble .usage-speed > span { color: var(--muted); }
+.chat-measurements .usage-live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }

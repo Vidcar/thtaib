@@ -11,17 +11,17 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any, Iterator
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import httpx
 from langchain_core.messages import AIMessage
 import uvicorn
 
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.agents.schemas import AgentRun, GenerationObservation
 from workbench_backend.app import create_app
 from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
+from workbench_backend.interaction.projection import event
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, offline_workbench_client
@@ -275,29 +275,66 @@ class InteractionStreamTests(unittest.TestCase):
         started = self._start_command(thread_id)
         original = wait_for_state(self.client, thread_id)
         calls_before = len(self.app.state.harness.list_runs())
-        actual_page = self.app.state.app_store.interaction_page
-        first = True
-
-        def gap_once(ident, since):
-            nonlocal first
-            page, high_water = actual_page(ident, since)
-            if first:
-                first = False
-                return page[1:], high_water
-            return page, high_water
-
-        with patch.object(self.app.state.app_store, "interaction_page", side_effect=gap_once):
-            with loopback_app_server(self.app) as base_url:
-                events = read_loopback_interaction_events(
-                    base_url, token=self.app.state.local_trust_token, thread_id=thread_id,
-                    body={"channels": ["values", "lifecycle"]},
-                    stop=lambda items: any((item.get("data") or {}).get("method") == "values" for item in items),
-                )
+        store = self.app.state.app_store
+        with store._lock:
+            store._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=1", (thread_id,))
+            store._conn.commit()
+        with loopback_app_server(self.app) as base_url:
+            events = read_loopback_interaction_events(
+                base_url, token=self.app.state.local_trust_token, thread_id=thread_id,
+                body={"channels": ["values", "lifecycle"]},
+                stop=lambda items: any((item.get("data") or {}).get("method") == "values" for item in items),
+            )
         values = next(item["data"]["params"]["data"] for item in events if (item.get("data") or {}).get("method") == "values")
         self.assertEqual(values["messages"], original["values"]["messages"])
         self.assertEqual(values["workbench"]["recovery"]["kind"], "replay_gap")
         self.assertEqual(values["workbench"]["run"]["id"], started["run_id"])
         self.assertEqual(len(self.app.state.harness.list_runs()), calls_before)
+
+    def test_reconnect_from_coalesced_measurement_keeps_native_events_without_recovery(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self.addCleanup(hold.set)
+        self._install_model([AIMessage(content="complete answer")], hold=hold)
+        thread_id = self._register_agent()
+        started = self._start_command(thread_id)
+        wait_for_generate_hold()
+        harness, store = self.app.state.harness, self.app.state.app_store
+
+        def measure(count):
+            with harness._lock:
+                run = harness._require_run(started["run_id"])
+                run.generation_observation = GenerationObservation(request_id="request", phase="generating",
+                    input_tokens=100, output_tokens=count, context_used_tokens=100 + count,
+                    elapsed_seconds=1, tokens_per_second=40, measured_at=run.updated_at,
+                    basis="llama_cpp_timings", interval="current_model_call_generation")
+                harness._persist_and_notify(run, telemetry=True)
+            return store.get_interaction(thread_id)["seq"]
+
+        cursor = measure(1)
+        run = harness._require_run(started["run_id"])
+        for raw in [event("messages", {"event": "message-start", "id": "retained-message"}),
+                    event("tools", {"event": "tool-finished", "tool_call_id": "retained-tool", "output": "retained output"})]:
+            self.app.state.interaction.observe(run, raw)
+        second_cursor = measure(2)
+        latest = measure(3)
+        calls_before = len(harness.list_runs())
+        with loopback_app_server(self.app) as base_url:
+            for since in (cursor, second_cursor):
+                received = read_loopback_interaction_events(base_url, token=self.app.state.local_trust_token,
+                    thread_id=thread_id, body={"channels": ["values", "messages", "tools", "lifecycle"], "since": since},
+                    stop=lambda items: any(int(item.get("id") or 0) == latest for item in items))
+                wire = json.dumps(received)
+                self.assertNotIn("after_seq", wire)
+                self.assertNotIn("replaceable_measurement", wire)
+                self.assertNotIn("replay_gap", wire)
+                if since == cursor:
+                    self.assertIn("retained-message", wire)
+                    self.assertIn("retained output", wire)
+                self.assertEqual(received[-1]["data"]["params"]["data"]["workbench"]["run"]["generation_observation"]["output_tokens"], 3)
+        self.assertEqual(len(harness.list_runs()), calls_before)
+        hold.set()
+        wait_for_state(self.client, thread_id)
 
 
 if __name__ == "__main__":
