@@ -1,15 +1,15 @@
-import { workbenchTabs, tabIcons, tabLabel } from "./workspaceNavigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type CSSProperties, type RefObject } from "react";
 import { PanelResize, usePanelWidth } from "./PanelResize";
+import { AnswerActions } from "./AnswerActions";
+import { areaLabel, newestConversationFirst } from "./conversationAreas";
 import { HoverHelp } from "./HoverHelp";
-import { DeleteChatDialog } from "./DeleteChatDialog";
 import { useDismissibleDetails } from "./useDismissibleDetails";
 
 import { api, ApiError } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
 import { setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
 import { Icon } from "./Icon";
-import { AttentionButton } from "./AttentionPanel";
+import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { LibraryPanel } from "./LibraryPanel";
 import { FileChangesPanel } from "./FileChangesPanel";
@@ -21,7 +21,6 @@ import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
 import { ChatHistoryActions } from "./ChatHistoryActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
-import { ConversationRename } from "./ConversationRename";
 import { AgentMessageFeed } from "./AgentMessageFeed";
 import { conversationTitle, displayedTranscript, formatWhen, shortId } from "./display";
 import { EmptyState } from "./EmptyState";
@@ -82,6 +81,7 @@ interface PendingChatSubmit {
 function ChatInteractionStream(props: {
   detailedStreams?: boolean;
   renderMessageFooter?: ComponentProps<typeof AgentMessageFeed>["renderMessageFooter"];
+  renderAnswerActions?: ComponentProps<typeof AgentMessageFeed>["renderAnswerActions"];
   threadId: string;
   selectionGeneration: number;
   conversation: ChatConversation;
@@ -160,6 +160,7 @@ function ChatInteractionStream(props: {
         <ChatInteractionStreamContent
           detailedStreams={props.detailedStreams}
           renderMessageFooter={props.renderMessageFooter}
+          renderAnswerActions={props.renderAnswerActions}
           stream={stream}
           owner={owner}
           conversation={conversation}
@@ -187,6 +188,7 @@ interface SelectionOwner {
 function ChatInteractionStreamContent(props: {
   detailedStreams?: boolean;
   renderMessageFooter?: ComponentProps<typeof AgentMessageFeed>["renderMessageFooter"];
+  renderAnswerActions?: ComponentProps<typeof AgentMessageFeed>["renderAnswerActions"];
   stream: WorkbenchStream;
   owner: SelectionOwner;
   conversation: ChatConversation;
@@ -378,7 +380,7 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} userMessageText={message => {
+        <AgentMessageFeed sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
           return retained?.content;
         }} />
@@ -484,8 +486,23 @@ function preferredChatDeploymentId(deployments: Deployment[], current: string): 
   );
 }
 
-function newestConversationFirst(items: ChatConversation[]): ChatConversation[] {
-  return [...items].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+function sameAnswer(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+  const normalized = normalize(left);
+  return normalized.length > 0 && normalized === normalize(right);
+}
+
+function savedAnswer(conversation: ChatConversation, messageId: string | undefined, incomplete: boolean, visibleText = ""): { runId: string; text: string } | null {
+  if (incomplete) return null;
+  const assistants = conversation.transcript.filter(item => item.role === "assistant" && item.run_id);
+  const lastForRun = new Map<string, ChatMessage>();
+  for (const item of assistants) if (item.run_id) lastForRun.set(item.run_id, item);
+  const usable = [...lastForRun.values()].filter(item => !(conversation.current_run && isAgentRunLive(conversation.current_run.status) && conversation.current_run.id === item.run_id));
+  const byId = messageId ? usable.find(item => item.id === messageId) : undefined;
+  const byText = [...usable].reverse().find(entry => sameAnswer(entry.content, visibleText));
+  const item = byId ?? byText;
+  if (!item?.run_id) return null;
+  return { runId: item.run_id, text: item.content };
 }
 
 function chatHasAcceptedInputMessage(conversation: ChatConversation, messageId: string): boolean {
@@ -498,32 +515,6 @@ function chatHasAcceptedInputMessage(conversation: ChatConversation, messageId: 
     const message = item as ChatMessage & { id?: string | null };
     return item.role === "user" && message.id === messageId && Boolean(item.run_id && acceptedRunIds.has(item.run_id));
   });
-}
-
-function areaLabel(conversation: ChatConversation | null): string {
-  if (!conversation || areaKind(conversation) !== "project") {
-    return "General";
-  }
-  if (conversation.area_label?.trim()) {
-    return conversation.area_label;
-  }
-  const path = conversation.area_project_path ?? conversation.project_path;
-  if (!path) {
-    return "Project";
-  }
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.split("/").filter(Boolean).at(-1) ?? path;
-}
-
-function areaKind(conversation: ChatConversation): "general" | "project" {
-  return conversation.area_kind ?? (conversation.project_path ? "project" : "general");
-}
-
-function areaKey(conversation: ChatConversation): string {
-  if (areaKind(conversation) !== "project") {
-    return "general";
-  }
-  return conversation.area_id ?? conversation.area_project_path ?? conversation.project_path ?? conversation.id;
 }
 
 const fallbackPresentation: PresentationSettings = {
@@ -549,32 +540,26 @@ interface ChatPanelProps {
   onReuseAssetHandled?: () => void;
   presentation?: PresentationSettings;
   productName?: string;
-  navigationCollapsed?: boolean;
-  onNavigationCollapsedChange?: (value: boolean) => void;
-  navigationWidth?: number;
-  onNavigationWidthChange?: (value: number) => void;
+  chatLaunch?: ChatLaunch | null;
+  onChatLaunchHandled?: () => void;
+  historyNotice?: HistoryNotice | null;
+  conversationListRef?: RefObject<ConversationListActions | null>;
+  onHistoryChanged?: () => void;
+  onActiveConversationId?: (id: string | null) => void;
+  onCreateProject?: () => void;
+  projectRevision?: number;
 }
 
 export function ChatPanel(props: ChatPanelProps = {}) {
   const toolsMenuRef = useDismissibleDetails();
   const {
-    activeTab = "chat",
     attentionConversationId = null,
     onAttentionHandled,
-    backendOk = null,
-    backendStatus = "",
     onNavigate,
     presentation = fallbackPresentation,
   } = props;
-  const [localCollapsed, setLocalCollapsed] = useState(() => window.innerWidth <= 860);
-  const sidebarCollapsed = props.navigationCollapsed ?? localCollapsed;
-  const setSidebarCollapsed = (value: boolean) => { setLocalCollapsed(value); props.onNavigationCollapsedChange?.(value); };
-  const [localWidth, setLocalWidth] = usePanelWidth("workbench.navigation.width", 232, 190, 380);
-  const sidebarWidth = props.navigationWidth ?? localWidth;
-  const setSidebarWidth = props.onNavigationWidthChange ?? setLocalWidth;
   const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 380, 280, 720);
   const [filesExpanded, setFilesExpanded] = useState(false);
-  const [deletingConversation, setDeletingConversation] = useState<ChatConversation | null>(null);
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
@@ -595,6 +580,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const setupEditedFields = useRef(new Set<string>());
   const setupRequest = useRef(0);
   const workspaceLaunchClaim = useRef<string | null>(null);
+  const chatLaunchClaim = useRef<string | null>(null);
+  const historyNoticeClaim = useRef<string | null>(null);
   const [task, setTask] = useState("");
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -605,18 +592,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const reuseClaim = useRef<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null);
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [searchResults, setSearchResults] = useState<ChatConversation[] | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const retainedAssets = useChatRetainedAssets(conversation?.id ?? "");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  // Search covers retained titles/messages, not draft or streaming progress.
-  // Invalidate after branch, rename, deletion, archive or durable turn changes.
-  const searchableRevision = useMemo(() => JSON.stringify(conversations.map((item) => [
-    item.id, item.title, item.archived, item.transcript.map((message) => message.content),
-  ])), [conversations]);
+  const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
@@ -739,7 +718,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       api.deployments(),
       api.profiles(),
       api.agentTools(),
-      api.chatConversations(includeArchived),
+      api.chatConversations(false),
       api.knowledgeEntries(),
     ]);
     const [nextDeployments, nextProfiles, tools, nextConversations, nextKnowledge] = results;
@@ -763,7 +742,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       if (!cancelled) { setProjects(nextProjects); setAgentSetups(nextAgents); }
     }).catch(error => { if (!cancelled) setSetupError(errorMessage(error)); });
     return () => { cancelled = true; };
-  }, []);
+  }, [props.projectRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -831,33 +810,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void refresh().catch((error: unknown) => {
       setLoadError(errorMessage(error));
     });
-  }, [includeArchived]);
+  }, []);
 
-  useEffect(() => {
-    const query = searchQuery.trim();
-    if (!query) {
-      setSearchResults(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void api.searchChatConversations(query, includeArchived)
-        .then((results) => {
-          if (!cancelled) {
-            setSearchResults(newestConversationFirst(reconcileHistory(results.map((item) => item.conversation as ChatConversation))));
-          }
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) {
-            setMessage(errorMessage(error));
-          }
-        });
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [includeArchived, searchQuery, searchableRevision]);
+  useEffect(() => { props.onHistoryChanged?.(); }, [historySignature]);
+  useEffect(() => { props.onActiveConversationId?.(conversation?.id ?? selectionLoading?.id ?? null); }, [conversation?.id, selectionLoading?.id]);
 
   useEffect(() => {
     if (!conversation) {
@@ -1001,18 +957,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const tools = conversation?.enabled_tools ?? enabledTools;
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
-  const destinations = workbenchTabs;
-  const visibleConversations = reconcileHistory(searchResults ?? conversations).filter(item => includeArchived || !item.archived);
-  const generalConversations = newestConversationFirst(visibleConversations.filter((item) => areaKind(item) !== "project"));
-  const projectGroups = newestConversationFirst(visibleConversations.filter((item) => areaKind(item) === "project")).reduce(
-    (groups, item) => {
-      const key = areaKey(item);
-      const existing = groups.get(key) ?? [];
-      groups.set(key, [...existing, item]);
-      return groups;
-    },
-    new Map<string, ChatConversation[]>(),
-  );
   const currentArea = selectionLoading ? areaLabel(selectionLoading) : areaLabel(conversation);
 
   function chooseConversation(item: ChatConversation): void {
@@ -1086,7 +1030,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           if (error instanceof ApiError && error.status === 404 && error.code === "chat_missing") {
             historyMutations.current.set(item.id, "deleted");
             setConversations(current => current.filter(value => value.id !== item.id));
-            setSearchResults(current => current?.filter(value => value.id !== item.id) ?? null);
+            props.conversationListRef?.current?.forget(item.id);
             startFresh();
             setMessage("That conversation is no longer available. You can start a new chat.");
             return;
@@ -1116,30 +1060,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     });
   }
 
-  function setConversationArchived(item: ChatConversation, archived: boolean): void {
-    const saveDraft = archived && activeOwner.current.conversationId === item.id
-      ? persistBeforeLeaving()
-      : Promise.resolve();
-    const request = saveDraft.then(() => historyMutations.current.get(item.id) === "deleted"
-      ? null
-      : archived ? api.archiveChatConversation(item.id, true) : api.reopenChatConversation(item.id));
-    void request
-      .then((next) => {
-        if (!next) return;
-        if (historyMutations.current.get(next.id) === "deleted") return;
-        historyMutations.current.set(next.id, next.archived ?? archived);
-        setSearchResults(current => current?.map(value => value.id === next.id ? next : value) ?? null);
-        applyConversationUpdate(next);
-        if (archived && activeOwner.current.conversationId === item.id && !includeArchived) {
-          startFresh();
-        }
-        if (!archived) {
-          setIncludeArchived(true);
-        }
-      })
-      .catch(fail);
-  }
-
   function reconcileHistory(items: ChatConversation[]): ChatConversation[] {
     return items.filter(item => historyMutations.current.get(item.id) !== "deleted").map(item => {
       const archived = historyMutations.current.get(item.id);
@@ -1150,7 +1070,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   function removeConversation(id: string): void {
     historyMutations.current.set(id, "deleted");
     setConversations(current => current.filter(item => item.id !== id));
-    setSearchResults(current => current?.filter(item => item.id !== id) ?? null);
     if (activeOwner.current.conversationId === id || selectionLoading?.id === id || conversation?.id === id) startFresh();
   }
 
@@ -1355,10 +1274,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (props.navigationPreparationRef) props.navigationPreparationRef.current = null;
   }, [props.navigationPreparationRef]);
 
-  function startFreshAfterSaving(): void {
-    void persistBeforeLeaving().then(startFresh).catch(fail);
-  }
-
   useEffect(() => {
     if (conversation || !task.trim() || !selectedDeployment || sending || selectionBusy) return;
     const generation = selectionRequest.current;
@@ -1405,43 +1320,29 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     }
   }
 
-  function renderConversationButton(item: ChatConversation) {
-    return (
-      <div className={item.archived ? "conversation-row archived" : "conversation-row"}>
-        {renamingConversationId === item.id ? <ConversationRename
-          key={item.id}
-          conversation={item}
-          onRename={async title => {
-            const next = await api.renameChatConversation(item.id, title);
-            applyConversationUpdate(next);
-            setRenamingConversationId(current => current === item.id ? null : current);
-          }}
-          onCancel={() => setRenamingConversationId(null)}
-        /> : <>
-        <button
-          type="button"
-          className={item.id === conversation?.id || item.id === selectionLoading?.id ? "nav-item active" : "nav-item"}
-          title={`${conversationTitle(item)} · ${formatWhen(item.updated_at)}`}
-          onClick={() => chooseConversation(item)}
-        >
-          <span className="nav-item-title">{conversationTitle(item)}</span>
-          <span className="nav-item-meta">
-            {item.archived ? "Archived · " : ""}{formatWhen(item.updated_at)}
-          </span>
-        </button>
-        <div className="conversation-actions" aria-label={`${conversationTitle(item)} actions`}>
-          <button type="button" className="icon-button" aria-label="Rename chat" title="Rename chat" onClick={() => setRenamingConversationId(item.id)}><Icon name="edit" size={14} /></button>
-          {item.archived ? (
-            <button type="button" className="icon-button" aria-label="Reopen chat" title="Reopen chat" onClick={() => setConversationArchived(item, false)}><Icon name="restore" size={14} /></button>
-          ) : (
-            <button type="button" className="icon-button" aria-label="Archive chat" title="Archive chat" onClick={() => setConversationArchived(item, true)}><Icon name="archive" size={14} /></button>
-          )}
-          <button type="button" className="icon-button" aria-label="Delete chat" title="Delete chat" onClick={() => setDeletingConversation(item)}><Icon name="trash" size={14} /></button>
-        </div>
-        </>}
-      </div>
-    );
-  }
+  useEffect(() => {
+    const launch = props.chatLaunch;
+    if (!launch || chatLaunchClaim.current === launch.id) return;
+    chatLaunchClaim.current = launch.id;
+    if (launch.kind === "fresh") {
+      void persistBeforeLeaving().then(startFresh).catch(fail).finally(() => props.onChatLaunchHandled?.());
+      return;
+    }
+    if (!launch.conversationId) { props.onChatLaunchHandled?.(); return; }
+    chooseConversation(launch.conversation ?? { id: launch.conversationId } as ChatConversation);
+    props.onChatLaunchHandled?.();
+  }, [props.chatLaunch?.id]);
+
+  useEffect(() => {
+    const notice = props.historyNotice;
+    if (!notice || historyNoticeClaim.current === notice.token) return;
+    historyNoticeClaim.current = notice.token;
+    if (notice.deletedId) removeConversation(notice.deletedId);
+    else if (notice.conversation) {
+      applyConversationUpdate(notice.conversation);
+      if (notice.leave) startFresh();
+    }
+  }, [props.historyNotice?.token]);
 
   useEffect(() => {
     if (!attentionConversationId) return;
@@ -1489,80 +1390,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.reuseAssetId, props.reuseAssetIds, conversation?.id, selectedDeployment?.id, sending, selectionBusy]);
 
   return (
-    <section className={sidebarCollapsed ? "chat-layout chat-sidebar-collapsed" : "chat-layout"} style={{ "--navigation-width": `${sidebarWidth}px`, "--inspector-width": `${filesWidth}px` } as CSSProperties}>
-      {deletingConversation ? <DeleteChatDialog key={deletingConversation.id} conversation={deletingConversation} onClose={() => setDeletingConversation(null)} onDeleted={removeConversation} /> : null}
-      <aside className="chat-list" aria-label="Chat workspace">
-        <div className="chat-brand">
-          <div>
-            <h1>Workbench</h1>
-          </div>
-          <button
-            type="button"
-            className="nav-collapse"
-            aria-label={sidebarCollapsed ? "Expand chat sidebar" : "Collapse chat sidebar"}
-            aria-expanded={!sidebarCollapsed}
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          >
-            <Icon name="panel" size={18} />
-          </button>
-        </div>
-        <button type="button" className="new-chat-button" aria-label="New chat" title="New chat" onClick={startFreshAfterSaving}><Icon name="edit" size={18} /><span>New chat</span></button>
-        <nav className="chat-destinations" aria-label="Destinations">
-          {destinations.map((item) => item === "attention" ? <AttentionButton key={item} collapsed={sidebarCollapsed} onOpen={() => navigateAway("attention")} /> : (
-            <button
-              key={item}
-              type="button"
-              className={item === activeTab ? "tab destination-current" : "tab"}
-              aria-label={tabLabel(item)}
-              title={tabLabel(item)}
-              onClick={() => navigateAway(item)}
-            >
-              <Icon name={tabIcons[item]} /><span className="destination-label">{tabLabel(item)}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="chat-list-head">
-          <h2>Conversations</h2>
-          <label className="archive-filter" title="Include archived chats"><input type="checkbox" aria-label="Show archived" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /><Icon name="archive" size={14} /></label>
-        </div>
-        <label className="chat-search">
-          <span className="sr-only">Search chats</span><Icon name="search" size={15} />
-          <input
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search chats"
-          />
-        </label>
-        {visibleConversations.length === 0 ? (
-          <p className="hint">{searchQuery.trim() ? "No matching conversations." : "No conversations yet."}</p>
-        ) : (
-          <div className="chat-groups">
-            <section className="chat-group">
-              <h3>Recent</h3>
-              <ul className="nav-list">
-                {generalConversations.map((item) => (
-                  <li key={item.id}>{renderConversationButton(item)}</li>
-                ))}
-              </ul>
-            </section>
-            {[...projectGroups.entries()].map(([project, items]) => (
-              <details key={project} className="chat-group" open>
-                <summary><Icon name="folder" size={14} />{areaLabel(items[0])}</summary>
-                <ul className="nav-list">
-                  {items.map((item) => (
-                    <li key={item.id}>{renderConversationButton(item)}</li>
-                  ))}
-                </ul>
-              </details>
-            ))}
-          </div>
-        )}
-        <div className="sidebar-footer">
-          <div className="service-indicator" title={backendStatus}><span className={`status-dot${backendOk ? " ready" : ""}`} /><span>{backendOk === false ? "Service unavailable" : "Local"}</span></div>
-        </div>
-        {!sidebarCollapsed ? <PanelResize label="Resize chat navigation" width={sidebarWidth} onResize={setSidebarWidth} reset={232} /> : null}
-      </aside>
-
+    <section className="chat-layout" style={{ "--inspector-width": `${filesWidth}px` } as CSSProperties}>
       <div className="chat-main"
         onDragEnter={event => {
           if (!Array.from(event.dataTransfer.types).includes("Files")) return;
@@ -1714,11 +1542,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </EmptyState>
           ) : !conversation && transcript.length === 0 ? (
             <EmptyState title="What are we working on?">
-              {projectId || projectPath ? <span>Start a conversation in {projects.find(project => project.id === projectId)?.name ?? projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "this project"}.</span> : <button type="button" className="quiet-button" onClick={() => setSetupOpen(true)}><Icon name="folder" size={16} /> Add a project</button>}
+              {projectId || projectPath ? <span>Start a conversation in {projects.find(project => project.id === projectId)?.name ?? projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "this project"}.</span> : <button type="button" className="quiet-button" onClick={() => props.onCreateProject?.()}><Icon name="folder" size={16} /> Add a project</button>}
             </EmptyState>
           ) : canObserveInteraction && interactionThreadId && conversation ? (
             <ChatInteractionStream
               detailedStreams={presentation.detailed_streams}
+              renderAnswerActions={(nativeMessage, incomplete, answerText) => {
+                const saved = savedAnswer(conversation, nativeMessage.id, incomplete, answerText);
+                if (!saved) return null;
+                return <AnswerActions conversation={conversation} runId={saved.runId} answerText={saved.text} disabled={selectionBusy || sending} onError={setMessage} onConversationCreated={next => { cacheConversation(next); chooseConversation(next); }} />;
+              }}
               renderMessageFooter={(nativeMessage) => {
                 const item = conversation.transcript.find(entry => entry.id === nativeMessage.id);
                 if (!item) return null;
@@ -1752,6 +1585,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                   <time>{formatWhen(item.at)}</time>
                 </header>
                 <p>{transcriptMessageContent(item)}</p>
+                {conversation && item.role === "assistant" ? (() => {
+                  const saved = savedAnswer(conversation, item.id ?? undefined, false, item.content);
+                  return saved ? <AnswerActions conversation={conversation} runId={saved.runId} answerText={saved.text} disabled={selectionBusy || sending} onError={setMessage} onConversationCreated={next => { cacheConversation(next); chooseConversation(next); }} /> : null;
+                })() : null}
               </article>
             ))
           )}

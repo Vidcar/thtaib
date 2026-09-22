@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { PanelResize, usePanelWidth } from "./PanelResize";
+import { usePanelWidth } from "./PanelResize";
 
 import { AgentRunPanel } from "./AgentRunPanel";
-import { AttentionPanel, AttentionButton } from "./AttentionPanel";
+import { AttentionPanel } from "./AttentionPanel";
 import { api } from "./api";
 import { ChatPanel } from "./ChatPanel";
 import type { ChatWorkspaceLaunch } from "./chatSetup";
 import { errorMessage } from "./errors";
-import { Icon } from "./Icon";
+import { CreateProjectDialog } from "./CreateProjectDialog";
 import { ProjectsPanel } from "./ProjectsPanel";
 import { AgentSetupsPanel } from "./AgentSetupsPanel";
-import { workbenchTabs, tabIcons, tabLabel } from "./workspaceNavigation";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { ModelsPanel } from "./ModelsPanel";
 import { SettingsPanel } from "./SettingsPanel";
+import { WorkbenchSidebar, type ChatLaunch, type ConversationListActions, type HistoryNotice } from "./WorkbenchSidebar";
 import type { RetainedAsset } from "./packet03Api";
 import type { PresentationSettings, WorkbenchSurface, WorkbenchTab } from "./types";
 
@@ -33,6 +33,7 @@ export function App() {
   const activeTab = useRef(tab);
   activeTab.current = tab;
   const prepareChatNavigation = useRef<(() => Promise<boolean>) | null>(null);
+  const conversationListRef = useRef<ConversationListActions | null>(null);
   const attentionRequest = useRef(0);
   const [backendStatus, setBackendStatus] = useState("Checking local services…");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
@@ -41,6 +42,13 @@ export function App() {
   const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
   const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
   const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [projectRevision, setProjectRevision] = useState(0);
+  const [chatLaunch, setChatLaunch] = useState<ChatLaunch | null>(null);
+  const [historyNotice, setHistoryNotice] = useState<HistoryNotice | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { const saved = window.localStorage?.getItem("workbench.navigation.collapsed"); return saved === null || saved === undefined ? window.innerWidth < 900 : saved === "true"; } catch { return window.innerWidth < 900; }
   });
@@ -116,6 +124,7 @@ export function App() {
   const clearAttentionRun = useCallback((id: string) => {
     setAttentionRunId(current => current === id ? null : current);
   }, []);
+  const clearFocusProject = useCallback(() => setFocusProjectId(null), []);
 
   useEffect(() => {
     const unsubscribe = window.workbench?.onAttention?.(openAttentionTarget);
@@ -136,10 +145,14 @@ export function App() {
           <ChatPanel
             workspaceLaunch={workspaceLaunch}
             onWorkspaceLaunchHandled={() => setWorkspaceLaunch(null)}
-            navigationCollapsed={sidebarCollapsed}
-            onNavigationCollapsedChange={setSidebarCollapsed}
-            navigationWidth={sidebarWidth}
-            onNavigationWidthChange={setSidebarWidth}
+            chatLaunch={chatLaunch}
+            onChatLaunchHandled={() => setChatLaunch(null)}
+            historyNotice={historyNotice}
+            conversationListRef={conversationListRef}
+            onHistoryChanged={() => setHistoryRevision(value => value + 1)}
+            onActiveConversationId={setActiveConversationId}
+            onCreateProject={() => setCreateProjectOpen(true)}
+            projectRevision={projectRevision}
             activeTab="chat"
             backendOk={backendOk}
             backendStatus={backendStatus}
@@ -156,7 +169,7 @@ export function App() {
           />
         );
       case "projects":
-        return <ProjectsPanel onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
+        return <ProjectsPanel projectRevision={projectRevision} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
       case "agents":
         return <AgentSetupsPanel onUse={setup => { setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
@@ -184,45 +197,55 @@ export function App() {
     }
   }
 
-  const tabs = workbenchTabs;
+  function openChatLaunch(launch: ChatLaunch) {
+    setChatLaunch(launch);
+    setTab("chat");
+  }
 
   return (
-    <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`} style={{ "--navigation-width": `${sidebarWidth}px` } as CSSProperties}>
-      {tab === "chat" ? null : (
-        <aside className="app-nav" aria-label="Workbench">
-          <div className="app-nav-head">
-            <div>
-              <h1>Workbench</h1>
-            </div>
-            <button
-              type="button"
-              className="nav-collapse"
-              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              aria-expanded={!sidebarCollapsed}
-              onClick={() => setSidebarCollapsed((value) => !value)}
-            >
-              <Icon name="panel" size={18} />
-            </button>
-          </div>
-          <nav className="side-tabs">
-            {tabs.map((item) => item === "attention" ? <AttentionButton key={item} active={tab === item} collapsed={sidebarCollapsed} onOpen={() => setTab("attention")} /> : (
-              <button
-                key={item}
-                type="button"
-                className={item === tab ? "tab active" : "tab"}
-                aria-label={tabLabel(item)}
-                title={tabLabel(item)}
-                onClick={() => setTab(item)}
-              >
-                <Icon name={tabIcons[item]} size={18} />
-                {sidebarCollapsed ? <span className="sr-only">{tabLabel(item)}</span> : <span>{tabLabel(item)}</span>}
-              </button>
-            ))}
-          </nav>
-          <div className="service-indicator" title={backendStatus}><span className={`status-dot${backendOk ? " ready" : ""}`} /><span>{backendOk === false ? "Service unavailable" : "Local"}</span></div>
-          {!sidebarCollapsed ? <PanelResize label="Resize navigation" width={sidebarWidth} onResize={setSidebarWidth} reset={232} /> : null}
-        </aside>
-      )}
+    <div className={`app${tab === "chat" ? " app-chat" : ""}${sidebarCollapsed ? " app-nav-collapsed" : ""}`} style={{ "--navigation-width": `${sidebarWidth}px` } as CSSProperties}>
+      <CreateProjectDialog open={createProjectOpen} onClose={() => setCreateProjectOpen(false)} onCreated={() => setProjectRevision(value => value + 1)} />
+      <WorkbenchSidebar
+        tab={tab}
+        collapsed={sidebarCollapsed}
+        width={sidebarWidth}
+        onCollapsedChange={setSidebarCollapsed}
+        onWidthChange={setSidebarWidth}
+        onNavigate={next => {
+          void (async () => {
+            if (activeTab.current === "chat" && next !== "chat" && prepareChatNavigation.current) {
+              if (!await prepareChatNavigation.current()) return;
+            }
+            setTab(next);
+          })();
+        }}
+        backendOk={backendOk}
+        backendStatus={backendStatus}
+        activeConversationId={activeConversationId}
+        historyRevision={historyRevision}
+        projectRevision={projectRevision}
+        conversationListRef={conversationListRef}
+        onOpenConversation={conversation => openChatLaunch({ id: crypto.randomUUID(), kind: "open", conversationId: conversation.id, conversation })}
+        onNewChat={() => openChatLaunch({ id: crypto.randomUUID(), kind: "fresh" })}
+        onAddProject={() => setCreateProjectOpen(true)}
+        onNewChatInProject={project => {
+          void (async () => {
+            if (activeTab.current === "chat" && prepareChatNavigation.current && !await prepareChatNavigation.current()) return;
+            setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id });
+            setTab("chat");
+          })();
+        }}
+        onEditProject={projectId => {
+          void (async () => {
+            if (activeTab.current === "chat" && prepareChatNavigation.current && !await prepareChatNavigation.current()) return;
+            setFocusProjectId(projectId);
+            setTab("projects");
+          })();
+        }}
+        onProjectChanged={() => setProjectRevision(value => value + 1)}
+        onHistoryNotice={notice => { setHistoryNotice(notice); setHistoryRevision(value => value + 1); }}
+        onBeforeConversationChange={() => prepareChatNavigation.current?.() ?? Promise.resolve()}
+      />
       <main className="app-main">{renderTab(tab)}</main>
     </div>
   );

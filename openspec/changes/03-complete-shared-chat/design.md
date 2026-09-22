@@ -6,7 +6,7 @@ The approved direction is conversation-led, clean and information-dense, inspire
 
 ### Composition and navigation
 
-Use one collapsible left sidebar: New chat and cross-area search, General chats, then collapsible named projects with their conversations. Keep each conversation's immutable area visible in its header. Project-area selection opens or creates a different session, never an editable folder field that retargets the current session. Retain rename/archive/reopen and removed-project history.
+Use one collapsible left sidebar on every page: New chat and cross-area search, destinations that stay fully visible, then one list of collapsible named projects with their conversations, then chats with no project. `familiar-chat-sidebar` records this order; do not treat that change as closing this packet. Keep each conversation's immutable area visible in its header. Project-area selection opens or creates a different session, never an editable folder field that retargets the current session. Retain rename/archive/reopen and removed-project history.
 
 Provide compact destinations for Models, Agents, Knowledge, Library, Lab and Workflows, with Settings at the bottom. Introduce functional destinations in their owning packets, not empty placeholders. Existing Agent run remains accessible until Packet 07 delivers Workflows, which preserves its history. Keep conversation and composer central; open the right-hand Files/activity/detail panel on demand. Collapse secondary panels in half-screen windows rather than squeezing the composer or requiring horizontal scrolling for ordinary controls.
 

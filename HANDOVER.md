@@ -2,6 +2,8 @@
 
 Updated 2026-09-22. Dave requested wrapping up to conserve credits: finish identified defects and hand over remaining checks. Branch `codex/packet-03-shared-chat`; [draft PR118](https://github.com/Vidcar/thtaib/pull/118). Do not claim Packet03/04 complete or UX accepted.
 
+The familiar chat sidebar (OpenSpec change `familiar-chat-sidebar`) is separate from this handover. Destinations stay fully visible, and project folders plus “No project” share one list. It does not close Packet 03, Packet 04, or draft PR 118.
+
 Implemented: repaired model downloads, permanent disk deletion, saved probes/projector selection and precision labels; compact Models/Settings/Library; retained images/documents and source viewers; canonical projects/versioned agents; scoped Knowledge/proposals/skill packages; async harness/saver; verified file changes/reversal; MCP/public web and Windows credential vault. Identified setup, permission, connection-readiness and project-send scope defects are fixed.
 
 Verification: 612 default and156 integration backend tests passed sequentially, desktop build/regressions, contracts and strict OpenSpec16/16 passed. Real Qwen/Gemma image/tool checks, project operations/reversal, Knowledge/skill refresh, public search/page read and MCP passed. Native Windows passed image upload/viewer, model deletion, project creation, memory removal, connection failure/recovery and HF selection. Gemma combined JSON/tool failure remains visible; Qwen can ignore loaded memory without explicit reading. Dave accepted drop/notifications/tray only.

@@ -78,7 +78,6 @@ export function ChatHistoryActions({
   }, [conversation.id, conversation.current_run_id, conversation.current_run?.status, selectedRunId]);
 
   const selectedOption = options.find((item) => item.runId === selectedRunId) ?? null;
-  const projectStateSupported = Boolean(conversation.project_path || conversation.area_project_path || conversation.workspace_id || conversation.area_workspace_id);
   const blocked = disabled || busy !== null;
 
   async function runAction(mode: ChatBranchMode): Promise<void> {
@@ -198,15 +197,6 @@ export function ChatHistoryActions({
 
       <div className="chat-history-action-grid">
         <HistoryActionButton
-          icon="folder"
-          title={projectStateSupported ? "Branch workspace" : "Branch chat"}
-          description={projectStateSupported ? "Restore a supported project-state branch from this checkpoint." : "Start a separate conversation from this checkpoint."}
-          disabled={blocked || !selectedRunId || !actions?.branch_available}
-          unavailableReason={actions?.branch_reason ?? null}
-          busy={busy === "branch"}
-          onClick={() => void runAction("continue")}
-        />
-        <HistoryActionButton
           icon="activity"
           title="Retry task"
           description="Repeat the task from the prior safe boundary after confirmation. Effects may repeat."
@@ -223,15 +213,6 @@ export function ChatHistoryActions({
           unavailableReason={actions?.retry_reason ?? null}
           busy={busy === "retry"}
           onClick={() => void runAction("edit")}
-        />
-        <HistoryActionButton
-          icon="restore"
-          title="Regenerate answer"
-          description="Answer-only regeneration with tools disabled when the backend has a supported checkpoint."
-          disabled={blocked || !selectedRunId || !actions?.regenerate_available}
-          unavailableReason={actions?.regenerate_reason ?? null}
-          busy={busy === "regenerate"}
-          onClick={() => void runAction("regenerate")}
         />
         <HistoryActionButton
           icon="files"

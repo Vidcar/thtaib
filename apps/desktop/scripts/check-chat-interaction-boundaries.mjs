@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import React, { StrictMode } from "react";
+import React, { StrictMode, useState } from "react";
 import { act, create } from "react-test-renderer";
 import { createServer as createViteServer } from "vite";
 
@@ -652,6 +652,47 @@ function makeHarness(options = {}) {
   return { server, state };
 }
 
+function ChatHarness({ ChatPanel, WorkbenchSidebar, panelProps }) {
+  const [chatLaunch, setChatLaunch] = useState(null);
+  const [historyNotice, setHistoryNotice] = useState(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const ownedPreparation = React.useRef(null);
+  const preparation = panelProps.navigationPreparationRef ?? ownedPreparation;
+  const conversationListRef = React.useRef(null);
+  return React.createElement(React.Fragment, null,
+    React.createElement(WorkbenchSidebar, {
+      tab: "chat",
+      collapsed: false,
+      width: 232,
+      onCollapsedChange: () => {},
+      onWidthChange: () => {},
+      onNavigate: (next) => panelProps.onNavigate?.(next),
+      backendOk: true,
+      backendStatus: "Local",
+      activeConversationId,
+      historyRevision,
+      projectRevision: 0,
+      conversationListRef,
+      onOpenConversation: (conversation) => setChatLaunch({ id: `open-${conversation.id}-${crypto.randomUUID()}`, kind: "open", conversationId: conversation.id, conversation }),
+      onNewChat: () => setChatLaunch({ id: `fresh-${crypto.randomUUID()}`, kind: "fresh" }),
+      onAddProject: () => {},
+      onHistoryNotice: (notice) => { setHistoryNotice(notice); setHistoryRevision(value => value + 1); },
+      onBeforeConversationChange: () => preparation.current?.() ?? Promise.resolve(),
+    }),
+    React.createElement(ChatPanel, {
+      ...panelProps,
+      navigationPreparationRef: preparation,
+      conversationListRef,
+      chatLaunch,
+      onChatLaunchHandled: () => setChatLaunch(null),
+      historyNotice,
+      onHistoryChanged: () => setHistoryRevision(value => value + 1),
+      onActiveConversationId: setActiveConversationId,
+    }),
+  );
+}
+
 async function renderChat(vite, harness, props = {}) {
   await new Promise((resolve) => harness.server.listen(0, "127.0.0.1", resolve));
   const address = harness.server.address();
@@ -675,9 +716,10 @@ async function renderChat(vite, harness, props = {}) {
     clearInterval,
   };
   const { ChatPanel } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
+  const { WorkbenchSidebar } = await vite.ssrLoadModule("/src/renderer/WorkbenchSidebar.tsx");
   let renderer;
   await act(async () => {
-    renderer = create(React.createElement(StrictMode, null, React.createElement(ErrorBoundary, null, React.createElement(ChatPanel, props))));
+    renderer = create(React.createElement(StrictMode, null, React.createElement(ErrorBoundary, null, React.createElement(ChatHarness, { ChatPanel, WorkbenchSidebar, panelProps: props }))));
     await Promise.resolve();
   });
   await act(async () => {
@@ -815,6 +857,9 @@ function composeForm(renderer) {
 function textOf(node) {
   if (typeof node === "string") {
     return node;
+  }
+  if (Array.isArray(node)) {
+    return node.map(textOf).join("");
   }
   if (!node?.children) {
     return "";
@@ -1234,15 +1279,15 @@ async function testProjectBranchesGroupByImmutableArea(vite) {
   try {
     await waitFor(() => button(renderer, "Branch from restored workspace A"), "project branch A listed");
     const group = renderer.root.findAll(
-      (node) => node.type === "details" && textOf(node).includes("Original Project"),
+      (node) => node.type === "section" && node.props.className === "chat-group" && textOf(node).includes("Original Project"),
     );
     assert.equal(group.length, 1, "branches with the same immutable area should share one group");
-    const summaries = renderer.root.findAll(
-      (node) => node.type === "summary" && textOf(node).includes("Original Project"),
+    const headers = renderer.root.findAll(
+      (node) => node.type === "button" && node.props.className === "chat-group-toggle" && textOf(node).includes("Original Project"),
     );
-    assert.equal(summaries.length, 1, "header label should use the immutable original area label");
-    assert.equal(renderer.root.findAll((node) => node.type === "summary" && textOf(node).includes("branch-a")).length, 0, "group header must not use execution workspace A");
-    assert.equal(renderer.root.findAll((node) => node.type === "summary" && textOf(node).includes("branch-b")).length, 0, "group header must not use execution workspace B");
+    assert.equal(headers.length, 1, "header label should use the immutable original area label");
+    assert.equal(renderer.root.findAll((node) => node.type === "button" && node.props.className === "chat-group-toggle" && textOf(node).includes("branch-a")).length, 0, "group header must not use execution workspace A");
+    assert.equal(renderer.root.findAll((node) => node.type === "button" && node.props.className === "chat-group-toggle" && textOf(node).includes("branch-b")).length, 0, "group header must not use execution workspace B");
     const groupText = textOf(group[0]);
     assert.match(groupText, /Branch from restored workspace A/);
     assert.match(groupText, /Branch from restored workspace B/);

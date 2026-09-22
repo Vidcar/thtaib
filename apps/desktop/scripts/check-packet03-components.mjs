@@ -22,6 +22,7 @@ try {
   const { ComposerAttachments } = await vite.ssrLoadModule("/src/renderer/ComposerAttachments.tsx");
   const { LibraryPanel } = await vite.ssrLoadModule("/src/renderer/LibraryPanel.tsx");
   const { ChatHistoryActions } = await vite.ssrLoadModule("/src/renderer/ChatHistoryActions.tsx");
+  const { AnswerActions } = await vite.ssrLoadModule("/src/renderer/AnswerActions.tsx");
   const { PanelResize, usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
   const { HoverHelp } = await vite.ssrLoadModule("/src/renderer/HoverHelp.tsx");
   const { ChatMeasurements } = await vite.ssrLoadModule("/src/renderer/ChatMeasurements.tsx");
@@ -30,7 +31,7 @@ try {
   await checkComposerUploadStaleGuard(ComposerAttachments);
   await checkDropWaitsForSavedAttachments(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
-  await checkChatHistoryActions(ChatHistoryActions);
+  await checkChatHistoryActions(ChatHistoryActions, AnswerActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
   await checkChatMeasurements(ChatMeasurements);
@@ -499,7 +500,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
   }
 }
 
-async function checkChatHistoryActions(ChatHistoryActions) {
+async function checkChatHistoryActions(ChatHistoryActions, AnswerActions) {
   const originalFetch = globalThis.fetch;
   const originalConfirm = globalThis.window.confirm;
   const originalDocument = globalThis.document;
@@ -597,8 +598,25 @@ async function checkChatHistoryActions(ChatHistoryActions) {
     });
     assert.equal(button(renderer, "Retry task").props.disabled, false, "terminal hydration refreshes saved reply availability without reopening Chat");
 
-    assert.ok(textOf(renderer.root).includes("Regenerate answer"));
-    assert.ok(textOf(renderer.root).includes("This turn has no matching retained project snapshot."), "unavailable regenerate reason should be visible");
+    assert.ok(!textOf(renderer.root).includes("Regenerate answer"), "regenerate stays on the answer, not the conversation menu");
+    assert.ok(!textOf(renderer.root).includes("Branch chat") && !textOf(renderer.root).includes("Branch workspace"), "branch stays on the answer, not the conversation menu");
+    let answers;
+    await act(async () => {
+      answers = create(React.createElement(AnswerActions, {
+        conversation: conversationFixture(),
+        runId: "run_done",
+        answerText: "Done",
+        onConversationCreated: () => {},
+        onError: (message) => errors.push(message),
+      }));
+      await tick();
+    });
+    const regenerate = answers.root.findByProps({ "aria-label": "Regenerate answer" });
+    assert.equal(regenerate.props.disabled, true, "unsupported regenerate stays disabled");
+    assert.equal(regenerate.props.title, "This turn has no matching retained project snapshot.");
+    assert.equal(answers.root.findByProps({ "aria-label": "Branch workspace" }).props.disabled, false);
+    assert.ok(answers.root.findByProps({ "aria-label": "Copy answer" }));
+    await act(async () => { answers.unmount(); });
 
     await act(async () => {
       button(renderer, "Retry task").props.onClick();

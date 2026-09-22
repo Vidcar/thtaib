@@ -1,9 +1,10 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CopyIconButton } from "./CopyIconButton";
 import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
@@ -222,29 +223,9 @@ function textFromNode(node: React.ReactNode): string {
 
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const code = textFromNode(children);
-  // Adapted from Agent Chat UI's useCopyToClipboard/CodeHeader at the revision
-  // above; local styling, error handling and timer cleanup stay in this UI.
-  const [copyState, setCopyState] = useState<"ready" | "copied" | "failed">("ready");
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
   return (
     <div className="code-block-wrap">
-      <button
-        type="button"
-        className="copy-code"
-        aria-label={copyState === "copied" ? "Code copied" : "Copy code block"}
-        disabled={copyState === "copied"}
-        onClick={() => {
-          if (!code || !navigator.clipboard) { setCopyState("failed"); return; }
-          void navigator.clipboard.writeText(code).then(() => {
-            setCopyState("copied");
-            if (resetTimer.current) clearTimeout(resetTimer.current);
-            resetTimer.current = setTimeout(() => setCopyState("ready"), 3000);
-          }).catch(() => setCopyState("failed"));
-        }}
-      >
-        {copyState === "copied" ? "Copied" : copyState === "failed" ? "Retry copy" : "Copy"}
-      </button>
+      <CopyIconButton text={code} label="Copy code block" />
       <pre className="code-block">{children}</pre>
     </div>
   );
@@ -396,7 +377,7 @@ function ToolBlockList({
         </>}
       >
         <div className="tool-call-details">
-          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><pre className="code-block"><code>{stringifyValue(tool.args)}</code></pre></section> : null}
+          {tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><div className="code-block-wrap"><CopyIconButton text={stringifyValue(tool.args)} label="Copy tool input" /><pre className="code-block"><code>{stringifyValue(tool.args)}</code></pre></div></section> : null}
           {tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
         </div>
@@ -466,6 +447,7 @@ export function AgentMessageFeed(props: {
   fallback?: React.ReactNode;
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
+  renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
   userMessageText?: (message: BaseMessage) => string | undefined;
   sourceScope?: { sessionId?: string; projectPath?: string };
 }) {
@@ -531,6 +513,7 @@ export function AgentMessageFeed(props: {
               <AttachmentList attachments={parts.attachments} />
               {renderTools(messageTools, messageKey)}
             </div>
+            {type === "ai" ? props.renderAnswerActions?.(message, incomplete, parts.answer) : null}
             {props.renderMessageFooter?.(message)}
           </article>
         );
