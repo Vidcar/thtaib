@@ -15,6 +15,9 @@ from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.chat.schemas import ChatConversation
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.schemas import RuntimeManifest, ModelBundle, BundleFile, BundleSource
+from workbench_backend.inference.bundles import BundleService
+from workbench_backend.inference.store import RecordStore
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.backup import (
     BackupCreateRequest,
@@ -186,6 +189,163 @@ class BackupServiceTests(unittest.TestCase):
         self.assertEqual(len(project_refs), 1)
         self.assertEqual(project_refs[0].path, str(missing_project))
         self.assertTrue(project_refs[0].missing)
+
+    def test_restore_reports_missing_bundle_files_without_deployment_history(self) -> None:
+        primary = self.root.parent / "weights" / "model.gguf"
+        primary.parent.mkdir()
+        primary.write_bytes(b"primary weights")
+        shard = self.root.parent / "weights" / "model-00002-of-00002.gguf"
+        shard.mkdir()
+        companion = self.root.parent / "weights" / "mmproj.gguf"
+        bundle = {
+            "id": "bundle-never-run",
+            "display_name": "Never run bundle",
+            "format": "gguf",
+            "quantization": None,
+            "source": {
+                "kind": "local",
+                "repo_id": None,
+                "requested_revision": None,
+                "resolved_revision": None,
+                "original_path": str(primary),
+            },
+            "files": [
+                {
+                    "role": "primary_weights",
+                    "name": primary.name,
+                    "path": str(primary),
+                    "sha256": "primary",
+                    "size_bytes": primary.stat().st_size,
+                    "ownership": "external",
+                }
+            ],
+            "shards": [
+                {
+                    "role": "shard",
+                    "name": shard.name,
+                    "path": str(shard),
+                    "sha256": "shard",
+                    "size_bytes": 10,
+                    "ownership": "external",
+                }
+            ],
+            "companions": [
+                {
+                    "role": "companion",
+                    "name": companion.name,
+                    "path": str(companion),
+                    "sha256": "companion",
+                    "size_bytes": 11,
+                    "ownership": "external",
+                }
+            ],
+            "primary_path": str(primary),
+            "managed_root": None,
+            "created_at": utc_now(),
+            "status": "complete",
+            "disk_matches": True,
+        }
+        (self.paths.state / "bundles.json").write_text(json.dumps([{"id": "corrupt-record"}, bundle]), encoding="utf-8")
+
+        archive = self.root.parent / "bundle-refs.zip"
+        result = self.service.create_backup(BackupCreateRequest(destination=str(archive)))
+        model_refs = sorted(
+            ref.path for ref in result.manifest.external_references if ref.kind == "model" and ref.path
+        )
+
+        self.assertEqual(model_refs, sorted([str(primary), str(shard), str(companion)]))
+        self.assertEqual(len([ref for ref in result.manifest.external_references if ref.kind == "model"]), 3)
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+        self.assertNotIn("weights/model.gguf", names)
+        self.assertNotIn("weights/model-00002-of-00002.gguf", names)
+        self.assertNotIn("weights/mmproj.gguf", names)
+
+        restore_root = self.root.parent / "bundle-refs-restore"
+        restored = self.service.restore_backup(
+            BackupRestoreRequest(archive_path=str(archive), destination_root=str(restore_root))
+        )
+
+        missing_model_paths = sorted(
+            ref.path for ref in restored.missing_dependencies if ref.kind == "model" and ref.path
+        )
+        self.assertEqual(missing_model_paths, sorted([str(shard), str(companion)]))
+
+    def test_restore_reports_missing_runtime_files_without_copying_runtime_or_credentials(self) -> None:
+        install_dir = self.root.parent / "runtime-install"
+        install_dir.mkdir()
+        executable = install_dir / "llama-server.exe"
+        executable.write_bytes(b"runtime binary")
+        # RuntimeManager retains downloaded release archives next to the
+        # manifest, while extracted binaries live in a separate install folder.
+        archive_asset = self.paths.runtimes / "llama-b11045.zip"
+        archive_asset.write_bytes(b"downloaded release")
+        companion_asset = self.paths.runtimes / "cudart64_134.zip"
+        manifest = RuntimeManifest(
+            platform="windows",
+            flavor="cuda-13.4",
+            release_tag="b11045",
+            source_url="https://example.invalid/llama-b11045.zip",
+            asset_name=archive_asset.name,
+            sha256="archive",
+            install_dir=str(install_dir),
+            executable=str(executable),
+            companion_asset_name=companion_asset.name,
+            companion_sha256="companion",
+        )
+        (self.paths.runtimes / "runtime-manifest.json").write_text(manifest.model_dump_json(), encoding="utf-8")
+        (self.paths.state / "desktop_backend_shared_secret").write_text("secret", encoding="utf-8")
+
+        archive = self.root.parent / "runtime-refs.zip"
+        result = self.service.create_backup(BackupCreateRequest(destination=str(archive)))
+        runtime_refs = sorted(
+            ref.path
+            for ref in result.manifest.external_references
+            if ref.kind == "runtime" and ref.path and not ref.path.endswith("runtime-manifest.json")
+        )
+
+        self.assertEqual(runtime_refs, sorted([str(executable), str(archive_asset), str(companion_asset)]))
+        with zipfile.ZipFile(archive, "r") as zf:
+            names = set(zf.namelist())
+        self.assertIn("runtimes/runtime-manifest.json", names)
+        self.assertNotIn("runtimes/desktop_backend_shared_secret", names)
+        self.assertNotIn("runtime-install/llama-server.exe", names)
+        self.assertNotIn("runtime-install/llama-b11045.zip", names)
+        self.assertNotIn("runtime-install/cudart64_134.zip", names)
+
+        restore_root = self.root.parent / "runtime-refs-restore"
+        restored = self.service.restore_backup(
+            BackupRestoreRequest(archive_path=str(archive), destination_root=str(restore_root))
+        )
+
+        missing_runtime_paths = sorted(
+            ref.path for ref in restored.missing_dependencies if ref.kind == "runtime" and ref.path
+        )
+        self.assertEqual(missing_runtime_paths, [str(companion_asset)])
+
+    def test_restored_models_verify_as_external_references_to_preserved_weights(self) -> None:
+        weights = self.paths.models / "model.gguf"
+        weights.write_bytes(b"preserved model bytes")
+        bundle = ModelBundle(id="bundle_restore", display_name="Restore model",
+            source=BundleSource(kind="local", original_path=str(weights)),
+            files=[BundleFile(role="primary_weights", name=weights.name, path=str(weights),
+                sha256=sha256_file(weights), size_bytes=weights.stat().st_size, ownership="managed")],
+            primary_path=str(weights), created_at=utc_now())
+        RecordStore(self.paths).put_bundle(bundle)
+        archive = self.root.parent / "model-ownership.zip"
+        self.service.create_backup(BackupCreateRequest(destination=str(archive)))
+        destination = self.root.parent / "model-ownership-restore"
+        self.service.restore_backup(BackupRestoreRequest(archive_path=str(archive), destination_root=str(destination)))
+        restored_paths = WorkbenchPaths(destination)
+        records = RecordStore(restored_paths)
+        restored = records.get_bundle(bundle.id)
+        verified = BundleService(restored_paths, records).verify_bundle(restored)
+        self.assertTrue(verified.disk_matches, "existing weights must verify from the restored root")
+        self.assertTrue(all(item.ownership == "external" for item in verified.files))
+        self.assertEqual(verified.primary_path, str(weights))
+        self.assertIsNone(verified.managed_root)
+        self.assertEqual(weights.read_bytes(), b"preserved model bytes")
+        self.assertEqual(RecordStore(self.paths).get_bundle(bundle.id).files[0].ownership, "managed")
 
     def test_maintenance_gate_waits_for_mutation_then_rechecks_active_work(self) -> None:
         release = threading.Event()

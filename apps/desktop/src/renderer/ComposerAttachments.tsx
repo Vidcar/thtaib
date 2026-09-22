@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { Icon } from "./Icon";
 import { packet03Api, type AssetContentKind, type RetainedAsset } from "./packet03Api";
 import "./packet03Panels.css";
 
@@ -21,13 +22,16 @@ interface LocalUpload {
 
 interface ComposerAttachmentsProps {
   sessionId: string | null | undefined;
+  attachmentIds?: string[];
   disabled?: boolean;
   onAttachmentsChanged?: (attachments: StagedComposerAttachment[]) => void;
 }
 
-export function ComposerAttachments({ sessionId, disabled = false, onAttachmentsChanged }: ComposerAttachmentsProps) {
+export function ComposerAttachments({ sessionId, attachmentIds, disabled = false, onAttachmentsChanged }: ComposerAttachmentsProps) {
   const [items, setItems] = useState<LocalUpload[]>([]);
+  const itemsRef = useRef<LocalUpload[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const generation = useRef(0);
   const onAttachmentsChangedRef = useRef(onAttachmentsChanged);
 
@@ -37,9 +41,34 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
 
   useEffect(() => {
     generation.current += 1;
+    itemsRef.current = [];
     setItems([]);
-    onAttachmentsChangedRef.current?.([]);
+    if (!attachmentIds?.length) onAttachmentsChangedRef.current?.([]);
+    return () => { generation.current += 1; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !attachmentIds) return;
+    let cancelled = false;
+    itemsRef.current = itemsRef.current.filter(item => !item.asset || attachmentIds.includes(item.asset.id));
+    setItems(itemsRef.current);
+    if (attachmentIds.length) {
+      setRestoring(true);
+      void packet03Api.assets({ sessionId }).then(assets => {
+        if (cancelled) return;
+        const current = itemsRef.current;
+        itemsRef.current = [...current, ...assets.filter(asset => attachmentIds.includes(asset.id) && !current.some(item => item.asset?.id === asset.id)).map(asset => ({ id: asset.id, filename: asset.filename, size: asset.size_bytes, status: "ready" as const, asset }))];
+        setItems(itemsRef.current);
+      }).catch(error => {
+        if (cancelled) return;
+        itemsRef.current = [...itemsRef.current, { id: "restore-error", filename: "Saved attachments", size: 0, status: "error", message: error instanceof Error ? error.message : String(error) }];
+        setItems(itemsRef.current);
+      }).finally(() => { if (!cancelled) setRestoring(false); });
+    } else {
+      setRestoring(false);
+    }
+    return () => { cancelled = true; };
+  }, [sessionId, JSON.stringify(attachmentIds)]);
 
   function readyAttachments(nextItems = items): StagedComposerAttachment[] {
     return nextItems
@@ -48,11 +77,10 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
   }
 
   function commitItems(updater: (current: LocalUpload[]) => LocalUpload[]) {
-    setItems((current) => {
-      const next = updater(current);
-      onAttachmentsChangedRef.current?.(readyAttachments(next));
-      return next;
-    });
+    const next = updater(itemsRef.current);
+    itemsRef.current = next;
+    setItems(next);
+    onAttachmentsChangedRef.current?.(readyAttachments(next));
   }
 
   async function stageFiles(fileList: FileList | File[]): Promise<void> {
@@ -107,7 +135,7 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
     commitItems((current) => current.filter((item) => item.id !== id));
   }
 
-  const cannotAttach = disabled || !sessionId;
+  const cannotAttach = disabled || restoring || !sessionId;
 
   return (
     <section className="packet03-attachments" aria-label="Composer attachments">
@@ -127,11 +155,16 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
           }
         }}
       >
-        <label>
-          Attach text or code files
+        <div className="packet03-dropzone-main">
+          <Icon name="files" size={18} />
+          <span>Drop text or code here</span>
+        </div>
+        <label className="packet03-file-picker">
+          <span>Choose files</span>
           <input
             type="file"
             multiple
+            aria-label="Attach text or code files"
             disabled={cannotAttach}
             onChange={(event) => {
               if (event.target.files) {
@@ -142,7 +175,7 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
           />
         </label>
         <p className="hint">
-          Files are read in the browser, validated as UTF-8 text or code, then stored as immutable retained uploads for this conversation.
+          Up to 1 MB per file. A copy stays with this conversation.
         </p>
       </div>
 
@@ -151,16 +184,17 @@ export function ComposerAttachments({ sessionId, disabled = false, onAttachments
           {items.map((item) => (
             <li key={item.id} className="packet03-item">
               <div className="packet03-row">
-                <strong>{item.filename}</strong>
+                <Icon name="files" size={16} />
+                <strong title={item.filename}>{item.filename}</strong>
                 <span className="hint">{formatBytes(item.size)}</span>
+                <span className={item.status === "error" ? "notice notice-warn" : "hint"}>
+                  {item.message ?? (item.status === "uploading" ? "Uploading..." : "Ready")}
+                </span>
+                <button type="button" className="icon-button" aria-label={`Remove ${item.filename} from draft`} title="Remove from draft" disabled={disabled} onClick={() => removeItem(item.id)}>
+                  <Icon name="close" size={16} />
+                  <span className="sr-only">Remove from draft</span>
+                </button>
               </div>
-              <p className={item.status === "error" ? "notice notice-warn" : "hint"}>
-                {item.message ?? (item.status === "uploading" ? "Uploading..." : "Ready")}
-              </p>
-              {item.asset ? <p className="hint">Staged retained upload: {item.asset.id}</p> : null}
-              <button type="button" disabled={disabled} onClick={() => removeItem(item.id)}>
-                Remove from draft
-              </button>
             </li>
           ))}
         </ul>

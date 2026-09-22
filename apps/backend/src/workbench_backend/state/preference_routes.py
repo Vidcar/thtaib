@@ -15,6 +15,11 @@ def save_preferences(request: Request, body: PresentationPreferences) -> Present
     return request.app.state.preferences.save_preferences(body)
 
 
+@router.patch("/presentation")
+def update_preferences(request: Request, body: PresentationPreferences) -> PresentationPreferences:
+    return request.app.state.preferences.update_preferences(body)
+
+
 @router.get("/grants")
 def grants(request: Request) -> list[PermissionGrant]:
     return request.app.state.preferences.grants()

@@ -7,7 +7,7 @@ import type {
 
 export type WorkbenchSurface = "managed-inference";
 
-export type WorkbenchTab = "chat" | "models" | "knowledge" | "agent-run" | "lab";
+export type WorkbenchTab = "chat" | "models" | "knowledge" | "agent-run" | "lab" | "library" | "settings" | "attention";
 
 export interface PathsInfo {
   root: string;
@@ -385,6 +385,7 @@ export interface AgentRun {
   host_shell?: HostShellFacts;
   pending_interrupt?: PendingInterrupt | null;
   context_observation?: ContextObservation | null;
+  generation_observation?: import("../generated/shared-contracts/openapi").SchemaGenerationObservation | null;
   structured_output?: StructuredOutputResult | null;
 }
 
@@ -442,9 +443,11 @@ export function visiblePendingInterrupt(run: AgentRun | null | undefined): Pendi
 }
 
 export interface ChatMessage {
+  id?: string | null;
   role: "user" | "assistant" | "system";
   content: string;
   content_blocks?: UserContentBlock[] | null;
+  attachment_ids?: string[];
   at: string;
   run_id: string | null;
 }

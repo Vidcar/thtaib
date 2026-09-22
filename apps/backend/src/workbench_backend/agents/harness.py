@@ -21,6 +21,7 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatResult
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
@@ -211,7 +212,9 @@ class HarnessService:
         ]
 
     def checkpoint_state_for_run(self, run: AgentRun, checkpoint_id: str) -> dict[str, Any]:
-        agent = self._create_compiled_agent(run, [], None)
+        # Use the execution graph's exact framework topology and state schema,
+        # but never initialize inference, retrieval, or materialized storage.
+        agent = self._create_compiled_agent(run.model_copy(deep=True), [], None, inspection_only=True)
         snapshot = _graph_checkpoint_snapshot(agent, run.thread_id, checkpoint_id)
         return {"values": dict(snapshot.values), "next": tuple(snapshot.next)}
 
@@ -900,14 +903,17 @@ class HarnessService:
         run: AgentRun,
         http_sink: list[dict[str, Any]],
         fixture_bank: FixtureBank | None,
+        *,
+        inspection_only: bool = False,
     ) -> Any:
-        model = self._model_factory(run, http_sink)
+        model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
         agent_kwargs: dict[str, Any] = {}
-        backend = build_run_backend(run, self.manager.paths)
+        backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only)
         knowledge_plan = self._knowledge_plan_for_run(run)
         if backend is not None:
             agent_kwargs["backend"] = backend
-            materialize_onto_backend(backend, knowledge_plan)
+            if not inspection_only:
+                materialize_onto_backend(backend, knowledge_plan)
         observation = run.context_observation
         usable = observation.usable_input_tokens if observation is not None else None
         # Override provider-name defaults; only observed runtime capacity is a fact.
@@ -936,10 +942,11 @@ class HarnessService:
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
         tools = tools_for_names(run.presented_tools)
-        retrieval_tool = self._live_search_knowledge_tool(run, backend)
+        retrieval_tool = self._live_search_knowledge_tool(run, backend, inspection_only=inspection_only)
         if retrieval_tool is not None:
             tools = [*tools, retrieval_tool]
-        deployment = self.manager.ensure_deployment_ready(run.deployment_id)
+        deployment = (self.manager.get_deployment(run.deployment_id) if inspection_only
+                      else self.manager.ensure_deployment_ready(run.deployment_id))
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
         response_format, structured_output = response_format_for_run(
             output_schema=run.output_schema,
@@ -1349,7 +1356,7 @@ class HarnessService:
         if model is not None:
             model.close()
 
-    def _live_search_knowledge_tool(self, run: AgentRun, backend: Any) -> Any:
+    def _live_search_knowledge_tool(self, run: AgentRun, backend: Any, *, inspection_only: bool = False) -> Any:
         """Build the official search tool, or none for recorded-tool / no retrieval."""
 
         if run.tool_mode is ToolMode.recorded_tool:
@@ -1358,6 +1365,8 @@ class HarnessService:
             return None
         if not run.embedding_deployment_id or backend is None:
             return None
+        if inspection_only:
+            return make_search_knowledge_tool(_CheckpointInspectionVectorStore(), backend)
         embedding_deployment = resolve_embedding_deployment(
             self.manager,
             run.embedding_deployment_id,
@@ -1868,6 +1877,40 @@ def _graph_checkpoint_snapshot(agent: Any, thread_id: str | None, checkpoint_id:
             status_code=409,
         )
     return snapshot
+
+
+class _CheckpointInspectionModel(BaseChatModel):
+    """Inert model used only to compile Deep Agents for checkpoint reads."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "checkpoint-inspection"
+
+    def bind_tools(self, _tools: list[Any], **_kwargs: Any) -> "_CheckpointInspectionModel":
+        return self
+
+    def _generate(
+        self,
+        _messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **_kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError("Checkpoint inspection graph must not execute inference.")
+
+    async def _agenerate(
+        self,
+        _messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **_kwargs: Any,
+    ) -> ChatResult:
+        raise RuntimeError("Checkpoint inspection graph must not execute inference.")
+
+
+class _CheckpointInspectionVectorStore:
+    def similarity_search(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("Checkpoint inspection graph must not execute retrieval.")
 
 
 def _invoke_config(run: AgentRun) -> dict[str, Any]:

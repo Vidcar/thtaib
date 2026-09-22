@@ -14,6 +14,7 @@ from workbench_backend.agents.schemas import AgentEvent, AgentRun
 from workbench_backend.assets.schemas import (
     RegisterVerifiedOutputRequest,
     RetainedAssetDeletionRequest,
+    RetainedAssetListFilters,
     RetainedAssetReuseRequest,
     RetainedUploadRequest,
 )
@@ -632,6 +633,72 @@ class RetainedAssetServiceTests(unittest.TestCase):
         )
         self.assertIn("shared by selection", blocks[0].text)
         self.assertEqual(self.assets.content(asset.id, session_id="chat_target").text, "shared by selection")
+
+    def test_session_list_includes_explicit_reuse_consumers_without_unrelated_assets(self) -> None:
+        self.put_conversation("chat_source")
+        self.put_conversation("chat_target")
+        self.put_conversation("chat_other")
+        shared = self.assets.retain_upload(
+            RetainedUploadRequest(
+                session_id="chat_source",
+                filename="shared.txt",
+                content_type="text/plain",
+                content_base64=b64("shared by selection"),
+            )
+        )
+        unrelated = self.assets.retain_upload(
+            RetainedUploadRequest(
+                session_id="chat_other",
+                filename="other.txt",
+                content_type="text/plain",
+                content_base64=b64("other"),
+            )
+        )
+
+        self.assets.current_user_content(
+            RetainedAssetReuseRequest(
+                asset_ids=[shared.id],
+                session_id="chat_target",
+                allow_cross_session_reuse=True,
+            )
+        )
+
+        listed = self.assets.list_assets(RetainedAssetListFilters(session_id="chat_target"))
+        self.assertEqual([asset.id for asset in listed], [shared.id])
+        self.assertNotIn(unrelated.id, [asset.id for asset in listed])
+
+        self.assets.store.mark_deleted(shared.id, utc_now())
+        self.assertEqual(self.assets.list_assets(RetainedAssetListFilters(session_id="chat_target")), [])
+        deleted = self.assets.list_assets(RetainedAssetListFilters(session_id="chat_target", include_deleted=True))
+        self.assertEqual([asset.id for asset in deleted], [shared.id])
+
+    def test_session_and_project_list_keeps_explicit_session_reuse(self) -> None:
+        project = self.root / "target-project"
+        project.mkdir()
+        self.put_conversation("chat_source")
+        self.put_conversation("chat_target", project_path=str(project))
+        shared = self.assets.retain_upload(
+            RetainedUploadRequest(
+                session_id="chat_source",
+                filename="shared.txt",
+                content_type="text/plain",
+                content_base64=b64("shared by selection"),
+            )
+        )
+
+        self.assets.current_user_content(
+            RetainedAssetReuseRequest(
+                asset_ids=[shared.id],
+                session_id="chat_target",
+                project_path=str(project),
+                allow_cross_session_reuse=True,
+            )
+        )
+
+        listed = self.assets.list_assets(
+            RetainedAssetListFilters(session_id="chat_target", project_path=str(project))
+        )
+        self.assertEqual([asset.id for asset in listed], [shared.id])
 
     def test_deletion_preview_preserves_assets_shared_with_retained_consumers(self) -> None:
         self.put_conversation("chat_delete")

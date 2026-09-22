@@ -23,6 +23,16 @@ interface ToolBlock {
   result?: unknown;
 }
 
+interface DetailSectionProps {
+  children: React.ReactNode;
+  defaultOpen: boolean;
+  id: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  summary: React.ReactNode;
+  className: string;
+}
+
 function roleLabel(type: string): string {
   switch (type) {
     case "human":
@@ -47,6 +57,11 @@ function stringifyValue(value: unknown): string {
     return value;
   }
   return value == null ? "" : JSON.stringify(value, null, 2);
+}
+
+function isErrorLike(value: unknown): boolean {
+  const text = stringifyValue(value).toLowerCase();
+  return /\b(error|failed|exception|traceback)\b/.test(text);
 }
 
 function imageMarker(part: Record<string, unknown>, index: number): string {
@@ -219,17 +234,56 @@ function MarkdownMessage({ text }: { text: string }) {
   );
 }
 
-function ReasoningDetails({ reasoning }: { reasoning: string[] }) {
+function DetailSection({ children, className, defaultOpen, id, onToggle, openStates, summary }: DetailSectionProps) {
+  const open = openStates.get(id) ?? defaultOpen;
+  return (
+    <details
+      className={className}
+      open={open}
+    >
+      <summary
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          onToggle(id, !open);
+        }}
+      >
+        {summary}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+function ReasoningDetails({
+  defaultOpen,
+  messageKey,
+  onToggle,
+  openStates,
+  reasoning,
+}: {
+  defaultOpen: boolean;
+  messageKey: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  reasoning: string[];
+}) {
   if (reasoning.length === 0) {
     return null;
   }
   return (
-    <details className="message-reasoning">
-      <summary>Reasoning</summary>
+    <DetailSection
+      className="message-reasoning"
+      defaultOpen={defaultOpen}
+      id={`${messageKey}:reasoning`}
+      onToggle={onToggle}
+      openStates={openStates}
+      summary="Reasoning"
+    >
       {reasoning.map((item, index) => (
         <MarkdownMessage key={index} text={item} />
       ))}
-    </details>
+    </DetailSection>
   );
 }
 
@@ -246,18 +300,37 @@ function AttachmentList({ attachments }: { attachments: string[] }) {
   );
 }
 
-function ToolBlockList({ toolBlocks }: { toolBlocks: ToolBlock[] }) {
+function ToolBlockList({
+  defaultOpen,
+  messageKey,
+  onToggle,
+  openStates,
+  toolBlocks,
+}: {
+  defaultOpen: boolean;
+  messageKey: string;
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  toolBlocks: ToolBlock[];
+}) {
   if (toolBlocks.length === 0) {
     return null;
   }
   return (
-    <details className="message-tools">
-      <summary>Tool activity</summary>
+    <DetailSection
+      className="message-tools"
+      defaultOpen={defaultOpen}
+      id={`${messageKey}:tools`}
+      onToggle={onToggle}
+      openStates={openStates}
+      summary={`Tool activity (${toolBlocks.length})`}
+    >
       <ul className="plain-list">
         {toolBlocks.map((tool, index) => (
           <li key={`${tool.name}-${index}`}>
             <strong>{tool.name}</strong>
             {tool.status ? <span className="message-state">{tool.status}</span> : null}
+            {!defaultOpen && isErrorLike(tool.result) ? <p className="notice notice-error">{stringifyValue(tool.result)}</p> : null}
             {tool.args !== undefined ? (
               <pre className="code-block">
                 <code>{JSON.stringify(tool.args, null, 2)}</code>
@@ -267,7 +340,7 @@ function ToolBlockList({ toolBlocks }: { toolBlocks: ToolBlock[] }) {
           </li>
         ))}
       </ul>
-    </details>
+    </DetailSection>
   );
 }
 
@@ -287,7 +360,8 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
 
   useLayoutEffect(() => {
     const transcript = rootRef.current?.closest(".transcript");
-    if (!(transcript instanceof HTMLElement)) {
+    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
+    if (!elementCtor || !(transcript instanceof elementCtor)) {
       return undefined;
     }
     const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
@@ -301,10 +375,20 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
 
   useLayoutEffect(() => {
     const transcript = rootRef.current?.closest(".transcript");
-    if (!(transcript instanceof HTMLElement) || !shouldFollow.current) {
+    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
+    if (!elementCtor || !(transcript instanceof elementCtor) || !shouldFollow.current) {
       return;
     }
-    transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+    const selection = typeof document === "undefined" ? null : document.getSelection?.();
+    if (selection && !selection.isCollapsed && transcript.contains(selection.anchorNode)) {
+      return;
+    }
+    const reduceMotion = typeof window === "undefined" ? false : window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (typeof transcript.scrollTo === "function") {
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+    } else {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
   }, [signature]);
 
   return rootRef;
@@ -315,9 +399,23 @@ export function AgentMessageFeed(props: {
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   fallback?: React.ReactNode;
+  detailedStreams?: boolean;
+  renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
+  userMessageText?: (message: BaseMessage) => string | undefined;
 }) {
-  const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback } = props;
+  const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback, detailedStreams = false } = props;
   const rootRef = useFollowTranscript(messages, incompleteMessageIds);
+  const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
+  const handleDetailToggle = (id: string, open: boolean) => {
+    setOpenStates((current) => {
+      if (current.get(id) === open) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(id, open);
+      return next;
+    });
+  };
   if (messages.length === 0) {
     return fallback;
   }
@@ -326,37 +424,74 @@ export function AgentMessageFeed(props: {
       {messages.map((message, index) => {
         const type = messageType(message);
         const incomplete = Boolean(message.id && incompleteMessageIds.has(message.id));
-        const parts = parseContent(message.contentBlocks ?? message.content);
+        const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
+        const parts = parseContent(submittedText ?? message.contentBlocks ?? message.content);
+        const messageKey = message.id ?? `${type}-${index}`;
+        const compactToolMessage = type === "tool" && !detailedStreams;
+        const toolMessageText = compactToolMessage ? stringifyValue(message.content) : "";
         return (
-          <article key={message.id ?? `${type}-${index}`} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
+          <article key={messageKey} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
             <header>
               <strong>{type === "tool" && message.name ? `Tool: ${message.name}` : roleLabel(type)}</strong>
               {incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
             </header>
             <div className="message-body">
-              <MarkdownMessage text={parts.answer} />
+              {compactToolMessage ? (
+                <>
+                  {isErrorLike(toolMessageText) ? <p className="notice notice-error">{toolMessageText}</p> : null}
+                  <ToolBlockList
+                    defaultOpen={detailedStreams}
+                    messageKey={`${messageKey}:tool-message`}
+                    onToggle={handleDetailToggle}
+                    openStates={openStates}
+                    toolBlocks={[{ name: message.name ?? "tool", result: toolMessageText }]}
+                  />
+                </>
+              ) : (
+                <MarkdownMessage text={parts.answer} />
+              )}
               <AttachmentList attachments={parts.attachments} />
-              <ReasoningDetails reasoning={parts.reasoning} />
-              <ToolBlockList toolBlocks={parts.toolBlocks} />
+              <ReasoningDetails
+                defaultOpen={detailedStreams}
+                messageKey={messageKey}
+                onToggle={handleDetailToggle}
+                openStates={openStates}
+                reasoning={parts.reasoning}
+              />
+              <ToolBlockList
+                defaultOpen={detailedStreams}
+                messageKey={messageKey}
+                onToggle={handleDetailToggle}
+                openStates={openStates}
+                toolBlocks={parts.toolBlocks}
+              />
             </div>
+            {props.renderMessageFooter?.(message)}
           </article>
         );
       })}
       {toolCalls.length > 0 ? (
-        <details className="card">
-          <summary>Tool activity</summary>
+        <DetailSection
+          className="card"
+          defaultOpen={detailedStreams}
+          id="live-tool-calls"
+          onToggle={handleDetailToggle}
+          openStates={openStates}
+          summary={`Tool activity (${toolCalls.length})`}
+        >
           <ul className="plain-list">
             {toolCalls.map((call, index) => (
               <li key={`${call.id ?? call.name}-${index}`}>
                 <strong>{call.name}</strong>
                 {"status" in call && typeof call.status === "string" ? <span className="message-state">{call.status}</span> : null}
+                {"result" in call && isErrorLike(call.result) ? <p className="notice notice-error">{stringifyValue(call.result)}</p> : null}
                 <pre className="code-block">
                   <code>{JSON.stringify({ args: call.args ?? {}, result: "result" in call ? call.result : undefined }, null, 2)}</code>
                 </pre>
               </li>
             ))}
           </ul>
-        </details>
+        </DetailSection>
       ) : null}
     </div>
   );

@@ -42,6 +42,12 @@ class PreferenceStore:
             self.store._conn.execute("INSERT OR REPLACE INTO presentation_preferences VALUES(1, ?)", (value.model_dump_json(),))
         return value
 
+    def update_preferences(self, patch: PresentationPreferences) -> PresentationPreferences:
+        with self.store._lock, self.store._conn:
+            value = self.preferences().model_copy(update=patch.model_dump(exclude_unset=True))
+            self.store._conn.execute("INSERT OR REPLACE INTO presentation_preferences VALUES(1, ?)", (value.model_dump_json(),))
+        return value
+
     def grants(self) -> list[PermissionGrant]:
         with self.store._lock:
             rows = self.store._conn.execute("SELECT payload FROM permission_grants ORDER BY id").fetchall()

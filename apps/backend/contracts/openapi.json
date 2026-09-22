@@ -809,6 +809,13 @@
             "title": "Metadata",
             "type": "object"
           },
+          "per_request_defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RuntimeControlDescriptor"
+            },
+            "title": "Per Request Defaults",
+            "type": "object"
+          },
           "startup_defaults": {
             "additionalProperties": {
               "$ref": "#/components/schemas/RuntimeControlDescriptor"
@@ -1657,7 +1664,7 @@
             "type": "array"
           },
           "note": {
-            "default": "Debug-quality Chat. The embedded Deep Agents harness owns model/tool iteration. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; this is not a durable Approvals inbox (OQ-011).",
+            "default": "Shared Chat. The embedded Deep Agents harness owns model/tool iteration; the application persists native interrupts and surfaces them here. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; the application persists the interrupt for Chat.",
             "title": "Note",
             "type": "string"
           },
@@ -2392,6 +2399,18 @@
               }
             ],
             "title": "Deployment Id"
+          },
+          "draft_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Revision"
           },
           "embedding_deployment_id": {
             "anyOf": [
@@ -3416,7 +3435,7 @@
             "type": "string"
           },
           "note": {
-            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
             "title": "Note",
             "type": "string"
           }
@@ -4950,7 +4969,7 @@
         "type": "object"
       },
       "PendingInterrupt": {
-        "description": "Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011).",
+        "description": "Native Deep Agents interrupt persisted by the application and surfaced in Chat.",
         "properties": {
           "action_requests": {
             "items": {
@@ -4999,7 +5018,7 @@
             "type": "array"
           },
           "note": {
-            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+            "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
             "title": "Note",
             "type": "string"
           },

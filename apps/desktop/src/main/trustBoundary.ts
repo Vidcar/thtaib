@@ -19,7 +19,6 @@ interface TrustedWindowRecord {
 }
 
 const trustedWindows = new Map<number, TrustedWindowRecord>();
-let headerInstalled = false;
 
 export function requireTrustedIpc(event: IpcMainInvokeEvent): void {
   const record = trustedWindows.get(event.sender.id);
@@ -57,10 +56,8 @@ export function installTrustedAppWindow(window: BrowserWindow, document: Trusted
 }
 
 export function installLocalTrustHeader(token: string, backendOrigin = WORKBENCH_BACKEND_ORIGIN): void {
-  if (headerInstalled) {
-    return;
-  }
-  headerInstalled = true;
+  // Electron replaces the previous listener. Reinstall after restore activation
+  // so the renderer uses the new root's token with the same document checks.
   const normalizedBackendOrigin = normalizeOrigin(backendOrigin);
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ["http://*/*", "https://*/*"] },

@@ -21,9 +21,11 @@ const vite = await createViteServer({ root: desktopRoot, appType: "custom", serv
 try {
   const { ComposerAttachments } = await vite.ssrLoadModule("/src/renderer/ComposerAttachments.tsx");
   const { LibraryPanel } = await vite.ssrLoadModule("/src/renderer/LibraryPanel.tsx");
+  const { ChatHistoryActions } = await vite.ssrLoadModule("/src/renderer/ChatHistoryActions.tsx");
 
   await checkComposerUploadStaleGuard(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
+  await checkChatHistoryActions(ChatHistoryActions);
 } finally {
   await vite.close();
 }
@@ -72,13 +74,13 @@ async function checkComposerUploadStaleGuard(ComposerAttachments) {
     await act(async () => {
       await tick();
     });
-    assert.ok(!textOf(renderer.root).includes("asset_old"), "stale upload response from previous session must not stage an attachment");
+    assert.ok(!textOf(renderer.root).includes("old.txt"), "stale upload response from previous session must not stage an attachment");
 
     uploads.get("chat_new").deferred.resolve(jsonResponse(asset("asset_new", "new.ts", "chat_new")));
     await act(async () => {
       await tick();
     });
-    assert.ok(textOf(renderer.root).includes("asset_new"), "current upload should stage retained asset id");
+    assert.ok(textOf(renderer.root).includes("new.ts"), "current upload should show its filename");
     assert.deepEqual(attachments.at(-1), ["asset_new"]);
 
     await act(async () => {
@@ -241,6 +243,238 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
   } finally {
     globalThis.fetch = originalFetch;
   }
+}
+
+async function checkChatHistoryActions(ChatHistoryActions) {
+  const originalFetch = globalThis.fetch;
+  const originalConfirm = globalThis.window.confirm;
+  const originalDocument = globalThis.document;
+  const originalCreateObjectUrl = globalThis.URL?.createObjectURL;
+  const originalRevokeObjectUrl = globalThis.URL?.revokeObjectURL;
+  const created = [];
+  const deleted = [];
+  const errors = [];
+  const branchRequests = [];
+  const downloads = [];
+  let turnCompleted = false;
+  let deleteBody = null;
+  let confirmCalls = 0;
+  globalThis.window.confirm = () => {
+    confirmCalls += 1;
+    return true;
+  };
+  globalThis.URL.createObjectURL = (blob) => {
+    downloads.push({ blob, filename: null });
+    return `blob:download-${downloads.length}`;
+  };
+  globalThis.URL.revokeObjectURL = () => {};
+  globalThis.document = {
+    body: { appendChild: () => {} },
+    createElement: () => ({
+      href: "",
+      download: "",
+      click() {
+        downloads.at(-1).filename = this.download;
+      },
+      remove() {},
+    }),
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url);
+    if (address.includes("/replies/run_done/actions")) {
+      return jsonResponse({
+        branch_available: turnCompleted,
+        retry_available: turnCompleted,
+        regenerate_available: false,
+        branch_reason: turnCompleted ? null : "Wait for the active turn to stop before branching.",
+        retry_reason: turnCompleted ? null : "Wait for the active turn to stop before branching.",
+        regenerate_reason: "This turn has no matching retained project snapshot.",
+      });
+    }
+    if (address.includes("/branches")) {
+      branchRequests.push(JSON.parse(String(init.body)));
+      return jsonResponse({ ...conversationFixture(), id: "chat_branch", source_conversation_id: "chat_source" });
+    }
+    if (address.includes("/export")) {
+      return jsonResponse({
+        schema_version: 1,
+        exported_at: "2026-09-21T00:02:00Z",
+        conversation: conversationFixture(),
+        runs: [{ id: "run_done", task: "Do work" }],
+        retained_assets: [{ filename: "notes.txt" }],
+        note: "Readable export only.",
+      });
+    }
+    if (address.includes("/delete-preview")) {
+      return jsonResponse(deletePreviewFixture());
+    }
+    if (init.method === "DELETE" && address.includes("/v1/chat/conversations/chat_source")) {
+      deleteBody = JSON.parse(String(init.body));
+      return jsonResponse({ ...deletePreviewFixture(), diagnostics_deleted: Boolean(deleteBody.include_diagnostics) });
+    }
+    throw new Error(`unexpected fetch ${address}`);
+  };
+
+  try {
+    let renderer;
+    await act(async () => {
+      renderer = create(React.createElement(ChatHistoryActions, {
+        conversation: { ...conversationFixture(), current_run: { ...conversationFixture().current_run, status: "running" } },
+        onConversationCreated: (next) => created.push(next.id),
+        onDeleted: (id) => deleted.push(id),
+        onError: (message) => errors.push(message),
+      }));
+      await tick();
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    assert.equal(button(renderer, "Retry task").props.disabled, true, "running turn cannot be retried");
+    turnCompleted = true;
+    await act(async () => {
+      renderer.update(React.createElement(ChatHistoryActions, {
+        conversation: { ...conversationFixture(), current_run: { ...conversationFixture().current_run, status: "completed" } },
+        onConversationCreated: (next) => created.push(next.id),
+        onDeleted: (id) => deleted.push(id),
+        onError: (message) => errors.push(message),
+      }));
+      await tick();
+    });
+    assert.equal(button(renderer, "Retry task").props.disabled, false, "terminal hydration refreshes saved reply availability without reopening Chat");
+
+    assert.ok(textOf(renderer.root).includes("Regenerate answer"));
+    assert.ok(textOf(renderer.root).includes("This turn has no matching retained project snapshot."), "unavailable regenerate reason should be visible");
+
+    await act(async () => {
+      button(renderer, "Retry task").props.onClick();
+      await tick();
+    });
+    assert.equal(confirmCalls, 1, "retry must disclose repeated effects before creating a branch");
+    assert.deepEqual(branchRequests.at(-1), {
+      source_run_id: "run_done",
+      mode: "retry",
+      acknowledge_repeated_effects: true,
+    });
+    assert.deepEqual(created, ["chat_branch"]);
+
+    const editBox = renderer.root.findByType("textarea");
+    await act(async () => {
+      editBox.props.onChange({ target: { value: "Do the safer edited task" } });
+    });
+    await act(async () => {
+      button(renderer, "Edit task branch").props.onClick();
+      await tick();
+    });
+    assert.deepEqual(branchRequests.at(-1), {
+      source_run_id: "run_done",
+      mode: "edit",
+      acknowledge_repeated_effects: true,
+      edited_task: "Do the safer edited task",
+    });
+
+    await act(async () => {
+      button(renderer, "Readable export").props.onClick();
+      await tick();
+    });
+    assert.equal(downloads.at(-1).filename, "Source-chat.md");
+    assert.match(await downloads.at(-1).blob.text(), /# Source chat[\s\S]*## You[\s\S]*Do work[\s\S]*## Assistant[\s\S]*Done/);
+
+    await act(async () => {
+      button(renderer, "Advanced JSON export").props.onClick();
+      await tick();
+    });
+    assert.equal(downloads.at(-1).filename, "Source-chat-structured.json");
+    assert.match(await downloads.at(-1).blob.text(), /"schema_version": 1/);
+
+    await act(async () => {
+      button(renderer, "Preview delete").props.onClick();
+      await tick();
+    });
+    assert.ok(textOf(renderer.root).includes("1 retained asset"));
+    assert.ok(textOf(renderer.root).includes("Project files and model files are retained."));
+
+    const diagnostic = renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox")[0];
+    await act(async () => {
+      diagnostic.props.onChange({ target: { checked: true } });
+    });
+    await act(async () => {
+      button(renderer, "Delete conversation").props.onClick();
+      await tick();
+    });
+    assert.deepEqual(deleteBody, { execute: true, include_diagnostics: true });
+    assert.deepEqual(deleted, ["chat_source"]);
+    assert.deepEqual(errors, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window.confirm = originalConfirm;
+    globalThis.document = originalDocument;
+    globalThis.URL.createObjectURL = originalCreateObjectUrl;
+    globalThis.URL.revokeObjectURL = originalRevokeObjectUrl;
+  }
+}
+
+function conversationFixture() {
+  return {
+    id: "chat_source",
+    title: "Source chat",
+    archived: false,
+    archived_at: null,
+    area_kind: "project",
+    area_id: "D:/Project",
+    area_label: "Project",
+    area_project_path: "D:/Project",
+    area_workspace_id: null,
+    deployment_id: "deploy_1",
+    profile_id: null,
+    inherit_deployment_settings: true,
+    project_path: "D:/Project",
+    workspace_id: null,
+    thread_id: "thread_1",
+    transcript: [
+      { id: "msg_user", role: "user", content: "Do work", at: "2026-09-21T00:00:00Z", run_id: "run_done" },
+      { id: "msg_assistant", role: "assistant", content: "Done", at: "2026-09-21T00:01:00Z", run_id: "run_done" },
+    ],
+    current_run_id: null,
+    run_ids: ["run_done"],
+    history_replaced: false,
+    harness: "deepagents",
+    second_agent_loop: false,
+    source_surface: "chat",
+    current_run: null,
+    pending_cancel_input_ids: [],
+    draft: null,
+    queue: [],
+    events: [],
+    continuity: null,
+    deploy_health: null,
+    filesystem_tools_available: true,
+    shell_tools_available: true,
+    enabled_tools: [],
+    created_at: "2026-09-21T00:00:00Z",
+    updated_at: "2026-09-21T00:01:00Z",
+  };
+}
+
+function deletePreviewFixture() {
+  return {
+    conversation_id: "chat_source",
+    can_delete: true,
+    blockers: [],
+    affected_sessions: ["chat_source"],
+    retained_sessions: ["chat_other"],
+    affected_runs: ["run_done"],
+    retained_runs: [],
+    affected_assets: ["asset_a"],
+    retained_assets: ["asset_b"],
+    checkpoint_threads_deleted: ["thread_1"],
+    checkpoint_threads_retained: [],
+    scratch_deleted: [],
+    diagnostics_deleted: false,
+    project_sources_deleted: false,
+    model_files_deleted: false,
+    note: "Conversation deletion removes only application-owned records. Project files and model files are retained.",
+  };
 }
 
 function asset(id, filename, sessionId, overrides = {}) {

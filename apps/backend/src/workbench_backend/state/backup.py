@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend import __version__
 from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.ids import new_id, utc_now
+from workbench_backend.inference.schemas import ModelBundle, RuntimeManifest
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.checkpointer import copy_checkpoints_for_backup
 from workbench_backend.state.store import ApplicationStore
@@ -323,6 +324,14 @@ class BackupService:
                     id=setup.loaded_deployment_id,
                     missing=False,
                 )
+        for bundle in self._bundle_records():
+            for path in _bundle_reference_paths(bundle):
+                refs[("model", str(path))] = BackupExternalReference(
+                    kind="model",
+                    id=bundle.id,
+                    path=str(path),
+                    missing=not path.is_file(),
+                )
         runtime_manifest = self.paths.runtimes / "runtime-manifest.json"
         if runtime_manifest.exists():
             refs[("runtime", str(runtime_manifest))] = BackupExternalReference(
@@ -330,6 +339,13 @@ class BackupService:
                 path=str(runtime_manifest),
                 missing=False,
             )
+            if manifest := self._runtime_manifest_record(runtime_manifest):
+                for path in _runtime_reference_paths(manifest, self.paths.runtimes):
+                    refs[("runtime", str(path))] = BackupExternalReference(
+                        kind="runtime",
+                        path=str(path),
+                        missing=not path.is_file(),
+                    )
         for name in EXCLUDED_NAMES:
             candidate = self.paths.state / name
             if candidate.exists():
@@ -339,6 +355,30 @@ class BackupService:
                     missing=False,
                 )
         return list(refs.values())
+
+    def _bundle_records(self) -> list[ModelBundle]:
+        path = self.paths.state / "bundles.json"
+        if not path.is_file():
+            return []
+        try:
+            records = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(records, list):
+            return []
+        bundles: list[ModelBundle] = []
+        for record in records:
+            try:
+                bundles.append(ModelBundle.model_validate(record))
+            except Exception:
+                continue
+        return bundles
+
+    def _runtime_manifest_record(self, path: Path) -> RuntimeManifest | None:
+        try:
+            return RuntimeManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
 
     def _copy_restored_tree(self, staging: Path, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
@@ -386,6 +426,31 @@ def _copy_tree_safely(source: Path, destination: Path) -> None:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
+
+
+def _bundle_reference_paths(bundle: ModelBundle) -> list[Path]:
+    paths: dict[str, Path] = {}
+    if bundle.primary_path:
+        primary = Path(bundle.primary_path)
+        paths[str(primary)] = primary
+    for item in [*bundle.files, *bundle.shards, *bundle.companions]:
+        path = Path(item.path)
+        paths[str(path)] = path
+    return list(paths.values())
+
+
+def _runtime_reference_paths(manifest: RuntimeManifest, archive_root: Path) -> list[Path]:
+    paths: dict[str, Path] = {}
+    executable = Path(manifest.executable)
+    paths[str(executable)] = executable
+    # Local pins name the executable itself as their asset; release pins keep
+    # downloaded archives beside the manifest, outside the extracted directory.
+    names = () if manifest.release_tag == "local" else (manifest.asset_name, manifest.companion_asset_name)
+    for name in names:
+        if name:
+            path = archive_root / name
+            paths[str(path)] = path
+    return list(paths.values())
 
 
 def _collect_files(root: Path) -> list[tuple[Path, str]]:
@@ -486,11 +551,18 @@ def _verify_manifest_files(root: Path, manifest: BackupManifest) -> None:
 def _missing_dependencies(manifest: BackupManifest) -> list[BackupExternalReference]:
     missing: list[BackupExternalReference] = []
     for ref in manifest.external_references:
-        if ref.path and not Path(ref.path).exists():
+        if ref.path and _reference_path_missing(ref):
             missing.append(ref.model_copy(update={"missing": True}))
         elif ref.missing:
             missing.append(ref)
     return missing
+
+
+def _reference_path_missing(ref: BackupExternalReference) -> bool:
+    path = Path(ref.path or "")
+    if ref.kind == "project":
+        return not path.exists()
+    return not path.is_file()
 
 
 def _safe_relative(relative: str) -> str:
@@ -776,6 +848,17 @@ def _rebase_payload_paths(value: Any, destination: Path, source_root: Path) -> N
 
 
 def _rebase_restored_json_files(root: Path, destination: Path, source_root: Path) -> None:
+    bundles = root / "state" / "bundles.json"
+    if bundles.is_file():
+        payload = json.loads(bundles.read_text(encoding="utf-8"))
+        for bundle in payload:
+            # Weights are excluded from backups. The restored application may
+            # reference them but must not inherit ownership of source files.
+            bundle["managed_root"] = None
+            for collection in ("files", "shards", "companions"):
+                for item in bundle.get(collection, []):
+                    item["ownership"] = "external"
+        bundles.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     records = [*(root / "snapshots").glob("*/manifest.json"), *(root / "cases").glob("*.json")]
     for path in records:
         try:

@@ -18,7 +18,7 @@ from workbench_backend.inference.schemas import (
     RuntimeControlDescriptor,
     RuntimeControlOption,
 )
-from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE
+from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE, STARTUP_ENUMS
 
 SMALL_CONTEXT_VALUES = (1024, 2048, 4096, 8192, 16384)
 MIN_LARGE_CONTEXT_OPTION = 32 * 1024
@@ -45,6 +45,7 @@ def bundle_configuration_options(
         context_size=_context_descriptor(metadata.context_length, observed_context),
         gpu_layers=_gpu_layers_descriptor(metadata.block_count),
         startup_defaults=_startup_defaults(recommended_threads=recommended_threads),
+        per_request_defaults=_per_request_defaults(),
         metadata={
             "architecture": metadata.architecture,
             "name": metadata.name,
@@ -52,6 +53,45 @@ def bundle_configuration_options(
             "block_count": metadata.block_count,
         },
     )
+
+
+def _per_request_defaults() -> dict[str, RuntimeControlDescriptor]:
+    return {
+        "reasoning_effort": RuntimeControlDescriptor(
+            key="reasoning_effort",
+            label="Thinking effort",
+            description=(
+                "Per-request reasoning effort values accepted by the pinned "
+                "llama.cpp OpenAI-compatible request schema."
+            ),
+            source="pinned_runtime_schema",
+            applied="default",
+            options=[
+                RuntimeControlOption(
+                    value=value,
+                    label="Model default" if value == "default" else _title_effort(value),
+                    description=(
+                        "Leave reasoning effort to the model or profile default."
+                        if value == "default"
+                        else f"Send reasoning_effort={value} with this Chat request."
+                    ),
+                )
+                for value in _ordered_reasoning_efforts()
+            ],
+        )
+    }
+
+
+def _ordered_reasoning_efforts() -> list[str]:
+    preferred = ["default", "minimal", "low", "medium", "high", "xhigh", "max"]
+    supported = STARTUP_ENUMS["reasoning_effort"]
+    ordered = [value for value in preferred if value in supported]
+    ordered.extend(sorted(supported - set(ordered)))
+    return ordered
+
+
+def _title_effort(value: str) -> str:
+    return value.replace("_", " ").title()
 
 
 def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeControlDescriptor:

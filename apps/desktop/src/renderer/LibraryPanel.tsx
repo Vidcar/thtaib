@@ -14,6 +14,7 @@ import "./packet03Panels.css";
 interface LibraryPanelProps {
   sessionId?: string | null;
   projectPath?: string | null;
+  onReuseSelectedAssets?: (assets: RetainedAsset[]) => void;
   onReuseAssets?: (result: RetainedAssetReuseResult, assets: RetainedAsset[]) => void;
 }
 
@@ -72,7 +73,7 @@ function deleteOutcomeText(result: RetainedAssetDeletionPreview): string {
   return `${deletedText}; ${preserved} shared item${preserved === 1 ? "" : "s"} preserved.`;
 }
 
-export function LibraryPanel({ sessionId = null, projectPath = null, onReuseAssets }: LibraryPanelProps) {
+export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSelectedAssets, onReuseAssets }: LibraryPanelProps) {
   const [origin, setOrigin] = useState<RetainedAssetOrigin | "all">("all");
   const [scope, setScope] = useState<"available" | "session" | "project" | "all">("available");
   const [includeDeleted, setIncludeDeleted] = useState(false);
@@ -170,7 +171,14 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseAsse
   }
 
   async function reuseSelected(): Promise<void> {
-    if (selectedIds.length === 0 || !sessionId || !onReuseAssets) return;
+    if (selectedIds.length === 0) return;
+    if (onReuseSelectedAssets && (!sessionId || !onReuseAssets)) {
+      if (selectedAssets.length === 0) return;
+      onReuseSelectedAssets(selectedAssets);
+      setMessage(`Opening Chat to reuse ${selectedAssets.length} retained file${selectedAssets.length === 1 ? "" : "s"}.`);
+      return;
+    }
+    if (!sessionId || !onReuseAssets) return;
     setBusy(true);
     setMessage("");
     try {
@@ -323,7 +331,11 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseAsse
           )}
 
           <div className="packet03-actions">
-            <button type="button" disabled={busy || selectedIds.length === 0 || !sessionId || !onReuseAssets} onClick={() => void reuseSelected()}>
+            <button
+              type="button"
+              disabled={busy || selectedIds.length === 0 || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))}
+              onClick={() => void reuseSelected()}
+            >
               Reuse selected
             </button>
             <button type="button" disabled={busy || selectedIds.length === 0} onClick={() => void previewDeletion()}>

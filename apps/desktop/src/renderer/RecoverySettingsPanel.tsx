@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   packet03Api,
@@ -21,6 +21,14 @@ const fallbackPresentation: PresentationSettings = {
   success_notifications: false,
 };
 
+function backupArchivePath(destinationFolder: string, now = new Date()): string {
+  const folder = destinationFolder.trim();
+  const separator = folder.includes("\\") ? "\\" : "/";
+  const normalizedFolder = folder.replace(/[\\/]+$/, "");
+  const stamp = now.toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
+  return `${normalizedFolder}${separator}local-ai-workbench-${stamp}.workbench-backup.zip`;
+}
+
 function grantLabel(grant: PermissionGrant): string {
   const scope = grant.scope === "always" ? "Always allow" : "This session";
   return `${scope}: ${grant.action}`;
@@ -34,6 +42,8 @@ function argumentSummary(value: Record<string, unknown>): string {
 
 export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted }: RecoverySettingsPanelProps) {
   const [preferences, setPreferences] = useState<PresentationSettings>(fallbackPresentation);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesBusy, setPreferencesBusy] = useState(false);
   const [grants, setGrants] = useState<PermissionGrant[]>([]);
   const [activeRunIds, setActiveRunIds] = useState<string[]>([]);
   const [backupDestination, setBackupDestination] = useState("");
@@ -43,22 +53,54 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   const [lastRestore, setLastRestore] = useState<BackupRestoreResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const preferencesRef = useRef(preferences);
+  const preferencesLoadedRef = useRef(false);
+  const refreshInFlight = useRef(false);
+  const saveInFlight = useRef(false);
+  const preferencesGeneration = useRef(0);
+
+  function applyPreferences(next: PresentationSettings): void {
+    preferencesRef.current = next;
+    setPreferences(next);
+  }
+
+  function markPreferencesLoaded(): void {
+    preferencesLoadedRef.current = true;
+    setPreferencesLoaded(true);
+  }
 
   async function refresh(): Promise<void> {
+    if (refreshInFlight.current || saveInFlight.current) return;
+    refreshInFlight.current = true;
+    const generation = preferencesGeneration.current;
     setBusy(true);
     setMessage("");
     try {
-      const [nextPreferences, nextGrants, work] = await Promise.all([
+      const [nextPreferencesResult, nextGrants, work] = await Promise.allSettled([
         packet03Api.presentation(),
         packet03Api.grants(),
         packet03Api.activeWork(),
       ]);
-      setPreferences(nextPreferences);
-      setGrants(nextGrants);
-      setActiveRunIds(work.active_run_ids);
+      if (nextPreferencesResult.status === "fulfilled") {
+        if (generation === preferencesGeneration.current && !saveInFlight.current) {
+          applyPreferences(nextPreferencesResult.value);
+          markPreferencesLoaded();
+        }
+      } else {
+        setMessage(nextPreferencesResult.reason instanceof Error ? nextPreferencesResult.reason.message : String(nextPreferencesResult.reason));
+      }
+      if (nextGrants.status !== "fulfilled") {
+        throw nextGrants.reason;
+      }
+      if (work.status !== "fulfilled") {
+        throw work.reason;
+      }
+      setGrants(nextGrants.value);
+      setActiveRunIds(work.value.active_run_ids);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      refreshInFlight.current = false;
       setBusy(false);
     }
   }
@@ -67,16 +109,33 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     void refresh();
   }, []);
 
-  async function savePreferences(next: PresentationSettings): Promise<void> {
-    setPreferences(next);
+  async function savePreferences(patch: Partial<PresentationSettings>): Promise<void> {
+    if (!preferencesLoadedRef.current || saveInFlight.current || refreshInFlight.current) return;
+    saveInFlight.current = true;
+    const generation = preferencesGeneration.current + 1;
+    preferencesGeneration.current = generation;
+    const previous = preferencesRef.current;
+    const optimistic = { ...previous, ...patch };
+    applyPreferences(optimistic);
+    setPreferencesBusy(true);
     setMessage("");
     try {
-      const saved = await packet03Api.savePresentation(next);
-      setPreferences(saved);
-      onPreferencesChanged?.(saved);
+      const saved = await packet03Api.savePresentation(patch);
+      if (preferencesGeneration.current === generation) {
+        applyPreferences(saved);
+        markPreferencesLoaded();
+        onPreferencesChanged?.(saved);
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-      void refresh();
+      if (preferencesGeneration.current === generation) {
+        applyPreferences(previous);
+        setMessage(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      saveInFlight.current = false;
+      if (preferencesGeneration.current === generation) {
+        setPreferencesBusy(false);
+      }
     }
   }
 
@@ -109,7 +168,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     setBusy(true);
     setMessage("");
     try {
-      const result = await packet03Api.createBackup(backupDestination.trim());
+      const result = await packet03Api.createBackup(backupArchivePath(backupDestination));
       setLastBackup(result);
       setMessage("Backup created.");
     } catch (error) {
@@ -149,6 +208,8 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     }
   }
 
+  const preferenceControlsDisabled = !preferencesLoaded || preferencesBusy || refreshInFlight.current;
+
   return (
     <section className="packet03-panel" aria-label="Recovery and settings">
       <div className="packet03-row">
@@ -156,7 +217,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
           <p className="eyebrow">Settings</p>
           <h2>Recovery and permissions</h2>
         </div>
-        <button type="button" disabled={busy} onClick={() => void refresh()}>
+        <button type="button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
           Refresh
         </button>
       </div>
@@ -170,7 +231,8 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             Theme
             <select
               value={preferences.theme}
-              onChange={(event) => void savePreferences({ ...preferences, theme: event.target.value as PresentationTheme })}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ theme: event.target.value as PresentationTheme })}
             >
               <option value="system">System</option>
               <option value="light">Light</option>
@@ -181,7 +243,8 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             <input
               type="checkbox"
               checked={preferences.detailed_streams}
-              onChange={(event) => void savePreferences({ ...preferences, detailed_streams: event.target.checked })}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ detailed_streams: event.target.checked })}
             />
             Show detailed streams by default
           </label>
@@ -189,7 +252,8 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             <input
               type="checkbox"
               checked={preferences.attention_notifications}
-              onChange={(event) => void savePreferences({ ...preferences, attention_notifications: event.target.checked })}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
             />
             Notify for approvals, questions and failures
           </label>
@@ -197,7 +261,8 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             <input
               type="checkbox"
               checked={preferences.success_notifications}
-              onChange={(event) => void savePreferences({ ...preferences, success_notifications: event.target.checked })}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
             />
             Notify when work succeeds
           </label>

@@ -15,7 +15,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "build": "pnpm run typecheck && node scripts/check-interaction-sdk.mjs && node scripts/check-interrupt-visibility.mjs && node scripts/check-packet03-components.mjs && node scripts/check-agent-message-feed-render.mjs && node scripts/check-interaction-react-ownership.mjs && node scripts/check-chat-interaction-boundaries.mjs && node scripts/check-agent-run-interaction-boundaries.mjs && node scripts/check-electron-trust-boundary.mjs && node scripts/check-model-settings.mjs && node scripts/check-models-panel-loading.mjs && vite build",
+    "build": "pnpm run typecheck && node scripts/check-interaction-sdk.mjs && node scripts/check-interrupt-visibility.mjs && node scripts/check-packet03-components.mjs && node scripts/check-chat-model-controls.mjs && node scripts/check-chat-queue-panel.mjs && node scripts/check-chat-retained-files.mjs && node scripts/check-conversation-rename.mjs && node scripts/check-recovery-settings-panel.mjs && node scripts/check-presentation-preferences.mjs && node scripts/check-agent-message-feed-render.mjs && node scripts/check-interaction-react-ownership.mjs && node scripts/check-chat-interaction-boundaries.mjs && node scripts/check-agent-run-interaction-boundaries.mjs && node scripts/check-electron-trust-boundary.mjs && node scripts/check-windows-notification-identity.mjs && node scripts/check-model-settings.mjs && node scripts/check-models-panel-loading.mjs && vite build",
     "package": "pnpm run build && electron-builder --win nsis",
     "generate:shared-contracts": "openapi-typescript ../backend/contracts/openapi.json -o src/generated/shared-contracts/openapi.d.ts --root-types"
   },

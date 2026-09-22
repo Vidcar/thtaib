@@ -52,10 +52,10 @@ class ChatBranchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def start_turn(self, conversation_id: str, task: str) -> dict:
+    def start_turn(self, conversation_id: str, task: str, **extra: object) -> dict:
         response = self.client.post(
             f"/v1/chat/conversations/{conversation_id}/start",
-            json={"task": task, "presented_tools": []},
+            json={"task": task, "presented_tools": [], **extra},
         )
         self.assertEqual(response.status_code, 200, response.text)
         return wait_for_run(self.client, response.json()["current_run_id"])
@@ -161,6 +161,38 @@ class ChatBranchTests(unittest.TestCase):
         body = response.json()
         self.assertTrue(body["regenerate_available"], body)
         self.assertIsNone(body["regenerate_reason"])
+
+    def test_reply_actions_inspect_checkpoint_without_starting_runtime(self) -> None:
+        self.install_model([AIMessage(content="answer")])
+        conversation = self.create_conversation()
+        run = self.start_turn(conversation["id"], "task")
+
+        def fail_model_factory(_run, _sink):
+            raise AssertionError("reply actions must not construct a model")
+
+        self.app.state.harness._model_factory = fail_model_factory
+        with patch.object(
+            self.app.state.manager,
+            "ensure_deployment_ready",
+            side_effect=AssertionError("reply actions must not start deployment"),
+        ):
+            with patch(
+                "workbench_backend.agents.harness_backend.harness_scratch_root",
+                wraps=lambda *_args: self.root / "inspection-must-not-create",
+            ):
+                with patch(
+                    "workbench_backend.agents.harness.materialize_onto_backend",
+                    side_effect=AssertionError("reply actions must not materialize knowledge"),
+                ):
+                    response = self.client.get(
+                        f"/v1/chat/conversations/{conversation['id']}/replies/{run['id']}/actions"
+                    )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["regenerate_available"], body)
+        self.assertIsNone(body["regenerate_reason"])
+        self.assertFalse((self.root / "inspection-must-not-create").exists())
 
     def test_regenerate_unavailable_without_final_project_snapshot(self) -> None:
         self.install_model([AIMessage(content="answer")])
@@ -309,6 +341,32 @@ class ChatBranchTests(unittest.TestCase):
         self.assertEqual(len(RECEIVED_PROMPTS), before_calls + 1)
         self.assertIn("second task", RECEIVED_PROMPTS[-1])
         self.assertNotEqual(response.json()["source_checkpoint_id"], first["checkpoint_ids"][0])
+
+    def test_regenerate_preserves_source_per_request_overrides(self) -> None:
+        self.install_model([AIMessage(content="original answer"), AIMessage(content="regenerated answer")])
+        conversation = self.create_conversation()
+        run = self.start_turn(
+            conversation["id"],
+            "task",
+            per_request_overrides={"temperature": 0.17, "reasoning_effort": "medium"},
+        )
+
+        response = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/branches",
+            json={"source_run_id": run["id"], "mode": "regenerate"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        regen = wait_for_run(self.client, response.json()["current_run_id"])
+
+        stored = self.app.state.app_store.get_run(regen["id"])
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertIsNotNone(stored.effective_setup)
+        assert stored.effective_setup is not None
+        self.assertEqual(
+            stored.effective_setup.bags.per_request.requested,
+            {"temperature": 0.17, "reasoning_effort": "medium"},
+        )
 
     def test_typed_ask_user_cancel_resumes_with_cancelled_payload(self) -> None:
         self.install_model([

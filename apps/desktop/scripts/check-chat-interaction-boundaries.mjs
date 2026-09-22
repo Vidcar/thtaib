@@ -143,6 +143,24 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function clearDraftIfRevision(conversation, revision) {
+  if (revision == null || !conversation?.draft || conversation.draft.revision !== revision) {
+    return conversation;
+  }
+  return {
+    ...conversation,
+    draft: {
+      content: "",
+      content_blocks: null,
+      attachment_ids: [],
+      intended_config: conversation.draft.intended_config ?? {},
+      revision: conversation.draft.revision + 1,
+      updated_at: now(),
+    },
+    updated_at: now(),
+  };
+}
+
 function sse(res, frames = []) {
   res.writeHead(200, { "content-type": "text/event-stream" });
   for (const frame of frames) {
@@ -190,6 +208,8 @@ function makeHarness(options = {}) {
       archives: [],
       queues: [],
       chatCancels: [],
+      assetUploads: [],
+      assetLists: [],
       closedStreams: [],
     },
     barriers: {
@@ -198,6 +218,7 @@ function makeHarness(options = {}) {
       command: new Map(),
       cancel: new Map(),
       chatCancel: new Map(),
+      assetUpload: new Map(),
     },
     queuedConversationResponses: new Map(),
     consumedResponses: [],
@@ -219,6 +240,7 @@ function makeHarness(options = {}) {
       ["thread_b", threadBRun],
       ["thread_new", threadNewRun],
     ]),
+    assets: new Map(options.assets ? options.assets.map((asset) => [asset.id, asset]) : []),
     chatGetCounts: new Map(),
     deploymentRequests: 0,
   };
@@ -249,6 +271,64 @@ function makeHarness(options = {}) {
         }
         if (req.method === "GET" && url.pathname === "/v1/knowledge/entries") {
           json(res, 200, []);
+          return;
+        }
+        if (req.method === "GET" && url.pathname.match(/^\/v1\/bundles\/[^/]+\/configuration-options$/)) {
+          json(res, 200, {
+            startup: {},
+            per_request: {},
+            agent: {},
+            per_request_defaults: {
+              reasoning_effort: {
+                options: [
+                  { value: "default", label: "Model default" },
+                  { value: "low", label: "Low" },
+                  { value: "medium", label: "Medium" },
+                  { value: "high", label: "High" },
+                ],
+              },
+            },
+          });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/v1/assets") {
+          const sessionId = url.searchParams.get("session_id");
+          state.requests.assetLists.push({ sessionId });
+          const assets = [...state.assets.values()].filter((asset) => !sessionId || asset.session_id === sessionId);
+          json(res, 200, assets);
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/v1/assets/uploads") {
+          const payload = body ? JSON.parse(body) : {};
+          state.requests.assetUploads.push(payload);
+          const barrier = state.barriers.assetUpload.get(payload.session_id) ?? state.barriers.assetUpload.get("*");
+          if (barrier) {
+            await barrier.promise;
+          }
+          const asset = {
+            id: `asset_${state.requests.assetUploads.length}`,
+            origin: "upload",
+            scope: "session",
+            session_id: payload.session_id,
+            project_path: null,
+            access_scope: "session",
+            storage: "application.sqlite",
+            filename: payload.filename ?? "attachment.txt",
+            content_type: payload.content_type ?? "text/plain",
+            content_kind: payload.content_kind ?? "text",
+            encoding: "utf-8",
+            size_bytes: payload.content_base64 ? Buffer.from(payload.content_base64, "base64").length : 0,
+            sha256: `sha_${state.requests.assetUploads.length}`,
+            observed_at: now(),
+            source_run_id: null,
+            source_tool_call_id: null,
+            source_tool_name: null,
+            mutable_reference: null,
+            observation: null,
+            deleted_at: null,
+          };
+          state.assets.set(asset.id, asset);
+          json(res, 200, asset);
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/chat/conversations") {
@@ -344,6 +424,7 @@ function makeHarness(options = {}) {
             draft: {
               content: payload.content ?? "",
               content_blocks: payload.content_blocks ?? null,
+              attachment_ids: payload.attachment_ids ?? [],
               intended_config: payload.intended_config ?? {},
               revision,
               updated_at: now(),
@@ -371,7 +452,10 @@ function makeHarness(options = {}) {
             created_at: now(),
             updated_at: now(),
           };
-          state.conversations[id] = { ...current, queue: [...(current.queue ?? []), item], updated_at: now() };
+          state.conversations[id] = clearDraftIfRevision(
+            { ...current, queue: [...(current.queue ?? []), item], updated_at: now() },
+            payload.draft_revision,
+          );
           json(res, 200, state.conversations[id]);
           return;
         }
@@ -380,6 +464,7 @@ function makeHarness(options = {}) {
           if (barrier) {
             await barrier.promise;
           }
+          state.conversations[state.createdConversation.id] = state.createdConversation;
           json(res, 200, state.createdConversation);
           return;
         }
@@ -438,6 +523,7 @@ function makeHarness(options = {}) {
           const payload = body ? JSON.parse(body) : {};
           state.requests.commands.push({ threadId, payload });
           const message = payload.params?.input?.messages?.[0];
+          const workbench = payload.params?.metadata?.workbench ?? {};
           if (state.commandRejects) {
             const conversationId = [...state.threadByConversation.entries()].find(([, value]) => value === threadId)?.[0];
             let accepted = null;
@@ -455,6 +541,7 @@ function makeHarness(options = {}) {
                 run_ids: accepted ? [...current.run_ids, accepted.id] : current.run_ids,
                 updated_at: now(),
               };
+              state.conversations[conversationId] = clearDraftIfRevision(state.conversations[conversationId], workbench.draft_revision);
               if (accepted) {
                 state.streamRuns.set(threadId, accepted);
               }
@@ -494,6 +581,7 @@ function makeHarness(options = {}) {
                   ? state.conversations[conversationId].run_ids
                   : [...state.conversations[conversationId].run_ids, projected.id],
               };
+              state.conversations[conversationId] = clearDraftIfRevision(state.conversations[conversationId], workbench.draft_revision);
             }
             const stream = state.openStreams.get(threadId);
             stream?.write(`data: ${JSON.stringify(streamFrame(projected))}\n\n`);
@@ -533,7 +621,7 @@ function makeHarness(options = {}) {
   return { server, state };
 }
 
-async function renderChat(vite, harness) {
+async function renderChat(vite, harness, props = {}) {
   await new Promise((resolve) => harness.server.listen(0, "127.0.0.1", resolve));
   const address = harness.server.address();
   const port = typeof address === "object" && address ? address.port : 0;
@@ -558,7 +646,7 @@ async function renderChat(vite, harness) {
   const { ChatPanel } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
   let renderer;
   await act(async () => {
-    renderer = create(React.createElement(StrictMode, null, React.createElement(ErrorBoundary, null, React.createElement(ChatPanel))));
+    renderer = create(React.createElement(StrictMode, null, React.createElement(ErrorBoundary, null, React.createElement(ChatPanel, props))));
     await Promise.resolve();
   });
   await act(async () => {
@@ -613,7 +701,7 @@ function activeConversationTitle(renderer) {
 }
 
 function textarea(renderer) {
-  const found = renderer.root.findAll((node) => node.type === "textarea");
+  const found = composeForm(renderer).findAll((node) => node.type === "textarea");
   assert.ok(found.length > 0, "expected textarea");
   return found[0];
 }
@@ -622,6 +710,62 @@ function inputByPlaceholder(renderer, placeholder) {
   const found = renderer.root.findAll((node) => node.type === "input" && node.props.placeholder === placeholder);
   assert.ok(found.length > 0, `expected input ${placeholder}`);
   return found[0];
+}
+
+function inputByType(renderer, type) {
+  const found = renderer.root.findAll((node) => node.type === "input" && node.props.type === type);
+  assert.ok(found.length > 0, `expected input type ${type}`);
+  return found[0];
+}
+
+function buttonByAriaLabel(renderer, label) {
+  const found = renderer.root.findAll((node) => node.type === "button" && node.props["aria-label"] === label);
+  assert.ok(found.length > 0, `expected button aria-label ${label}`);
+  return found[0];
+}
+
+function toolsAllowedCheckbox(renderer) {
+  const found = renderer.root.findAll(
+    (node) => node.type === "label" && typeof node.props.className === "string" && node.props.className.includes("check-row") && textOf(node).includes("Allow available tools"),
+  );
+  assert.ok(found.length > 0, "expected tools allowed checkbox");
+  return found[0].findByType("input");
+}
+
+function thinkingEffortSlider(renderer) {
+  return inputByType(renderer, "range");
+}
+
+function testFile(name, content, type = "text/plain") {
+  const bytes = new TextEncoder().encode(content);
+  if (typeof File !== "undefined") {
+    return new File([bytes], name, { type });
+  }
+  return {
+    name,
+    type,
+    size: bytes.byteLength,
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  };
+}
+
+async function stageAttachment(renderer, filename = "note.md", content = "# note") {
+  await act(async () => {
+    buttonByAriaLabel(renderer, "Attach files").props.onClick();
+    await Promise.resolve();
+  });
+  await act(async () => {
+    inputByType(renderer, "file").props.onChange({
+      target: { files: [testFile(filename, content, "text/markdown")] },
+      currentTarget: { value: filename },
+    });
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    const text = allText(renderer);
+    assert.match(text, new RegExp(filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(text, /Attached/);
+  }, `uploaded ${filename} ready`);
 }
 
 function composeForm(renderer) {
@@ -727,8 +871,7 @@ async function testTerminalHydrationCannotReselectAfterNew(vite) {
       button(renderer, "New").props.onClick();
       await Promise.resolve();
     });
-    await flush();
-    assert.match(allText(renderer), /Start a conversation/i, "New should clear active selection");
+    await waitFor(() => assert.match(allText(renderer), /Start a conversation/i), "New should clear active selection");
     await releaseResponse(harness, heldHydration, "/v1/chat/conversations/conv_a", "GET");
     assert.match(allText(renderer), /Start a conversation/i, "late terminal hydration must not reselect A");
   } finally {
@@ -843,7 +986,7 @@ async function testCreateRegisterAfterNewDoesNotSubmitOrSelect(vite) {
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await act(async () => {
@@ -873,7 +1016,7 @@ async function testNewConversationHeldRegistrationAfterCreateDoesNotSubmitAfterN
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "create then registration waits"), "new conversation draft");
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_new"), "new conversation registration held");
@@ -906,7 +1049,7 @@ async function testSubmitBlockedDuringHeldSelectionRegistration(vite) {
       textarea(renderer).props.onChange({ target: { value: "must not submit while binding" } });
       await Promise.resolve();
     });
-    composeForm(renderer).props.onSubmit({ preventDefault() {} });
+    composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
     await flush();
     assert.equal(harness.state.requests.commands.length, 0, "loading selection must not submit to an old thread");
     assert.equal(harness.state.requests.chatGets.some((item) => item.id === "conv_new"), false, "loading selection must not create a new conversation");
@@ -937,7 +1080,7 @@ async function testOldTerminalHydrationCannotOverwriteNewerRunOnSameSelection(vi
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "newer same conversation run"), "newer same-selection draft");
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.match(allText(renderer), /accepted 1/), "newer run projected");
@@ -969,7 +1112,7 @@ async function testSubmitAckDoesNotClearNewerDraft(vite, changeDraft = true) {
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "submit command");
@@ -1032,6 +1175,15 @@ async function testProjectBranchesGroupByImmutableArea(vite) {
     const groupText = textOf(group[0]);
     assert.match(groupText, /Branch from restored workspace A/);
     assert.match(groupText, /Branch from restored workspace B/);
+    await act(async () => button(renderer, "Branch from restored workspace A").props.onClick());
+    await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "workspace branch selected");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Continue inside this branch" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "workspace branch submission sent");
+    const config = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    assert.equal(config.workspace_id, "workspace_a", "continuation preserves restored workspace identity");
+    assert.equal(config.project_path, "D:\\LocalAIWorkbench\\workspaces\\branch-a");
+    assert.equal(harness.state.requests.draftUpdates.at(-1).payload.intended_config.workspace_id, "workspace_a");
   } finally {
     await closeHarness(renderer, harness);
   }
@@ -1052,7 +1204,7 @@ async function testRejectedSubmitWithOnlyStagedInputKeepsDraftAndError(vite) {
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "rejected submit command");
@@ -1083,7 +1235,7 @@ async function testPendingSubmitDoesNotReusePreviousCancelledStatus(vite) {
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "pending follow-up command held");
@@ -1115,7 +1267,7 @@ async function testPendingSubmitStopUsesPendingInputIdentity(vite) {
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "pending follow-up command held");
@@ -1179,9 +1331,369 @@ async function testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear(vit
     });
     await waitFor(() => assert.doesNotMatch(allText(renderer), /Stopping submission/), "authoritative terminal view clears pending cancel");
     await waitFor(() => assert.equal(selectedRunId(renderer), "run_after_pending_cancel"), "authoritative terminal run selected after pending cancel clears");
+    await waitFor(() => assert.equal((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 3, true), "terminal hydration fetched after cleared pending cancel");
+    assert.equal(selectedRunId(renderer), "run_after_pending_cancel", "stale terminal hydration must not restore the previous cancelled run");
     assert.deepEqual(harness.state.requests.cancels, [], "reopened pending cancel must not call previous run cancel");
     assert.deepEqual(harness.state.requests.chatCancels, [], "reopened pending cancel must not send a new stop without a local submission");
   } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
+  const harness = makeHarness({
+    aRun: null,
+    threadARun: null,
+    deployments: [{ ...baseDeployment, bundle_id: "bundle_1" }],
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "A bound before attachment submit");
+    await stageAttachment(renderer, "attachment-only.md", "attached context");
+    await waitFor(() => assert.equal(harness.state.requests.assetUploads.length, 1), "attachment-only upload captured");
+    await act(async () => {
+      toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: false } });
+      thinkingEffortSlider(renderer).props.onChange({ target: { value: "3" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "attachment-only SDK command captured");
+    const command = harness.state.requests.commands[0].payload;
+    const message = command.params.input.messages[0];
+    const metadata = command.params.metadata.workbench;
+    assert.equal(message.content, "", "attachment-only submit sends an empty human message body");
+    assert.deepEqual(metadata.attachment_ids, ["asset_1"], "SDK metadata preserves staged attachment ids");
+    assert.deepEqual(metadata.presented_tools, [], "tools-off state is carried in SDK metadata");
+    assert.deepEqual(metadata.per_request_overrides, { reasoning_effort: "high" }, "per-message reasoning override is carried in SDK metadata");
+    assert.equal(command.params.multitaskStrategy, "reject", "SDK direct submit preserves reject multitask strategy");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testFreshDraftPersistsBeforeImmediateNavigation(vite) {
+  const navigations = [];
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  const renderer = await renderChat(vite, harness, { onNavigate: (tab) => navigations.push(tab) });
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "fresh unsent draft" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      button(renderer, "Models").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.draftUpdates.length, 1), "fresh draft saved before tab navigation");
+    assert.equal(harness.state.requests.draftUpdates[0].id, "conv_new");
+    assert.equal(harness.state.requests.draftUpdates[0].payload.content, "fresh unsent draft");
+    assert.equal(harness.state.conversations.conv_new.draft.content, "fresh unsent draft");
+    await waitFor(() => assert.equal(navigations.length, 1), "navigation proceeds once after draft persistence");
+    assert.equal(navigations[0], "models", "navigation target is preserved after draft persistence");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testFreshSubmitSharesCreatedDraftSessionAndSendsRevision(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null, commandProjectsRun: true });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "fresh submit after draft save" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.draftUpdates.length, 1), "fresh submit saves draft once");
+    await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_new"), "fresh submit registers created draft conversation");
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "fresh submit command sent");
+    assert.equal(harness.state.requests.draftUpdates[0].id, "conv_new");
+    assert.equal(harness.state.requests.commands[0].threadId, "thread_new");
+    assert.equal(
+      harness.state.requests.commands[0].payload.params.metadata.workbench.draft_revision,
+      1,
+      "SDK metadata carries the persisted submitted draft revision",
+    );
+    assert.equal(Object.keys(harness.state.conversations).filter((id) => id === "conv_new").length, 1, "draft save and submit share one created conversation");
+    assert.equal(harness.state.conversations.conv_new.draft.revision, 2, "accepted command clears submitted draft with incremented revision");
+    assert.equal(harness.state.conversations.conv_new.draft.content, "");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testAcceptedDraftNextSaveUsesIncrementedRevision(vite) {
+  const draft = {
+    content: "send saved draft",
+    content_blocks: null,
+    attachment_ids: [],
+    intended_config: { deployment_id: "dep_1", profile_id: null, inherit_deployment_settings: true, project_path: null, workspace_id: null, embedding_deployment_id: null, presented_tools: null, per_request_overrides: {}, knowledge_version_refs: [], memory_version_refs: [], skill_version_refs: [], protected_instruction_version_refs: [] },
+    revision: 4,
+    updated_at: now(),
+  };
+  const savedConversation = conversation("conv_a", "Conversation A", null, { draft });
+  const harness = makeHarness({ aRun: null, threadARun: null, commandProjectsRun: true });
+  harness.state.conversations.conv_a = savedConversation;
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "send saved draft"), "saved draft restored");
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "saved draft command sent");
+    assert.equal(
+      harness.state.requests.commands[0].payload.params.metadata.workbench.draft_revision,
+      4,
+      "submitted saved draft revision is sent in SDK metadata",
+    );
+    await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "accepted saved draft clears composer");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "next unsent draft" } });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      const last = harness.state.requests.draftUpdates.at(-1);
+      assert.equal(last?.payload.content, "next unsent draft");
+      assert.equal(last?.payload.expected_revision, 5);
+    }, "next draft save uses incremented accepted revision");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testQueuedDraftClearDoesNotEraseLaterDraft(vite) {
+  const draft = {
+    content: "queue saved draft",
+    content_blocks: null,
+    attachment_ids: [],
+    intended_config: { deployment_id: "dep_1", profile_id: null, inherit_deployment_settings: true, project_path: null, workspace_id: null, embedding_deployment_id: null, presented_tools: null, per_request_overrides: {}, knowledge_version_refs: [], memory_version_refs: [], skill_version_refs: [], protected_instruction_version_refs: [] },
+    revision: 3,
+    updated_at: now(),
+  };
+  const busyRun = run("run_busy", "running");
+  const busyConversation = conversation("conv_a", "Conversation A", busyRun, { draft });
+  const harness = makeHarness({ aRun: busyRun, threadARun: busyRun });
+  harness.state.conversations.conv_a = busyConversation;
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "queue saved draft"), "queued draft restored");
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "queued saved draft request sent");
+    assert.equal(harness.state.requests.queues[0].payload.draft_revision, 3, "queue payload carries submitted draft revision");
+    await waitFor(() => assert.equal(textarea(renderer).props.value, ""), "queued draft clears composer");
+    assert.equal(harness.state.conversations.conv_a.draft.revision, 4, "queue response increments cleared draft revision");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "newer draft after queue" } });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      const last = harness.state.requests.draftUpdates.at(-1);
+      assert.equal(last?.payload.content, "newer draft after queue");
+      assert.equal(last?.payload.expected_revision, 4);
+    }, "newer post-queue draft saves against incremented revision");
+    assert.equal(harness.state.conversations.conv_a.draft.content, "newer draft after queue");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
+  const harness = makeHarness({
+    aRun: run("run_busy", "running"),
+    threadARun: run("run_busy", "running"),
+    deployments: [{ ...baseDeployment, bundle_id: "bundle_1" }],
+  });
+  harness.state.conversations.conv_a.workspace_id = "workspace_queue";
+  harness.state.conversations.conv_a.project_path = "D:\\LocalAIWorkbench\\workspaces\\queued-branch";
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "A bound before queued submit");
+    await stageAttachment(renderer, "queued-context.md", "queued context");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "queued turn with attachment" } });
+      toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: false } });
+      thinkingEffortSlider(renderer).props.onChange({ target: { value: "2" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "queued submit captured");
+    const queued = harness.state.requests.queues[0].payload;
+    assert.equal(queued.task, "queued turn with attachment");
+    assert.equal(queued.workspace_id, "workspace_queue", "queued branch keeps its owned workspace identity");
+    assert.equal(queued.project_path, "D:\\LocalAIWorkbench\\workspaces\\queued-branch");
+    assert.deepEqual(queued.attachment_ids, ["asset_1"], "queue request preserves staged attachment ids");
+    assert.deepEqual(queued.presented_tools, [], "queue request preserves tools-off state");
+    assert.deepEqual(queued.per_request_overrides, { reasoning_effort: "medium" }, "queue request preserves per-message reasoning override");
+    assert.deepEqual(harness.state.conversations.conv_a.queue[0].intended_config.attachment_ids, ["asset_1"], "queued item intended config stores attachment ids for reload");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
+  const savedAsset = {
+    id: "asset_saved",
+    origin: "upload",
+    scope: "session",
+    session_id: "conv_a",
+    project_path: null,
+    access_scope: "session",
+    storage: "application.sqlite",
+    filename: "saved-draft.md",
+    content_type: "text/markdown",
+    content_kind: "text",
+    encoding: "utf-8",
+    size_bytes: 12,
+    sha256: "sha_saved",
+    observed_at: now(),
+    source_run_id: null,
+    source_tool_call_id: null,
+    source_tool_name: null,
+    mutable_reference: null,
+    observation: null,
+    deleted_at: null,
+  };
+  const draft = {
+    content: "restored draft text",
+    content_blocks: null,
+    attachment_ids: ["asset_saved"],
+    intended_config: {
+      deployment_id: "dep_1",
+      profile_id: null,
+      inherit_deployment_settings: true,
+      project_path: null,
+      embedding_deployment_id: null,
+      presented_tools: [],
+      per_request_overrides: { reasoning_effort: "high" },
+    },
+    revision: 7,
+    updated_at: now(),
+  };
+  const restoredConversation = conversation("conv_a", "Conversation A", null, { draft });
+  const harness = makeHarness({
+    aRun: null,
+    threadARun: null,
+    assets: [savedAsset],
+    deployments: [{ ...baseDeployment, bundle_id: "bundle_1" }],
+  });
+  harness.state.conversations.conv_a = restoredConversation;
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "restored draft text"), "draft content restored");
+    await waitFor(() => assert.match(allText(renderer), /saved-draft\.md/), "draft attachment restored from session assets");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Attach files" }).props["aria-expanded"], true, "restored draft attachments are visible before sending");
+    assert.equal(harness.state.requests.assetLists.at(-1)?.sessionId, "conv_a", "draft restore lists assets for the selected conversation");
+    assert.equal(toolsAllowedCheckbox(renderer).props.checked, false, "draft intended config restores tools-off state");
+    assert.equal(String(thinkingEffortSlider(renderer).props.value), "3", "draft intended config restores per-message reasoning choice");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "restored draft text plus edit" } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.draftUpdates.at(-1)?.payload.attachment_ids?.[0], "asset_saved"), "draft save retains restored attachment id");
+    assert.deepEqual(
+      harness.state.requests.draftUpdates.at(-1)?.payload.intended_config?.per_request_overrides,
+      { reasoning_effort: "high" },
+      "draft save retains restored intended per-message config",
+    );
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testLateUploadAfterNavigationDoesNotAttachToNewConversation(vite) {
+  const heldUpload = deferred();
+  const harness = makeHarness({
+    aRun: null,
+    bRun: null,
+    threadARun: null,
+    threadBRun: null,
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    harness.state.barriers.assetUpload.set("conv_a", heldUpload);
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => {
+      button(renderer, "Conversation A").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "A bound before late upload");
+    await act(async () => {
+      buttonByAriaLabel(renderer, "Attach files").props.onClick();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      inputByType(renderer, "file").props.onChange({
+        target: { files: [testFile("late-a.md", "late A", "text/markdown")] },
+        currentTarget: { value: "late-a.md" },
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.assetUploads.length, 1), "late A upload started");
+    await act(async () => {
+      button(renderer, "Conversation B").props.onClick();
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_b"), "B selected while A upload held");
+    heldUpload.resolve();
+    await flush();
+    await waitFor(() => assert.equal(activeConversationTitle(renderer).includes("Conversation B"), true), "B remains selected after late A upload resolves");
+    assert.doesNotMatch(allText(renderer), /late-a\.md/, "late upload from previous conversation must not attach to newly selected conversation");
+    await act(async () => {
+      textarea(renderer).props.onChange({ target: { value: "B message" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "B submit captured");
+    assert.deepEqual(
+      harness.state.requests.commands[0].payload.params.metadata.workbench.attachment_ids,
+      [],
+      "B submit must not inherit a late upload from A",
+    );
+  } finally {
+    heldUpload.resolve();
     await closeHarness(renderer, harness);
   }
 }
@@ -1330,7 +1842,7 @@ async function testAcceptedSubmitErrorRefreshSuppressesStaleErrorButKeepsNewerDr
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "post-error accepted refresh held");
@@ -1365,7 +1877,7 @@ async function testAcceptedSubmitErrorRefreshAfterNavigationDoesNotRetarget(vite
       await Promise.resolve();
     });
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "post-error navigation refresh held");
@@ -1401,7 +1913,7 @@ async function testAcceptedSubmitTargetsOriginalThreadAfterNavigationAndRevisit(
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "accepted then leave"), "accepted navigation draft");
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "A submit command");
@@ -1432,6 +1944,7 @@ async function testAcceptedSubmitTargetsOriginalThreadAfterNavigationAndRevisit(
 
 async function testEarlyShellActions(vite) {
   const harness = makeHarness({ bRun: run("run_b") });
+  harness.state.conversations.conv_b.transcript[0].content = "An unrelated retained message";
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
@@ -1453,14 +1966,22 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.draftUpdates.at(-1)?.payload.content, "remember this draft"), "draft saved");
-    const originalPrompt = globalThis.window.prompt;
-    globalThis.window.prompt = () => "Renamed B";
     await act(async () => {
       button(renderer, "Rename").props.onClick();
       await Promise.resolve();
     });
-    globalThis.window.prompt = originalPrompt;
+    await act(async () => {
+      renderer.root.findByProps({ className: "conversation-rename" }).findByType("input").props.onChange({ target: { value: "Renamed B" } });
+    });
+    await act(async () => {
+      renderer.root.findByProps({ className: "conversation-rename" }).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
+    });
     await waitFor(() => assert.equal(harness.state.conversations.conv_b.title, "Renamed B"), "conversation renamed");
+    await waitFor(() => assert.match(allText(renderer), /No matching conversations/, "rename invalidates retained search results"), "renamed conversation no longer matches old query");
+    await act(async () => {
+      inputByPlaceholder(renderer, "Search titles and messages").props.onChange({ target: { value: "Renamed B" } });
+    });
+    await waitFor(() => button(renderer, "Archive"), "rename response closes inline editor");
     await act(async () => {
       button(renderer, "Archive").props.onClick();
       await Promise.resolve();
@@ -1493,11 +2014,11 @@ async function testEarlyShellActions(vite) {
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "queue this follow-up"), "queue follow-up draft applied");
     await act(async () => {
-      composeForm(renderer).props.onSubmit({ preventDefault() {} });
+      composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.queues.at(-1)?.payload.task, "queue this follow-up"), "busy conversation queues follow-up");
-    assert.match(allText(renderer), /queue this follow-up/, "queued item is visible");
+    await waitFor(() => assert.match(allText(renderer), /queue this follow-up/), "queued item is visible after its response");
     await act(async () => {
       button(renderer, "New").props.onClick();
       await Promise.resolve();
@@ -1577,6 +2098,14 @@ try {
     ["pending submit hides previous cancelled status", testPendingSubmitDoesNotReusePreviousCancelledStatus],
     ["pending submit stop uses input identity", testPendingSubmitStopUsesPendingInputIdentity],
     ["reopened pending cancel clears from authoritative view", testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear],
+    ["fresh draft persists before navigation", testFreshDraftPersistsBeforeImmediateNavigation],
+    ["fresh submit shares draft session", testFreshSubmitSharesCreatedDraftSessionAndSendsRevision],
+    ["accepted draft next save uses incremented revision", testAcceptedDraftNextSaveUsesIncrementedRevision],
+    ["queued draft clear preserves later draft", testQueuedDraftClearDoesNotEraseLaterDraft],
+    ["attachment-only SDK submit metadata", testAttachmentOnlySdkSubmitKeepsMetadata],
+    ["queued submit attachment/config capture", testQueuedSubmitKeepsAttachmentsToolsAndOverrides],
+    ["persisted draft attachment/config reload", testPersistedDraftRestoresAttachmentsAndIntendedConfig],
+    ["late upload navigation guard", testLateUploadAfterNavigationDoesNotAttachToNewConversation],
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],
     ["unknown projection requires authoritative current run", testUnknownProjectionRequiresAuthoritativeCurrentRun],
     ["unknown projection adopts authoritative new current run", testUnknownProjectionAdoptsAuthoritativeNewCurrentRun],
@@ -1598,7 +2127,7 @@ try {
         await fn(vite);
         console.log(`CASE PASS: ${name}`);
       } catch (error) {
-        const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         console.log(`CASE FAIL: ${name}: ${message}`);
         failures.push(name);
       }

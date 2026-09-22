@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 
 import { AgentRunPanel } from "./AgentRunPanel";
+import { AttentionPanel } from "./AttentionPanel";
 import { api } from "./api";
 import { ChatPanel } from "./ChatPanel";
 import { errorMessage } from "./errors";
+import { Icon, type IconName } from "./Icon";
 import { KnowledgePanel } from "./KnowledgePanel";
 import { LabPanel } from "./LabPanel";
+import { LibraryPanel } from "./LibraryPanel";
 import { ModelsPanel } from "./ModelsPanel";
-import type { PresentationSettings, PresentationTheme, WorkbenchSurface, WorkbenchTab } from "./types";
+import { SettingsPanel } from "./SettingsPanel";
+import type { RetainedAsset } from "./packet03Api";
+import type { PresentationSettings, WorkbenchSurface, WorkbenchTab } from "./types";
 
 const fallbackPresentation: PresentationSettings = {
   theme: "system",
@@ -39,12 +44,29 @@ function tabLabel(tab: WorkbenchTab): string {
       return "Agent run";
     case "lab":
       return "Lab";
+    case "library":
+      return "Library";
+    case "attention":
+      return "Attention";
+    case "settings":
+      return "Settings";
     default: {
       const unexpected: never = tab;
       return unexpected;
     }
   }
 }
+
+const tabIcons: Record<WorkbenchTab, IconName> = {
+  chat: "chat",
+  library: "library",
+  attention: "activity",
+  models: "models",
+  knowledge: "knowledge",
+  "agent-run": "agent-run",
+  lab: "lab",
+  settings: "settings",
+};
 
 export function App() {
   const productName = window.workbench?.productName ?? "Local AI Workbench";
@@ -54,6 +76,7 @@ export function App() {
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
+  const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
@@ -116,13 +139,14 @@ export function App() {
     };
   }, []);
 
-  function updateTheme(theme: PresentationTheme): void {
-    const previous = presentation;
-    const next = { ...presentation, theme };
-    setPresentation(next);
-    void api.updatePresentationSettings(next).then(setPresentation).catch(() => {
-      setPresentation(previous);
-    });
+  function openAttentionConversation(conversationId: string | null): void {
+    setAttentionConversationId(conversationId);
+    setTab("chat");
+  }
+
+  function handleLibraryReuseMany(assets: RetainedAsset[]): void {
+    setReuseAssetIds([...new Set(assets.map((asset) => asset.id))]);
+    setTab("chat");
   }
 
   function renderTab(current: WorkbenchTab) {
@@ -130,12 +154,15 @@ export function App() {
       case "chat":
         return (
           <ChatPanel
-            activeTab={tab}
+            activeTab="chat"
             backendOk={backendOk}
             backendStatus={backendStatus}
             attentionConversationId={attentionConversationId}
-            onThemeChange={updateTheme}
-            onNavigate={setTab}
+            onPresentationChange={setPresentation}
+            onNavigate={(next) => setTab(next)}
+            reuseAssetId={reuseAssetIds[0] ?? null}
+            reuseAssetIds={reuseAssetIds}
+            onReuseAssetHandled={() => setReuseAssetIds([])}
             presentation={presentation}
             productName={productName}
           />
@@ -148,6 +175,16 @@ export function App() {
         return <AgentRunPanel />;
       case "lab":
         return <LabPanel />;
+      case "library":
+        return (
+          <LibraryPanel
+            onReuseSelectedAssets={handleLibraryReuseMany}
+          />
+        );
+      case "attention":
+        return <AttentionPanel onOpenConversation={openAttentionConversation} />;
+      case "settings":
+        return <SettingsPanel onPreferencesChanged={setPresentation} />;
       default: {
         const unexpected: never = current;
         return unexpected;
@@ -155,7 +192,7 @@ export function App() {
     }
   }
 
-  const tabs: WorkbenchTab[] = ["chat", "models", "knowledge", "agent-run", "lab"];
+  const tabs: WorkbenchTab[] = ["chat", "library", "attention", "models", "knowledge", "agent-run", "lab", "settings"];
 
   return (
     <div className={`${tab === "chat" ? "app app-chat" : "app"}${sidebarCollapsed ? " app-nav-collapsed" : ""}`}>
@@ -186,7 +223,8 @@ export function App() {
                 title={tabLabel(item)}
                 onClick={() => setTab(item)}
               >
-                {sidebarCollapsed ? tabLabel(item).slice(0, 1) : tabLabel(item)}
+                <Icon name={tabIcons[item]} size={18} />
+                {sidebarCollapsed ? <span className="sr-only">{tabLabel(item)}</span> : <span>{tabLabel(item)}</span>}
               </button>
             ))}
           </nav>

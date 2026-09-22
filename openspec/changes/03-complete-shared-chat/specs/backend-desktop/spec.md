@@ -89,7 +89,7 @@ Inline approval cards SHALL show exact action/resource scope and the four AGT-00
 
 #### Scenario: Queue with independent configuration
 
-- **WHEN** a user queues a follow-up, changes the header model and then the active turn fails
+- **WHEN** a user queues a follow-up, changes the selected model and then the active turn fails
 - **THEN** the queue pauses with its original intended model/setup visible and editable, and Stop/Queue remain distinct from approval actions.
 
 #### Scenario: Background approval and notification navigation

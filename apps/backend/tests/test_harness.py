@@ -7,6 +7,7 @@ import os
 import socketserver
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ import httpx
 from langgraph.checkpoint.base import empty_checkpoint
 from langchain_core.messages import AIMessage
 
-from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness import HarnessService, _graph_checkpoint_snapshot
 from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
@@ -127,6 +128,18 @@ class HarnessApiTests(unittest.TestCase):
         response = self.client.post("/v1/agent-runs", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    def _wait_for_pending_interrupt(self, run_id: str) -> dict[str, Any]:
+        deadline = time.monotonic() + 10
+        body: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            response = self.client.get(f"/v1/agent-runs/{run_id}")
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            if body.get("pending_interrupt") and body.get("checkpoint_ids"):
+                return body
+            time.sleep(0.05)
+        raise AssertionError(f"pending interrupt not observed: {body}")
 
     def _record_capability(self, capability: str, status: str = "passed") -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
@@ -635,6 +648,73 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(observed.status, AgentRunStatus.running)
         self.assertIsNotNone(observed.pending_interrupt)
         self.assertEqual(observed.pending_interrupt.action_requests[0].name, "execute")
+
+    def test_checkpoint_reader_matches_execution_graph_for_pending_interrupt_without_runtime_effects(self) -> None:
+        self._record_capability("tools")
+        self._record_capability("structured_tools")
+        self._record_capability("structured_tools_with_tools")
+        project = self.root / "checkpoint-reader-project"
+        project.mkdir()
+        (project / "disposable.txt").write_text("keep", encoding="utf-8")
+        self.scripted = ScriptedChatModel([
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "Remove-Item disposable.txt"},
+                        "id": "exec_checkpoint_reader",
+                    }
+                ],
+            )
+        ])
+        started = self._start(
+            task="run a shell command",
+            presented_tools=["execute"],
+            project_path=str(project),
+            output_schema={
+                "schema_version": 1, "name": "AnswerShape",
+                "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            },
+        )
+        body = self._wait_for_pending_interrupt(started["id"])
+        run = self.app.state.harness.get_run(started["id"])
+        checkpoint_id = body["checkpoint_ids"][-1]
+
+        execution_agent = self.app.state.harness._create_compiled_agent(run, [], None)
+        execution_snapshot = _graph_checkpoint_snapshot(execution_agent, run.thread_id, checkpoint_id)
+
+        def fail_model_factory(_run, _sink):
+            raise AssertionError("checkpoint read must not construct a runtime model")
+
+        self.app.state.harness._model_factory = fail_model_factory
+        original_run = run.model_dump(mode="json")
+        with patch.object(
+            self.app.state.manager,
+            "ensure_deployment_ready",
+            side_effect=AssertionError("checkpoint read must not start deployment"),
+        ):
+            with patch(
+                "workbench_backend.agents.harness_backend.harness_scratch_root",
+                # Backend construction may resolve paths, but may not create
+                # or populate storage while inspecting saved state.
+                wraps=lambda *_args: self.root / "inspection-must-not-create",
+            ):
+                with patch(
+                    "workbench_backend.agents.harness.materialize_onto_backend",
+                    side_effect=AssertionError("checkpoint read must not materialize knowledge"),
+                ):
+                    inspected = self.app.state.harness.checkpoint_state_for_run(run, checkpoint_id)
+                    inspection_agent = self.app.state.harness._create_compiled_agent(
+                        run.model_copy(deep=True), [], None, inspection_only=True,
+                    )
+
+        self.assertEqual(inspected["next"], tuple(execution_snapshot.next))
+        self.assertEqual(inspected["values"], dict(execution_snapshot.values))
+        self.assertEqual(set(inspection_agent.nodes), set(execution_agent.nodes))
+        self.assertEqual(set(inspection_agent.channels), set(execution_agent.channels))
+        self.assertEqual(run.model_dump(mode="json"), original_run)
+        self.assertFalse((self.root / "inspection-must-not-create").exists())
 
     def test_restart_fails_pending_interrupt_with_historical_only_checkpoint(self) -> None:
         now = utc_now()

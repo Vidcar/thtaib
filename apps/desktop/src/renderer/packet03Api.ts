@@ -1,5 +1,6 @@
-import { backendUrl } from "./api";
+import { api, backendUrl } from "./api";
 import type { PresentationSettings } from "./types";
+import type { components } from "../generated/shared-contracts/openapi";
 
 export async function packet03Request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${backendUrl()}${path}`, {
@@ -88,10 +89,7 @@ export interface RetainedAssetDeletionPreview {
   note: string;
 }
 
-export interface RetainedAssetReuseResult {
-  content_blocks?: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-}
+export type RetainedAssetReuseResult = components["schemas"]["TextContentBlock"][];
 
 export interface RetainedUploadRequest {
   session_id: string;
@@ -189,9 +187,8 @@ export const packet03Api = {
     packet03Request<RetainedAssetDeletionPreview>("/v1/assets/delete-preview", { method: "POST", body: JSON.stringify({ asset_ids: assetIds }) }),
   deleteAssets: (assetIds: string[]) =>
     packet03Request<RetainedAssetDeletionPreview>("/v1/assets/delete", { method: "POST", body: JSON.stringify({ asset_ids: assetIds }) }),
-  presentation: () => packet03Request<PresentationSettings>("/v1/settings/presentation"),
-  savePresentation: (payload: PresentationSettings) =>
-    packet03Request<PresentationSettings>("/v1/settings/presentation", { method: "PUT", body: JSON.stringify(payload) }),
+  presentation: () => api.presentationSettings(),
+  savePresentation: (payload: Partial<PresentationSettings>) => api.updatePresentationSettings(payload),
   grants: () => packet03Request<PermissionGrant[]>("/v1/settings/grants"),
   revokeGrant: (grantId: string) => packet03Request<{ revoked: true }>(`/v1/settings/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
   createBackup: (destination: string) =>

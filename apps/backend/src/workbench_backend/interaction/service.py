@@ -229,9 +229,9 @@ class InteractionService:
         for index, item in enumerate(view.transcript):
             kind = {"user": "human", "assistant": "ai", "system": "system"}.get(item.role)
             if kind is not None:
-                transcript.append((index, kind, self._content_key(item.content_blocks or item.content), item.id))
+                transcript.append((index, kind, self._alignment_content_key(item.content_blocks or item.content), item.id))
         checkpoint = [
-            (index, message.get("type"), self._content_key(message.get("content")), message.get("id"))
+            (index, message.get("type"), self._alignment_content_key(message.get("content")), message.get("id"))
             for index, message in enumerate(checkpoint_messages)
             if message.get("type") in {"human", "ai", "system"} and not (
                 message.get("type") == "ai" and message.get("tool_calls")
@@ -257,7 +257,7 @@ class InteractionService:
         while transcript_index >= 0 and checkpoint_index >= 0:
             source_index, kind, content, ident = transcript[transcript_index]
             target_index, target_kind, target_content, target_ident = checkpoint[checkpoint_index]
-            if kind != target_kind or content != target_content:
+            if kind != target_kind or (not ident and content != target_content):
                 break
             if ident and ident != target_ident:
                 break
@@ -267,6 +267,20 @@ class InteractionService:
         if checkpoint_index >= 0:
             return matches
         return suffix
+
+    @staticmethod
+    def _alignment_content_key(content: Any) -> str:
+        # The readable transcript can predate native block retention. Compare
+        # its answer text to a text/reasoning-only native message, preserving
+        # the complete native blocks in the projection. Other block types are
+        # deliberately not collapsed into text.
+        if isinstance(content, list) and content and all(
+            isinstance(block, dict) and block.get("type") in {"text", "reasoning"}
+            and (block.get("type") != "text" or isinstance(block.get("text"), str))
+            for block in content
+        ) and any(block.get("type") == "text" for block in content):
+            content = "".join(block.get("text", "") for block in content if block.get("type") == "text")
+        return InteractionService._content_key(content)
 
     @staticmethod
     def _content_key(content: Any) -> str:
@@ -340,6 +354,12 @@ class InteractionService:
                     snapshot["messages"] = archive_messages(snapshot.get("messages", []), [{
                         "type": "human", "id": run.input_message_id, "content": user_message_content(run.task, run.content_blocks),
                     }])
+                # Registration/reconnect may occur after the framework emitted
+                # input.requested. Recover its saved exact identity, never a new
+                # interrupt or a replay of the effectful command.
+                if recovered_interrupts := self._saved_interrupts(run):
+                    snapshot["__interrupt__"] = recovered_interrupts
+                    snapshot["workbench"]["interrupt_run_id"] = run.id
                 if not run.pending_interrupt and (previous.get("pending_interrupt") or previous.get("id") != run.id or not is_run_lifecycle_live(run.status)):
                     snapshot["__interrupt__"] = []
                     snapshot["workbench"].pop("interrupt_run_id", None)
@@ -397,13 +417,26 @@ class InteractionService:
             return "completed"
         return "running"
 
+    @staticmethod
+    def _saved_interrupts(run: AgentRun) -> list[dict[str, Any]]:
+        pending = run.pending_interrupt
+        if not pending or not pending.interrupt_id or not is_run_lifecycle_live(run.status) or run.status.value == "cancel_requested":
+            return []
+        return [{"id": pending.interrupt_id, "namespace": pending.namespace,
+                 "value": pending.model_dump(mode="json", exclude_none=True)}]
+
     def state(self, thread_id: str) -> dict[str, Any]:
         binding = self.binding(thread_id)
         if binding["run_id"]:
             # Existing recovery owner reconciles orphaned workers before we
             # advertise finality. It never invokes the model on a state read.
             current = self.harness.get_run(binding["run_id"])
-            if self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run"):
+            saved_interrupts = self._saved_interrupts(current)
+            missing_interrupt = bool(saved_interrupts) and (
+                binding["snapshot"].get("__interrupt__") != saved_interrupts or
+                binding["snapshot"].get("workbench", {}).get("interrupt_run_id") != current.id
+            )
+            if missing_interrupt or self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run"):
                 self.observe(current, None)
                 binding = self.binding(thread_id)
         values = self.display_values(binding["snapshot"])

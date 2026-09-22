@@ -114,8 +114,8 @@ HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
     "LocalShellBackend with the bound project as cwd. permissions= apply to "
     "routed filesystem prefixes only while the default backend is a sandbox. "
-    "interrupt_on pauses dangerous execute calls. Not a durable Approvals "
-    "inbox (OQ-011)."
+    "interrupt_on pauses dangerous execute calls; the application persists "
+    "native interrupts and surfaces them through shared Chat."
 )
 
 
@@ -153,7 +153,7 @@ class UserAnswerRequest(BaseModel):
 
 
 class PendingInterrupt(BaseModel):
-    """Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011)."""
+    """Native Deep Agents interrupt persisted by the application and surfaced in Chat."""
 
     interrupt_id: str | None = None
     namespace: list[str] = Field(default_factory=list)

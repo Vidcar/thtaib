@@ -316,7 +316,9 @@ class ChatService:
                 if request.output_schema is not None:
                     item.output_schema = request.output_schema
                 if request.intended_config is not None:
-                    item.intended_config = dict(request.intended_config)
+                    merged_config = dict(item.intended_config)
+                    merged_config.update(dict(request.intended_config))
+                    item.intended_config = merged_config
                 item.updated_at = utc_now()
                 updated = self.app_store.update_conversation(conversation)
             return self._view(updated)
@@ -659,7 +661,12 @@ class ChatService:
                         input_message_id,
                     )
         assert accepted is not None
-        next_conversation = self._accept_dispatched_run(next_conversation, accepted, input_message_id)
+        next_conversation = self._accept_dispatched_run(
+            next_conversation,
+            accepted,
+            input_message_id,
+            draft_revision=request.draft_revision if queue_item is None else None,
+        )
         if self.app_store.chat_submission_cancel_requested(next_conversation.id, input_message_id):
             self.app_store.request_chat_submission_cancel(
                 next_conversation.id,
@@ -717,6 +724,7 @@ class ChatService:
                 updated_at=now,
             )
             queued.queue.append(item)
+            self.app_store._clear_chat_draft_if_revision_locked(queued, request.draft_revision, now)
             queued.updated_at = now
             return self.store.put(queued)
 
@@ -806,11 +814,14 @@ class ChatService:
         conversation: ChatConversation,
         run: AgentRun,
         input_message_id: str | None,
+        *,
+        draft_revision: int | None = None,
     ) -> ChatConversation:
         accepted = self.app_store.accept_chat_dispatched_run(
             conversation.id,
             run.id,
             input_message_id,
+            draft_revision=draft_revision,
         )
         return accepted or conversation
 
@@ -861,6 +872,7 @@ class ChatService:
     ) -> dict[str, object]:
         return {
             "task": request.task.strip(),
+            "draft_revision": request.draft_revision,
             "content_blocks": [block.model_dump(mode="json") for block in content_blocks] if content_blocks else None,
             "attachment_ids": list(request.attachment_ids),
             "output_schema": request.output_schema.model_dump(mode="json") if request.output_schema else None,
@@ -876,6 +888,7 @@ class ChatService:
                     return submission
         return {
             "task": message.content,
+            "draft_revision": None,
             "content_blocks": message.content_blocks,
             "attachment_ids": list(message.attachment_ids),
             "output_schema": None,

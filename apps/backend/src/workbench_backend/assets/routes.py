@@ -16,6 +16,7 @@ from workbench_backend.assets.schemas import (
     RetainedUploadRequest,
 )
 from workbench_backend.assets.service import RetainedAssetService
+from workbench_backend.inference.user_content import TextContentBlock
 
 router = APIRouter(prefix="/v1/assets")
 
@@ -82,8 +83,8 @@ def asset_content(
     return get_assets(request).content(asset_id, session_id=session_id, project_path=project_path)
 
 
-@router.post("/reuse")
-def reuse_assets(request: Request, body: RetainedAssetReuseRequest) -> object:
+@router.post("/reuse", response_model=list[TextContentBlock])
+def reuse_assets(request: Request, body: RetainedAssetReuseRequest) -> list[TextContentBlock]:
     return get_assets(request).current_user_content(body)
 
 

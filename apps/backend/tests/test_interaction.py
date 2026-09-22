@@ -659,6 +659,49 @@ class InteractionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403, response.text)
         self.assertEqual(response.json()["code"], "invalid_token")
 
+    def test_register_after_direct_chat_interrupt_recovers_native_response_target(self) -> None:
+        marker = self.project / "late-registration.txt"
+        self._install_model(_execute_then_reply(write_marker_command(marker.name)))
+        created = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.deployment_id, "project_path": str(self.project),
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation_id = created.json()["id"]
+        started = self.client.post(f"/v1/chat/conversations/{conversation_id}/start", json={
+            "task": "Create the marker", "presented_tools": ["execute"],
+        })
+        self.assertEqual(started.status_code, 200, started.text)
+        run_id = started.json()["current_run_id"]
+        deadline = time.monotonic() + 10
+        while True:
+            saved = self.app.state.harness.get_run(run_id)
+            if saved.pending_interrupt:
+                break
+            if time.monotonic() >= deadline:
+                self.fail("Direct Chat did not reach its durable approval")
+            time.sleep(0.01)
+        self.assertFalse(marker.exists())
+        registered = self.client.post("/v1/agent-interaction/threads", json={
+            "source_surface": "chat", "conversation_id": conversation_id,
+        })
+        self.assertEqual(registered.status_code, 200, registered.text)
+        thread_id = registered.json()["thread_id"]
+        state = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
+        self.assertTrue(state["tasks"], "reopening a durable approval must expose its SDK response target")
+        pending = state["tasks"][0]["interrupts"][0]
+        self.assertEqual(pending["id"], saved.pending_interrupt.interrupt_id)
+        self.assertEqual(state["values"]["workbench"]["interrupt_run_id"], run_id)
+        approved = self.client.post(f"/v1/agent-interaction/threads/{thread_id}/commands", json={
+            "id": "approve-recovered", "method": "input.respond", "params": {
+                "interrupt_id": pending["id"], "namespace": pending.get("namespace", []),
+                "response": {"decisions": [{"type": "approve"}]},
+            },
+        })
+        self.assertEqual(approved.status_code, 200, approved.text)
+        finished = self._wait_state(thread_id)
+        self.assertEqual(finished["tasks"], [])
+        self.assertTrue(marker.exists())
+
     def test_native_approval_identity_namespace_and_duplicates(self) -> None:
         marker = self.project / "approved-marker.txt"
         self._install_model(_execute_then_reply(write_marker_command(marker.name)))

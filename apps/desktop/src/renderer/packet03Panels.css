@@ -46,6 +46,31 @@
   font-size: 0.8rem;
 }
 
+.packet03-details {
+  margin-top: 0.35rem;
+}
+
+.packet03-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.packet03-attention-button {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.packet03-attention-button strong {
+  min-width: 1.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.75rem;
+}
+
 .packet03-preview {
   max-height: 18rem;
   overflow: auto;

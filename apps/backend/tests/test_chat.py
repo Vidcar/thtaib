@@ -7,6 +7,8 @@ import threading
 import time
 import unittest
 import base64
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -15,7 +17,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest, UserAnswerRequest
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.app import create_app
@@ -43,6 +45,21 @@ def wait_for_chat(client: TestClient, conversation_id: str, *, timeout: float = 
     raise TimeoutError(f"chat {conversation_id} did not finish: {body}")
 
 
+def wait_for_chat_interrupt(client: TestClient, conversation_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    body: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = client.get(f"/v1/chat/conversations/{conversation_id}")
+        body = response.json()
+        run = body.get("current_run") or {}
+        if run.get("pending_interrupt"):
+            return body
+        if run.get("status") in {"completed", "cancelled", "failed"}:
+            raise TimeoutError(f"chat finished without interrupt: {body}")
+        time.sleep(0.05)
+    raise TimeoutError(f"chat {conversation_id} did not interrupt: {body}")
+
+
 def write_then_reply(path: str = "/edited.md", content: str = "chat-file-edit") -> list[AIMessage]:
     return [
         AIMessage(
@@ -57,6 +74,21 @@ def write_then_reply(path: str = "/edited.md", content: str = "chat-file-edit") 
         ),
         AIMessage(content="Wrote edited.md in the project workspace."),
     ]
+
+
+def host_shell_marker_command(filename: str) -> str:
+    if os.name != "nt":
+        return f"touch {filename}"
+    return f"cmd /c type nul > {filename}"
+
+
+def chat_interrupt_decision(paused_view: dict[str, Any], decision: str) -> dict[str, Any]:
+    pending = paused_view["current_run"]["pending_interrupt"]
+    return {
+        "interrupt_id": pending["interrupt_id"],
+        "namespace": pending.get("namespace", []),
+        "decisions": [{"type": decision}],
+    }
 
 
 class ChatHarnessTests(unittest.TestCase):
@@ -214,6 +246,100 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(cleared.json()["transcript"], [])
         self.assertEqual((self.project / "keep.md").read_text(encoding="utf-8"), "retain-me")
         self.assertEqual((self.project / "edited.md").read_text(encoding="utf-8"), "chat-file-edit")
+
+    def test_rename_archive_search_and_reopen_survive_store_reopen(self) -> None:
+        general = self._create(project_path=None, title="General planning notes")
+        project = self._create(title="Project launch notes")
+        original_project_identity = {
+            "id": project["id"],
+            "thread_id": project["thread_id"],
+            "area_kind": project["area_kind"],
+            "area_id": project["area_id"],
+            "area_label": project["area_label"],
+            "area_project_path": project["area_project_path"],
+            "project_path": project["project_path"],
+            "workspace_id": project["workspace_id"],
+        }
+        self.assertEqual(general["area_kind"], "general")
+        self.assertEqual(project["area_kind"], "project")
+
+        general_transcript = self.client.put(
+            f"/v1/chat/conversations/{general['id']}/transcript",
+            json={"messages": [{"role": "user", "content": "Readable banana message", "at": "2026-01-01T00:00:00+00:00"}]},
+        )
+        self.assertEqual(general_transcript.status_code, 200, general_transcript.text)
+        project_transcript = self.client.put(
+            f"/v1/chat/conversations/{project['id']}/transcript",
+            json={"messages": [{"role": "assistant", "content": "Readable cherry answer", "at": "2026-01-01T00:00:00+00:00"}]},
+        )
+        self.assertEqual(project_transcript.status_code, 200, project_transcript.text)
+
+        title_hits = self.client.get("/v1/chat/conversations/search", params={"q": "launch"}).json()
+        self.assertEqual([item["conversation"]["id"] for item in title_hits], [project["id"]])
+        message_hits = self.client.get("/v1/chat/conversations/search", params={"q": "readable"}).json()
+        self.assertEqual(
+            {item["conversation"]["id"] for item in message_hits},
+            {general["id"], project["id"]},
+        )
+        self.assertEqual(
+            {
+                item["conversation"]["id"]: [message["content"] for message in item["matched_messages"]]
+                for item in message_hits
+            },
+            {
+                general["id"]: ["Readable banana message"],
+                project["id"]: ["Readable cherry answer"],
+            },
+        )
+
+        renamed = self.client.patch(
+            f"/v1/chat/conversations/{project['id']}",
+            json={"title": "Renamed project launch"},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["title"], "Renamed project launch")
+        archived = self.client.post(f"/v1/chat/conversations/{project['id']}/archive", json={"archived": True})
+        self.assertEqual(archived.status_code, 200, archived.text)
+        self.assertTrue(archived.json()["archived"])
+        self.assertIsNotNone(archived.json()["archived_at"])
+        for key, value in original_project_identity.items():
+            self.assertEqual(archived.json()[key], value)
+
+        active_ids = [item["id"] for item in self.client.get("/v1/chat/conversations").json()]
+        self.assertIn(general["id"], active_ids)
+        self.assertNotIn(project["id"], active_ids)
+        self.assertEqual(self.client.get("/v1/chat/conversations/search", params={"q": "cherry"}).json(), [])
+        archived_hits = self.client.get(
+            "/v1/chat/conversations/search",
+            params={"q": "cherry", "include_archived": True},
+        ).json()
+        self.assertEqual([item["conversation"]["id"] for item in archived_hits], [project["id"]])
+        fetched_archived = self.client.get(f"/v1/chat/conversations/{project['id']}")
+        self.assertEqual(fetched_archived.status_code, 200, fetched_archived.text)
+        self.assertTrue(fetched_archived.json()["archived"])
+
+        close_workbench_sqlite(self.app, self.client)
+        self.app = create_app(data_root=self.root)
+        self.manager = self.app.state.manager
+        self.client = offline_workbench_client(self.app)
+
+        after_reopen_default_ids = [item["id"] for item in self.client.get("/v1/chat/conversations").json()]
+        self.assertIn(general["id"], after_reopen_default_ids)
+        self.assertNotIn(project["id"], after_reopen_default_ids)
+        after_reopen_archived = self.client.get(f"/v1/chat/conversations/{project['id']}").json()
+        self.assertTrue(after_reopen_archived["archived"])
+        self.assertEqual(after_reopen_archived["title"], "Renamed project launch")
+        for key, value in original_project_identity.items():
+            self.assertEqual(after_reopen_archived[key], value)
+
+        reopened = self.client.post(f"/v1/chat/conversations/{project['id']}/reopen")
+        self.assertEqual(reopened.status_code, 200, reopened.text)
+        self.assertFalse(reopened.json()["archived"])
+        self.assertIsNone(reopened.json()["archived_at"])
+        for key, value in original_project_identity.items():
+            self.assertEqual(reopened.json()[key], value)
+        unarchived_ids = [item["id"] for item in self.client.get("/v1/chat/conversations").json()]
+        self.assertIn(project["id"], unarchived_ids)
 
     def test_workspace_id_resolves_project_path(self) -> None:
         workspace = self.client.post(
@@ -1363,6 +1489,42 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 409, rejected.text)
         self.assertEqual(rejected.json()["code"], "session_area_immutable")
 
+    def test_project_branch_retains_removed_original_area_identity(self) -> None:
+        self.scripted = ScriptedChatModel([AIMessage(content="answer before original project removal")])
+        conversation = self._create(title="Removed original project")
+        started = self._start(conversation["id"], "Capture project state before removal.")
+        finished = wait_for_chat(self.client, conversation["id"])
+        run = self.app.state.app_store.get_run(started["current_run"]["id"])
+        self.assertIsNotNone(run)
+        assert run is not None
+        self.assertTrue(run.final_snapshot_id)
+
+        original_path = str(self.project.resolve())
+        shutil.rmtree(self.project)
+        self.assertFalse(self.project.exists())
+        reopened = self.client.get(f"/v1/chat/conversations/{conversation['id']}")
+        self.assertEqual(reopened.status_code, 200, reopened.text)
+        self.assertEqual(reopened.json()["area_project_path"], original_path)
+        self.assertEqual(reopened.json()["area_id"], original_path)
+        self.assertEqual(reopened.json()["area_label"], self.project.name)
+
+        branch = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/branches",
+            json={"source_run_id": finished["current_run_id"], "mode": "continue"},
+        )
+
+        self.assertEqual(branch.status_code, 200, branch.text)
+        body = branch.json()
+        self.assertEqual(body["source_conversation_id"], conversation["id"])
+        self.assertEqual(body["area_project_path"], original_path)
+        self.assertEqual(body["area_id"], original_path)
+        self.assertEqual(body["area_label"], self.project.name)
+        self.assertNotEqual(body["project_path"], original_path)
+        branch_project_path = Path(body["project_path"])
+        self.assertTrue(branch_project_path.is_dir())
+        self.assertTrue(branch_project_path.is_relative_to(self.app.state.manager.paths.workspaces.resolve()))
+        self.assertEqual(body["branch_head_checkpoint_id"], body["source_checkpoint_id"])
+
     def test_terminal_reconciliation_updates_branch_head_checkpoint(self) -> None:
         conversation = self._create()
         stored = self.app.state.app_store.get_conversation(conversation["id"])
@@ -1384,6 +1546,220 @@ class ChatHarnessTests(unittest.TestCase):
         fetched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
         self.assertEqual(fetched["current_run"]["status"], finished["current_run"]["status"])
         self.assertIn(fetched["branch_head_checkpoint_id"], run.checkpoint_ids)
+
+    def test_accepted_start_clears_matching_draft_revision(self) -> None:
+        conversation = self._create()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={
+                "content": "Send this draft.",
+                "attachment_ids": [],
+                "intended_config": {"deployment_id": self.deployment_id},
+            },
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        revision = draft.json()["draft"]["revision"]
+
+        started = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Send this draft.", "draft_revision": revision},
+        )
+
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(started.json()["draft"]["content"], "")
+        self.assertEqual(started.json()["draft"]["attachment_ids"], [])
+        self.assertEqual(started.json()["draft"]["intended_config"], {"deployment_id": self.deployment_id})
+        self.assertEqual(started.json()["draft"]["revision"], revision + 1)
+        fetched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(fetched["draft"]["content"], "")
+        self.assertEqual(fetched["draft"]["revision"], revision + 1)
+        self.assertEqual(fetched["transcript"][-1]["content"], "Send this draft.")
+
+    def test_start_preserves_newer_draft_revision(self) -> None:
+        conversation = self._create()
+        first = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={"content": "Original draft.", "intended_config": {"deployment_id": self.deployment_id}},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        stale_revision = first.json()["draft"]["revision"]
+        second = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={
+                "content": "Newer unsent draft.",
+                "intended_config": {"deployment_id": self.deployment_id, "per_request_overrides": {"temperature": 0.4}},
+                "expected_revision": stale_revision,
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+
+        started = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Original draft.", "draft_revision": stale_revision},
+        )
+
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(started.json()["draft"]["content"], "Newer unsent draft.")
+        self.assertEqual(started.json()["draft"]["revision"], stale_revision + 1)
+        self.assertEqual(
+            started.json()["draft"]["intended_config"]["per_request_overrides"],
+            {"temperature": 0.4},
+        )
+
+    def test_failed_start_admission_preserves_submitted_draft_revision(self) -> None:
+        conversation = self._create()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={"content": "Keep after failure.", "intended_config": {"deployment_id": self.deployment_id}},
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        revision = draft.json()["draft"]["revision"]
+
+        failed = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={
+                "task": "Keep after failure.",
+                "draft_revision": revision,
+                "deployment_id": "missing-deployment",
+            },
+        )
+
+        self.assertNotEqual(failed.status_code, 200, failed.text)
+        fetched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(fetched["draft"]["content"], "Keep after failure.")
+        self.assertEqual(fetched["draft"]["revision"], revision)
+
+    def test_enqueue_clears_matching_draft_revision(self) -> None:
+        conversation = self._create()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={
+                "content": "Queue this draft.",
+                "attachment_ids": [],
+                "intended_config": {"deployment_id": self.deployment_id, "presented_tools": []},
+            },
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        revision = draft.json()["draft"]["revision"]
+
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={
+                "task": "Queue this draft.",
+                "draft_revision": revision,
+                "deployment_id": self.deployment_id,
+                "presented_tools": [],
+            },
+        )
+
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(queued.json()["draft"]["content"], "")
+        self.assertEqual(queued.json()["draft"]["attachment_ids"], [])
+        self.assertEqual(
+            queued.json()["draft"]["intended_config"],
+            {"deployment_id": self.deployment_id, "presented_tools": []},
+        )
+        self.assertEqual(queued.json()["draft"]["revision"], revision + 1)
+        self.assertEqual(queued.json()["queue"][0]["task"], "Queue this draft.")
+        self.assertEqual(queued.json()["queue"][0]["intended_config"]["presented_tools"], [])
+
+    def test_accept_run_atomically_clears_matching_draft_without_resetting_revision(self) -> None:
+        conversation = self._create()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={
+                "content": "Crash-window draft.",
+                "attachment_ids": [],
+                "intended_config": {"deployment_id": self.deployment_id, "per_request_overrides": {"temperature": 0.3}},
+            },
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        revision = draft.json()["draft"]["revision"]
+        stored = self.app.state.app_store.get_conversation(conversation["id"])
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        stored.transcript.append(
+            ChatMessage(
+                id="crash-window-input",
+                role="user",
+                content="Crash-window draft.",
+                at=utc_now(),
+            )
+        )
+        self.app.state.app_store.put_conversation(stored)
+
+        accepted = self.app.state.app_store.accept_chat_dispatched_run(
+            conversation["id"],
+            "run_crash_window",
+            "crash-window-input",
+            draft_revision=revision,
+        )
+
+        self.assertIsNotNone(accepted)
+        assert accepted is not None
+        self.assertEqual(accepted.current_run_id, "run_crash_window")
+        self.assertEqual(accepted.transcript[-1].run_id, "run_crash_window")
+        self.assertIsNotNone(accepted.draft)
+        assert accepted.draft is not None
+        self.assertEqual(accepted.draft.content, "")
+        self.assertEqual(accepted.draft.attachment_ids, [])
+        self.assertEqual(accepted.draft.revision, revision + 1)
+        self.assertEqual(
+            accepted.draft.intended_config,
+            {"deployment_id": self.deployment_id, "per_request_overrides": {"temperature": 0.3}},
+        )
+
+    def test_queued_dispatch_does_not_clear_newer_draft(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        scripted = ScriptedChatModel([AIMessage(content="held first"), AIMessage(content="queued reply")])
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return scripted
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        conversation = self._create()
+        first = self._start(conversation["id"], "Held first.")
+        wait_for_status(self.client, first["current_run"]["id"], "running")
+        wait_for_generate_hold()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={"content": "Queued draft.", "intended_config": {"deployment_id": self.deployment_id}},
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        queued_revision = draft.json()["draft"]["revision"]
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={"task": "Queued draft.", "draft_revision": queued_revision},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(queued.json()["draft"]["content"], "")
+        self.assertEqual(queued.json()["draft"]["revision"], queued_revision + 1)
+        newer = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={"content": "Future unsent draft.", "intended_config": {"deployment_id": self.deployment_id}},
+        )
+        self.assertEqual(newer.status_code, 200, newer.text)
+        newer_revision = newer.json()["draft"]["revision"]
+
+        hold.set()
+        wait_for_run(self.client, first["current_run"]["id"])
+        terminal = self.app.state.app_store.get_run(first["current_run"]["id"])
+        self.assertIsNotNone(terminal)
+        assert terminal is not None
+        self.app.state.chat.observe_terminal_run(terminal)
+        dispatched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+
+        self.assertEqual(dispatched["draft"]["content"], "Future unsent draft.")
+        self.assertEqual(dispatched["draft"]["revision"], newer_revision)
+        self.assertEqual(dispatched["queue"][0]["status"], "dispatching")
 
     def test_queued_turn_dispatches_after_success_and_pauses_after_failure(self) -> None:
         hold = threading.Event()
@@ -1451,6 +1827,114 @@ class ChatHarnessTests(unittest.TestCase):
         )
         self.assertEqual(finished["transcript"][-1]["content"], "queued second")
 
+    def test_queue_waits_behind_host_shell_approval_until_deliberate_resolution(self) -> None:
+        marker = "queue-approval-marker.txt"
+        self.scripted = ScriptedChatModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "execute",
+                            "args": {"command": host_shell_marker_command(marker)},
+                            "id": "call_exec",
+                        }
+                    ],
+                ),
+                AIMessage(content="approval resolved"),
+                AIMessage(content="queued after approval"),
+            ]
+        )
+        conversation = self._create()
+        started = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Wait for approval.", "presented_tools": ["execute"]},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        paused = wait_for_chat_interrupt(self.client, conversation["id"])
+        first_run_id = paused["current_run_id"]
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={"task": "Run only after approval succeeds.", "input_message_id": "queued-after-approval"},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(queued.json()["queue"][0]["status"], "queued")
+        self.assertEqual(queued.json()["run_ids"], [first_run_id])
+        self.assertEqual(len(self.app.state.harness.list_runs()), 1)
+
+        decided = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/interrupt-decision",
+            json=chat_interrupt_decision(paused, "approve"),
+        )
+        self.assertEqual(decided.status_code, 200, decided.text)
+        terminal = wait_for_run(self.client, first_run_id)
+        self.assertEqual(terminal["status"], "completed", terminal.get("error"))
+        self.assertTrue((self.project / marker).is_file())
+        self.app.state.chat.observe_terminal_run(AgentRun.model_validate(terminal))
+        dispatched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(dispatched["queue"][0]["status"], "dispatching")
+        self.assertEqual(dispatched["queue"][0]["input_message_id"], "queued-after-approval")
+        self.assertEqual(len(dispatched["run_ids"]), 2)
+        self.assertNotEqual(dispatched["current_run_id"], first_run_id)
+        queued_run = wait_for_run(self.client, dispatched["current_run_id"])
+        self.assertEqual(queued_run["status"], "completed", queued_run.get("error"))
+
+    def test_queue_waits_behind_typed_question_until_answered(self) -> None:
+        self.scripted = ScriptedChatModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "ask_user",
+                            "args": {"prompt": "Choose format", "answer_type": "text"},
+                            "id": "ask_1",
+                        }
+                    ],
+                ),
+                AIMessage(content="typed answer resolved"),
+                AIMessage(content="queued after typed answer"),
+            ]
+        )
+        conversation = self._create()
+        started = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Ask a question.", "presented_tools": ["ask_user"]},
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        paused = wait_for_chat_interrupt(self.client, conversation["id"])
+        first_run_id = paused["current_run_id"]
+        pending = paused["current_run"]["pending_interrupt"]
+        self.assertEqual(pending["kind"], "ask_user")
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={"task": "Run only after typed answer succeeds.", "input_message_id": "queued-after-answer"},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(queued.json()["queue"][0]["status"], "queued")
+        self.assertEqual(queued.json()["run_ids"], [first_run_id])
+        self.assertEqual(len(self.app.state.harness.list_runs()), 1)
+
+        self.app.state.harness.resume_interrupt(
+            first_run_id,
+            UserAnswerRequest(
+                answer="Markdown",
+                interrupt_id=pending["interrupt_id"],
+                namespace=pending.get("namespace", []),
+            ),
+            require_interrupt_identity=True,
+        )
+        terminal = wait_for_run(self.client, first_run_id)
+        self.assertEqual(terminal["status"], "completed", terminal.get("error"))
+        self.app.state.chat.observe_terminal_run(AgentRun.model_validate(terminal))
+        dispatched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(dispatched["queue"][0]["status"], "dispatching")
+        self.assertEqual(dispatched["queue"][0]["input_message_id"], "queued-after-answer")
+        self.assertEqual(len(dispatched["run_ids"]), 2)
+        self.assertNotEqual(dispatched["current_run_id"], first_run_id)
+        queued_run = wait_for_run(self.client, dispatched["current_run_id"])
+        self.assertEqual(queued_run["status"], "completed", queued_run.get("error"))
+
     def test_queue_requires_resume_and_preserves_intended_config_across_selector_changes(self) -> None:
         other = self.client.post(
             "/v1/deployments/connected",
@@ -1496,6 +1980,54 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(
             resumed.json()["queue"][0]["frozen_config"]["per_request_overrides"],
             {"temperature": 0.3},
+        )
+
+    def test_queue_partial_intended_config_edit_keeps_frozen_selector(self) -> None:
+        other = self.client.post(
+            "/v1/deployments/connected",
+            json={"endpoint": "http://127.0.0.1:10/v1", "display_name": "queue-partial-other"},
+        ).json()
+        self.scripted = ScriptedChatModel(
+            [
+                AIMessage(content="selector changed"),
+                AIMessage(content="queued with edited reasoning"),
+            ]
+        )
+        conversation = self._create()
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={
+                "task": "Queued with original selector.",
+                "deployment_id": self.deployment_id,
+                "per_request_overrides": {"reasoning_effort": "low"},
+            },
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        queue_id = queued.json()["queue"][0]["id"]
+        edited = self.client.patch(
+            f"/v1/chat/conversations/{conversation['id']}/queue/{queue_id}",
+            json={"intended_config": {"per_request_overrides": {"reasoning_effort": "medium"}}},
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()["queue"][0]["intended_config"]["deployment_id"], self.deployment_id)
+        self.assertEqual(
+            edited.json()["queue"][0]["intended_config"]["per_request_overrides"],
+            {"reasoning_effort": "medium"},
+        )
+
+        changed = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Change selector before queued dispatch.", "deployment_id": other["id"]},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        wait_for_chat(self.client, conversation["id"])
+
+        resumed = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/resume", json={})
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        self.assertEqual(resumed.json()["current_run"]["deployment_id"], self.deployment_id)
+        self.assertEqual(
+            resumed.json()["queue"][0]["frozen_config"]["per_request_overrides"],
+            {"reasoning_effort": "medium"},
         )
 
     def test_tools_off_attachment_only_turn_uses_retained_content(self) -> None:
@@ -1559,6 +2091,15 @@ class ChatHarnessTests(unittest.TestCase):
 
     def test_direct_start_recovers_accepted_run_after_commit_gap(self) -> None:
         conversation = self._create()
+        draft = self.client.put(
+            f"/v1/chat/conversations/{conversation['id']}/draft",
+            json={
+                "content": "Recover accepted direct run.",
+                "intended_config": {"deployment_id": self.deployment_id},
+            },
+        )
+        self.assertEqual(draft.status_code, 200, draft.text)
+        draft_revision = draft.json()["draft"]["revision"]
         original_start = self.app.state.harness.start
         accepted: list[str] = []
 
@@ -1570,7 +2111,11 @@ class ChatHarnessTests(unittest.TestCase):
         with patch.object(self.app.state.harness, "start", side_effect=accept_then_raise):
             response = self.client.post(
                 f"/v1/chat/conversations/{conversation['id']}/start",
-                json={"task": "Recover accepted direct run.", "input_message_id": "direct-gap"},
+                json={
+                    "task": "Recover accepted direct run.",
+                    "input_message_id": "direct-gap",
+                    "draft_revision": draft_revision,
+                },
             )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -1580,6 +2125,8 @@ class ChatHarnessTests(unittest.TestCase):
         user_messages = [message for message in body["transcript"] if message["role"] == "user"]
         self.assertEqual([message["id"] for message in user_messages], ["direct-gap"])
         self.assertEqual(user_messages[0]["run_id"], accepted[0])
+        self.assertEqual(body["draft"]["content"], "")
+        self.assertEqual(body["draft"]["revision"], draft_revision + 1)
 
     def test_direct_start_retry_after_model_load_failure_reuses_input_identity(self) -> None:
         conversation = self._create()

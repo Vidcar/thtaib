@@ -395,6 +395,7 @@ class BundleConfigurationOptions(BaseModel):
     context_size: RuntimeControlDescriptor
     gpu_layers: RuntimeControlDescriptor
     startup_defaults: dict[str, RuntimeControlDescriptor]
+    per_request_defaults: dict[str, RuntimeControlDescriptor] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

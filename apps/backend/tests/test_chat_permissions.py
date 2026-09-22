@@ -22,6 +22,181 @@ from workbench_backend.state.store import ApplicationStore
 
 
 class ChatPermissionTests(unittest.TestCase):
+    def test_independent_preference_updates_preserve_other_fields_after_restart(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths = WorkbenchPaths(Path(root))
+            store = ApplicationStore(paths)
+            try:
+                prefs = PreferenceStore(store)
+                prefs.save_preferences(PresentationPreferences(
+                    theme="light", attention_notifications=False, success_notifications=True))
+                barrier = threading.Barrier(3)
+                errors = []
+
+                def update(patch):
+                    try:
+                        barrier.wait(timeout=5)
+                        prefs.update_preferences(PresentationPreferences(**patch))
+                    except Exception as error:
+                        errors.append(error)
+
+                workers = [threading.Thread(target=update, args=(patch,)) for patch in
+                           ({"theme": "dark"}, {"detailed_streams": True})]
+                for worker in workers:
+                    worker.start()
+                barrier.wait(timeout=5)
+                for worker in workers:
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+            finally:
+                store.close()
+            store = ApplicationStore(paths)
+            try:
+                self.assertEqual(PreferenceStore(store).preferences(), PresentationPreferences(
+                    theme="dark", detailed_streams=True,
+                    attention_notifications=False, success_notifications=True))
+            finally:
+                store.close()
+
+    def test_mixed_ordered_approval_decisions_persist_only_requested_grants(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths = WorkbenchPaths(Path(root))
+            store = ApplicationStore(paths)
+            stop_thread = threading.Event()
+            try:
+                harness = HarnessService(lambda: type("Manager", (), {"paths": paths})(), app_store=store)
+                harness._startup_reconciled = True
+                actions = [
+                    PendingInterruptAction(name="execute", args={"command": "echo once > once.txt"}),
+                    PendingInterruptAction(name="execute", args={"command": "echo session > session.txt"}),
+                    PendingInterruptAction(name="execute", args={"command": "echo always > always.txt"}),
+                    PendingInterruptAction(name="execute", args={"command": "echo reject > reject.txt"}),
+                ]
+                run = AgentRun(
+                    id="run_mixed_decisions",
+                    status=AgentRunStatus.running,
+                    deployment_id="model",
+                    task="work",
+                    thread_id="session1",
+                    project_path=root,
+                    enabled_tools=["execute"],
+                    presented_tools=["execute"],
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                    pending_interrupt=PendingInterrupt(
+                        interrupt_id="interrupt-mixed-decisions",
+                        namespace=["__interrupt__", "mixed"],
+                        action_requests=actions,
+                    ),
+                )
+
+                worker = threading.Thread(target=stop_thread.wait)
+                worker.start()
+                self.addCleanup(stop_thread.set)
+                self.addCleanup(worker.join, 1)
+                harness._runs[run.id] = run
+                harness._threads[run.id] = worker
+                harness._cancels[run.id] = threading.Event()
+                request = InterruptDecisionRequest(
+                    interrupt_id="interrupt-mixed-decisions",
+                    namespace=["__interrupt__", "mixed"],
+                    decisions=[
+                        {"type": "approve", "scope": "once"},
+                        {"type": "approve", "scope": "session"},
+                        {"type": "approve", "scope": "always"},
+                        {"type": "reject"},
+                    ],
+                )
+
+                exposed = harness.resume_interrupt(run.id, request, require_interrupt_identity=True)
+
+                self.assertEqual(exposed.id, run.id)
+                self.assertEqual(
+                    [payload["type"] for payload in harness._pending_decisions[run.id]],
+                    ["approve", "approve", "approve", "reject"],
+                )
+                prefs = PreferenceStore(store)
+                grants = prefs.grants()
+                self.assertEqual(len(grants), 2)
+                self.assertFalse(prefs.matches(run, "execute", actions[0].args))
+                self.assertTrue(prefs.matches(run, "execute", actions[1].args))
+                self.assertFalse(
+                    prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[1].args)
+                )
+                self.assertTrue(
+                    prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[2].args)
+                )
+                self.assertFalse(prefs.matches(run, "execute", actions[3].args))
+                self.assertEqual(
+                    {(grant.scope, grant.arguments["command"]) for grant in grants},
+                    {
+                        ("session", "echo session > session.txt"),
+                        ("always", "echo always > always.txt"),
+                    },
+                )
+            finally:
+                stop_thread.set()
+                store.close()
+
+    def test_ordered_decision_mismatch_cannot_approve_wrong_pending_action(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths = WorkbenchPaths(Path(root))
+            store = ApplicationStore(paths)
+            try:
+                harness = HarnessService(lambda: type("Manager", (), {"paths": paths})(), app_store=store)
+                harness._startup_reconciled = True
+                run = AgentRun(
+                    id="run_order_mismatch",
+                    status=AgentRunStatus.running,
+                    deployment_id="model",
+                    task="work",
+                    thread_id="session1",
+                    project_path=root,
+                    enabled_tools=["execute"],
+                    presented_tools=["execute"],
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                    pending_interrupt=PendingInterrupt(
+                        interrupt_id="interrupt-order-mismatch",
+                        namespace=["__interrupt__", "ordered"],
+                        action_requests=[
+                            PendingInterruptAction(
+                                name="execute",
+                                args={"command": "echo first > first.txt"},
+                                allowed_decisions=["approve"],
+                            ),
+                            PendingInterruptAction(
+                                name="execute",
+                                args={"command": "echo second > second.txt"},
+                                allowed_decisions=["reject"],
+                            ),
+                        ],
+                    ),
+                )
+                harness._runs[run.id] = run
+                harness._cancels[run.id] = threading.Event()
+                request = InterruptDecisionRequest(
+                    interrupt_id="interrupt-order-mismatch",
+                    namespace=["__interrupt__", "ordered"],
+                    decisions=[
+                        {"type": "reject"},
+                        {"type": "approve", "scope": "always"},
+                    ],
+                )
+
+                with self.assertRaises(HarnessError) as raised:
+                    harness.resume_interrupt(run.id, request, require_interrupt_identity=True)
+
+                self.assertEqual(raised.exception.code, "interrupt_decision_not_allowed")
+                self.assertIsNone(harness._pending_decisions.get(run.id))
+                prefs = PreferenceStore(store)
+                self.assertEqual(prefs.grants(), [])
+                self.assertFalse(prefs.matches(run, "execute", {"command": "echo first > first.txt"}))
+                self.assertFalse(prefs.matches(run, "execute", {"command": "echo second > second.txt"}))
+            finally:
+                store.close()
+
     def test_cancel_prevents_all_model_and_tool_dispatch_hooks(self):
         from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
         from workbench_backend.errors import HarnessError

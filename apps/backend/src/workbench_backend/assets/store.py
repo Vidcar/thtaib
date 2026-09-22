@@ -64,12 +64,27 @@ class RetainedAssetStore:
     ) -> list[RetainedAsset]:
         clauses: list[str] = []
         params: list[object] = []
+        availability: list[str] = []
         if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
+            availability.append(
+                """
+                (
+                    session_id = ?
+                    OR EXISTS (
+                        SELECT 1 FROM retained_asset_consumers rac
+                        WHERE rac.asset_id = retained_assets.id
+                        AND rac.consumer_kind = 'session'
+                        AND rac.consumer_id = ?
+                    )
+                )
+                """
+            )
+            params.extend([session_id, session_id])
         if project_path is not None:
-            clauses.append("project_path = ?")
+            availability.append("project_path = ?")
             params.append(project_path)
+        if availability:
+            clauses.append("(" + " OR ".join(availability) + ")")
         if origin is not None:
             clauses.append("origin = ?")
             params.append(origin)

@@ -40,6 +40,8 @@ const fixed = await runFixture("fixed");
 writeFileSync(path.join(scratch, "receiver-results.json"), JSON.stringify({ vulnerable, fixed }, null, 2));
 for (const mode of ["dev", "file"]) {
   assert.equal(fixed.captures[`${mode}:trusted`], "electron-boundary-token", `${mode} trusted app request should receive token`);
+  assert.equal(fixed.captures[`${mode}:rotated`], "restored-boundary-token", `${mode} restored root must replace the old authorization`);
+  assert.equal(fixed.captures[`${mode}:rotated-iframe`], "", `${mode} token rotation must preserve subframe isolation`);
   assert.equal(fixed.captures[`${mode}:iframe`], "", `${mode} untrusted subframe should not receive token`);
   assert.equal(fixed.captures[`${mode}:untrusted-window`], "", `${mode} untrusted window should not receive token`);
   assert.equal(fixed.captures[`${mode}:untrusted-spoofed`], "", `${mode} untrusted request should strip caller-supplied token`);
@@ -344,6 +346,12 @@ async function runMode(mode, appUrl, replacementUrl, useProtocolRelativeExternal
   await trusted.loadURL(appUrl);
   console.log("fixture step", boundaryMode, mode, "loaded");
   await fetchFrom(trusted, mode + ":trusted");
+  if (boundaryMode === "fixed") {
+    installLocalTrustHeader("restored-boundary-token", backendOrigin);
+    await fetchFrom(trusted, mode + ":rotated");
+    await fetchFromIframe(trusted, mode + ":rotated-iframe");
+    installLocalTrustHeader(TOKEN, backendOrigin);
+  }
   console.log("fixture step", boundaryMode, mode, "trusted fetch");
   await fetchRedirectForward(trusted, mode + ":redirect-forward");
   console.log("fixture step", boundaryMode, mode, "redirect fetch");

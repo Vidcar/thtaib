@@ -1341,6 +1341,10 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+            /** Per Request Defaults */
+            per_request_defaults?: {
+                [key: string]: components["schemas"]["RuntimeControlDescriptor"];
+            };
             /** Startup Defaults */
             startup_defaults: {
                 [key: string]: components["schemas"]["RuntimeControlDescriptor"];
@@ -1639,7 +1643,7 @@ export interface components {
             memory_version_refs?: string[];
             /**
              * Note
-             * @default Debug-quality Chat. The embedded Deep Agents harness owns model/tool iteration. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; this is not a durable Approvals inbox (OQ-011).
+             * @default Shared Chat. The embedded Deep Agents harness owns model/tool iteration; the application persists native interrupts and surfaces them here. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; the application persists the interrupt for Chat.
              */
             note: string;
             /** Pending Cancel Input Ids */
@@ -1875,6 +1879,8 @@ export interface components {
             content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             /** Deployment Id */
             deployment_id?: string | null;
+            /** Draft Revision */
+            draft_revision?: number | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
             /**
@@ -2265,7 +2271,7 @@ export interface components {
             isolation: "none";
             /**
              * Note
-             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
              */
             note: string;
         };
@@ -2882,7 +2888,7 @@ export interface components {
         };
         /**
          * PendingInterrupt
-         * @description Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011).
+         * @description Native Deep Agents interrupt persisted by the application and surfaced in Chat.
          */
         PendingInterrupt: {
             /** Action Requests */
@@ -2911,7 +2917,7 @@ export interface components {
             namespace?: string[];
             /**
              * Note
-             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).
+             * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
              */
             note: string;
             question?: components["schemas"]["UserQuestion"] | null;

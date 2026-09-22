@@ -237,10 +237,10 @@ body {
 .app-nav { padding: 1.7rem 1rem; gap: 1.3rem; }
 .app-nav > .eyebrow { display: none; }
 .app-nav h1 { padding: 0 .4rem; font-size: 1.05rem; line-height: 1.5; letter-spacing: -.02em; }
-.app-nav .tab { background: transparent; border-color: transparent; border-radius: 8px; padding: .8rem .9rem; color: #a9b9ce; }
-.app-nav .tab:hover { background: #17202d; color: #e6edf8; }
-.app-nav .tab.active { background: #1d2b40; border-color: #30415b; color: #d7e6ff; }
-.app-nav > .hint { margin-top: auto; padding: .7rem .4rem 0; border-top: 1px solid #263141; font-size: .75rem; }
+.app-nav .tab { background: transparent; border-color: transparent; border-radius: 8px; padding: .8rem .9rem; color: var(--muted); }
+.app-nav .tab:hover { background: color-mix(in srgb, var(--bg-raised) 72%, var(--accent) 10%); color: var(--text); }
+.app-nav .tab.active { background: color-mix(in srgb, var(--bg-raised) 80%, var(--accent) 20%); border-color: color-mix(in srgb, var(--border) 70%, var(--accent) 30%); color: var(--text); }
+.app-nav > .hint { margin-top: auto; padding: .7rem .4rem 0; border-top: 1px solid var(--border); font-size: .75rem; }
 
 .eyebrow {
   margin: 0;
@@ -558,7 +558,8 @@ h4 {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   padding: 0.75rem;
-  background: #0b0f14;
+  background: var(--bg-input);
+  color: var(--text);
 }
 
 .message-reasoning,
@@ -659,7 +660,7 @@ button.danger {
 .meta div {
   padding: 0.85rem 1rem;
   border: 1px solid var(--border);
-  background: rgba(17, 21, 28, 0.72);
+  background: var(--bg-raised);
 }
 
 .meta {
@@ -736,7 +737,7 @@ textarea {
   background: none;
   border: 1px solid transparent;
   padding: 0.45rem 0.5rem;
-  color: #9ec2ff;
+  color: var(--text);
   text-align: left;
 }
 
@@ -778,7 +779,8 @@ textarea {
   overflow: auto;
   max-height: 16rem;
   font-size: 0.8rem;
-  background: #0b0f14;
+  background: var(--bg-input);
+  color: var(--text);
   padding: 0.75rem;
   border: 1px solid var(--border);
 }

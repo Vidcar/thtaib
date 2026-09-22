@@ -3,7 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from workbench_backend.chat.schemas import ChatConversation, ChatMessage
+from workbench_backend.chat.schemas import ChatConversation, ChatDraft, ChatMessage
 from workbench_backend.inference.ids import utc_now
 
 CHAT_STATE_SCHEMA = """
@@ -131,6 +131,8 @@ class ChatStateStoreMixin:
         conversation_id: str,
         run_id: str,
         input_message_id: str | None,
+        *,
+        draft_revision: int | None = None,
     ) -> ChatConversation | None:
         now = utc_now()
         with self._lock:
@@ -153,6 +155,7 @@ class ChatStateStoreMixin:
                     item.run_id = run_id
                     item.updated_at = now
                     break
+            self._clear_chat_draft_if_revision_locked(conversation, draft_revision, now)
             conversation.updated_at = now
             conversation = self._reconcile_conversation_current_run_locked(conversation)
             self._conn.execute(
@@ -165,6 +168,26 @@ class ChatStateStoreMixin:
             )
             self._conn.commit()
             return conversation
+
+    def _clear_chat_draft_if_revision_locked(
+        self,
+        conversation: ChatConversation,
+        draft_revision: int | None,
+        now: str,
+    ) -> bool:
+        if draft_revision is None:
+            return False
+        if conversation.draft is None or conversation.draft.revision != draft_revision:
+            return False
+        conversation.draft = ChatDraft(
+            content="",
+            content_blocks=None,
+            attachment_ids=[],
+            intended_config=dict(conversation.draft.intended_config),
+            revision=conversation.draft.revision + 1,
+            updated_at=now,
+        )
+        return True
 
     def resolve_chat_submission_cancel(
         self,

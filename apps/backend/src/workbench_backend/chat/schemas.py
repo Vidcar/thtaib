@@ -45,6 +45,7 @@ class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
+    draft_revision: int | None = Field(default=None, ge=0)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
     output_schema: OutputSchemaRequest | None = None
@@ -221,10 +222,11 @@ class ChatConversationView(ChatConversation):
     shell_tools_available: bool = False
     enabled_tools: list[str] = Field(default_factory=list)
     note: str = (
-        "Debug-quality Chat. The embedded Deep Agents harness owns model/tool "
-        "iteration. Follow-ups resume conversation.thread_id. Transcript is "
-        "displayed history, not the working project and not harness context. "
+        "Shared Chat. The embedded Deep Agents harness owns model/tool iteration; "
+        "the application persists native interrupts and surfaces them here. "
+        "Follow-ups resume conversation.thread_id. Transcript is displayed "
+        "history, not the working project and not harness context. "
         "A project folder is optional; filesystem and host-shell tools are "
         "unavailable without one. Host-shell execute pauses on Deep Agents "
-        "interrupt_on; this is not a durable Approvals inbox (OQ-011)."
+        "interrupt_on; the application persists the interrupt for Chat."
     )

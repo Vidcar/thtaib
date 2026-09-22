@@ -935,7 +935,7 @@
           "type": "string"
         },
         "note": {
-          "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+          "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
           "title": "Note",
           "type": "string"
         }
@@ -1402,7 +1402,7 @@
       "type": "object"
     },
     "PendingInterrupt": {
-      "description": "Deep Agents interrupt_on payload. Not a durable product inbox (OQ-011).",
+      "description": "Native Deep Agents interrupt persisted by the application and surfaced in Chat.",
       "properties": {
         "action_requests": {
           "items": {
@@ -1452,7 +1452,7 @@
           "type": "array"
         },
         "note": {
-          "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls. Not a durable Approvals inbox (OQ-011).",
+          "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
           "title": "Note",
           "type": "string"
         },

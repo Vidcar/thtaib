@@ -86,6 +86,13 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual(body["startup_defaults"]["fit"]["applied"], "on")
         self.assertEqual(body["startup_defaults"]["threads"]["source"], "backend_recommendation")
         self.assertIsNotNone(body["startup_defaults"]["threads"]["recommended"])
+        effort = body["per_request_defaults"]["reasoning_effort"]
+        self.assertEqual(effort["source"], "pinned_runtime_schema")
+        self.assertEqual(effort["applied"], "default")
+        self.assertEqual(
+            [item["value"] for item in effort["options"]],
+            ["default", "minimal", "low", "medium", "high", "xhigh", "max"],
+        )
 
     def test_small_context_models_get_small_options(self) -> None:
         bundle_id = self._bundle(context_length=8192, block_count=4)

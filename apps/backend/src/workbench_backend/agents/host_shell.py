@@ -1,8 +1,8 @@
 """Windows host shell policy on Deep Agents 0.7.15 (ENV-001 / OQ-003).
 
 Uses ``LocalShellBackend``, ``permissions=``, and ``interrupt_on=``. The
-framework pauses dangerous ``execute`` calls; this module does not invent a
-second approvals inbox (OQ-011).
+framework pauses dangerous ``execute`` calls; the application persists native
+interrupts and surfaces them through shared Chat.
 
 Sources consulted 2026-09-19 for pinned ``deepagents==0.7.15``:
 
@@ -79,7 +79,8 @@ HOST_SHELL_NOTE = (
     "LocalShellBackend with the bound project as cwd and inherit the backend "
     "process environment. permissions= apply only to routed filesystem "
     "prefixes while the default backend is a sandbox. interrupt_on pauses "
-    "dangerous execute calls. This is not a durable Approvals inbox (OQ-011)."
+    "dangerous execute calls; the application persists native interrupts and "
+    "surfaces them through shared Chat."
 )
 
 

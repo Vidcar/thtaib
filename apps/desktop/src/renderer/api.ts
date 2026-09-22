@@ -63,11 +63,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+// Settings and Chat share one ordered writer. Reads which straddle a write
+// rehydrate afterward, so a late initial load cannot replace the saved values.
+let presentationWrite: Promise<unknown> = Promise.resolve();
+let presentationRevision = 0;
+async function readPresentation(): Promise<PresentationSettings> {
+  for (;;) {
+    const revision = presentationRevision;
+    await presentationWrite;
+    const value = await request<PresentationSettings>("/v1/settings/presentation");
+    if (revision === presentationRevision) return value;
+  }
+}
+function writePresentation(payload: Partial<PresentationSettings>): Promise<PresentationSettings> {
+  presentationRevision += 1;
+  const body = JSON.stringify(payload);
+  const result = presentationWrite.then(() => request<PresentationSettings>("/v1/settings/presentation", { method: "PATCH", body }));
+  presentationWrite = result.catch(() => undefined);
+  return result;
+}
+
 export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
-  presentationSettings: () => request<PresentationSettings>("/v1/settings/presentation"),
-  updatePresentationSettings: (payload: PresentationSettings) =>
-    request<PresentationSettings>("/v1/settings/presentation", { method: "PUT", body: JSON.stringify(payload) }),
+  presentationSettings: readPresentation,
+  updatePresentationSettings: writePresentation,
   paths: () => request<PathsInfo>("/v1/paths"),
   bundles: () => request<ModelBundle[]>("/v1/bundles"),
   imports: () => request<ImportJob[]>("/v1/imports"),
@@ -207,12 +226,8 @@ export const api = {
     request<ChatConversation>(`/v1/chat/conversations/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
   reopenChatConversation: (id: string) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/reopen`, { method: "POST", body: "{}" }),
-  updateChatDraft: (id: string, payload: { content: string; expected_revision?: number | null; intended_config?: Record<string, unknown> }) =>
+  updateChatDraft: (id: string, payload: { content: string; attachment_ids?: string[]; expected_revision?: number | null; intended_config?: Record<string, unknown> }) =>
     request<ChatConversation>(`/v1/chat/conversations/${id}/draft`, { method: "PUT", body: JSON.stringify(payload) }),
-  updateChatQueueItem: (conversationId: string, itemId: string, payload: { task?: string | null; intended_config?: Record<string, unknown> | null }) =>
-    request<ChatConversation>(`/v1/chat/conversations/${conversationId}/queue/${itemId}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  removeChatQueueItem: (conversationId: string, itemId: string) =>
-    request<ChatConversation>(`/v1/chat/conversations/${conversationId}/queue/${itemId}`, { method: "DELETE" }),
   startChat: (
     id: string,
     payload: {
