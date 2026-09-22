@@ -804,12 +804,12 @@ function buttonByAriaLabel(renderer, label) {
   return found[0];
 }
 
-function toolsAllowedCheckbox(renderer) {
+function approvalModeButton(renderer, label) {
   const found = renderer.root.findAll(
-    (node) => node.type === "label" && typeof node.props.className === "string" && node.props.className.includes("check-row") && textOf(node).includes("Use tools"),
+    (node) => node.type === "button" && node.props.role === "radio" && node.props["aria-label"] === label,
   );
-  assert.ok(found.length > 0, "expected tools allowed checkbox");
-  return found[0].findByType("input");
+  assert.ok(found.length > 0, `expected approval mode ${label}`);
+  return found[0];
 }
 
 function thinkingEffortSlider(renderer) {
@@ -1583,7 +1583,7 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
     await stageAttachment(renderer, "attachment-only.md", "attached context");
     await waitFor(() => assert.equal(harness.state.requests.assetUploads.length, 1), "attachment-only upload captured");
     await act(async () => {
-      toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: false } });
+      approvalModeButton(renderer, "Full access").props.onClick();
       thinkingEffortSlider(renderer).props.onChange({ target: { value: "3" } });
       await Promise.resolve();
     });
@@ -1597,7 +1597,7 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
     const metadata = command.params.metadata.workbench;
     assert.equal(message.content, "", "attachment-only submit sends an empty human message body");
     assert.deepEqual(metadata.attachment_ids, ["asset_1"], "SDK metadata preserves staged attachment ids");
-    assert.deepEqual(metadata.presented_tools, [], "tools-off state is carried in SDK metadata");
+    assert.equal(metadata.approval_mode, "full_access", "approval mode is carried in SDK metadata");
     assert.deepEqual(metadata.per_request_overrides, { reasoning_effort: "high" }, "per-message reasoning override is carried in SDK metadata");
     assert.equal(command.params.multitaskStrategy, "reject", "SDK direct submit preserves reject multitask strategy");
   } finally {
@@ -1769,7 +1769,7 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
     await stageAttachment(renderer, "queued-context.md", "queued context");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "queued turn with attachment" } });
-      toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: false } });
+      approvalModeButton(renderer, "Full access").props.onClick();
       thinkingEffortSlider(renderer).props.onChange({ target: { value: "2" } });
       await Promise.resolve();
     });
@@ -1783,7 +1783,7 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
     assert.equal(queued.workspace_id, "workspace_queue", "queued branch keeps its owned workspace identity");
     assert.equal(queued.project_path, "D:\\LocalAIWorkbench\\workspaces\\queued-branch");
     assert.deepEqual(queued.attachment_ids, ["asset_1"], "queue request preserves staged attachment ids");
-    assert.deepEqual(queued.presented_tools, [], "queue request preserves tools-off state");
+    assert.equal(queued.approval_mode, "full_access", "queue request preserves the approval mode");
     assert.deepEqual(queued.per_request_overrides, { reasoning_effort: "medium" }, "queue request preserves per-message reasoning override");
     assert.deepEqual(harness.state.conversations.conv_a.queue[0].intended_config.attachment_ids, ["asset_1"], "queued item intended config stores attachment ids for reload");
   } finally {
@@ -1825,6 +1825,7 @@ async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
       project_path: null,
       embedding_deployment_id: null,
       presented_tools: [],
+      approval_mode: "full_access",
       per_request_overrides: { reasoning_effort: "high" },
     },
     revision: 7,
@@ -1849,7 +1850,7 @@ async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
     await waitFor(() => assert.match(allText(renderer), /saved-draft\.md/), "draft attachment restored from session assets");
     assert.equal(renderer.root.findByProps({ "aria-label": "Attach files" }).props["aria-expanded"], true, "restored draft attachments are visible before sending");
     assert.equal(harness.state.requests.assetLists.at(-1)?.sessionId, "conv_a", "draft restore lists assets for the selected conversation");
-    assert.equal(toolsAllowedCheckbox(renderer).props.checked, false, "draft intended config restores tools-off state");
+    assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "draft intended config restores the approval mode");
     assert.equal(String(thinkingEffortSlider(renderer).props.value), "3", "draft intended config restores per-message reasoning choice");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "restored draft text plus edit" } });
@@ -2496,7 +2497,7 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     await waitFor(() => assert.ok(allText(renderer).includes("Agent one")), "saved agent choices");
     await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "one-version" } }));
     await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "one-version"), "agent applied");
-    assert.equal(toolsAllowedCheckbox(renderer).props.checked, false, "effective tools-off choice is visible");
+    assert.equal(approvalModeButton(renderer, "Ask").props["aria-checked"], true, "a saved agent without a mode stays on Ask");
     assert.ok(allText(renderer).includes("Keep these instructions intact"));
     await act(async () => textarea(renderer).props.onChange({ target: { value: "First task" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
@@ -2510,12 +2511,13 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "two-version" } }));
     await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "two-version"), "next-turn agent selected");
     assert.equal(harness.state.requests.commands[0].payload.params.metadata.workbench.agent_setup_version_id, "one-version", "changing next-turn setup cannot mutate the in-flight request");
-    await act(async () => { toolsAllowedCheckbox(renderer).props.onChange({ target: { checked: true } }); textarea(renderer).props.onChange({ target: { value: "Queue the next task" } }); });
+    await act(async () => { approvalModeButton(renderer, "Full access").props.onClick(); textarea(renderer).props.onChange({ target: { value: "Queue the next task" } }); });
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "next task queued");
     const queued = harness.state.requests.queues[0].payload;
     assert.equal(queued.agent_setup_version_id, "two-version");
-    assert.deepEqual(queued.presented_tools, ["echo"], "an explicit tools-on edit must replace an inherited empty list");
+    assert.equal(queued.approval_mode, "full_access", "an approval-mode choice is sent with the queued turn");
+    assert.equal(Object.hasOwn(queued, "presented_tools"), false, "the chat shield does not replace the agent's tool list");
   } finally { await closeHarness(renderer, harness); }
 }
 

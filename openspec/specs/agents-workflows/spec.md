@@ -127,12 +127,20 @@ Continuing SHALL use the same saved thread with a new application run for only t
 
 Protected tool actions SHALL use Deep Agents `interrupt_on` and LangGraph resume on the same checkpointer thread. A pending interrupt SHALL keep the run `running` with typed details, not a new lifecycle status. Cancellation SHALL use `cancel_requested` until the worker confirms `cancelled`. The UI SHALL offer **Approve once**, **Allow for this session**, **Always allow** and **Reject**, showing exact action/resource scope. Once covers the pending action; session covers matching actions in the logical session across window reopening; Always allow creates an inspectable revocable matching grant; Reject does not create a permanent deny rule. Explicit rename/delete grants MAY satisfy matching future approvals.
 
+An agent setup and a chat MAY set an approval mode beside the selected tools. **Ask** keeps the pauses above. **Approve for me** lets an already selected rename or delete proceed without a card. **Full access** also lets an already selected shell command or external tool proceed without a card. A mode MUST NOT enable a tool that was not selected, save memory, or answer a typed question. The four choices remain whenever a pause still happens. A queued turn keeps the mode it was queued with. Changing the mode applies to a later message and does not rewrite the saved agent.
+
 Grants SHALL be rechecked at dispatch/resume and MUST NOT enable disabled tools, expand denied access/child selection, authorize automatic memory saving or bypass authored workflow approval nodes. Read scope does not imply write/delete or global scope. Every decision SHALL identify its run, thread/checkpoint and exact interrupt. Reject stale/duplicate/wrong-run decisions; retain framework order for all actions inside one interrupt. Resume the saved interruption rather than resending the task. Cancel while interrupted SHALL reject/resume outstanding commands and reach cancelled only after owned work stops; external termination remains separately known or uncertain.
 
 #### Scenario: Approve deny cancel
 
 - **WHEN** a command pauses for approval
 - **THEN** the chosen allowed framework decision resumes its saved interrupt, and cancellation prevents further dispatch without falsely claiming external work stopped.
+
+#### Scenario: Approval mode skips a pause
+
+- **WHEN** a chat is set to Approve for me and the agent renames a selected file, or it is set to Full access and the agent runs a selected shell command
+- **THEN** that action proceeds without a review card
+- **AND** a typed question still waits, a tool that was not selected is still refused, and a memory proposal is not saved.
 
 #### Scenario: Revoked or mismatched grant
 

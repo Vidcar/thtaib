@@ -2,7 +2,9 @@
 
 Updated 2026-09-22. The consolidated contract is on main. Current specs are `openspec/specs/`. Active changes are `rewrite-loaded-boundaries` and `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
 
-Dave then asked for two app fixes. A second chat or agent run may start in a folder or workspace another run is already using. The person chooses which run writes. Lab case capture and application backup still refuse to copy while a run is live. Restarting the backend marks a live run that cannot resume as failed or orphaned.
+Dave then asked for app fixes. A second chat or agent run may start in a folder or workspace another run is already using. The person chooses which run writes. Lab case capture and application backup still refuse to copy while a run is live. Restarting the backend marks a live run that cannot resume as failed or orphaned.
+
+The chat shield and each saved agent choose Ask, Approve for me, or Full access. Ask keeps today's pauses. Approve for me lets an already selected rename or delete proceed. Full access also lets an already selected shell command or external tool proceed. A question still waits, a tool that is off stays off, and memory is not saved by itself. Detailed activity is the button beside the model name. The review card remains when a pause still happens.
 
 The live file-write display is on `codex/chat-tool-stream-display` at `9c9ee9b`, pushed and not merged. It shows the file name and a short tail while a tool argument is still streaming. It does not fully remove the lag. The open-box scroll follow was rebuilt and not measured again. The open reasoning panel can still lag, and that was not changed. Some project chat sends still fail with `read_attachment` missing from the enabled catalogue. That is separate from the folder lock. Do not delete Dave's ScratchArea chats.
 

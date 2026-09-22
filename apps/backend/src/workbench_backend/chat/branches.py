@@ -149,6 +149,7 @@ class ChatBranches:
                                 content_blocks=run.content_blocks,
                                 output_schema=run.output_schema,
                                 presented_tools=[],
+                                approval_mode=branch.approval_mode,
                                 system_prompt=run.system_prompt,
                                 workspace_id=branch.workspace_id,
                                 project_path=branch.project_path,

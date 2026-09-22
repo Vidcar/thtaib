@@ -81,6 +81,16 @@
           "default": null,
           "title": "Agent Setup Version Id"
         },
+        "approval_mode": {
+          "default": "ask",
+          "enum": [
+            "ask",
+            "approve_for_me",
+            "full_access"
+          ],
+          "title": "Approval Mode",
+          "type": "string"
+        },
         "budgets": {
           "anyOf": [
             {

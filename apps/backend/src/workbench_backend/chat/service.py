@@ -173,6 +173,7 @@ class ChatService:
             setup_overrides=overrides,
             setup_cleared_fields=cleared_fields,
             presented_tools=selection.configuration.presented_tools,
+            approval_mode=selection.configuration.approval_mode or "ask",
             connection_ids=selection.configuration.connection_ids,
             per_request_overrides=selection.configuration.per_request_overrides,
             profile_id=profile_id,
@@ -628,6 +629,7 @@ class ChatService:
                         retained_asset_ids=list(request.attachment_ids),
                         output_schema=request.output_schema,
                         presented_tools=next_conversation.presented_tools,
+                        approval_mode=next_conversation.approval_mode,
                         system_prompt=(
                             CHAT_SYSTEM_PROMPT
                             if next_conversation.project_path
@@ -1137,12 +1139,15 @@ class ChatService:
                 values.setdefault(key, [])
             values.setdefault("profile_id", None)
             values.setdefault("presented_tools", None)
+            values.setdefault("approval_mode", None)
             values.setdefault("connection_ids", None)
             values.setdefault("per_request_overrides", None)
             request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
             fields_set = request.model_fields_set
         if "presented_tools" in fields_set:
             conversation.presented_tools = request.presented_tools
+        if "approval_mode" in fields_set and request.approval_mode:
+            conversation.approval_mode = request.approval_mode
         if "connection_ids" in fields_set:
             conversation.connection_ids = request.connection_ids
         if "per_request_overrides" in fields_set:
@@ -1226,6 +1231,7 @@ class ChatService:
             "project_path": clone.project_path,
             "workspace_id": clone.workspace_id,
             "presented_tools": clone.presented_tools,
+            "approval_mode": clone.approval_mode,
             "attachment_ids": list(request.attachment_ids),
             "memory_version_refs": list(clone.memory_version_refs),
             "skill_version_refs": list(clone.skill_version_refs),

@@ -582,6 +582,7 @@ class HarnessService:
                 content_blocks=request.content_blocks,
                 enabled_tools=enabled,
                 presented_tools=presented,
+                approval_mode=request.approval_mode,
                 framework_read_paths=framework_read_paths,
                 denied_tools=[],
                 system_prompt=setup.system_prompt,

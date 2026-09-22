@@ -126,6 +126,8 @@ def resolve_presented_tools(
                 filesystem_blocked.append(name)
         elif name in SHELL_TOOL_NAMES and not project_bound:
             shell_blocked.append(name)
+        elif name in ATTACHMENT_TOOL_NAMES and not attachment_available:
+            continue
         elif name in enabled:
             presented.append(name)
         else:

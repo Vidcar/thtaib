@@ -518,6 +518,7 @@ export interface ChatConversation {
   deploy_health?: ChatDeployHealth | null;
   filesystem_tools_available?: boolean;
   shell_tools_available?: boolean;
+  approval_mode?: "ask" | "approve_for_me" | "full_access";
   enabled_tools?: string[];
   created_at: string;
   updated_at: string;
