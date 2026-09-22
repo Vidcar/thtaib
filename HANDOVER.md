@@ -1,8 +1,8 @@
 # Current handover
 
-Updated 2026-09-22. Branch `codex/packet-03-shared-chat`; [draft PR118](https://github.com/Vidcar/thtaib/pull/118). Packet 03 is closed. Do not claim Packet 04 complete or the deferred journeys accepted.
+Updated 2026-09-22. Packet 03 is closed and [PR 118](https://github.com/Vidcar/thtaib/pull/118) is merged to main. Do not claim Packet 04 complete or the deferred journeys accepted.
 
-The familiar chat sidebar (OpenSpec change `familiar-chat-sidebar`) is separate from this handover. Destinations stay fully visible, and project folders plus “No project” share one list. It does not close Packet 03, Packet 04, or draft PR 118.
+The familiar chat sidebar (OpenSpec change `familiar-chat-sidebar`) is separate from this handover. Destinations stay fully visible, and project folders plus “No project” share one list. It does not close Packet 04.
 
 Implemented: repaired model downloads, permanent disk deletion, saved probes/projector selection and precision labels; compact Models/Settings/Library; retained images/documents and source viewers; canonical projects/versioned agents; scoped Knowledge/proposals/skill packages; async harness/saver; verified file changes/reversal; MCP/public web and Windows credential vault. Identified setup, permission, connection-readiness and project-send scope defects are fixed.
 
@@ -12,4 +12,4 @@ Qwen8080 PID34364 runs with vision; Gemma is installed/stopped. `.scratch/packet
 
 Final fixes: project-send409 and startup failure recovery pass the complete desktop build. A deterministic conversation-list/delete race regression reproduced startup404; the backend now skips deleted rows under its per-conversation lock. Focused73 Chat/lifecycle checks passed after this last change; the earlier612/156 full-suite results precede it. The rebuilt app opens normally with Qwen selected.
 
-Packet 03 checkpoint 3.2 is resolved. Dave accepted project-file attach/send and the full-screen review. Deferred, not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Those belong in a later change. Packet 04 tasks 2.8/2.9 remain open. Do not merge draft PR 118 while Packet 04 is open. Use existing OpenSpec evidence/PR, no new trackers/CI.
+Packet 03 checkpoint 3.2 is resolved. Dave accepted project-file attach/send and the full-screen review. Deferred, not accepted: document-source inspection, memory-proposal review, the skill journey, the half-screen review, and leftover fixture cleanup. Those belong in a later change. Packet 04 tasks 2.8/2.9 remain open. Dave asked for draft PR 118 to be merged with Packet 04 still open. Use existing OpenSpec evidence, no new trackers/CI.
