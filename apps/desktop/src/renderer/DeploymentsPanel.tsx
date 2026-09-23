@@ -133,7 +133,7 @@ export function DeploymentsPanel({
     const shouldHydrate = changedModel || (!dirty.current && changedProfile) || (selectedRunning && !dirty.current && hydrated.current.deployment !== selectedRunning.id);
     if (changedModel) { dirty.current = false; setMessage(""); setProfileId(""); }
     let cancelled = false;
-    setConfiguration(null); setMaximumContext(null); setLayers(null); setContextChoices([]); setModelInfo("Loading model details…");
+    if (changedModel) { setConfiguration(null); setMaximumContext(null); setLayers(null); setContextChoices([]); setModelInfo("Loading model details…"); }
     if (shouldHydrate) {
     changedStartup.current = new Set(Object.keys(selectedRunning?.startup_overrides ?? {}));
     hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "", profile: saved?.id ?? "", revision: saved?.revision ?? 0 };
