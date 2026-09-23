@@ -197,3 +197,29 @@ class ModelConfigurationTests(unittest.TestCase):
             self.assertEqual(resolved.effective_values["approval_mode"].inherited_value, "full_access")
             self.assertEqual(resolved.effective_values["per_request.temperature"].inherited_value, 0.3)
             self.assertEqual(resolved.effective_values["per_request.temperature"].requested_override, 0.7)
+
+    def test_explicit_other_model_overrides_inherited_selector_but_same_model_keeps_variant(self):
+        from workbench_backend.inference.schemas import ConnectedDeploymentRequest
+        first = self.deployment(ctx_size=8192)
+        profile = self.manager.list_model_configurations(self.bundle_id)[0]
+        same_model = self.deployment(ctx_size=16384)
+        connected = self.manager.attach_connected(ConnectedDeploymentRequest(
+            display_name="Explicit other", endpoint="http://127.0.0.1:9/v1"))
+        other_file = write_tiny_gguf(Path(self.tmp.name) / "other.gguf", name="Other model")
+        other_bundle = self.manager.import_local(LocalImportRequest(source_path=str(other_file))).bundle_id
+        with open_application_store(self.paths) as store:
+            store.put_setup_defaults(SetupConfiguration(model_configuration_id=profile.id))
+            service = SetupService(store, self.manager)
+            explicit = service.resolve(overrides=SetupConfiguration(deployment_id=connected.id))
+            self.assertEqual(explicit.configuration.deployment_id, connected.id)
+            self.assertIsNone(explicit.configuration.model_configuration_id)
+            self.assertIsNone(explicit.configuration.profile_id)
+            self.assertIsNone(explicit.configuration.bundle_id)
+            same = service.resolve(overrides=SetupConfiguration(deployment_id=same_model.id))
+            self.assertEqual(same.configuration.deployment_id, same_model.id)
+            self.assertEqual(same.configuration.model_configuration_id, profile.id)
+            self.assertTrue(same.effective_values["startup.ctx_size"].requires_reload)
+            other = service.resolve(overrides=SetupConfiguration(bundle_id=other_bundle))
+            self.assertEqual(other.configuration.bundle_id, other_bundle)
+            self.assertNotEqual(other.configuration.model_configuration_id, profile.id)
+            self.assertNotEqual(other.configuration.deployment_id, first.id)

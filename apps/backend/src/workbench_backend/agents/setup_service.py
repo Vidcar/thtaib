@@ -244,9 +244,11 @@ class SetupService:
         instructions = []
         protected = []
         for name, source_id, configuration in layers:
+            explicit = configuration.model_dump(exclude_none=True)
+            self._resolve_model_selector_layer(values, effective, explicit)
             if configuration.inherit_deployment_settings is False and configuration.profile_id is None:
                 values.pop("profile_id", None)
-            for key, value in configuration.model_dump(exclude_none=True).items():
+            for key, value in explicit.items():
                 prior = effective.get(key)
                 effective[key] = ResolvedSetting(value=value, source=name, source_id=source_id,
                     inherited=(name != layers[-1][0] or configuration is not overrides),
@@ -333,6 +335,39 @@ class SetupService:
                 if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                     raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
         return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions, effective_values=effective)
+
+    def _resolve_model_selector_layer(self, values: dict, effective: dict, explicit: dict) -> None:
+        """A higher model choice cannot be replaced by a lower incompatible one."""
+        if explicit.get("model_configuration_id"):
+            return
+        def clear(key: str) -> None:
+            values.pop(key, None)
+            effective.pop(key, None)
+
+        if explicit.get("profile_id"):
+            clear("model_configuration_id")
+            profile = self.manager.store.get_profile(explicit["profile_id"])
+            if profile is not None and profile.bundle_id:
+                # Legacy bound presets use the same canonical selection owner.
+                explicit["model_configuration_id"] = profile.id
+            return
+        if not explicit.get("deployment_id") and not explicit.get("bundle_id"):
+            return
+        deployment = self.manager.store.get_deployment(explicit["deployment_id"]) if explicit.get("deployment_id") else None
+        bundle_id = explicit.get("bundle_id") or (deployment.bundle_id if deployment else None)
+        lower_profile_id = values.get("model_configuration_id") or values.get("profile_id")
+        lower_profile = self.manager.store.get_profile(lower_profile_id) if lower_profile_id else None
+        if values.get("model_configuration_id") and (lower_profile is None or lower_profile.bundle_id != bundle_id):
+            clear("model_configuration_id")
+            clear("profile_id")
+        elif lower_profile is not None and lower_profile.bundle_id and lower_profile.bundle_id != bundle_id:
+            clear("profile_id")
+        if explicit.get("deployment_id") and values.get("bundle_id") != bundle_id:
+            clear("bundle_id")
+        if explicit.get("bundle_id") and not explicit.get("deployment_id"):
+            lower_deployment = self.manager.store.get_deployment(values.get("deployment_id") or "")
+            if lower_deployment is None or lower_deployment.bundle_id != bundle_id:
+                clear("deployment_id")
 
     @staticmethod
     def _project_view(project: ProjectRecord) -> ProjectRecord:
