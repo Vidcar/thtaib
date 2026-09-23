@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
+import { AppearancePreviewApp } from "./AppearancePreview";
 import "./styles.css";
 import "./chatPolish.css";
 import "./workbenchTheme.css";
@@ -15,6 +16,6 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    {window.location.hash === "#appearance-preview" ? <AppearancePreviewApp /> : <App />}
   </StrictMode>,
 );

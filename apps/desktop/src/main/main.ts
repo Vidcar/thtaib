@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow } from "electron";
+import { installAppearancePreview } from "./appearancePreviewWindow";
 import { installBackground, retainWindowInBackground } from "./background";
 import { configureWindowsNotificationIdentity, ensureWindowsNotificationShortcut, WINDOWS_LAUNCH_BACKEND_ARG } from "./windowsNotificationIdentity";
 
@@ -19,6 +20,7 @@ import {
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const ownsSingleInstance = app.requestSingleInstanceLock();
+let mainWindow: BrowserWindow | undefined;
 
 configureWindowsNotificationIdentity();
 
@@ -52,6 +54,10 @@ function createWindow(): void {
     },
   });
 
+  mainWindow = window;
+  window.on("closed", () => {
+    if (mainWindow === window) mainWindow = undefined;
+  });
   window.once("ready-to-show", () => {
     window.show();
   });
@@ -71,7 +77,7 @@ function createWindow(): void {
 }
 
 function focusExistingWindow(): void {
-  const [window] = BrowserWindow.getAllWindows();
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
   if (!window) {
     return;
   }
@@ -178,6 +184,22 @@ if (ownsSingleInstance) {
     });
     await ensureBackendFromShortcut();
     await installBackground(focusExistingWindow);
+    installAppearancePreview({
+      preloadPath: preloadScriptPath(),
+      appUrl: process.env.VITE_DEV_SERVER_URL || packagedAppDocumentUrl(path.join(currentDir, "../dist/index.html")),
+      mainWindow: () => mainWindow,
+      createWindow: options => new BrowserWindow(options),
+      load: window => {
+        const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+        if (devServerUrl) {
+          const url = new URL(devServerUrl);
+          url.hash = "appearance-preview";
+          void window.loadURL(url.toString());
+          return;
+        }
+        void window.loadFile(path.join(currentDir, "../dist/index.html"), { hash: "appearance-preview" });
+      },
+    });
     createWindow();
 
     app.on("activate", () => {

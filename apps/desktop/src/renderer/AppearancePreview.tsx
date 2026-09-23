@@ -1,16 +1,46 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { AppearanceToken } from "./appearanceValue";
+import { applyAppearancePreviewState, type AppearancePreviewState } from "./appearancePreviewSync";
 import { Icon } from "./Icon";
+import "./appearancePanel.css";
 
-export function AppearancePreview({ active }: { active: AppearanceToken | null }) {
+export function AppearancePreviewApp() {
+  const [active, setActive] = useState<{ id: string; name: string; detail: string } | null>(null);
+  useEffect(() => {
+    document.title = "Appearance preview";
+    document.documentElement.classList.add("appearance-preview-window");
+    const apply = (value: unknown) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const state = value as AppearancePreviewState;
+      if (!state.overrides || typeof state.overrides !== "object") return;
+      applyAppearancePreviewState(state);
+      setActive(state.activeId ? { id: state.activeId, name: state.activeName, detail: state.activeDetail } : null);
+    };
+    const stop = window.workbench?.onAppearancePreview?.(apply);
+    void window.workbench?.currentAppearancePreview?.().then(apply);
+    return () => {
+      stop?.();
+      document.documentElement.classList.remove("appearance-preview-window");
+    };
+  }, []);
+  return <AppearancePreview active={active} />;
+}
+
+export function AppearancePreview({ active }: { active: { id: string; name: string; detail: string } | null }) {
   const [guides, setGuides] = useState(true);
   const frameRef = useRef<HTMLDivElement>(null);
   const aimed = active?.id ?? "";
 
   useEffect(() => {
-    const marked = frameRef.current?.querySelector(".is-hit");
-    marked?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const frame = frameRef.current;
+    const marked = frame?.querySelector(".is-hit");
+    if (!frame || !marked) return;
+    const frameRect = frame.getBoundingClientRect();
+    const markRect = marked.getBoundingClientRect();
+    if (markRect.top < frameRect.top) frame.scrollTop -= frameRect.top - markRect.top;
+    else if (markRect.bottom > frameRect.bottom) frame.scrollTop += markRect.bottom - frameRect.bottom;
+    if (markRect.left < frameRect.left) frame.scrollLeft -= frameRect.left - markRect.left;
+    else if (markRect.right > frameRect.right) frame.scrollLeft += markRect.right - frameRect.right;
   }, [aimed]);
 
   return (
