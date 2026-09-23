@@ -226,6 +226,8 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [attentionAttempt, setAttentionAttempt] = useState(0);
+  const [attentionFailed, setAttentionFailed] = useState(false);
   const draftRevision = useRef(0);
   const ownerGeneration = useRef(0);
 
@@ -253,6 +255,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
     setRun(null);
     setPendingSubmit(null);
     setStarting(true);
+    setAttentionFailed(false);
     setMessage("");
     void Promise.all([
       api.agentRun(attentionRunId),
@@ -261,16 +264,16 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
       if (cancelled || ownerGeneration.current !== generation) return;
       setRun(currentRun);
       setThreadId(registered.thread_id);
+      onAttentionHandled?.(attentionRunId);
     }).catch((error: unknown) => {
-      if (!cancelled && ownerGeneration.current === generation) setMessage(errorMessage(error));
+      if (!cancelled && ownerGeneration.current === generation) { setMessage(errorMessage(error)); setAttentionFailed(true); }
     }).finally(() => {
       if (!cancelled && ownerGeneration.current === generation) {
         setStarting(false);
-        onAttentionHandled?.(attentionRunId);
       }
     });
     return () => { cancelled = true; };
-  }, [attentionRunId, onAttentionHandled]);
+  }, [attentionRunId, onAttentionHandled, attentionAttempt]);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
 
@@ -338,6 +341,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
           setRun(null);
           setPendingSubmit(null);
           setStarting(true);
+          setAttentionFailed(false);
           void (async () => {
             const registered = await api.registerAgentInteractionThread({ source_surface: "agent" });
             if (ownerGeneration.current !== generation) {
@@ -426,7 +430,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
       ) : (
         <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
-      {message ? <Notice tone="error">{message}</Notice> : null}
+      {message ? <Notice tone="error" action={attentionFailed && attentionRunId ? <button type="button" disabled={starting} onClick={() => setAttentionAttempt(current => current + 1)}>Retry</button> : undefined}>{message}</Notice> : null}
     </section>
   );
 }

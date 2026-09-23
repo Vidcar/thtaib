@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { createServer } from "vite";
+import { checkAgentSavedActions, checkKnowledgeSavedActions } from "./fixtures/knowledge-action-journeys.mjs";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.window = { setTimeout, clearTimeout, setInterval, clearInterval, workbench: { backendUrl: "http://127.0.0.1:8000" } };
@@ -15,6 +16,8 @@ try {
   await checkKnowledgeOwnershipAndReview(KnowledgePanel);
   await checkSkillResourceNavigation((await vite.ssrLoadModule("/src/renderer/SkillPackageControls.tsx")).SkillResources);
   await checkAgentDraftConflict((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
+  await checkAgentSavedActions((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
+  await checkKnowledgeSavedActions(KnowledgePanel);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
   await checkFileReversalConflict((await vite.ssrLoadModule("/src/renderer/FileChangesPanel.tsx")).FileChangesPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
