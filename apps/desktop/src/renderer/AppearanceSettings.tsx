@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { appearanceTokens } from "./appearanceCatalog";
+import { AppearancePreview } from "./AppearancePreview";
 import {
   appearanceActiveTheme,
   appearanceDirty,
@@ -25,6 +26,10 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
   const [group, setGroup] = useState<(typeof groups)[number]>("All");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [aimed, setAimed] = useState<AppearanceToken | null>(null);
+  const aim = useCallback((token: AppearanceToken) => {
+    setAimed(current => current?.id === token.id ? current : token);
+  }, []);
   const active = appearanceActiveTheme();
   const dirty = appearanceDirty();
   const visible = useMemo(() => {
@@ -52,6 +57,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
   }
 
   return (
+    <div className="appearance-layout">
     <div className="appearance-editor">
       <div className="appearance-bar">
         <p className="hint">{dirty ? "Unsaved changes" : "No unsaved changes"} · editing {active} colours</p>
@@ -59,7 +65,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
         <button type="button" className="primary-button" disabled={!dirty || saving} onClick={() => void onApply()}>Apply</button>
       </div>
       {message ? <p className="hint" role="status">{message}</p> : null}
-      <p className="appearance-note hint">Each row is one shared look, used everywhere it appears, including this page. Inset is the padding inside something. Space is the gap between things. Only the steps you can tell apart are listed. The window follows the draft. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value. A slider covers a wide range; the number beside it accepts any valid value. Viewport sizes, breakpoints, and one-off positions stay fixed.</p>
+      <p className="appearance-note hint">Each row is one shared look, used everywhere it appears, including this page. The preview is a sample window of that draft. Point at a control, or move it, and the parts it changes are marked. Inset is the padding inside something. Space is the gap between things. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value.</p>
       <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
       <div className="appearance-groups" role="group" aria-label="Appearance groups">
         {groups.map(item => (
@@ -67,15 +73,17 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
         ))}
       </div>
       <p className="hint" data-appearance-version={version}>{visible.length} shown</p>
-      {visible.map(token => <AppearanceRow key={token.id} token={token} value={currentAppearanceValue(token)} />)}
+      {visible.map(token => <AppearanceRow key={token.id} token={token} value={currentAppearanceValue(token)} onAim={aim} />)}
+    </div>
+    <AppearancePreview active={aimed} />
     </div>
   );
 }
 
-const AppearanceRow = memo(function AppearanceRow({ token, value }: { token: AppearanceToken; value: string }) {
+const AppearanceRow = memo(function AppearanceRow({ token, value, onAim }: { token: AppearanceToken; value: string; onAim: (token: AppearanceToken) => void }) {
   const shipped = shippedValue(token, token.theme === "split" ? appearanceActiveTheme() : "dark");
   return (
-    <div className="appearance-row">
+    <div className="appearance-row" onFocusCapture={() => onAim(token)} onPointerEnter={() => onAim(token)}>
       <div className="appearance-row-name">
         <strong>{token.name}</strong>
         <span className="hint">{token.group}. Shipped {shipped}. {token.detail}</span>

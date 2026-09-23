@@ -287,7 +287,7 @@ function themeSelect(renderer) {
 }
 
 function preferenceCheckboxes(renderer) {
-  return renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox");
+  return renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox" && node.props["data-appearance-guide"] == null);
 }
 
 function button(renderer, text) {
