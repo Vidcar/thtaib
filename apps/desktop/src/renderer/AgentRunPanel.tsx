@@ -167,7 +167,7 @@ function AgentRunStreamContent(props: {
 
       {displayRun ? (
         <div className="card">
-          <AgentMessageFeed messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
+          <AgentMessageFeed live={isAgentRunLive(displayRun.status)} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
           <RunProgress
             run={displayRun}
             title={displayRun.task}

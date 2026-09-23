@@ -53,32 +53,36 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 function tapEventIds(response: Response, onSeq: (seq: number) => void): Response {
-  const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let pending = "";
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
+  let eventId: number | null = null;
+  let hasData = false;
+  // Only a complete SSE frame can advance the resume cursor. A connection
+  // may end after its id line but before its token data has reached the SDK.
+  // pipeThrough also propagates cancellation to the original response body.
+  const stream = response.body!.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(value, controller) {
+      pending += decoder.decode(value, { stream: true });
+      let end: number;
+      while ((end = pending.search(/[\r\n]/)) >= 0) {
+        if (pending[end] === "\r" && end === pending.length - 1) break;
+        const line = pending.slice(0, end);
+        pending = pending.slice(end + (pending.slice(end, end + 2) === "\r\n" ? 2 : 1));
+        if (line === "") {
+          if (hasData && eventId !== null) onSeq(eventId);
+          eventId = null;
+          hasData = false;
+        } else if (line.startsWith("id:")) {
+          const raw = line.slice(3).trim();
+          const seq = Number(raw);
+          eventId = raw && Number.isSafeInteger(seq) && seq >= 0 ? seq : null;
+        } else if (line.startsWith("data:")) {
+          hasData = true;
+        }
       }
       controller.enqueue(value);
-      pending += decoder.decode(value, { stream: true });
-      const lines = pending.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.replace(/\r$/, "");
-        if (!trimmed.startsWith("id:")) {
-          continue;
-        }
-        const seq = Number(trimmed.slice(3).trim());
-        if (Number.isInteger(seq) && seq >= 0) {
-          onSeq(seq);
-        }
-      }
     },
-  });
+  }));
   return new Response(stream, {
     status: response.status,
     statusText: response.statusText,

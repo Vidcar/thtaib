@@ -10,7 +10,7 @@ import { CopyIconButton } from "./CopyIconButton";
 import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
-import { closeUnfinishedMarks, splitStreamingMarkdown, VIRTUAL_LINE_HEIGHT, visibleLineRange } from "./streamingMarkdown";
+import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdown";
 
 export let markdownParseCount = 0;
 export let finishedBubbleRenders = 0;
@@ -200,9 +200,18 @@ function decodeJsonString(source: string): string {
     }
     const next = source[index + 1];
     if (next === undefined) break;
+    if (next === "u") {
+      const digits = source.slice(index + 2, index + 6);
+      if (!/^[0-9a-f]{4}$/i.test(digits)) break;
+      out += String.fromCharCode(Number.parseInt(digits, 16));
+      index += 5;
+      continue;
+    }
     if (next === "n") out += "\n";
     else if (next === "t") out += "\t";
     else if (next === "r") out += "\r";
+    else if (next === "b") out += "\b";
+    else if (next === "f") out += "\f";
     else out += next;
     index += 1;
   }
@@ -252,6 +261,15 @@ function readableToolText(args: unknown): string {
     }
   }
   return stringifyValue(args);
+}
+
+function writtenFileContent(args: unknown): string | null {
+  if (typeof args === "string") return jsonStringField(args, "content");
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    const content = (args as Record<string, unknown>).content;
+    return typeof content === "string" ? content : null;
+  }
+  return null;
 }
 
 function writtenAmount(count: number): string {
@@ -334,7 +352,7 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
             </a>
           );
         },
-        code({ children, className, ...rest }) {
+        code({ children, className, node: _node, ...rest }) {
           const match = /language-([\w-]+)/.exec(className ?? "");
           return (
             <code className={match ? `language-${match[1]}` : className} {...rest}>
@@ -368,62 +386,7 @@ function StreamingMarkdown({ text }: { text: string }) {
   );
 }
 
-const REASONING_ROW = 48;
-
-function VirtualMarkdown({ text }: { text: string }) {
-  const parts = useMemo(() => splitStreamingMarkdown(text), [text]);
-  const rows = useMemo(() => {
-    const next = [...parts.blocks];
-    if (parts.tail.trim()) {
-      next.push(closeUnfinishedMarks(parts.tail));
-    }
-    return next;
-  }, [parts]);
-  const ref = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  const [scrollTop, setScrollTop] = useState(Number.MAX_SAFE_INTEGER);
-  const [viewport, setViewport] = useState(420);
-  const range = visibleLineRange(rows.length, scrollTop, viewport, REASONING_ROW, 2);
-  const visible = rows.slice(range.start, range.end);
-
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element || !stick.current || selectionInside(element)) {
-      return;
-    }
-    element.scrollTop = element.scrollHeight;
-    setScrollTop(element.scrollTop);
-    if (element.clientHeight > 0) {
-      setViewport(element.clientHeight);
-    }
-  }, [text]);
-
-  if (rows.length <= 12) {
-    return <StreamingMarkdown text={text} />;
-  }
-  return (
-    <div
-      ref={ref}
-      className="virtual-markdown"
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        const nextTop = element.scrollTop;
-        const nextView = element.clientHeight || 420;
-        stick.current = element.scrollHeight - nextTop - nextView < 96;
-        setScrollTop(nextTop);
-        setViewport(nextView);
-      }}
-    >
-      <div style={{ height: range.start * REASONING_ROW }} />
-      {visible.map((row, index) => (
-        <MarkdownMessage key={`${range.start + index}:${row.length}:${row.slice(0, 24)}`} text={row} />
-      ))}
-      <div style={{ height: Math.max(0, (rows.length - range.end) * REASONING_ROW) }} />
-    </div>
-  );
-}
-
-function useStickToBottom(signature: string) {
+function useStickToBottom(signature: string, hasContent: boolean, open: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   useLayoutEffect(() => {
@@ -436,14 +399,14 @@ function useStickToBottom(signature: string) {
     };
     element.addEventListener("scroll", onScroll, { passive: true });
     return () => element.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasContent]);
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element || !stick.current || selectionInside(element)) {
       return;
     }
     element.scrollTop = element.scrollHeight;
-  }, [signature]);
+  }, [signature, open]);
   return ref;
 }
 
@@ -452,45 +415,11 @@ function selectionInside(element: HTMLElement): boolean {
   return Boolean(selection && !selection.isCollapsed && element.contains(selection.anchorNode));
 }
 
-export function VirtualPlainText({ text }: { text: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  const lines = useMemo(() => text.split("\n"), [text]);
-  const [scrollTop, setScrollTop] = useState(Number.MAX_SAFE_INTEGER);
-  const [viewport, setViewport] = useState(400);
-  const range = visibleLineRange(lines.length, scrollTop, viewport);
-  const visible = lines.slice(range.start, range.end);
-  const top = range.start * VIRTUAL_LINE_HEIGHT;
-  const bottom = Math.max(0, (lines.length - range.end) * VIRTUAL_LINE_HEIGHT);
-
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element || !stick.current || selectionInside(element)) {
-      return;
-    }
-    element.scrollTop = element.scrollHeight;
-    setScrollTop(element.scrollTop);
-    if (element.clientHeight > 0) {
-      setViewport(element.clientHeight);
-    }
-  }, [text]);
-
+function ToolInputText({ text }: { text: string }) {
+  const ref = useStickToBottom(text, true, true);
   return (
-    <div
-      ref={ref}
-      className="virtual-text"
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        const nextTop = element.scrollTop;
-        const nextView = element.clientHeight || 400;
-        stick.current = element.scrollHeight - nextTop - nextView < 96;
-        setScrollTop(nextTop);
-        setViewport(nextView);
-      }}
-    >
-      <div style={{ height: top }} />
-      <pre className="code-block live-tool-code"><code>{visible.join("\n")}</code></pre>
-      <div style={{ height: bottom }} />
+    <div ref={ref} className="tool-input-text">
+      <pre className="code-block live-tool-code"><code>{text}</code></pre>
     </div>
   );
 }
@@ -530,7 +459,8 @@ function ReasoningDetails({
   openStates: ReadonlyMap<string, boolean>;
   reasoning: string[];
 }) {
-  const followRef = useStickToBottom(reasoning.join("\n").length.toString());
+  const open = openStates.get(`${messageKey}:reasoning`) ?? defaultOpen;
+  const followRef = useStickToBottom(reasoning.join("\n"), reasoning.length > 0, open);
   if (reasoning.length === 0) {
     return null;
   }
@@ -544,7 +474,7 @@ function ReasoningDetails({
       summary={<><Icon name="activity" size={14} /><span className="activity-name">Reasoning</span></>}
     >
       <div className="reasoning-content" ref={followRef}>{reasoning.map((item, index) => (
-        <VirtualMarkdown key={index} text={item} />
+        <StreamingMarkdown key={index} text={item} />
       ))}</div>
     </DetailSection>
   );
@@ -617,12 +547,14 @@ function todoState(toolBlocks: ToolBlock[]): { items: TodoItem[]; failure: strin
 
 function ToolBlockList({
   defaultOpen,
+  live,
   messageKey,
   onToggle,
   openStates,
   toolBlocks,
 }: {
   defaultOpen: boolean;
+  live?: boolean;
   messageKey: string;
   onToggle: (id: string, open: boolean) => void;
   openStates: ReadonlyMap<string, boolean>;
@@ -639,14 +571,20 @@ function ToolBlockList({
     {rows.map((tool, index) => {
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
-    const streaming = toolIsStreaming(tool);
-    const writing = streaming ? readableToolText(tool.args) : "";
-    const finished = !streaming;
+    const incomplete = toolIsStreaming(tool);
+    const stopped = incomplete && (live === false || tool.status === "unfinished");
+    const streaming = incomplete && !stopped;
+    const writing = incomplete ? readableToolText(tool.args) : "";
+    const fileContent = tool.name === "write_file" ? writtenFileContent(tool.args) : null;
+    const readableInput = incomplete ? writing : fileContent;
+    const finished = !incomplete && !error;
     const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
-    const label = activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
-    const counts = !error && finished ? lineCounts(change) : "";
     const path = toolFilePath(tool.args);
-    const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || Boolean(path));
+    const label = stopped
+      ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
+      : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
+    const counts = !error && finished ? lineCounts(change) : "";
+    const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || (Boolean(path) && !stopped));
     const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
@@ -667,11 +605,15 @@ function ToolBlockList({
           {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
         </>}
       >
-        {streaming && !open ? null : <div className="tool-call-details">
+        {incomplete && !open ? null : <div className="tool-call-details">
           <p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>
-          {streaming ? <section aria-label="Tool input"><span className="tool-detail-label">Writing</span><div className="code-block-wrap"><CopyIconButton text={writing} label="Copy tool input" /><VirtualPlainText text={writing} /></div></section> : null}
-          {!streaming && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
-          {!streaming && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
+          {readableInput !== null ? <section aria-label="Tool input">
+            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Writing" : "File content"}</span>
+            <div className="code-block-wrap"><CopyIconButton text={readableInput} label="Copy tool input" /><ToolInputText text={readableInput} /></div>
+            {!incomplete ? <details className="tool-raw-arguments"><summary>Raw tool arguments</summary><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></details> : null}
+          </section> : null}
+          {!incomplete && fileContent === null && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
+          {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
         </div>}
       </DetailSection>
@@ -685,7 +627,11 @@ function ToolBlockList({
 function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>, toolCalls: AssembledToolCall[]) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const shouldFollow = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const lastPosition = useRef({ top: 0, height: 0 });
   const hasContent = messages.length > 0 || toolCalls.length > 0;
+  const lastHumanId = [...messages].reverse().find(message => messageType(message) === "human")?.id;
+  const previousHumanId = useRef(lastHumanId);
   const signature = useMemo(
     () =>
       messages
@@ -693,43 +639,72 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
           const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
           return `${message.id ?? ""}:${content.length}:${incompleteMessageIds.has(message.id ?? "") ? "partial" : "done"}`;
         })
-        .join("|") + toolCalls.map(call => `${call.callId}:${call.status}:${stringifyValue(call.output).length}:${call.error ?? ""}`).join("|"),
+        .join("|") + toolCalls.map(call => `${call.callId}:${call.status}:${stringifyValue(call.input ?? call.args).length}:${stringifyValue(call.output).length}:${call.error ?? ""}`).join("|"),
     [incompleteMessageIds, messages, toolCalls],
   );
 
-  useLayoutEffect(() => {
+  const transcriptElement = useCallback(() => {
     const transcript = rootRef.current?.closest(".transcript");
     const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
-    if (!elementCtor || !(transcript instanceof elementCtor)) {
-      return undefined;
-    }
-    const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
-    const onScroll = () => {
-      shouldFollow.current = nearBottom();
-    };
-    transcript.addEventListener("scroll", onScroll, { passive: true });
-    shouldFollow.current = nearBottom();
-    return () => transcript.removeEventListener("scroll", onScroll);
-  }, [hasContent]);
+    return elementCtor && transcript instanceof elementCtor ? transcript : null;
+  }, []);
 
-  useLayoutEffect(() => {
-    const transcript = rootRef.current?.closest(".transcript");
-    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
-    if (!elementCtor || !(transcript instanceof elementCtor) || !shouldFollow.current) {
-      return;
-    }
-    const selection = typeof document === "undefined" ? null : document.getSelection?.();
-    if (selection && !selection.isCollapsed && transcript.contains(selection.anchorNode)) {
-      return;
-    }
+  const follow = useCallback((explicit = false) => {
+    const transcript = transcriptElement();
+    if (!transcript || !shouldFollow.current || (!explicit && selectionInside(transcript))) return;
     if (typeof transcript.scrollTo === "function") {
       transcript.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
     } else {
       transcript.scrollTop = transcript.scrollHeight;
     }
-  }, [signature]);
+    lastPosition.current = { top: transcript.scrollTop, height: transcript.scrollHeight };
+  }, [transcriptElement]);
 
-  return rootRef;
+  const jumpToLatest = useCallback(() => {
+    shouldFollow.current = true;
+    setShowJump(false);
+    follow(true);
+  }, [follow]);
+
+  useLayoutEffect(() => {
+    const transcript = transcriptElement();
+    if (!transcript) return;
+    const nearBottom = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 96;
+    const onScroll = () => {
+      if (nearBottom()) {
+        shouldFollow.current = true;
+      } else if (transcript.scrollTop < lastPosition.current.top && transcript.scrollHeight >= lastPosition.current.height) {
+        // Content growth or browser scroll anchoring does not express intent
+        // to stop following. An upward move through unchanged content does.
+        shouldFollow.current = false;
+      }
+      lastPosition.current = { top: transcript.scrollTop, height: transcript.scrollHeight };
+      setShowJump(!shouldFollow.current);
+    };
+    transcript.addEventListener("scroll", onScroll, { passive: true });
+    // Images, disclosures, wrapping and content-visibility can change layout
+    // without delivering another token. Observe those changes in the same
+    // scroll owner rather than adding a second competing smooth scroll.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => follow());
+    observer?.observe(transcript);
+    if (rootRef.current) observer?.observe(rootRef.current);
+    follow();
+    return () => {
+      transcript.removeEventListener("scroll", onScroll);
+      observer?.disconnect();
+    };
+  }, [follow, hasContent, transcriptElement]);
+
+  useLayoutEffect(() => {
+    if (lastHumanId && lastHumanId !== previousHumanId.current) {
+      shouldFollow.current = true;
+      setShowJump(false);
+    }
+    previousHumanId.current = lastHumanId;
+    follow();
+  }, [follow, lastHumanId, signature]);
+
+  return { rootRef, showJump, jumpToLatest };
 }
 
 const EMPTY_INCOMPLETE: ReadonlySet<string> = new Set();
@@ -738,15 +713,32 @@ function useFrameSample<T>(value: T, enabled: boolean): T {
   const [shown, setShown] = useState(value);
   const latest = useRef(value);
   latest.current = value;
+  const pendingFrame = useRef<number | null>(null);
+  const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frame = typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+  const cancel = useCallback(() => {
+    if (pendingFrame.current !== null) window.cancelAnimationFrame(pendingFrame.current);
+    if (pendingTimer.current !== null) clearTimeout(pendingTimer.current);
+    pendingFrame.current = null;
+    pendingTimer.current = null;
+  }, []);
   useEffect(() => {
     if (!enabled || !frame) {
+      cancel();
       setShown(latest.current);
-      return undefined;
+      return;
     }
-    const handle = window.requestAnimationFrame(() => setShown(latest.current));
-    return () => window.cancelAnimationFrame(handle);
-  }, [enabled, frame, value]);
+    if (pendingFrame.current !== null) return;
+    const publish = () => {
+      cancel();
+      setShown(latest.current);
+    };
+    pendingFrame.current = window.requestAnimationFrame(publish);
+    // Hidden windows pause animation frames. Keep the retained view current
+    // there too, without resetting the deadline on each incoming token.
+    pendingTimer.current = setTimeout(publish, 100);
+  }, [cancel, enabled, frame, value]);
+  useEffect(() => cancel, [cancel]);
   if (!enabled || !frame) {
     return value;
   }
@@ -756,6 +748,7 @@ function useFrameSample<T>(value: T, enabled: boolean): T {
 const MessageBubble = memo(function MessageBubble(props: {
   answer: string;
   attachments: MessageParts["attachments"];
+  continuation: boolean;
   detailedStreams: boolean;
   incomplete: boolean;
   message: BaseMessage;
@@ -767,17 +760,19 @@ const MessageBubble = memo(function MessageBubble(props: {
   renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
   toolsKey: string;
+  toolsLive?: boolean;
   type: string;
+  writing: boolean;
 }) {
   if (!props.incomplete) {
     finishedBubbleRenders += 1;
   }
   const settled = !props.incomplete;
   return (
-    <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}`}>
+    <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
-        {props.incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
+        {props.incomplete ? <span className="message-state" aria-label={props.writing ? "Response in progress" : "Incomplete response"}>{props.writing ? "Writing" : "Partial"}</span> : null}
       </header>
       <div className="message-body">
         <ReasoningDetails
@@ -789,7 +784,7 @@ const MessageBubble = memo(function MessageBubble(props: {
         />
         {props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
         <AttachmentList attachments={props.attachments} />
-        <ToolBlockList defaultOpen={props.detailedStreams} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
+        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
       </div>
       {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
       {props.renderMessageFooter?.(props.message)}
@@ -800,7 +795,9 @@ const MessageBubble = memo(function MessageBubble(props: {
     return false;
   }
   return previous.message === next.message
+    && previous.continuation === next.continuation
     && previous.toolsKey === next.toolsKey
+    && previous.toolsLive === next.toolsLive
     && previous.detailedStreams === next.detailedStreams
     && previous.openStates === next.openStates
     && previous.onToggle === next.onToggle
@@ -823,12 +820,23 @@ export function AgentMessageFeed(props: {
 }) {
   const { toolCalls = [], fallback, detailedStreams = false } = props;
   const incompleteMessageIds = props.incompleteMessageIds ?? EMPTY_INCOMPLETE;
-  const streaming = Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
+  const endedToolIds = useRef(new Set<string>());
+  if (props.live === false) {
+    for (const call of toolCalls) {
+      if (toolIsStreaming(mergeTool({ name: call.name }, undefined, call))) {
+        endedToolIds.current.add(call.callId || call.id);
+      }
+    }
+  }
+  const retainStoppedTool = (tool: ToolBlock): ToolBlock => tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool)
+    ? { ...tool, status: "unfinished" }
+    : tool;
+  const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
     const status = call.status as string;
     return status === "preparing" || status === "running";
-  });
+  }));
   const messages = useFrameSample(props.messages, streaming);
-  const rootRef = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
+  const { rootRef, showJump, jumpToLatest } = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
   const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
   const handleDetailToggle = useCallback((id: string, open: boolean) => {
     setOpenStates((current) => {
@@ -843,11 +851,20 @@ export function AgentMessageFeed(props: {
   if (messages.length === 0 && toolCalls.length === 0) {
     return fallback;
   }
-  const lastAiId = [...messages].reverse().find((message) => messageType(message) === "ai")?.id;
+  let lastAiId: string | undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const type = messageType(messages[index]);
+    if (type === "human") break;
+    if (type === "ai") { lastAiId = messages[index].id; break; }
+  }
+  let previousType = "";
+  const latestHumanIndex = messages.map(messageType).lastIndexOf("human");
   const prepared = messages.map((message, index) => {
     const type = messageType(message);
+    const continuation = type === "ai" && previousType === "ai";
+    if (type !== "tool") previousType = type;
     const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
-    return { message, type, key: message.id ?? `${type}-${index}`, parts: parseContent(submittedText ?? message.contentBlocks ?? message.content) };
+    return { message, type, continuation, live: props.live === undefined ? undefined : props.live && index > latestHumanIndex, key: message.id ?? `${type}-${index}`, parts: parseContent(submittedText ?? message.contentBlocks ?? message.content) };
   });
   const resultById = new Map<string, ToolBlock>();
   const callIds = new Set<string>();
@@ -860,23 +877,24 @@ export function AgentMessageFeed(props: {
   const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
   return (
     <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
-      {prepared.map(({ message, type, key: messageKey, parts }) => {
+      {prepared.map(({ message, type, continuation, live, key: messageKey, parts }) => {
         const incomplete = Boolean((message.id && incompleteMessageIds.has(message.id)) || (props.live && message.id && message.id === lastAiId));
         const result = toolResultMessage(message);
         if (result) {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)]} /></div>;
         }
-        const messageTools = parts.toolBlocks.map(block => mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined));
+        const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined)));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
-        const toolsKey = messageTools.map((tool) => `${tool.id ?? ""}:${tool.status ?? ""}:${tool.error ?? ""}:${typeof tool.result === "string" ? tool.result.length : 0}`).join("|");
+        const toolsKey = JSON.stringify(messageTools);
         return (
           <MessageBubble
             key={messageKey}
             answer={parts.answer}
             attachments={parts.attachments}
+            continuation={continuation}
             detailedStreams={detailedStreams}
             incomplete={incomplete}
             message={message}
@@ -888,11 +906,14 @@ export function AgentMessageFeed(props: {
             renderAnswerActions={props.renderAnswerActions}
             renderMessageFooter={props.renderMessageFooter}
             toolsKey={toolsKey}
+            toolsLive={live}
             type={type}
+            writing={Boolean(props.live && message.id === lastAiId)}
           />
         );
       })}
-      <ToolBlockList defaultOpen={detailedStreams} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call))} />
+      <ToolBlockList defaultOpen={detailedStreams} live={props.live} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} />
+      {showJump ? <button type="button" className="chat-jump-latest" aria-label="Jump to latest message" onClick={jumpToLatest}>↓ Latest</button> : null}
     </div></SourceScope.Provider>
   );
 }

@@ -1328,8 +1328,10 @@ async function testPendingSubmitDoesNotReusePreviousCancelledStatus(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "pending follow-up command held");
-    assert.match(allText(renderer), /Working(?:(?!This can continue).)*Loading model/s, "pending submit should show loading status");
-    assert.doesNotMatch(allText(renderer), /Working(?:(?!This can continue).)*Cancelled/s, "pending submit must not reuse previous terminal run status");
+    const waiting = renderer.root.findByProps({ className: "chat-waiting" });
+    assert.equal(waiting.props.role, "status", "waiting is announced once in the answer area");
+    assert.match(textOf(waiting), /Preparing reply/, "pending submit shows its own preparation status");
+    assert.doesNotMatch(textOf(waiting), /Cancelled|Stopped/, "pending submit must not reuse previous terminal run status");
   } finally {
     heldCommand.resolve();
     await closeHarness(renderer, harness);
@@ -2489,6 +2491,89 @@ async function testProjectionOwnershipLeakReproduction(vite) {
   }
 }
 
+async function testAccessModeBelongsToSelectedConversation(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  harness.state.conversations.conv_a.approval_mode = "ask";
+  harness.state.conversations.conv_a.setup_overrides = { approval_mode: "ask" };
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "history loaded");
+    await act(async () => approvalModeButton(renderer, "Full access").props.onClick());
+    assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true);
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "selected chat ready");
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "Ask chat selected");
+    assert.equal(approvalModeButton(renderer, "Ask").props["aria-checked"], true,
+      "opening an Ask chat cannot retain another chat's Full access choice");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testReopenedAccessUsesCurrentInheritanceWithSerializedNullOverrides(vite) {
+  for (const currentDefault of ["ask", null]) {
+    for (const override of [null, "full_access"]) {
+      const harness = makeHarness({ aRun: null, threadARun: null,
+        resolveSetup: payload => ({ configuration: {
+          deployment_id: "dep_1", approval_mode: payload.overrides?.approval_mode ?? currentDefault,
+        }, instruction_layers: [] }),
+      });
+      Object.assign(harness.state.conversations.conv_a, {
+        agent_setup_version_id: "saved-agent-version", approval_mode: "full_access",
+        // The real API serializes optional SetupConfiguration fields as null.
+        setup_overrides: { deployment_id: null, approval_mode: override, presented_tools: null },
+      });
+      const renderer = await renderChat(vite, harness);
+      try {
+        await waitFor(() => button(renderer, "Conversation A"), "history loaded");
+        await act(async () => button(renderer, "Conversation A").props.onClick());
+        await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "selected chat ready");
+        await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "inherited chat selected");
+        const expectedLabel = override ? "Full access" : "Ask";
+        assert.equal(approvalModeButton(renderer, expectedLabel).props["aria-checked"], true,
+          `serialized null must inherit current ${currentDefault ?? "default Ask"}; explicit Full remains selected`);
+        await act(async () => textarea(renderer).props.onChange({ target: { value: "Use this access choice" } }));
+        await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+        await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "inherited mode submission");
+        const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+        assert.equal(Object.hasOwn(submitted, "approval_mode"), override !== null,
+          "opening the chat must not convert inherited access into an explicit override");
+        if (override) assert.equal(submitted.approval_mode, override);
+      } finally { await closeHarness(renderer, harness); }
+    }
+  }
+}
+
+async function testDraftAgentChangeDoesNotRestorePreviousAccess(vite) {
+  for (const draftOverride of [null, "full_access"]) {
+    const harness = makeHarness({ aRun: null, threadARun: null,
+      resolveSetup: payload => ({ configuration: {
+        deployment_id: "dep_1", approval_mode: payload.overrides?.approval_mode ?? "ask",
+      }, instruction_layers: [] }),
+    });
+    Object.assign(harness.state.conversations.conv_a, {
+      agent_setup_version_id: "previous-agent", approval_mode: "full_access",
+      setup_overrides: { approval_mode: "full_access" },
+      draft: { content: "Continue with the newly selected agent", revision: 1, updated_at: now(),
+        attachment_ids: [], intended_config: { agent_setup_version_id: "new-agent",
+          ...(draftOverride ? { approval_mode: draftOverride } : {}) } },
+    });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "history loaded");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "draft agent ready");
+      await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "draft agent selected");
+      assert.equal(approvalModeButton(renderer, draftOverride ? "Full access" : "Ask").props["aria-checked"], true,
+        "reopening a changed-agent draft must preserve its chosen access, not the previous agent's override");
+      await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+      await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "draft agent submitted");
+      const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+      assert.equal(submitted.agent_setup_version_id, "new-agent");
+      assert.equal(Object.hasOwn(submitted, "approval_mode"), draftOverride !== null);
+      if (draftOverride) assert.equal(submitted.approval_mode, draftOverride);
+    } finally { await closeHarness(renderer, harness); }
+  }
+}
+
 async function testAgentSetupInheritanceAndFutureTurn(vite) {
   const setups = ["one", "two"].map(id => ({ id, name: `Agent ${id}`, current_version_id: `${id}-version`, missing_dependencies: [] }));
   const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: false, agentSetups: setups,
@@ -2552,6 +2637,9 @@ try {
     console.log("Projection ownership leak reproduction exposed the broken state.");
   } else {
     const cases = [
+    ["reopened draft agent access", testDraftAgentChangeDoesNotRestorePreviousAccess],
+    ["reopened access inherits serialized null", testReopenedAccessUsesCurrentInheritanceWithSerializedNullOverrides],
+    ["access belongs to selected conversation", testAccessModeBelongsToSelectedConversation],
     ["startup refresh failure remains usable", testStartupRefreshFailureRemainsUsable],
     ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
     ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],

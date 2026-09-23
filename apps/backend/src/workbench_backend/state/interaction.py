@@ -137,10 +137,14 @@ class InteractionStoreMixin:
 
         with self._lock:
             row = self._conn.execute(
-                "SELECT run_id FROM interaction_threads WHERE id = ?",
+                "SELECT run_id, json_extract(snapshot, '$.workbench.run.status') AS projected_status FROM interaction_threads WHERE id = ?",
                 (thread_id,),
             ).fetchone()
             if row is None:
+                return 0
+            # The run commit precedes the terminal interaction snapshot. Until
+            # that snapshot is published, token rows may be its only answer.
+            if row["projected_status"] in _LIVE_RUN_STATUS:
                 return 0
             if row["run_id"]:
                 status = self._conn.execute(

@@ -55,6 +55,7 @@ from workbench_backend.agents.retrieval import (
     resolve_embedding_deployment,
 )
 from workbench_backend.agents.host_shell import (
+    approval_mode_instructions,
     filesystem_permissions_for_run,
     interrupt_on_for_run,
     pending_interrupt_from_raw,
@@ -476,6 +477,7 @@ class HarnessService:
                 selected_agent_setup_version_id=selection.agent_setup_version_id,
                 selected_connection_ids=request.connection_ids,
             )
+            setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode)))
             _, structured_output = response_format_for_run(
                 output_schema=request.output_schema,
                 deployment=deployment,

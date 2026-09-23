@@ -66,22 +66,24 @@ def note_catalogue_served(application: FastAPI) -> None:
 
 
 def _finish_startup(application: FastAPI) -> None:
-    """Catch up finished chats after the first lists, then drop their token rows."""
+    """Resume accepted queue work; defer token maintenance until lists are read."""
 
     served = application.state.catalogue_served
     stop = application.state.startup_stop
+    if not stop.is_set():
+        try:
+            with application.state.maintenance_gate.mutation():
+                application.state.chat.dispatch_idle_queued()
+        except Exception:
+            log.exception("Saved chat dispatch failed; pending work remains durable")
     while not served.is_set() and not stop.is_set():
         served.wait(timeout=0.2)
     if stop.is_set():
         return
     try:
-        application.state.chat.reconcile_saved_queue_on_startup()
-    except Exception:
-        log.exception("Saved chat catch-up failed; the catalogue stays readable")
-    try:
         if application.state.app_store.interaction_event_count() < 500:
             return
-        removed = application.state.app_store.discard_finished_token_logs()
+        removed = application.state.interaction.discard_finished_token_logs()
         if removed:
             application.state.app_store.reclaim_unused_space()
     except Exception:
@@ -92,6 +94,9 @@ def _finish_startup(application: FastAPI) -> None:
 async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     application.state.catalogue_served = threading.Event()
     application.state.startup_stop = threading.Event()
+    # Recovery must precede admission and must not depend on opening a sidebar.
+    # This reconciles durable identities only; execution starts on the worker.
+    application.state.chat.reconcile_saved_queue_on_startup(pending_only=True)
     application.state.chat_coordinator = ChatCoordinator(application)
     finish = threading.Thread(target=_finish_startup, args=(application,), name="workbench-startup-finish", daemon=True)
     finish.start()
@@ -99,6 +104,9 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     yield
     application.state.startup_stop.set()
     application.state.catalogue_served.set()
+    finish.join(timeout=20)
+    if finish.is_alive():
+        raise RuntimeError("Chat startup recovery is still using the application store")
     application.state.chat_coordinator.close()
     harness = getattr(application.state, "harness", None)
     if harness is not None:

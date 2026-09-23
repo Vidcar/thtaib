@@ -10,7 +10,7 @@ Chat falls behind the model while a reply is still being written. Each token red
 - Finished text is left alone. Only the open tail of a streaming answer or reasoning block is redrawn.
 - A speed update updates the readout only. It does not rebuild the transcript, move the scroll position, or wait on a replay of the tokens so far.
 - An expanded tool or reasoning body shows the full text. Scrolling reaches every line. The live view no longer cuts the text down to the latest 4,000 characters.
-- Opening a chat, reconnecting, and approvals stay as they are. Copy, Regenerate, and Branch still wait until the answer is finished.
+- Opening a chat and reconnecting preserve one coherent text/status/cursor observation, including when completion compacts the token log. An incomplete network frame never advances the resume cursor. Copy, Regenerate, and Branch still wait until the answer is finished.
 
 ## Capabilities
 

@@ -72,9 +72,9 @@ class InteractionService:
     def display_values(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         result = copy.deepcopy(snapshot)
         workbench = result.get("workbench", {})
-        run = workbench.get("run")
-        if run and run.get("id"):
-            workbench["run"] = _without_file_preimages(self.harness.projection_run(run["id"]))
+        # A values frame and its cursor are one observation. Substituting the
+        # latest run here can mark an earlier, incomplete transcript completed
+        # before its final text arrives. Reconciliation belongs before capture.
         result["workbench"] = WorkbenchInteractionMetadata.model_validate(workbench).model_dump(
             mode="json",
             exclude_none=True,
@@ -576,41 +576,42 @@ class InteractionService:
     def state(self, thread_id: str) -> dict[str, Any]:
         binding = self.binding(thread_id)
         status = self.store.run_status(binding.get("run_id"))
-        if not (status and is_run_lifecycle_live(status)):
-            with self._projection_lock:
-                binding = self.binding(thread_id)
-                snapshot = copy.deepcopy(binding["snapshot"])
-                seq = binding["seq"]
-            values = self.display_values(snapshot)
-            workbench = values.get("workbench")
-            if isinstance(workbench, dict):
-                workbench.pop("interrupt_run_id", None)
-            values["__interrupt__"] = []
-            return {"values": values, "next": [], "tasks": [], "interaction_cursor": seq}
-        if binding["run_id"]:
+        projected_status = ((binding["snapshot"].get("workbench") or {}).get("run") or {}).get("status")
+        if binding["run_id"] and (status != projected_status or (status and is_run_lifecycle_live(status))):
             # Existing recovery owner reconciles orphaned workers before we
             # advertise finality. It never invokes the model on a state read.
-            current = self.harness.get_run(binding["run_id"])
-            saved_interrupts = self._saved_interrupts(current)
-            missing_interrupt = bool(saved_interrupts) and (
-                binding["snapshot"].get("__interrupt__") != saved_interrupts or
-                binding["snapshot"].get("workbench", {}).get("interrupt_run_id") != current.id
-            )
-            if missing_interrupt or self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run"):
-                self.observe(current, None)
-                binding = self.binding(thread_id)
+            # Retain the run owner's lock until reconciliation publishes, so
+            # a delayed read cannot overwrite a newer completed worker state.
+            with self.harness.run_read_lock(binding["run_id"]):
+                current = self.harness.get_run(binding["run_id"])
+                with self._projection_lock:
+                    binding = self.binding(thread_id)
+                    saved_interrupts = self._saved_interrupts(current)
+                    missing_interrupt = bool(saved_interrupts) and (
+                        binding["snapshot"].get("__interrupt__") != saved_interrupts or
+                        binding["snapshot"].get("workbench", {}).get("interrupt_run_id") != current.id
+                    )
+                    if binding["run_id"] == current.id and (missing_interrupt or
+                            self._stored_run(current) != binding["snapshot"].get("workbench", {}).get("run")):
+                        self.observe(current, None)
         with self._projection_lock:
-            # Copy the cursor and snapshot together. Replaying the log stays
-            # outside this lock so a worker can publish its interrupt.
+            # Capture the token prefix together with its snapshot and cursor.
+            # Completion is allowed to compact the log as soon as we release
+            # this lock; assembling the retained copy needs no execution lock.
             binding = self.binding(thread_id)
             snapshot = copy.deepcopy(binding["snapshot"])
             seq = binding["seq"]
-        run_record = (snapshot.get("workbench") or {}).get("run") or {}
-        run_status = run_record.get("status") if isinstance(run_record, dict) else None
-        if run_status and is_run_lifecycle_live(run_status):
-            snapshot = self._with_live_partials(snapshot, binding["id"], seq)
+            started = snapshot.get("workbench", {}).get("run_started_seq", 0)
+            if not isinstance(started, int):
+                started = 0
+            run_record = (snapshot.get("workbench") or {}).get("run") or {}
+            run_status = run_record.get("status")
+            live_events = list(self.replay(thread_id, started, seq)) if run_status and is_run_lifecycle_live(run_status) else []
+        if live_events:
+            snapshot = self._with_live_partials(snapshot, live_events)
         values = self.display_values(snapshot)
-        if binding["run_id"] and not self._harness_interrupt_is_published(binding["run_id"]):
+        if (not run_record.get("pending_interrupt") or not run_status or
+                not is_run_lifecycle_live(run_status) or run_status == "cancel_requested"):
             # A native interrupt event can be stored before the run is waiting.
             # Offering it early accepts an approval the harness does not have yet.
             values["__interrupt__"] = []
@@ -622,23 +623,13 @@ class InteractionService:
                 "tasks": [{"interrupts": interrupts}] if interrupts else [],
                 "interaction_cursor": seq}
 
-    def _harness_interrupt_is_published(self, run_id: str) -> bool:
-        try:
-            current = self.harness.get_run(run_id)
-        except WorkbenchError:
-            return False
-        return bool(self._saved_interrupts(current))
-
-    def _with_live_partials(self, snapshot: dict[str, Any], thread_id: str, through: int) -> dict[str, Any]:
+    def _with_live_partials(self, snapshot: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
         """Return a display copy that includes the answer generated so far.
 
         The stored snapshot still waits until the run finishes. Opening the
         chat reads this copy and subscribes after its cursor.
         """
-        started = snapshot.get("workbench", {}).get("run_started_seq", 0)
-        if not isinstance(started, int):
-            started = 0
-        partials, incomplete = partial_archive(self.replay(thread_id, started, through))
+        partials, incomplete = partial_archive(events)
         if partials:
             snapshot["messages"] = archive_messages(snapshot.get("messages", []), partials)
         if incomplete:
@@ -650,6 +641,29 @@ class InteractionService:
     def resume_view(self, thread_id: str, since: int) -> ResumeProjection:
         self.binding(thread_id)
         return ResumeProjection(self, thread_id, since)
+
+    def stream_page(self, thread_id: str, since: int, options: dict[str, Any],
+                    resume: ResumeProjection) -> tuple[list[dict[str, Any]], int, bool]:
+        """Prepare a replay page before completion can compact its token prefix."""
+        with self._projection_lock:
+            page, _high_water, gap = self.store.interaction_page(thread_id, since)
+            if gap:
+                return [], since, True
+            wires: list[dict[str, Any]] = []
+            for item in page:
+                since = item["seq"]
+                if not self.matches(item, options):
+                    continue
+                if item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
+                    item["params"]["data"] = self.display_values(item["params"]["data"])
+                wires.extend(resume.present(item))
+            return wires, since, False
+
+    def discard_finished_token_logs(self) -> int:
+        # Startup maintenance shares the same read/compaction boundary as a
+        # worker finishing a turn, including subscribers preparing a seed.
+        with self._projection_lock:
+            return self.store.discard_finished_token_logs()
 
     def command(self, thread_id: str, body: Command) -> dict[str, Any]:
         fields(body, {"id", "method", "params"}, "command")

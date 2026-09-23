@@ -188,7 +188,8 @@ summary > svg {
 .tool-call-details section {display: grid; gap: var(--space-tight); min-width: 0; margin: var(--space-compact) 0;}
 .tool-call-details {max-height: min(var(--layout-menu), 50vh); overflow: auto; overflow-anchor: none; padding-right: var(--pad-tight);}
 .live-tool-code {max-height: none; overflow: visible;}
-.virtual-text, .virtual-markdown {max-height: min(360px, 42vh); overflow: auto; overflow-anchor: none;}
+.tool-input-text {max-height: min(360px, 42vh); overflow: auto; overflow-anchor: none; overscroll-behavior: contain;}
+.tool-call-details:has(.tool-input-text) {max-height: none; overflow: visible;}
 .tool-detail-label {display: block;}
 .message-reasoning > :not(summary) {font-size: var(--text-body); line-height: var(--leading-body);}
 .message-reasoning[open] > .reasoning-content {max-height: min(var(--layout-menu), 45vh); overflow: auto; padding-left: var(--pad-compact); border-left: var(--line-strong) solid var(--border);}
@@ -199,6 +200,28 @@ summary > svg {
 .reasoning-content > :first-child {margin-top: 0;}
 .reasoning-content > :last-child {margin-bottom: 0;}
 .message-feed > .bubble-assistant {margin-bottom: var(--space-tight); padding-top: var(--pad-tight); padding-bottom: var(--pad-tight);}
+.bubble-continuation > header > strong {display: none;}
+.bubble-continuation > header:has(> strong:only-child) {display: none;}
+.message-feed > .bubble-continuation {margin-top: 0;}
+.message-feed .message-reasoning > summary,
+.message-feed .message-tools > summary {min-height: var(--control-height); border-radius: var(--radius-control); padding-block: var(--pad-tight);}
+.message-feed .message-reasoning > summary:hover,
+.message-feed .message-tools > summary:hover {background: color-mix(in srgb, var(--bg-raised) 55%, transparent);}
+.chat-main .transcript {scrollbar-gutter: stable; overflow-anchor: none; padding-bottom: var(--pad-section);}
+.chat-waiting {display: flex; align-items: center; gap: var(--space-compact); min-height: var(--control-height-lg); padding: var(--pad-card) 0; color: var(--muted); font-size: var(--text-body);}
+.chat-waiting-dot {width: 7px; height: 7px; border-radius: var(--radius-circle); background: var(--accent); animation: chat-waiting-pulse 1.4s ease-in-out infinite;}
+@keyframes chat-waiting-pulse {50% {opacity: .35;}}
+.chat-jump-latest {position: sticky; bottom: var(--space-compact); display: block; width: fit-content; margin: var(--space-compact) auto 0; z-index: 2; padding: var(--pad-tight) var(--pad-card); border-radius: var(--radius-pill); background: var(--bg-panel); border: var(--line-hairline) solid var(--border); box-shadow: var(--shadow-soft); color: var(--text); font-size: var(--text-small);}
+.chat-jump-latest:hover {border-color: var(--accent);}
+.compose .composer-popover {max-height: min(60vh, 480px); overflow-y: auto;}
+@media (prefers-reduced-motion: reduce) {.chat-waiting-dot {animation: none;}}
+@container chat-workspace (max-width: 620px) {
+  .compose > .actions {flex-wrap: wrap;}
+  .compose .chat-model-controls {order: -1; flex: 1 0 100%; max-width: none;}
+  .compose .composer-menu > summary > span {display: inline;}
+  .compose .composer-menu > summary {padding-inline: var(--pad-tight);}
+  .compose .chat-model-controls-trigger {width: 100%;}
+}
 .message-tools summary {min-width: 0;}
 .message-tools summary > svg,
 .tool-call-state,
@@ -248,7 +271,7 @@ summary > svg {
 }
 .chat-workspace > .compose {grid-area: 2 / 1; min-width: 0;}
 .chat-workspace.files-open {
-  grid-template-columns: minmax(var(--layout-column), 1fr) minmax(var(--layout-column), var(--inspector-width, 380px));
+  grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 380px), 48%));
 }
 .chat-workspace > .chat-files-panel {
   position: relative;

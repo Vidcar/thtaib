@@ -144,10 +144,19 @@ def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
 
     No graph/model pump is bound. Reading text/reasoning projections cannot
     invoke anything: their only input is the already-persisted event iterator.
-    Incomplete tool arguments remain in durable replay, never executable calls.
+    Incomplete tool arguments remain inert content blocks, never executable calls.
     """
     active: dict[tuple[str, ...], ChatModelStream] = {}
+    blocks_by_namespace: dict[tuple[str, ...], dict[int, dict[str, Any]]] = {}
+    finished: dict[str, dict[str, Any]] = {}
     for item in events:
+        if finished and item["method"] == "values" and not item["params"].get("namespace"):
+            # A completed message event can precede its graph values update.
+            # Keep that finished output only until the authoritative complete
+            # message arrives, so hydration cannot briefly drop the answer.
+            for message in item["params"].get("data", {}).get("messages", []):
+                if isinstance(message, dict):
+                    finished.pop(message.get("id"), None)
         if item["method"] != "messages":
             continue
         params = item["params"]
@@ -155,6 +164,7 @@ def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
         data = params["data"]
         if data.get("event") == "message-start":
             active[key] = ChatModelStream(namespace=list(key), message_id=data.get("id"))
+            blocks_by_namespace[key] = {}
         projection = active.get(key)
         if projection is None:
             continue
@@ -163,9 +173,15 @@ def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
             # projections readable without turning the error into completion.
             continue
         projection.dispatch(data)
+        _accumulate_message_block(blocks_by_namespace[key], data)
         if data.get("event") == "message-finish":
+            if not key and projection.output_message is not None:
+                message = message_dict(projection.output_message)
+                if message is not None and message.get("id"):
+                    finished[message["id"]] = message
             active.pop(key, None)
-    messages, incomplete = [], []
+            blocks_by_namespace.pop(key, None)
+    messages, incomplete = list(finished.values()), []
     for namespace, projection in active.items():
         if namespace or not projection.message_id:
             continue
@@ -175,6 +191,14 @@ def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
             blocks.append({"type": "reasoning", "reasoning": reasoning})
         if text:
             blocks.append({"type": "text", "text": text})
+        # Native block deltas carry complete argument snapshots. Retain those
+        # bytes as display-only chunks, including unfinished JSON. Do not parse
+        # them into tool_calls or claim that the tool was ever executed.
+        for _index, block in sorted(blocks_by_namespace[namespace].items()):
+            if block.get("type") in {"tool_call_chunk", "tool_call", "invalid_tool_call"}:
+                blocks.append({"type": "tool_call_chunk", **{
+                    key: block[key] for key in ("id", "name", "args") if key in block
+                }})
         incomplete.append(projection.message_id)
         if blocks:
             messages.append({"type": "ai", "id": projection.message_id, "content": blocks})

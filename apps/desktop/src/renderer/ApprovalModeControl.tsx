@@ -1,7 +1,7 @@
 export const APPROVAL_MODES = [
-  { id: "ask", label: "Ask", summary: "Ask", hint: "Rename, delete, shell, and external tools stop for a decision." },
-  { id: "approve_for_me", label: "Approve for me", summary: "Approve", hint: "File changes proceed. Shell and external tools still stop." },
-  { id: "full_access", label: "Full access", summary: "Full", hint: "Selected shell and external tools proceed. Questions still wait." },
+  { id: "ask", label: "Ask", summary: "Ask", hint: "Ask before renaming, deleting, or using tools that need approval. Read-only commands and saved permissions can proceed." },
+  { id: "approve_for_me", label: "Approve for me", summary: "Approve for me", hint: "Allow selected file changes, including rename and delete. Shell and external tools still follow saved permissions and approval rules." },
+  { id: "full_access", label: "Full access", summary: "Full access", hint: "Allow selected file, shell, and external tools without approval pauses. Questions still wait for your answer." },
 ] as const;
 
 export type ApprovalMode = (typeof APPROVAL_MODES)[number]["id"];

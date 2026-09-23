@@ -249,6 +249,14 @@ function ChatInteractionStreamContent(props: {
     )
   ));
   const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
+  const inputId = pendingSubmit?.id ?? run?.input_message_id;
+  const reverseInputIndex = [...projection.messages].reverse().findIndex(message => inputId ? message.id === inputId : message.getType() === "human");
+  const inputIndex = reverseInputIndex < 0 ? -1 : projection.messages.length - reverseInputIndex - 1;
+  const hasTurnOutput = inputIndex >= 0 && projection.messages.slice(inputIndex + 1).some(message =>
+    message.getType() !== "human" && message.content.length > 0,
+  ) || projection.toolCalls.some(call => (call.status as string) === "preparing" || call.status === "running");
+  const waitingForOutput = projectionRunOwned && !visibleInterrupt && !hasTurnOutput &&
+    Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
   const projectionSignature = useRef("");
   const ownershipLookupKey = useRef("");
   const terminalRefreshKey = useRef("");
@@ -393,11 +401,12 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed live={stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
+        <AgentMessageFeed live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
           return retained?.content;
         }} />
       ) : null}
+      {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
       {projectionRunOwned && visibleInterrupt ? (
         <InterruptApproval
           pending={visibleInterrupt.pending}
@@ -658,7 +667,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
   const [selectionLoading, setSelectionLoading] = useState<ChatConversation | null>(null);
   const [boundGeneration, setBoundGeneration] = useState(0);
-  const transcriptEnd = useRef<HTMLDivElement | null>(null);
   const selectionRequest = useRef(0);
   const draftRevision = useRef(0);
   const serverDraftRevision = useRef(0);
@@ -850,6 +858,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       const resolved = await workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides);
       if (request !== setupRequest.current || generation !== selectionRequest.current) return;
       setupEditedFields.current = new Set(Object.keys(overrides));
+      if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
       setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
       setProjectPath(projects.find(project => project.id === nextProjectId)?.canonical_path ?? "");
       applyResolvedSetup(resolved);
@@ -975,21 +984,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     projectId, agentSetupVersionId, setupResolving, hasApplicationDefaults,
   ]);
 
-  const liveRunId =
-    conversation?.current_run && isAgentRunLive(conversation.current_run.status)
-      ? conversation.current_run.id
-      : null;
-
   const transcript = conversation ? displayedTranscript(conversation) : [];
 
   useEffect(() => {
     if (conversation?.current_run && !isAgentRunLive(conversation.current_run.status)) retainedAssets.refresh();
   }, [conversation?.current_run?.id, conversation?.current_run?.status]);
-
-  useEffect(() => {
-    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    transcriptEnd.current?.scrollIntoView({ block: "end", behavior: reduceMotion ? "auto" : "smooth" });
-  }, [transcript.length, liveRunId]);
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
@@ -1080,7 +1079,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         const draftConfig = next.draft?.intended_config ?? {};
         const nextProjectId = typeof draftConfig.project_id === "string" ? draftConfig.project_id : next.project_id ?? null;
         const nextVersionId = Object.hasOwn(draftConfig, "agent_setup_version_id") ? typeof draftConfig.agent_setup_version_id === "string" ? draftConfig.agent_setup_version_id : null : next.agent_setup_version_id ?? null;
-        const overrides = setupOverrides({ ...(next.setup_overrides ?? {}), ...draftConfig });
+        // Selecting another saved agent resets the previous agent's overrides,
+        // just as dispatch does. A restored draft keeps only its own new edits.
+        const priorOverrides = nextVersionId === (next.agent_setup_version_id ?? null) ? next.setup_overrides ?? {} : {};
+        const overrides = setupOverrides({ ...priorOverrides, ...draftConfig });
         let resolutionFailure = "";
         const resolved = nextProjectId || nextVersionId || hasApplicationDefaults ? await workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides).catch(error => { resolutionFailure = errorMessage(error); return null; }) : null;
         if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") return;
@@ -1088,6 +1090,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setSetupResolving(false); setSetupError(resolutionFailure);
         setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
         setupEditedFields.current = new Set(Object.keys(overrides));
+        if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
         activeOwner.current = { conversationId: next.id, threadId: registered.thread_id, generation: requestId };
         setBoundGeneration(requestId);
         setConversation(next);
@@ -1096,7 +1099,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setDeploymentId(typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : next.deployment_id);
         setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
         setProfileId(typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : draftConfig.inherit_deployment_settings === false ? "!none" : next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
-        if (draftConfig.approval_mode != null) setApprovalMode(approvalModeOf(draftConfig.approval_mode));
+        setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
@@ -1589,8 +1592,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               </article>
             ))
           )}
-          {runBusy && !pendingInterrupt && (pendingStopActive || pendingSubmissionActive || !(canObserveInteraction && conversation?.current_run && isAgentRunLive(conversation.current_run.status))) ? (
-            <p className="hint">
+          {runBusy && !pendingInterrupt && (pendingStopActive || !canObserveInteraction) ? (
+            <p className="hint" role="status">
               Working… {pendingStopActive ? (
                 <StatusBadge label="Stopping submission" tone="warn" />
               ) : pendingSubmissionActive ? (
@@ -1600,7 +1603,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               )}
             </p>
           ) : null}
-          <div ref={transcriptEnd} />
         </div>
 
         {deployHealthNotice && !runBusy ? (
@@ -1740,9 +1742,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           <div className="actions">
             <button type="button" className="icon-button" aria-label="Attach files" title="Attach files" aria-expanded={attachmentsOpen} disabled={!selectedDeployment || sending || selectionBusy} onClick={() => void openAttachments()}><Icon name="plus" /></button>
             <details ref={toolsMenuRef} name="chat-composer-controls" className="composer-menu">
-              <summary title="Approval mode" aria-label="Approval mode"><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></summary>
+              <summary title="Access for your next message" aria-label="Approval mode"><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></summary>
               <div className="composer-popover chat-tools-popover" role="group" aria-label="Approval mode choices">
                 <ApprovalModeControl value={approvalMode} disabled={selectionBusy || sending} onChange={mode => { markSetupEdited("approval_mode"); setApprovalMode(mode); }} />
+                <p className="hint">Applies to your next message. Running and queued messages keep their chosen access. Tools that are off stay off.</p>
                 <button type="button" className="chat-tools-permissions" onClick={() => navigateAway("settings")}><Icon name="settings" size={14} /> Saved permissions</button>
               </div>
             </details>
