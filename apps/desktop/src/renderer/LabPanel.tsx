@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
-import { deploymentOptionLabel, shortId } from "./display";
+import { shortId } from "./display";
+import { ChatModelControls } from "./ChatModelControls";
+import { workspaceApi, type SetupConfiguration } from "./workspaceApi";
 import { HoverHelp } from "./HoverHelp";
 import { Notice } from "./Notice";
 import { Icon } from "./Icon";
@@ -10,6 +12,7 @@ import {
   isAgentRunLive,
   type AgentRun,
   type Deployment,
+  type RunProfile,
   type EngineMeasurement,
   type LabCase,
   type LabRestore,
@@ -53,6 +56,8 @@ function LabRunObserverContent(props: { stream: WorkbenchStream; runId: string; 
 
 export function LabPanel() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [profiles, setProfiles] = useState<RunProfile[]>([]);
+  const [configuration, setConfiguration] = useState<SetupConfiguration>({});
   const [deploymentId, setDeploymentId] = useState("");
   const [workspace, setWorkspace] = useState<LabWorkspace | null>(null);
   const [files, setFiles] = useState<Record<string, string>>({});
@@ -68,8 +73,9 @@ export function LabPanel() {
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
-    const next = await api.deployments();
+    const [next, nextProfiles] = await Promise.all([api.deployments(), api.profiles()]);
     setDeployments(next);
+    setProfiles(nextProfiles);
     setDeploymentId((current) => current || next[0]?.id || "");
   }
 
@@ -217,7 +223,7 @@ export function LabPanel() {
             return;
           }
           void api
-            .startAgentRun(deploymentId, "Echo the text harness-ok using the echo tool.", ["echo"], workspace.id)
+            .startAgentRun(deploymentId, "Echo the text harness-ok using the echo tool.", ["echo"], workspace.id, undefined, undefined, configuration)
             .then((next) => {
               setRun(next);
               setMessage("Tool check started.");
@@ -226,17 +232,8 @@ export function LabPanel() {
         }}
       >
         <div className="entity-head"><h3>Tool check</h3><HoverHelp title="About the tool check">Asks the selected model to echo a short message using the echo tool. This checks basic tool use, not general model quality.</HoverHelp></div>
-        <label>
-          Model
-          <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
-            {deployments.map((deployment) => (
-              <option key={deployment.id} value={deployment.id}>
-                {deploymentOptionLabel(deployment)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={!deploymentId || !workspace}>
+        <ChatModelControls deployments={deployments} profiles={profiles} selectedDeploymentId={deploymentId} configuration={configuration} runtimeBusy={Boolean(liveRunId)} onReloaded={refresh} onApply={async next => { const resolved = await workspaceApi.resolveSetup(null, null, next); setConfiguration(next); setDeploymentId(resolved.configuration.deployment_id ?? next.deployment_id ?? (next.model_configuration_id ? "" : deploymentId)); }} />
+        <button type="submit" disabled={(!deploymentId && !configuration.model_configuration_id) || !workspace || Boolean(liveRunId)}>
           <Icon name="send" size={14} /> Run tool check
         </button>
         {run ? (

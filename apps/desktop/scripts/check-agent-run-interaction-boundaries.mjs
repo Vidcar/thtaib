@@ -99,6 +99,8 @@ function makeHarness() {
     });
     req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/v1/profiles") { json(res, 200, []); return; }
+      if (req.method === "POST" && url.pathname === "/v1/setup-resolution") { json(res, 200, { configuration: { deployment_id: "dep_1", ...JSON.parse(body).overrides }, instruction_layers: [], effective_values: {} }); return; }
       if (req.method === "GET" && url.pathname === "/v1/deployments") {
         json(res, 200, [{
           id: "dep_1",

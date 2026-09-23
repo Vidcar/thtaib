@@ -23,6 +23,7 @@ interface LocalUpload {
 }
 
 interface ComposerAttachmentsProps {
+  compact?: boolean;
   sessionId: string | null | undefined;
   attachmentIds?: string[];
   disabled?: boolean;
@@ -31,7 +32,7 @@ interface ComposerAttachmentsProps {
   onDropHandled?: (id: string) => void;
 }
 
-export function ComposerAttachments({ sessionId, attachmentIds, disabled = false, onAttachmentsChanged, incomingDrop, onDropHandled }: ComposerAttachmentsProps) {
+export function ComposerAttachments({ sessionId, attachmentIds, disabled = false, onAttachmentsChanged, incomingDrop, onDropHandled, compact = false }: ComposerAttachmentsProps) {
   const [items, setItems] = useState<LocalUpload[]>([]);
   const itemsRef = useRef<LocalUpload[]>([]);
   const [dragActive, setDragActive] = useState(false);
@@ -159,8 +160,8 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
   }, [incomingDrop, sessionId, cannotAttach]);
 
   return (
-    <section className="packet03-attachments" aria-label="Composer attachments">
-      <div
+    <section className={`packet03-attachments${compact ? " compact-attachments" : ""}`} aria-label="Composer attachments">
+      {!compact ? <div
         className={`packet03-dropzone${dragActive ? " is-active" : ""}`}
         onDragEnter={(event) => {
           event.preventDefault();
@@ -198,7 +199,7 @@ export function ComposerAttachments({ sessionId, attachmentIds, disabled = false
         <p className="hint">
           Images 8 MB · PDF / Word 16 MB · Text / code 1 MB
         </p>
-      </div>
+      </div> : null}
 
       {items.length ? (
         <ul className="packet03-list">

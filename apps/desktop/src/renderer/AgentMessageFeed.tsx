@@ -2,7 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { activityLine, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
+import { activityLine, groupActivity, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -38,6 +38,7 @@ interface ToolBlock {
   status?: string;
   result?: unknown;
   error?: string;
+  authorizationSource?: string;
 }
 
 interface DetailSectionProps {
@@ -172,7 +173,7 @@ function parseContent(content: unknown): MessageParts {
 function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
   if (messageType(message) !== "tool") return undefined;
   const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
-  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content };
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content, authorizationSource: typeof message.additional_kwargs.authorization_source === "string" ? message.additional_kwargs.authorization_source : undefined };
 }
 
 function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
@@ -183,6 +184,7 @@ function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: Asse
     status: retained ? retained.status ?? (toolError(retained) ? "error" : "success") : live?.status ?? block.status,
     result: retained ? retained.result : live?.status === "finished" ? live.output : block.result,
     error: retained?.status === "success" ? undefined : live?.error ?? block.error,
+    authorizationSource: retained?.authorizationSource ?? block.authorizationSource,
   };
 }
 
@@ -511,7 +513,7 @@ function TodoChecklist({ defaultOpen, failure, id, items, onToggle, openStates, 
   raw: unknown;
 }) {
   return <div className="todo-checklist">
-    {items.length ? <ol aria-label="Todo list">{items.map((item, index) => <li key={`${item.status}-${index}`} data-status={item.status}><span className="todo-status">{todoLabel(item.status)}</span> {item.content}</li>)}</ol> : failure ? null : <p className="activity-line">Updating the list</p>}
+    {items.length ? <ol aria-label="Todo list">{items.map((item, index) => <li key={`${item.status}-${index}`} data-status={item.status}><span className="todo-status" aria-label={todoLabel(item.status)} title={todoLabel(item.status)}>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span> {item.content}</li>)}</ol> : failure ? null : <p className="activity-line">Updating the list</p>}
     {failure ? <p className="tool-call-error" role="status">{failure}</p> : null}
     <DetailSection className="todo-arguments" defaultOpen={defaultOpen} id={id} onToggle={onToggle} openStates={openStates} summary={<span>List arguments</span>}>
       <CodeBlock text={stringifyValue(raw)} label="Copy tool input"><code>{stringifyValue(raw)}</code></CodeBlock>
@@ -566,9 +568,8 @@ function ToolBlockList({
   }
   const todos = todoState(toolBlocks);
   const rows = toolBlocks.filter(tool => tool.name !== "write_todos");
-  return <div className="tool-call-list">
-    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
-    {rows.map((tool, index) => {
+  const groups = groupActivity(rows, tool => { const error = toolError(tool); const finished = !toolIsStreaming(tool); return { label: activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) }), finished, failed: Boolean(error) }; });
+  function renderTool(tool: ToolBlock, index: number) {
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
     const incomplete = toolIsStreaming(tool);
@@ -603,25 +604,29 @@ function ToolBlockList({
             else if (path) dock?.openFile(path);
           }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
           {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
+          {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission</span> : null}
         </>}
       >
         {incomplete && !open ? null : <div className="tool-call-details">
-          <p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>
+          {path ? <p className="hint tool-identity">{path}</p> : tool.name === "execute" ? <p className="hint tool-identity">{readableToolText(tool.args)}</p> : null}
           {readableInput !== null ? <section aria-label="Tool input">
             <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Writing" : "File content"}</span>
             <div className="code-block-wrap"><CopyIconButton text={readableInput} label="Copy tool input" /><ToolInputText text={readableInput} /></div>
-            {!incomplete ? <details className="tool-raw-arguments"><summary>Raw tool arguments</summary><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></details> : null}
           </section> : null}
-          {!incomplete && fileContent === null && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
           {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
+          {!incomplete ? <details className="tool-raw-arguments"><summary>Tool details</summary><p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>{tool.args !== undefined ? <section aria-label="Raw tool arguments"><span className="tool-detail-label">Raw arguments</span><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}</details> : null}
         </div>}
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
       {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
       {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
     </div>;
-  })}</div>;
+  }
+  return <div className="tool-call-list">
+    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
+    {groups.map((group, index) => group.label ? <DetailSection key={group.items[0]?.id ?? index} className="activity-group" defaultOpen={defaultOpen} id={`${messageKey}:group:${group.items[0]?.id ?? index}`} onToggle={onToggle} openStates={openStates} summary={<><Icon name="files" size={14} /><span>{group.label}</span></>}>{group.items.map(tool => renderTool(tool, rows.indexOf(tool)))}</DetailSection> : group.items.map(tool => renderTool(tool, rows.indexOf(tool))))}
+  </div>;
 }
 
 function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>, toolCalls: AssembledToolCall[]) {
@@ -808,6 +813,7 @@ const MessageBubble = memo(function MessageBubble(props: {
 
 export function AgentMessageFeed(props: {
   messages: BaseMessage[];
+  toolAuthorizations?: Record<string, string>;
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   live?: boolean;
@@ -828,9 +834,10 @@ export function AgentMessageFeed(props: {
       }
     }
   }
-  const retainStoppedTool = (tool: ToolBlock): ToolBlock => tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool)
-    ? { ...tool, status: "unfinished" }
-    : tool;
+  const retainStoppedTool = (tool: ToolBlock): ToolBlock => ({ ...tool,
+    status: tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool) ? "unfinished" : tool.status,
+    authorizationSource: tool.authorizationSource ?? (tool.id ? props.toolAuthorizations?.[tool.id] : undefined),
+  });
   const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
     const status = call.status as string;
     return status === "preparing" || status === "running";
@@ -884,7 +891,7 @@ export function AgentMessageFeed(props: {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id ? liveById.get(result.id) : undefined))]} /></div>;
         }
         const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined)));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;

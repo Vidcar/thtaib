@@ -1,11 +1,17 @@
 /** Load Monaco from this desktop package. Never from a CDN. */
 
 let configured = false;
+let loading: Promise<void> | null = null;
 let monacoApi: typeof import("monaco-editor/editor/editor.api") | null = null;
 
 export async function ensureMonaco(): Promise<void> {
   if (configured || typeof window === "undefined") return;
-  configured = true;
+  if (loading) return loading;
+  loading = configureMonaco().catch(error => { loading = null; throw error; });
+  return loading;
+}
+
+async function configureMonaco(): Promise<void> {
   const [{ loader }, monaco, worker] = await Promise.all([
     import("@monaco-editor/react"),
     import("monaco-editor/editor/editor.api"),
@@ -19,6 +25,7 @@ export async function ensureMonaco(): Promise<void> {
   loader.config({ monaco });
   monacoApi = monaco;
   syncMonacoFromDocument();
+  configured = true;
 }
 
 export function editorTheme(): string {

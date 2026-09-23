@@ -22,7 +22,7 @@ function findByClass(root, className) {
 function detailsOpen(root, className) {
   const details = findByClass(root, className);
   assert.ok(details, `${className} details should render`);
-  const summary = details.findByType("summary");
+  const summary = details.findAllByType("summary")[0];
   return summary.props["aria-expanded"] === true;
 }
 
@@ -30,7 +30,7 @@ async function toggleDetails(root, className, open) {
   const details = findByClass(root, className);
   assert.ok(details, `${className} details should render`);
   assert.notEqual(detailsOpen(root, className), open, `${className} details should start in the opposite state before this toggle`);
-  const summary = details.findByType("summary");
+  const summary = details.findAllByType("summary")[0];
   await act(async () => {
     summary.props.onClick({ preventDefault() {} });
     await tick();
@@ -259,7 +259,7 @@ try {
   await act(async () => { toolRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] })); });
   await toggleDetails(toolRenderer.root, "message-tools", true);
   await act(async () => { toolRenderer.update(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], toolCalls: [completedCall] })); });
-  assert.equal(toolRenderer.root.findAllByType("details").length, 1, "hydration must not duplicate a live tool row");
+  assert.equal(toolRenderer.root.findAll(node => node.type === "details" && node.props.className === "message-tools").length, 1, "hydration must not duplicate a live tool row");
   assert.equal(detailsOpen(toolRenderer.root, "message-tools"), true, "expanded live tool remains open when attached to its retained call");
   await toggleDetails(toolRenderer.root, "message-tools", false);
   await act(async () => { toolRenderer.update(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], detailedStreams: true })); });

@@ -63,6 +63,7 @@ export function App() {
   const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [projectRevision, setProjectRevision] = useState(0);
+  useEffect(() => { if (typeof document !== "undefined") document.dispatchEvent(new Event("workbench:navigation")); }, [tab]);
   const [chatLaunch, setChatLaunch] = useState<ChatLaunch | null>(null);
   const [historyNotice, setHistoryNotice] = useState<HistoryNotice | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -175,7 +176,7 @@ export function App() {
             onActiveConversationId={setActiveConversationId}
             onCreateProject={() => setCreateProjectOpen(true)}
             projectRevision={projectRevision}
-            activeTab="chat"
+            activeTab={tab}
             backendOk={backendOk}
             backendStatus={backendStatus}
             attentionConversationId={attentionConversationId}
@@ -192,7 +193,7 @@ export function App() {
           />
         );
       case "projects":
-        return <ProjectsPanel projectRevision={projectRevision} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
+        return <ProjectsPanel contextual projectRevision={projectRevision} onProjectChanged={() => setProjectRevision(value => value + 1)} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
       case "agents":
         return <AgentSetupsPanel onUse={setup => { setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
@@ -272,7 +273,10 @@ export function App() {
         dotTitle={dotTitle}
         onListsReady={onListsReady}
       />
-      <main className="app-main">{renderTab(tab)}</main>
+      <main className="app-main">
+        <div className="persistent-chat" data-active={tab === "chat"} aria-hidden={tab !== "chat"} inert={tab !== "chat"}>{renderTab("chat")}</div>
+        {tab !== "chat" ? renderTab(tab) : null}
+      </main>
     </div>
   );
 }

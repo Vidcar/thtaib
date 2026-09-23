@@ -8,5 +8,5 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ onPreferencesChanged }: SettingsPanelProps) {
-  return <RecoverySettingsPanel onPreferencesChanged={onPreferencesChanged}><ApplicationDefaultsPanel /><ConnectionsPanel /></RecoverySettingsPanel>;
+  return <RecoverySettingsPanel onPreferencesChanged={onPreferencesChanged} defaultsPanel={<ApplicationDefaultsPanel />} connectionsPanel={<ConnectionsPanel />} />;
 }

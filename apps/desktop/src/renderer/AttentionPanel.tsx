@@ -34,7 +34,7 @@ export function notifyAttentionChanged(): void {
 
 export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
   const [items, setItems] = useState<AttentionItem[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
@@ -91,7 +91,7 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
       </div>
 
       {message ? <Notice role="status">{message}</Notice> : null}
-      {items.length === 0 ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
+      {items.length === 0 && !message ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
 
       <ul className="packet03-list">
         {items.map((item) => (

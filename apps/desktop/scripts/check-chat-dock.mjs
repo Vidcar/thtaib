@@ -61,6 +61,58 @@ try {
   assert.match(html, /Replace/);
   assert.doesNotMatch(html, />Start</, "a later successful list replaces the previous one");
   assert.match(html, /List arguments/, "raw todo arguments stay behind expand");
+  assert.match(html, /aria-label="Completed"/, "completed todos expose an accessible status mark");
+  assert.doesNotMatch(html, /Allowed by saved permission/, "successful tools do not imply a saved grant");
+
+  const authorised = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [
+    new AIMessage({ id: "authorised", content: "", tool_calls: [readCall] }),
+    new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success", additional_kwargs: { authorization_source: "saved_permission" } }),
+  ] }));
+  assert.match(authorised, /Allowed by saved permission/, "the backend grant fact is visible on the exact tool");
+  const durableAuthorisation = renderToStaticMarkup(React.createElement(AgentMessageFeed, { toolAuthorizations: { "read-1": "saved_permission" }, messages: [new AIMessage({ id: "restored", content: "", tool_calls: [readCall] })] }));
+  assert.match(durableAuthorisation, /Allowed by saved permission/, "retained run authorization can restore the exact call fact");
+  const { RunActivitySummary, helperApprovalOwner } = await vite.ssrLoadModule("/src/renderer/RunActivitySummary.tsx");
+  const reviewedRun = { child_runs: [{ run_id: "child-1", name: "Research helper", namespace: ["tools:parent", "helper:one"], status: "waiting for approval or answer" }], review_observation: { enabled: true, status: "max_iterations_reached", max_revisions: 2, evidence_scope: "Model review; no executable checks.", evaluations: [{ explanation: "One issue remains", criteria: [{ name: "Citations", passed: false, gap: "Missing source for the last claim" }] }] } };
+  assert.equal(helperApprovalOwner(reviewedRun, ["tools:parent", "helper:one", "tools:child"]), "Research helper");
+  assert.equal(helperApprovalOwner(reviewedRun, ["tools:other"]), undefined, "an unrelated approval cannot be attributed to a helper");
+  const reviewHtml = renderToStaticMarkup(React.createElement(RunActivitySummary, { run: reviewedRun }));
+  assert.match(reviewHtml, /Research helper/);
+  assert.match(reviewHtml, /Review limit reached/);
+  assert.match(reviewHtml, /Missing source for the last claim/);
+  assert.doesNotMatch(reviewHtml, /Review passed/, "exhausted revisions never imply a passing review");
+
+  const { groupActivity } = await vite.ssrLoadModule("/src/renderer/activityLine.ts");
+  const activity = [
+    { id: 1, label: "Read one", finished: true, failed: false },
+    { id: 2, label: "Read two", finished: true, failed: false },
+    { id: 3, label: "Read failed", finished: true, failed: true },
+    { id: 4, label: "Read four", finished: true, failed: false },
+    { id: 5, label: "Reading five", finished: false, failed: false },
+  ];
+  const groups = groupActivity(activity, item => item);
+  assert.deepEqual(groups.map(group => group.items.map(item => item.id)), [[1, 2], [3], [4], [5]], "failed and running calls remain visible chronological boundaries");
+  assert.equal(groups[0].label, "Read 2 files");
+  assert.deepEqual(groups.flatMap(group => group.items), activity, "grouping retains every original tool record");
+
+  const { groupConsecutiveChanges, MonacoDiff } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
+  const changes = [
+    { change: { id: "first", path: "one.md" }, before: "A", after: "B" },
+    { change: { id: "second", path: "one.md" }, before: "B", after: "C" },
+    { change: { id: "third", path: "two.md" }, before: "X", after: "Y" },
+    { change: { id: "fourth", path: "one.md" }, before: "C", after: "D" },
+  ];
+  const changeGroups = groupConsecutiveChanges(changes);
+  assert.deepEqual(changeGroups.map(group => group.items.map(item => item.change.id)), [["first", "second"], ["third"], ["fourth"]]);
+  assert.equal(changeGroups[0].items[1], changes[1], "a grouped edit keeps its own before/after evidence and reversal identity");
+  let loadAttempts = 0;
+  const rejectEditor = async () => { loadAttempts += 1; throw new Error("Editor resource unavailable"); };
+  let unavailable;
+  await act(async () => { unavailable = create(React.createElement(MonacoDiff, { original: "A", modified: "B", sideBySide: true, load: rejectEditor })); });
+  assert.match(JSON.stringify(unavailable.toJSON()), /The difference is unavailable/);
+  assert.doesNotMatch(JSON.stringify(unavailable.toJSON()), /Opening the difference/, "failed loading cannot leave an indefinite progress label");
+  await act(async () => unavailable.root.findByType("button").props.onClick());
+  assert.equal(loadAttempts, 2, "retry reattempts the failed editor resource");
+  await act(async () => unavailable.unmount());
 
   let renderer;
   await act(async () => {
