@@ -11,6 +11,7 @@ import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
 import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdown";
+import type { MatchedPermissionGrant } from "./packet03Api";
 
 export let markdownParseCount = 0;
 export let finishedBubbleRenders = 0;
@@ -39,6 +40,7 @@ interface ToolBlock {
   result?: unknown;
   error?: string;
   authorizationSource?: string;
+  authorizationGrant?: MatchedPermissionGrant;
 }
 
 interface DetailSectionProps {
@@ -173,7 +175,47 @@ function parseContent(content: unknown): MessageParts {
 function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
   if (messageType(message) !== "tool") return undefined;
   const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
-  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content, authorizationSource: typeof message.additional_kwargs.authorization_source === "string" ? message.additional_kwargs.authorization_source : undefined };
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content, authorizationSource: typeof message.additional_kwargs.authorization_source === "string" ? message.additional_kwargs.authorization_source : undefined, authorizationGrant: matchedPermissionGrant(message.additional_kwargs.authorization_grant) };
+}
+
+function matchedPermissionGrant(value: unknown): MatchedPermissionGrant | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const grant = value as Record<string, unknown>;
+  if (typeof grant.id !== "string" || !grant.id || typeof grant.display_name !== "string" || !grant.display_name.trim()
+    || (grant.scope !== "session" && grant.scope !== "always") || typeof grant.action !== "string"
+    || !grant.arguments || typeof grant.arguments !== "object" || Array.isArray(grant.arguments)
+    || typeof grant.created_at !== "string" || typeof grant.source_run_id !== "string"
+    || (grant.thread_id !== null && typeof grant.thread_id !== "string")
+    || (grant.project_path !== null && typeof grant.project_path !== "string")) return undefined;
+  return {
+    id: grant.id,
+    display_name: grant.display_name,
+    scope: grant.scope,
+    action: grant.action,
+    arguments: grant.arguments as Record<string, unknown>,
+    created_at: grant.created_at,
+    source_run_id: grant.source_run_id,
+    thread_id: grant.thread_id,
+    project_path: grant.project_path,
+  };
+}
+
+function SavedPermissionDetails({ grant }: { grant: MatchedPermissionGrant }) {
+  return <section aria-label="Matched saved permission">
+    <strong>{grant.display_name}</strong>
+    <dl className="meta compact">
+      <div><dt>Permission</dt><dd>{grant.id}</dd></div>
+      <div><dt>Scope</dt><dd>{grant.scope === "always" ? "Always allow" : "This session"}</dd></div>
+      <div><dt>Action</dt><dd>{grant.action}</dd></div>
+      <div><dt>Project</dt><dd>{grant.project_path ?? "No project"}</dd></div>
+      <div><dt>Session</dt><dd>{grant.thread_id ?? (grant.scope === "always" ? "Any session" : "Not recorded")}</dd></div>
+      <div><dt>Saved</dt><dd>{grant.created_at}</dd></div>
+      <div><dt>Originating run</dt><dd>{grant.source_run_id}</dd></div>
+    </dl>
+    <span className="tool-detail-label">Matching arguments</span>
+    <CodeBlock text={stringifyValue(grant.arguments)} label="Copy permission arguments"><code>{stringifyValue(grant.arguments)}</code></CodeBlock>
+    <p className="hint">Recorded when this call was allowed. Review or revoke current grants in Settings → Permissions.</p>
+  </section>;
 }
 
 function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
@@ -185,6 +227,7 @@ function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: Asse
     result: retained ? retained.result : live?.status === "finished" ? live.output : block.result,
     error: retained?.status === "success" ? undefined : live?.error ?? block.error,
     authorizationSource: retained?.authorizationSource ?? block.authorizationSource,
+    authorizationGrant: retained?.authorizationGrant ?? block.authorizationGrant,
   };
 }
 
@@ -592,6 +635,7 @@ function ToolBlockList({
     const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || (Boolean(path) && !stopped));
     const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
+    const grant = tool.authorizationSource === "saved_permission" ? tool.authorizationGrant : undefined;
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
       <DetailSection
         className="message-tools"
@@ -608,7 +652,7 @@ function ToolBlockList({
             else if (path) dock?.openFile(path);
           }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
           {streaming && writing ? <span className="tool-call-progress">{proposedAmount(writing.length)}</span> : null}
-          {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission</span> : null}
+          {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission{grant ? `: ${grant.display_name}` : ""}</span> : null}
         </>}
       >
         {incomplete && !open ? null : <div className="tool-call-details">
@@ -619,7 +663,7 @@ function ToolBlockList({
           </section> : null}
           {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
-          {!incomplete ? <details className="tool-raw-arguments"><summary>Tool details</summary><p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>{tool.args !== undefined ? <section aria-label="Raw tool arguments"><span className="tool-detail-label">Raw arguments</span><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}</details> : null}
+          {!incomplete || grant ? <details className="tool-raw-arguments"><summary>Tool details</summary><p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>{grant ? <SavedPermissionDetails grant={grant} /> : null}{tool.args !== undefined ? <section aria-label="Raw tool arguments"><span className="tool-detail-label">Raw arguments</span><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}</details> : null}
         </div>}
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
@@ -831,6 +875,7 @@ const MessageBubble = memo(function MessageBubble(props: {
 export function AgentMessageFeed(props: {
   messages: BaseMessage[];
   toolAuthorizations?: Record<string, string>;
+  toolAuthorizationGrants?: Record<string, MatchedPermissionGrant>;
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   live?: boolean;
@@ -855,6 +900,7 @@ export function AgentMessageFeed(props: {
   const retainStoppedTool = (tool: ToolBlock): ToolBlock => ({ ...tool,
     status: tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool) ? "unfinished" : tool.status,
     authorizationSource: tool.authorizationSource ?? (tool.id ? props.toolAuthorizations?.[tool.id] : undefined),
+    authorizationGrant: tool.authorizationGrant ?? (tool.id ? matchedPermissionGrant(props.toolAuthorizationGrants?.[tool.id]) : undefined),
   });
   const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
     const status = call.status as string;
