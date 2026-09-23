@@ -24,6 +24,8 @@ function preview(config = {}) {
   const dep = config.deployment_id ?? (id === "model_b" ? "dep_b" : "dep_a");
   const context = config.startup_overrides?.ctx_size ?? 32768;
   return { configuration: { ...config, deployment_id: dep, model_configuration_id: config.deployment_id === "connected" ? null : id }, instruction_layers: [], effective_values: {
+    model_selection: fact(id === "model_b" ? "Second model" : "Qwen", "Loaded model"),
+    model_configuration_target: { ...fact(config.deployment_id === "connected" ? null : id, "Qwen · Default"), unavailable_reason: config.deployment_id === "connected" ? "Connected models are configured by their external server." : null },
     "startup.ctx_size": fact(context, "Conversation", context !== 32768),
     "per_request.reasoning": fact(config.per_request_overrides?.reasoning ?? "on"),
     "per_request.reasoning_effort": fact(config.per_request_overrides?.reasoning_effort ?? "xhigh"),
@@ -34,9 +36,9 @@ function text(node) { return typeof node === "string" ? node : (node?.children ?
 function button(renderer, label) { const found = renderer.root.findAll(node => node.type === "button" && text(node) === label)[0]; assert.ok(found, `button ${label}`); return found; }
 function range(renderer, label) { return renderer.root.findAll(node => node.type === "input" && node.props.type === "range" && node.props["aria-label"] === label)[0]; }
 async function flush() { await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); }); }
-async function render(overrides = {}) {
+async function render(overrides = {}, resolve = preview) {
   const applied = [], saved = [], reloads = [], reconfigured = [];
-  workspaceApi.resolveSetup = async (_project, _agent, config) => preview(config);
+  workspaceApi.resolveSetup = async (_project, _agent, config) => resolve(config);
   api.modelConfiguration = async () => options();
   api.reconfigure = async (id, payload) => { reconfigured.push({ id, payload }); return deployment(id, "bundle_a"); };
   api.saveModelConfiguration = async (bundle, payload) => { saved.push({ bundle, payload }); return profile(payload.configuration_id, bundle); };
@@ -88,9 +90,25 @@ try {
     await state.close();
   }
   {
+    const loaded = { ...deployment("dep_a", "bundle_a"), profile_id: null, requested_startup: { ctx_size: 8192, n_gpu_layers: 30 }, settings: { startup: bag(), per_request: bag({ temperature: 0.4 }), agent: bag() } };
+    const state = await render({ configuration: {}, projectId: "project_without_model_choice", deployments: [loaded] }, config => ({
+      ...preview(config), configuration: { ...config, deployment_id: "dep_a", model_configuration_id: null, profile_id: null },
+    }));
+    assert.equal(button(state.renderer, "Save to model").props.disabled, false, "a migrated loaded model has an authoritative save target without a selected profile");
+    assert.equal(text(state.renderer.root.findAll(node => node.type === "option" && node.props.value === "")[0]), "Use loaded model", "being inside a project does not falsely claim the project chose this model");
+    await act(async () => button(state.renderer, "Save to model").props.onClick());
+    assert.equal(state.saved[0].payload.configuration_id, "model_a");
+    assert.equal(state.saved[0].payload.startup.ctx_size, 8192, "saving a loaded snapshot preserves its startup recipe");
+    assert.equal(state.saved[0].payload.per_request.temperature, 0.4, "saving the loaded model cannot replace its response settings with a later saved recipe");
+    assert.deepEqual(state.applied, [], "resolving a save destination does not pin or apply that configuration");
+    await state.close();
+  }
+  {
     const state = await render({ configuration: { deployment_id: "connected" }, selectedDeploymentId: "connected" });
     assert.equal(range(state.renderer, "Context size").props.disabled, true);
     assert.match(text(state.renderer.toJSON()), /managed outside Workbench/);
+    assert.equal(button(state.renderer, "Save to model").props.disabled, true);
+    assert.match(button(state.renderer, "Save to model").props.title, /external server/);
     await state.close();
   }
   {

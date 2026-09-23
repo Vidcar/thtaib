@@ -49,9 +49,11 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   useEffect(() => { setDraft(JSON.parse(incoming) as SetupConfiguration); setError(""); setNotice(""); }, [incoming, conversationId]);
   const preview = useSetupPreview({ ...configuration, ...draft }, projectId, agentSetupVersionId);
   const resolved = preview.data?.configuration;
+  const facts = preview.data?.effective_values ?? {};
   const selected = findConfiguration(profiles, resolved?.model_configuration_id ?? draft.model_configuration_id);
   const deployment = deployments.find(item => item.id === (resolved?.deployment_id ?? draft.deployment_id ?? selectedDeploymentId));
-  const savedConfiguration = selected ?? findConfiguration(profiles, deployment?.profile_id);
+  const saveTarget = facts.model_configuration_target;
+  const savedConfiguration = findConfiguration(profiles, typeof saveTarget?.value === "string" ? saveTarget.value : null);
   const bundleId = selected?.bundle_id ?? deployment?.bundle_id;
   const optionKey = `${bundleId}:${deployment?.id}`;
   const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
@@ -63,8 +65,9 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
     return () => { cancelled = true; };
   }, [optionKey, bundleId, deployment?.id]);
   const options = optionsResult?.key === optionKey ? optionsResult.data : null;
-  const facts = preview.data?.effective_values ?? {};
   const modelChoice = draft.model_configuration_id ? `configuration:${findConfiguration(profiles, draft.model_configuration_id)?.id ?? draft.model_configuration_id}` : draft.deployment_id && deployments.find(item => item.id === draft.deployment_id)?.scope === "connected" ? `deployment:${draft.deployment_id}` : "";
+  const inheritedSource = !modelChoice ? facts.model_selection?.source : undefined;
+  const automaticLabel = inheritedSource === "Loaded model" ? "Use loaded model" : inheritedSource?.startsWith("Project:") || inheritedSource?.startsWith("Agent:") ? `Use ${inheritedSource}` : inheritedSource?.startsWith("Application default") ? "Use app default" : "Use chat default";
   const modelName = configurationLabel(findConfiguration(profiles, configuration.model_configuration_id)) ?? deployments.find(item => item.id === selectedDeploymentId)?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
   const loadedContext = deployment?.server_props?.n_ctx;
   const desiredContext = typeof draft.startup_overrides?.ctx_size === "number" ? draft.startup_overrides.ctx_size : typeof facts["startup.ctx_size"]?.value === "number" ? facts["startup.ctx_size"].value as number : loadedContext;
@@ -87,8 +90,8 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
         for (const key of ["reasoning", "reasoning_effort", "reasoning_format"]) delete request[key];
         return { ...current, model_configuration_id: choice.startsWith("configuration:") ? choice.slice(14) : null, deployment_id: choice.startsWith("deployment:") ? choice.slice(11) : null, profile_id: null, bundle_id: null, inherit_deployment_settings: null, per_request_overrides: request, startup_overrides: {} };
       });
-    }}><option value="">{projectId || agentSetupVersionId ? "Use project / agent choice" : "Use loaded model"}</option>{profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{configurationLabel(item)}</option>)}{deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</select></label></div>
-      {resolved?.model_configuration_id && !draft.model_configuration_id ? <span className="hint">{configurationLabel(selected)} · {facts.model_configuration_id?.source ?? "inherited"}</span> : null}
+    }}><option value="">{automaticLabel}</option>{profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{configurationLabel(item)}</option>)}{deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</select></label></div>
+      {!modelChoice && typeof facts.model_selection?.value === "string" ? <span className="hint">{facts.model_selection.value} · {facts.model_selection.source}</span> : null}
       <div className="chat-context-control"><div className="setting-title"><span>Context {loadedContext ? `${tokenLabel(loadedContext)} loaded` : "not reported"}</span><HoverHelp title="Context">Larger context uses more memory. Apply reloads an idle managed model and preserves this conversation. Running work and other consumers can block a reload.</HoverHelp></div>
         {desiredContext ? <><CompactSlider label="Context size" value={desiredContext} values={contextChoices} formatValue={tokenLabel} onChange={stageContext} disabled={busy || !!contextReason} /><input aria-label="Exact context size" type="number" min={1} max={options?.context_size.maximum ?? undefined} value={desiredContext} disabled={busy || !!contextReason} onChange={event => { const value = Number(event.target.value); if (value > 0) stageContext(value); }} /></> : null}
         {contextReason ? <span className="hint">{contextReason}</span> : null}
@@ -110,9 +113,9 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
         await latest.current.onApply({ ...latest.current.configuration, ...draft });
         if (currentOwner.current === owner) close();
       })}>{busy ? "Applying…" : reloadNeeded ? "Apply & reload" : "Apply"}</button>
-      <button type="button" disabled={busy || !savedConfiguration?.bundle_id} title={!savedConfiguration ? "Choose a saved model configuration first" : "Update this model configuration for future work"} onClick={() => void act(async () => {
+      <button type="button" disabled={busy || preview.loading || !!preview.error || !savedConfiguration?.bundle_id} title={!savedConfiguration ? saveTarget?.unavailable_reason ?? "Choose a saved model configuration first" : `Save to ${saveTarget.source} for future work`} onClick={() => void act(async () => {
         if (!savedConfiguration?.bundle_id) return;
-        await api.saveModelConfiguration(savedConfiguration.bundle_id, { display_name: savedConfiguration.display_name, configuration_id: savedConfiguration.id, expected_revision: savedConfiguration.revision, startup: startup(), per_request: mergedStartup(savedConfiguration.bags.per_request.requested, draft.per_request_overrides ?? {}) });
+        await api.saveModelConfiguration(savedConfiguration.bundle_id, { display_name: savedConfiguration.display_name, configuration_id: savedConfiguration.id, expected_revision: savedConfiguration.revision, startup: startup(), per_request: mergedStartup(selected?.bags.per_request.requested ?? deployment?.settings.per_request.requested ?? {}, draft.per_request_overrides ?? {}) });
         await onReloaded(); if (currentOwner.current === owner) setNotice("Saved to model. Apply separately to use these chat changes.");
       })}>Save to model</button></div>
     </>}
