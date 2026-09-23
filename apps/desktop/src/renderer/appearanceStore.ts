@@ -8,6 +8,7 @@ import {
   type AppearanceFile,
   type AppearanceToken,
 } from "./appearanceValue";
+import { syncAppearancePreview } from "./appearancePreviewSync";
 import { syncMonacoFromDocument } from "./monacoSetup";
 import type { PresentationTheme } from "./types";
 
@@ -134,6 +135,7 @@ function publish(): void {
   version += 1;
   applyAppearanceToDocument(draft, activeTheme);
   syncMonacoFromDocument();
+  syncAppearancePreview();
   for (const listener of listeners) listener();
 }
 

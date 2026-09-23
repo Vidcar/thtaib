@@ -1,6 +1,6 @@
-.appearance-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 460px); gap: var(--space-section); align-items: start; }
-.appearance-editor { display: grid; gap: var(--space-compact); margin-top: var(--space-compact); min-width: 0; }
-.appearance-stage { position: sticky; top: 0; z-index: 3; display: grid; gap: var(--space-tight); align-content: start; max-height: calc(100vh - var(--pad-page) - var(--layout-inset)); padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); }
+.appearance-editor { display: grid; gap: var(--space-compact); margin-top: var(--space-compact); }
+html.appearance-preview-window, html.appearance-preview-window body, html.appearance-preview-window #root { height: 100%; margin: 0; }
+.appearance-stage { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: var(--space-tight); height: 100%; min-height: 0; padding: var(--pad-compact); background: var(--bg); color: var(--text); }
 .appearance-stage-bar { display: flex; align-items: center; gap: var(--space-compact); }
 .appearance-stage-bar strong { font-size: var(--text-body); }
 .appearance-stage-bar label { margin-left: auto; display: flex; align-items: center; gap: var(--space-tight); font-size: var(--text-small); color: var(--muted); }
@@ -55,10 +55,6 @@
 .appearance-stage.show-guides [data-guide] { outline: var(--line-hairline) dashed color-mix(in srgb, var(--accent) var(--tint-half), transparent); outline-offset: -1px; }
 .appearance-stage .is-hit { position: relative; z-index: 1; box-shadow: inset 0 0 0 var(--line-strong) var(--accent); }
 .appearance-stage.show-guides .is-hit { outline: var(--line-strong) solid var(--accent); }
-@media (max-width: 1100px) {
-  .appearance-layout { grid-template-columns: minmax(0, 1fr); }
-  .appearance-stage { order: -1; max-height: 52vh; }
-}
 .appearance-bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: var(--space-compact); align-items: center; background: var(--bg-panel); }
 .appearance-bar p { margin: 0; }
 .appearance-search { flex: 1 1 auto; min-width: 0; }

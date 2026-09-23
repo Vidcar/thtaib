@@ -7,6 +7,14 @@ contextBridge.exposeInMainWorld("workbench", {
   selectPath: (kind: "file" | "folder") => ipcRenderer.invoke("workbench:select-path", kind),
   readAppearance: () => ipcRenderer.invoke("workbench:appearance-read"),
   writeAppearance: (value: unknown) => ipcRenderer.invoke("workbench:appearance-write", value),
+  openAppearancePreview: () => ipcRenderer.invoke("workbench:appearance-preview-open"),
+  currentAppearancePreview: () => ipcRenderer.invoke("workbench:appearance-preview-current"),
+  publishAppearancePreview: (value: unknown) => ipcRenderer.invoke("workbench:appearance-preview-state", value),
+  onAppearancePreview: (callback: (value: unknown) => void) => {
+    const listener = (_event: unknown, value: unknown) => callback(value);
+    ipcRenderer.on("workbench:appearance-preview-state", listener);
+    return () => ipcRenderer.removeListener("workbench:appearance-preview-state", listener);
+  },
   activateRestore: (destination: string) => ipcRenderer.invoke("workbench:activate-restore", destination),
   saveAsset: (input: { assetId: string; sessionId?: string; projectPath?: string }) => ipcRenderer.invoke("workbench:save-asset", input),
   onAttention: (callback: (conversationId: string | null, runId: string) => void) => {
