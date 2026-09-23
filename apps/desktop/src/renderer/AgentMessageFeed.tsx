@@ -695,17 +695,18 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     // without delivering another token. Observe those changes in the same
     // scroll owner rather than adding a second competing smooth scroll.
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => follow());
+    const observed = new Set<Element>();
     const observeContent = () => {
-      observer?.disconnect();
-      observer?.observe(transcript);
       // Approval cards and run summaries are siblings of the message feed.
-      // Their arrival changes scrollHeight without resizing the scroll owner.
-      for (const child of Array.from(transcript.children ?? [])) observer?.observe(child);
-      if (rootRef.current) observer?.observe(rootRef.current);
+      // The feed uses display:contents, so its own box never reports growth.
+      // Observe its real message boxes, including late saved-answer actions.
+      const targets = new Set<Element>([transcript, ...Array.from(transcript.children ?? []), ...Array.from(rootRef.current?.children ?? [])]);
+      for (const element of observed) if (!targets.has(element)) { observer?.unobserve?.(element); observed.delete(element); }
+      for (const element of targets) if (!observed.has(element)) { observer?.observe(element); observed.add(element); }
       follow();
     };
     const contentObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(observeContent);
-    contentObserver?.observe(transcript, { childList: true });
+    contentObserver?.observe(transcript, { childList: true, subtree: true });
     observeContent();
     return () => {
       transcript.removeEventListener("scroll", onScroll);

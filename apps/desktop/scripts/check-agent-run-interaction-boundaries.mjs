@@ -251,6 +251,12 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.match(allText(renderer), /Workflows/), "initial task surface render");
+  const folder = () => renderer.root.findAllByType("input").find(node => node.props.placeholder === "Optional project path");
+  await act(async () => folder().props.onChange({ target: { value: "D:/isolated-workflow" } }));
+  assert.match(allText(renderer), /Shell tools follow approval rules and saved permissions/);
+  await act(async () => renderer.root.findByProps({ role: "radio", "aria-label": "Full access" }).props.onClick());
+  assert.match(allText(renderer), /Enabled shell tools run without approval pauses/);
+  assert.doesNotMatch(allText(renderer), /Shell commands can access this computer and require approval/);
   await act(async () => {
     textarea(renderer).props.onChange({ target: { value: "first task" } });
     await Promise.resolve();
@@ -261,6 +267,7 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.match(allText(renderer), /first task/), "first run projection");
+  assert.equal(harness.state.commands[0].payload.params.metadata.workbench.approval_mode, "full_access", "the displayed access reaches the workflow submission");
   await act(async () => {
     cancelButton(renderer).props.onClick();
     await Promise.resolve();

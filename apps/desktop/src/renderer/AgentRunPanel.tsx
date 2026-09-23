@@ -397,7 +397,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
           />
         </label>
         </div>
-        {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer and require approval.</p> : null}
+        {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer. {approvalMode === "full_access" ? "Enabled shell tools run without approval pauses." : "Shell tools follow approval rules and saved permissions."}</p> : null}
         <label>
           Task
           <textarea value={task} onChange={(event) => updateTask(event.target.value)} placeholder="What would you like to get done?" />

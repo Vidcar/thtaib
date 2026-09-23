@@ -27,11 +27,19 @@ export function SkillPackageImport({ entry, onImported }: { entry?: KnowledgeEnt
 }
 
 export function SkillResources({ versionId, resources = [] }: { versionId: string; resources?: SkillResource[] }) {
-  const [path, setPath] = useState("");
-  const [resource, setResource] = useState<ResourceView | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  useEffect(() => { setPath(""); setResource(null); setError(""); }, [versionId]);
-  useEffect(() => { let cancelled = false; setResource(null); setError(""); if (!path) return; setLoading(true); void request<ResourceView>(`/v1/knowledge/versions/${versionId}/resource?path=${encodeURIComponent(path)}`).then(next => { if (!cancelled) setResource(next); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); }).finally(() => { if (!cancelled) setLoading(false); }); return () => { cancelled = true; }; }, [versionId, path]);
-  return <details><summary>Supporting files · {resources.length}</summary>{resources.length ? <div className="setup-selection-options">{resources.map(item => <button key={item.path} type="button" onClick={() => setPath(item.path)} aria-pressed={path === item.path}>{item.path} <span className="hint">{Math.ceil(item.size_bytes / 1024)} KB</span></button>)}</div> : <p className="hint">This version has no supporting files.</p>}{loading ? <p role="status">Loading file…</p> : null}{error ? <Notice tone="error">{error}</Notice> : null}{resource ? <section><h4>{resource.path}</h4>{resource.binary ? <p className="hint">Binary file retained with the skill; text preview is unavailable.</p> : <pre className="wrapped-text">{resource.content}</pre>}<p className="hint">Read-only supporting content. Execution is unavailable.</p></section> : null}</details>;
+  const [selection, setSelection] = useState<{ versionId: string; path: string } | null>(null);
+  const [preview, setPreview] = useState<{ versionId: string; path: string; resource: ResourceView | null; error: string; loading: boolean } | null>(null);
+  const path = selection?.versionId === versionId && resources.some(item => item.path === selection.path) ? selection.path : "";
+  const current = preview?.versionId === versionId && preview.path === path ? preview : null;
+  useEffect(() => {
+    if (!path) { setPreview(null); return; }
+    let cancelled = false;
+    const owner = { versionId, path };
+    setPreview({ ...owner, resource: null, error: "", loading: true });
+    void request<ResourceView>(`/v1/knowledge/versions/${versionId}/resource?path=${encodeURIComponent(path)}`)
+      .then(resource => { if (!cancelled) setPreview({ ...owner, resource, error: "", loading: false }); })
+      .catch(failure => { if (!cancelled) setPreview({ ...owner, resource: null, error: errorMessage(failure), loading: false }); });
+    return () => { cancelled = true; };
+  }, [versionId, path]);
+  return <details><summary>Supporting files · {resources.length}</summary>{resources.length ? <div className="setup-selection-options">{resources.map(item => <button key={item.path} type="button" onClick={() => setSelection({ versionId, path: item.path })} aria-pressed={path === item.path}>{item.path} <span className="hint">{Math.ceil(item.size_bytes / 1024)} KB</span></button>)}</div> : <p className="hint">This version has no supporting files.</p>}{current?.loading ? <p role="status">Loading file…</p> : null}{current?.error ? <Notice tone="error">{current.error}</Notice> : null}{current?.resource ? <section><h4>{current.resource.path}</h4>{current.resource.binary ? <p className="hint">Binary file retained with the skill; text preview is unavailable.</p> : <pre className="wrapped-text">{current.resource.content}</pre>}<p className="hint">Read-only supporting content. Execution is unavailable.</p></section> : null}</details>;
 }
