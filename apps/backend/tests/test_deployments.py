@@ -263,6 +263,20 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(restored.reconfiguration["phase"], "rolled_back")
         self.assertTrue(restored.health.healthy)
 
+    def test_reconfigure_complete_recipe_removes_omitted_startup_and_records_configuration(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port":18132,"ctx_size":1024,"threads":2}))
+        profile = self.manager.create_profile(ProfileWriteRequest(display_name="Automatic context", bundle_id=self.bundle_id,
+            startup={"threads":4}, per_request={"temperature":0.2}))
+        changed = self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"threads":4},
+            replace_startup=True, model_configuration_id=profile.id))
+        self.assertEqual(changed.status, DeploymentStatus.running)
+        self.assertNotIn("ctx_size", changed.requested_startup)
+        self.assertNotIn("port", changed.requested_startup)
+        self.assertEqual(changed.requested_startup["threads"], 4)
+        self.assertEqual(changed.profile_id, profile.id)
+        self.assertEqual(changed.settings.per_request.applied["temperature"], 0.2)
+        self.assertNotIn("--ctx-size", self.supervisor.launched[-1])
+
     def test_valid_load_mode_replaces_retired_flags(self) -> None:
         deployment = self.manager.create_managed(
             ManagedDeploymentRequest(

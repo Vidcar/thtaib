@@ -549,13 +549,20 @@ class ModelManager:
             if deployment.scope != ManagementScope.managed:
                 raise ManagerError("This model is controlled by an external server.", code="connected_no_lifecycle", status_code=409)
             bundle = self._require_deployable_bundle(deployment.bundle_id or "")
-            requested = dict(deployment.requested_startup)
+            profile = self.get_profile(request.model_configuration_id) if request.model_configuration_id else None
+            if profile is not None:
+                if profile.bundle_id != deployment.bundle_id:
+                    raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+                if request.expected_configuration_revision is not None and request.expected_configuration_revision != profile.revision:
+                    raise ManagerError("The selected configuration changed. Refresh before applying.", code="configuration_revision_conflict", status_code=409)
+            requested = {} if request.replace_startup else dict(deployment.requested_startup)
             for key, value in request.startup.items():
                 if value is None:
                     requested.pop(key, None)
                 else:
                     requested[key] = value
-            bags = resolve_bags(startup=requested, per_request=deployment.settings.per_request.requested, agent=deployment.settings.agent.requested)
+            bags = resolve_bags(startup=requested, per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
+                agent=profile.bags.agent.requested if profile else deployment.settings.agent.requested)
             _require_valid_managed_startup(bags.startup)
             executable = self.runtime.require_executable()
             managed_argv(executable, bundle, bags.startup.applied)
@@ -577,7 +584,10 @@ class ModelManager:
             self.store.put_deployment(deployment.model_copy(update={"reconfiguration": journal}))
             stopped = self.deployments.stop(deployment.id)
             pending = stopped.model_copy(update={"requested_startup": requested, "applied_startup": bags.startup.applied,
-                "startup_overrides": {**deployment.startup_overrides, **request.startup}, "settings": bags,
+                "startup_overrides": dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}, "settings": bags,
+                "profile_id": profile.id if profile else deployment.profile_id,
+                "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
+                "configuration_revision": profile.revision if profile else deployment.configuration_revision,
                 "server_props": None, "reconfiguration": journal, "updated_at": utc_now()})
             self.store.put_deployment(pending)
             failure = None
@@ -898,7 +908,7 @@ class ModelManager:
         deployments = deployment_ids or set()
         try:
             with open_application_store(self.paths) as app_store:
-                conversations = app_store.list_conversations()
+                conversations = app_store.list_conversations(include_archived=True)
         except Exception as exc:
             raise ManagerError("Could not check saved conversations. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
         consumers = [

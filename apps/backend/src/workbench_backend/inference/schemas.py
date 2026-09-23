@@ -270,6 +270,9 @@ class ModelConfigurationWriteRequest(ProfileWriteRequest):
 
 class ReconfigureDeploymentRequest(BaseModel):
     startup: dict[str, Any]
+    replace_startup: bool = False
+    model_configuration_id: str | None = None
+    expected_configuration_revision: int | None = None
     expected_updated_at: str | None = None
     conversation_id: str | None = None
 

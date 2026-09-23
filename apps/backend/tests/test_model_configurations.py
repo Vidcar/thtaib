@@ -76,7 +76,7 @@ class ModelConfigurationTests(unittest.TestCase):
         deployment = self.deployment(ctx_size=8192)
         for status in ("queued", "dispatching", "paused"):
             with open_application_store(self.paths) as store:
-                store.put_conversation(ChatConversation(id="chat",deployment_id=deployment.id,created_at="now",updated_at="now",
+                store.put_conversation(ChatConversation(id="chat",deployment_id=deployment.id,archived=status == "paused",created_at="now",updated_at="now",
                     queue=[ChatQueueItem(id="queued",task="later",status=status,created_at="now",updated_at="now")]))
             with patch.object(self.manager.deployments, "stop") as stop:
                 with self.assertRaises(ManagerError) as caught:
