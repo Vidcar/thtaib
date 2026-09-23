@@ -34,6 +34,7 @@ export interface BundleFile {
 
 export interface ModelBundle {
   id: string;
+  default_configuration_id?: string | null;
   display_name: string;
   quantization: string | null;
   source: {
@@ -104,8 +105,11 @@ export interface PresentationSettings {
 
 export interface RunProfile {
   id: string;
+  revision?: number;
   display_name: string;
   bundle_id: string | null;
+  bundle_name?: string | null;
+  equivalent_configuration_ids?: string[];
   bags: SettingsBags;
 }
 
@@ -130,6 +134,7 @@ export interface DeploymentProfileChanges {
 
 export interface Deployment {
   id: string;
+  updated_at?: string;
   display_name: string;
   scope: "managed" | "connected";
   status: string;
@@ -137,6 +142,7 @@ export interface Deployment {
   profile_id?: string | null;
   endpoint: string | null;
   applied_startup: Record<string, unknown>;
+  requested_startup?: Record<string, unknown>;
   startup_overrides?: Record<string, unknown>;
   settings: SettingsBags;
   health: { healthy: boolean; detail: string | null } | null;
@@ -288,6 +294,9 @@ export interface StructuredOutputResult {
 
 export interface AgentRun {
   id: string;
+  child_runs?: Array<{ run_id: string; agent_id: string; version_id: string; name: string; namespace: string[]; tool_call_id?: string; status: string; error?: string }>;
+  tool_authorizations?: Record<string, string>;
+  review_observation?: { enabled: boolean; max_revisions: number; status: string; evidence_scope?: string; evaluations: Array<{ iteration?: number; grading_run_id?: string; result?: unknown; explanation?: string; criteria?: Array<{ name: string; passed: boolean; gap?: string }> }> };
   input_message_id?: string | null;
   status: AgentRunStatus;
   deployment_id: string;
@@ -606,6 +615,8 @@ export interface RuntimeControlDescriptor {
   source: string;
   applied: string | number | boolean | null;
   observed: string | number | boolean | null;
+  default_value?: unknown;
+  default_source?: string | null;
   maximum: number | null;
   recommended?: number | null;
   supported?: boolean | null;
@@ -614,7 +625,7 @@ export interface RuntimeControlDescriptor {
 }
 
 export interface BundleConfigurationOptions {
-  bundle_id: string;
+  bundle_id: string | null;
   deployment_id: string | null;
   context_size: RuntimeControlDescriptor;
   gpu_layers: RuntimeControlDescriptor;

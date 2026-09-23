@@ -48,7 +48,7 @@
 .compose .icon-button {background: transparent;}
 .compose .send-button {color: var(--bg); background: var(--text);}
 .compose .send-button:disabled {opacity: var(--fade-disabled);}
-.compose .stop-button:disabled {display: none;}
+.compose .stop-button[data-idle="true"] {visibility: hidden; pointer-events: none;}
 .composer-spacer {flex: 1; min-width: 0;}
 .compose .chat-model-controls {flex: 1; min-width: 0; max-width: var(--layout-dialog);}
 .compose .chat-model-controls-trigger {width: 100%; min-height: var(--control-height-lg); padding: var(--pad-tight) var(--pad-compact); border: none; box-shadow: none; background: transparent; border-radius: var(--radius-control);}

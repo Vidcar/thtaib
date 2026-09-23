@@ -20,5 +20,5 @@ export const workspaceApi = {
   duplicateAgentSetup: (id: string) => request<AgentSetup>(`/v1/agent-setups/${id}/duplicate`, { method: "POST", body: "{}" }),
   removeAgentSetup: (id: string) => request<AgentSetup>(`/v1/agent-setups/${id}`, { method: "DELETE" }),
   agentSetupVersions: (id: string) => request<AgentSetupVersion[]>(`/v1/agent-setups/${id}/versions`),
-  resolveSetup: (project_id: string | null, agent_setup_version_id: string | null, overrides: SetupConfiguration = {}) => request<ResolvedSetupSelection>("/v1/setup-resolution", { method: "POST", body: JSON.stringify({ project_id, agent_setup_version_id, overrides }) }),
+  resolveSetup: (project_id: string | null, agent_setup_version_id: string | null, overrides: SetupConfiguration = {}, editing_layer: "application" | "project" | "agent" | "conversation" = "conversation") => request<ResolvedSetupSelection>("/v1/setup-resolution", { method: "POST", body: JSON.stringify({ project_id, agent_setup_version_id, overrides, editing_layer }) }),
 };

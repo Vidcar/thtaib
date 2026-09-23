@@ -1,6 +1,6 @@
+import { configurationLabel, findConfiguration } from "./configurationLabel";
 import { useEffect, useState } from "react";
 
-import { ChatModelControls } from "./ChatModelControls";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { errorMessage } from "./errors";
 import { Icon } from "./Icon";
@@ -70,7 +70,6 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
         body: JSON.stringify({
           task: draft.task.trim(),
           attachment_ids: draft.attachmentIds,
-          intended_config: intendedConfigFromDraft(draft),
         }),
       });
       setDrafts((current) => ({ ...current, [item.id]: { ...draftFromQueueItem(next.queue?.find((entry) => entry.id === item.id) ?? item, next), dirty: false } }));
@@ -186,20 +185,7 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                       }
                     }}
                   />
-                  <ChatModelControls
-                    deployments={deployments}
-                    profiles={profiles}
-                    selectedDeploymentId={draft.deploymentId}
-                    selectedProfileId={draft.profileId}
-                    inheritDeploymentSettings={draft.inheritDeploymentSettings}
-                    perRequestOverrides={draft.perRequestOverrides}
-                    disabled={itemDisabled}
-                    locked={locked}
-                    onDeploymentChange={(deploymentId) => updateDraft(item.id, { deploymentId })}
-                    onProfileChange={(profileId) => updateDraft(item.id, { profileId })}
-                    onInheritDeploymentSettingsChange={(inheritDeploymentSettings) => updateDraft(item.id, { inheritDeploymentSettings })}
-                    onPerRequestOverridesChange={(perRequestOverrides) => updateDraft(item.id, { perRequestOverrides })}
-                  />
+                  <p className="hint">{configurationLabel(findConfiguration(profiles, draft.profileId)) ?? deployments.find(deployment => deployment.id === draft.deploymentId)?.display_name ?? "Captured model configuration"} · settings captured when queued</p>
                   {item.pause_error ? <Notice tone="error">{item.pause_error}</Notice> : null}
                   {item.frozen_config ? <p className="hint">{frozenConfigLabel(item)}</p> : null}
                   <button type="button" aria-label="Save queued turn" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
@@ -260,15 +246,6 @@ function draftFromQueueItem(item: ChatQueueItem, conversation: ChatConversation)
   };
 }
 
-function intendedConfigFromDraft(draft: QueueDraft): Record<string, unknown> {
-  return {
-    deployment_id: draft.deploymentId,
-    profile_id: draft.profileId && draft.profileId !== "!none" ? draft.profileId : null,
-    inherit_deployment_settings: draft.inheritDeploymentSettings,
-    per_request_overrides: draft.perRequestOverrides,
-  };
-}
-
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -291,8 +268,6 @@ function queueItemPath(conversationId: string, itemId: string): string {
 
 function frozenConfigLabel(item: ChatQueueItem): string {
   const config = (item.frozen_config ?? item.intended_config ?? {}) as Record<string, unknown>;
-  const deployment = typeof config.deployment_id === "string" ? config.deployment_id : "saved model";
-  const profile = typeof config.profile_id === "string" ? config.profile_id : config.profile_id === null ? "no preset" : "saved preset";
-  return `This turn is using its captured setup: ${deployment}, ${profile}. Later header changes do not affect it.`;
+  const mode = config.work_mode === "plan" ? "Plan" : "Work";
+  return `${mode} · model, access and helper settings captured when queued.`;
 }
-

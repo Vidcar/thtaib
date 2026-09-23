@@ -93,6 +93,8 @@
 .response-settings-editor .setting-row > label {margin: 0; display: flex; gap: var(--space-tight); align-items: center;}
 .response-settings-editor .setting-row > label strong {margin-left: auto;}
 .response-settings-editor .quiet-button {padding: var(--pad-tight); min-height: 24px; font-size: var(--text-small);}
+.response-settings-editor .setting-reset-actions {grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-tight);}
+.compact-slider-heading.visually-hidden {position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}
 .chat-model-controls-panel .actions {display: flex; justify-content: flex-end; gap: var(--space-compact); border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
 .run-activity-summary {display: grid; gap: var(--space-compact); margin: var(--space-compact) 0; font-size: var(--text-small);}
 .helper-activity {list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-tight);}

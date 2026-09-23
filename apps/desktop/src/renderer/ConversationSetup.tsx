@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { api } from "./api";
 import { HoverHelp } from "./HoverHelp";
 import { knowledgeKindLabel } from "./labels";
 import { Notice } from "./Notice";
@@ -24,7 +26,6 @@ export function ConversationSetup(props: {
   onProject: (projectId: string | null) => void;
   onAgent: (versionId: string | null) => void;
   setupResolving: boolean;
-  onManageProjects: () => void;
   onManageAgents: () => void;
   instructionLayers: ResolvedSetupSelection["instruction_layers"];
   missingDeployment: boolean;
@@ -40,6 +41,8 @@ export function ConversationSetup(props: {
   filesystemToolsAvailable: boolean | undefined;
   shellToolsAvailable: boolean | undefined;
 }) {
+  const [toolDetails, setToolDetails] = useState<Array<{ id: string; name: string; description: string }>>([]);
+  useEffect(() => { let cancelled = false; void api.agentTools().then(result => { if (!cancelled) setToolDetails(result.tools ?? []); }).catch(() => {}); return () => { cancelled = true; }; }, []);
   return (
     <div className="setup-panel">
       <div className="setup-grid">
@@ -47,7 +50,7 @@ export function ConversationSetup(props: {
         <label><span>Agent <HoverHelp title="About saved agents">Applies the selected saved version to the next message. Existing runs and queued messages keep their own setup.</HoverHelp></span><select aria-label="Chat agent" value={props.agentSetupVersionId ?? ""} disabled={props.selectionBusy || props.sending} onChange={event => props.onAgent(event.target.value || null)}><option value="">Default setup</option>{props.agentSetups.map(setup => <option key={setup.id} value={setup.current_version_id} disabled={Boolean(setup.missing_dependencies?.length)}>{setup.name}{setup.missing_dependencies?.length ? " · needs repair" : ""}</option>)}{props.agentSetupVersionId && !props.agentSetups.some(setup => setup.current_version_id === props.agentSetupVersionId) ? <option value={props.agentSetupVersionId}>Saved earlier agent version</option> : null}</select></label>
       </div>
       {props.setupResolving ? <p className="hint" role="status">Applying setup…</p> : null}
-      <div className="actions"><button type="button" onClick={props.onManageProjects}>Manage projects</button><button type="button" onClick={props.onManageAgents}>Manage agents</button></div>
+      <div className="actions"><button type="button" onClick={props.onManageAgents}>Manage agents</button></div>
       {props.instructionLayers?.length ? <details><summary>Effective instructions · {props.instructionLayers.length} layers</summary>{props.instructionLayers.map((layer, index) => <section key={`${layer.source_id ?? layer.name}-${index}`}><h4>{layer.name}</h4><pre className="wrapped-text">{layer.content}</pre></section>)}</details> : null}
       {props.missingDeployment ? <Notice tone="warn">This conversation's model connection is unavailable. Its history is preserved. Choose a model before sending another message.</Notice> : null}
       {props.selectedProfile ? <SettingsNotes unsupported={props.selectedProfile.bags.startup.unsupported} retired={props.selectedProfile.bags.startup.retired} /> : null}
@@ -72,7 +75,7 @@ export function ConversationSetup(props: {
           ))}
         </fieldset>
       </details>
-      {props.conversation && props.tools.length > 0 ? <details><summary>{props.tools.length} {props.tools.length === 1 ? "tool available" : "tools available"}</summary><p className="hint">{props.tools.join(", ")}</p></details> : <p className="hint">{props.conversation ? "No tools available." : "Available tools depend on the project you choose."}</p>}
+      {props.conversation && props.tools.length > 0 ? <details><summary>{props.tools.length} {props.tools.length === 1 ? "tool available" : "tools available"}</summary><ul className="plain-list">{props.tools.map(id => { const tool = toolDetails.find(item => item.id === id); return <li key={id}>{tool?.name ?? id}<HoverHelp title={tool?.name ?? id}>{tool?.description ?? "Tool details unavailable"}</HoverHelp></li>; })}</ul></details> : <p className="hint">{props.conversation ? "No tools available." : "Available tools depend on the project you choose."}</p>}
       {(props.filesystemToolsAvailable === false || props.shellToolsAvailable === false) ? <p className="hint">{props.filesystemToolsAvailable === false ? "Project files unavailable. " : ""}{props.shellToolsAvailable === false ? "Host shell unavailable." : ""}</p> : null}
     </div>
   );

@@ -129,7 +129,9 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["none", "draft-mtp"]);
     await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
     assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "3", "MTP exposes the runtime default draft count");
-    assert.deepEqual(renderer.root.findByProps({ id: "model-reasoning_effort" }).findAllByType("option").map(option => option.props.value), ["", "low", "medium", "xhigh"], "Only model-specific thinking levels are offered");
+    const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
+    assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");
+    assert.equal(renderer.root.findAll(node => node.type === "label" && textOf(node).startsWith("Saved preset")).length, 0, "Models has one configuration editor instead of a second preset selection");
     await act(async () => renderer.unmount());
   } finally {
     globalThis.fetch = originalFetch;

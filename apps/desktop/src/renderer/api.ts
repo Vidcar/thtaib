@@ -145,6 +145,7 @@ export const api = {
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
   modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),
+  deploymentConfiguration: (deploymentId: string) => request<BundleConfigurationOptions>(`/v1/deployments/${deploymentId}/configuration-options`),
   modelProjectors: (id: string) => request<SchemaBundleProjectors>(`/v1/bundles/${id}/projectors`),
   selectModelProjector: (id: string, path: string | null) => request<ModelBundle>(`/v1/bundles/${id}/projector`, { method: "PUT", body: JSON.stringify({ path }) }),
   capabilityProbe: (id: string, capability: string) => request<SchemaCapabilityEvidence>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
@@ -169,12 +170,16 @@ export const api = {
   deletionPreview: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}/delete-preview${kind === "bundle" && permanent ? "?permanent=true" : ""}`),
   deleteModelRecord: (kind: "bundle" | "profile", id: string, permanent = false) => request<DeletePreview>(`/v1/${kind === "bundle" ? "bundles" : "profiles"}/${id}${kind === "bundle" && permanent ? "?permanent=true" : ""}`, { method: "DELETE" }),
   deploymentProfileChanges: (id: string) => request<DeploymentProfileChanges>(`/v1/deployments/${id}/profile-changes`),
-  updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object }) =>
+  updateProfile: (id: string, payload: { display_name: string; bundle_id: string | null; startup: object; per_request: object; agent: object; expected_revision?: number }) =>
     request<RunProfile>(`/v1/profiles/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   renameProfile: (id: string, display_name: string) => request<RunProfile>(`/v1/profiles/${id}/rename`, { method: "POST", body: JSON.stringify({ display_name }) }),
   duplicateProfile: (id: string) => request<RunProfile>(`/v1/profiles/${id}/duplicate`, { method: "POST", body: "{}" }),
   start: (id: string) => request<Deployment>(`/v1/deployments/${id}/start`, { method: "POST" }),
   reload: (id: string) => request<Deployment>(`/v1/deployments/${id}/reload`, { method: "POST" }),
+  reconfigure: (id: string, payload: { startup: Record<string, unknown>; replace_startup?: boolean; model_configuration_id?: string | null; expected_configuration_revision?: number; expected_updated_at?: string; conversation_id?: string | null }) => request<Deployment>(`/v1/deployments/${id}/reconfigure`, { method: "POST", body: JSON.stringify(payload) }),
+  modelConfigurations: (bundleId: string) => request<RunProfile[]>(`/v1/bundles/${bundleId}/configurations`),
+  saveModelConfiguration: (bundleId: string, payload: { display_name: string; startup: object; per_request: object; configuration_id?: string; expected_revision?: number; make_default?: boolean }) => request<RunProfile>(`/v1/bundles/${bundleId}/configurations`, { method: "POST", body: JSON.stringify(payload) }),
+  setDefaultConfiguration: (bundleId: string, configuration_id: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/default-configuration`, { method: "PUT", body: JSON.stringify({ configuration_id }) }),
   smoke: (id: string) => request<{ ok: boolean; detail: string | null }>(`/v1/deployments/${id}/smoke`, { method: "POST" }),
   deploymentLogs: (id: string) => request<{ text: string; available: boolean }>(`/v1/deployments/${id}/logs`),
   runtime: () => request<RuntimeManifest | null>("/v1/runtime"),
@@ -200,7 +205,7 @@ export const api = {
   stop: (id: string) => request<Deployment>(`/v1/deployments/${id}/stop`, { method: "POST" }),
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
   healthOf: (id: string) => request<Deployment>(`/v1/deployments/${id}/health`),
-  agentTools: () => request<{ enabled: string[] }>("/v1/agent-tools"),
+  agentTools: () => request<{ enabled: string[]; tools?: Array<{ id: string; name: string; description: string; available?: boolean; unavailable_reason?: string | null }> }>("/v1/agent-tools"),
   startAgentRun: (
     deployment_id: string,
     task: string,
@@ -208,11 +213,13 @@ export const api = {
     workspace_id?: string,
     project_path?: string,
     embedding_deployment_id?: string,
+    configuration?: import("./workspaceApi").SetupConfiguration,
   ) =>
     request<AgentRun>("/v1/agent-runs", {
       method: "POST",
-      body: JSON.stringify({
-        deployment_id,
+        body: JSON.stringify({
+          ...configuration,
+          deployment_id,
         task,
         presented_tools,
         workspace_id,
