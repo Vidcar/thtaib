@@ -106,26 +106,16 @@ summary > svg {
   accent-color: var(--accent);
 }
 
-.packet03-attention-button strong {
-  margin-left: auto;
-  min-width: 17px;
-  padding: 1px 4px;
-  font-size: 10px;
-  border-radius: 5px;
-}
-
-.packet03-attention-button.is-collapsed {
-  position: relative;
+.packet03-attention-button.is-collapsed,
+.app-nav-collapsed .packet03-attention-button {
   justify-content: center;
 }
 
-.packet03-attention-button.is-collapsed strong {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  font-size: 9px;
-  min-width: 13px;
-  padding: 0 3px;
+.packet03-attention-button.is-collapsed .attention-count,
+.app-nav-collapsed .packet03-attention-button .attention-count {
+  top: 1px;
+  left: auto;
+  right: 1px;
 }
 
 /* Permission prompts and queues must retain contrast in either theme. */
@@ -275,7 +265,7 @@ summary > svg {
 .chat-conversation > .notice { margin: 4px 22px; flex-shrink: 0; }
 .chat-conversation > .chat-queue-panel { max-height: 30vh; overflow: auto; flex-shrink: 0; margin: 3px 22px; }
 
-@container chat-workspace (max-width: 900px) {
+@container chat-workspace (max-width: 1120px) {
   .chat-workspace.files-open {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto auto;
@@ -290,6 +280,14 @@ summary > svg {
   .chat-workspace.files-open > .compose { grid-area: 3 / 1; }
   .chat-workspace > .chat-files-panel > .panel-resize { display: none; }
 }
+.chat-rail[hidden] { display: none !important; }
+.chat-rail-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 0 0 10px; }
+.chat-rail-tabs button[role="tab"] { border: 0; border-radius: 7px; background: transparent; color: var(--muted); min-height: 28px; padding: 4px 8px; font-size: 12px; }
+.chat-rail-tabs button[aria-selected="true"] { background: var(--bg-raised); color: var(--text); }
+.chat-rail-close { margin-left: auto; }
+.chat-rail-body { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.chat-rail .setup-panel { display: grid; gap: 10px; }
+.chat-rail .chat-history-actions { position: static; }
 .chat-header { flex-wrap: wrap; align-items: flex-start; }
 .chat-header .history-menu[open] { flex: 1 0 100%; }
 .chat-header .history-menu-panel {

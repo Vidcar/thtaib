@@ -66,6 +66,11 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
     await tick();
   });
 
+  const editButtons = renderer.root.findAll((node) => node.type === "button" && node.props["aria-label"] === "Edit queued turn");
+  assert.equal(editButtons.length, 3, "each queued message offers edit");
+  await act(async () => {
+    editButtons.forEach((node) => node.props.onClick());
+  });
   const textareas = renderer.root.findAllByType("textarea");
   assert.ok(textareas.length >= 2, "queued items should render inline task editors");
   assert.equal(textareas[0].props.value, "first queued task");
@@ -139,7 +144,7 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
 }
 
 function button(renderer, text) {
-  const found = renderer.root.findAll((node) => node.type === "button" && textOf(node).includes(text))[0];
+  const found = renderer.root.findAll((node) => node.type === "button" && (textOf(node).includes(text) || node.props["aria-label"] === text || node.props.title === text))[0];
   assert.ok(found, `button ${text} should render`);
   return found;
 }

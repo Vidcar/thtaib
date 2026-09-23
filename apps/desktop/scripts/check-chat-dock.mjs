@@ -18,8 +18,8 @@ const monacoSource = readFileSync(path.join(desktopRoot, "src/renderer/monacoSet
 
 assert.match(css, /minmax\(240px, 1fr\) minmax\(260px, var\(--inspector-width/, "opening the dock keeps a readable conversation column");
 assert.doesNotMatch(css, /files-expanded[\s\S]*display:\s*none/, "widening the dock does not hide the conversation");
-assert.match(css, /@container chat-workspace \(max-width: 900px\)[\s\S]*max-height: min\(30vh, 260px\)[\s\S]*grid-area: 3 \/ 1/, "a narrow conversation stacks the dock and leaves the composer usable");
-assert.match(css, /\.chat-header \.history-menu-panel \{[^}]*position: static/, "the conversation menu stays in the header instead of covering the answer");
+assert.match(css, /@container chat-workspace \(max-width: 1120px\)[\s\S]*max-height: min\(30vh, 260px\)[\s\S]*grid-area: 3 \/ 1/, "a narrow conversation stacks the rail and leaves the composer usable");
+assert.match(css, /\.chat-rail \.chat-history-actions \{[^}]*position: static/, "conversation actions sit in the rail instead of covering the answer");
 assert.match(dockSource, /DiffEditor/, "file differences use Monaco's diff editor");
 assert.match(monacoSource, /loader\.config\(\{ monaco \}\)/, "Monaco is loaded from the desktop package");
 assert.doesNotMatch(`${dockSource}\n${monacoSource}`, /cdn\.|jsdelivr|unpkg/, "the editor does not request a CDN");

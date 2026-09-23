@@ -1044,7 +1044,7 @@ async function testCancelResponseCannotReselectAfterSwitch(vite) {
     await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "A bound before cancellation");
     await flush();
     await act(async () => {
-      button(renderer, "Cancel").props.onClick();
+      button(renderer, "Stop").props.onClick();
       await Promise.resolve();
     });
     await waitFor(() => assert.deepEqual(harness.state.requests.cancels, ["run_a"]), "cancel request held");
@@ -2069,7 +2069,7 @@ async function testUnknownProjectionAdoptsAuthoritativeNewCurrentRun(vite) {
     });
     await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "unknown projection authoritative lookup");
     await waitFor(() => assert.equal(selectedRunId(renderer), nextRun.id), "authoritative new run adopted from ownership lookup");
-    assert.match(allText(renderer), /Activity\s*Running/, "authoritative new run shows active progress in its Activity summary");
+    assert.equal(button(renderer, "Stop").props.disabled, false, "the composer Stop control is the running stop");
     assert.doesNotMatch(allText(renderer), /Working/, "an observed active run has no duplicate generic progress row");
     assert.match(allText(renderer), /new queued answer/, "authoritative new stream output renders");
   } finally {

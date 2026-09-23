@@ -111,6 +111,15 @@ def update_conversation_queue_item(
     return get_chat(request).update_queue_item(conversation_id, item_id, body)
 
 
+@router.post("/conversations/{conversation_id}/queue/{item_id}/steer")
+def steer_conversation_queue_item(
+    request: Request,
+    conversation_id: str,
+    item_id: str,
+) -> ChatConversationView:
+    return get_chat(request).steer_queue_item(conversation_id, item_id)
+
+
 @router.delete("/conversations/{conversation_id}/queue/{item_id}")
 def remove_conversation_queue_item(
     request: Request,

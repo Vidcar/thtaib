@@ -86,6 +86,7 @@ class ChatService:
         self._asset_service: RetainedAssetService | None = None
         self._submission_cancel_lock = threading.RLock()
         self._submission_cancel_events: dict[tuple[str, str | None, str], threading.Event] = {}
+        self._pending_steer: dict[str, str] = {}
 
     @property
     def manager(self) -> ModelManager:
@@ -354,6 +355,55 @@ class ChatService:
                 updated = self.app_store.update_conversation(conversation)
             return self._view(updated)
 
+    def steer_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
+        """Course-correct the live turn with one queued message.
+
+        Deep Agents 0.7 has no mid-stream inject. Stop the current model or
+        tool step, keep the transcript, and send this message on the same thread.
+        """
+
+        cancel_run_id: str | None = None
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id).model_copy(deep=True)
+            item = next((entry for entry in conversation.queue if entry.id == item_id), None)
+            if item is None:
+                raise ChatError("Unknown queued Chat turn.", code="queue_item_missing", status_code=404)
+            if item.status == "dispatching":
+                raise ChatError("A dispatching Chat turn cannot be steered.", code="queue_item_dispatching", status_code=409)
+            if item.pause_reason == "dispatch_uncertain":
+                raise ChatError(
+                    "Review the uncertain dispatch before steering this turn.",
+                    code="steer_needs_review",
+                    status_code=409,
+                )
+            now = utc_now()
+            item.status = "queued"
+            item.pause_reason = None
+            item.pause_error = None
+            item.pause_error_code = None
+            item.updated_at = now
+            conversation.queue = [item, *[entry for entry in conversation.queue if entry.id != item.id]]
+            conversation.updated_at = now
+            live = False
+            if conversation.current_run_id:
+                try:
+                    current = self.harness.get_run(conversation.current_run_id)
+                except HarnessError:
+                    current = None
+                live = current is not None and is_run_lifecycle_live(current.status)
+            saved = self.store.put(conversation)
+            if live:
+                self._pending_steer[conversation.id] = item.id
+                cancel_run_id = conversation.current_run_id
+            else:
+                self._pending_steer.pop(conversation.id, None)
+                saved = self._dispatch_next_queued(saved)
+        if cancel_run_id:
+            self.harness.cancel(cancel_run_id)
+            with self.store.conversation_lock(conversation_id):
+                return self._view(self._require(conversation_id))
+        return self._view(saved)
+
     def remove_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id).model_copy(deep=True)
@@ -382,11 +432,16 @@ class ChatService:
                 conversation = self._accept_dispatching_run(conversation, run)
                 conversation, terminal = self._reconcile_terminal_assistant(conversation, run)
                 if terminal == "completed":
+                    self._pending_steer.pop(conversation.id, None)
                     conversation = self._complete_queue_item(conversation, run.id)
                     self._dispatch_next_queued(conversation)
                 elif terminal in {"failed", "cancelled"}:
+                    steer_id = self._pending_steer.pop(conversation.id, None)
                     conversation = self._complete_queue_item(conversation, run.id)
-                    self._pause_queue(conversation, terminal)
+                    if steer_id:
+                        self._dispatch_steered(conversation, steer_id)
+                    else:
+                        self._pause_queue(conversation, terminal)
             return
 
     def reconcile_saved_queue_on_startup(self) -> int:
@@ -766,6 +821,21 @@ class ChatService:
             self.app_store._clear_chat_draft_if_revision_locked(queued, request.draft_revision, now)
             queued.updated_at = now
             return self.store.put(queued)
+
+    def _dispatch_steered(self, conversation: ChatConversation, item_id: str) -> ChatConversation:
+        steered = conversation.model_copy(deep=True)
+        item = next((entry for entry in steered.queue if entry.id == item_id), None)
+        if item is None or item.status == "dispatching":
+            return self._pause_queue(conversation, "cancelled")
+        now = utc_now()
+        item.status = "queued"
+        item.pause_reason = None
+        item.pause_error = None
+        item.pause_error_code = None
+        item.updated_at = now
+        steered.queue = [item, *[entry for entry in steered.queue if entry.id != item.id]]
+        steered.updated_at = now
+        return self._dispatch_next_queued(self.store.put(steered))
 
     def _dispatch_next_queued(self, conversation: ChatConversation) -> ChatConversation:
         if conversation.current_run_id:

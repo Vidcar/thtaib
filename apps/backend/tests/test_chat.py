@@ -2586,6 +2586,126 @@ class ChatHarnessTests(unittest.TestCase):
             self.assertEqual(body["queue"][0]["run_id"], body["run_ids"][1])
         close_workbench_sqlite(restarted)
 
+    def test_attention_opens_the_existing_chat_and_clears_when_dismissed_or_deleted(self) -> None:
+        kept = self._create(title="Kept chat")
+        now = utc_now()
+        older = AgentRun(
+            id="run_old_fail",
+            status=AgentRunStatus.failed,
+            deployment_id=self.deployment_id,
+            task="older failure",
+            enabled_tools=[],
+            presented_tools=[],
+            created_at=now,
+            updated_at=now,
+            finished_at=now,
+            source_surface="chat",
+            checkpoint_ids=["cp-old"],
+        )
+        latest = AgentRun(
+            id="run_latest_ok",
+            status=AgentRunStatus.completed,
+            deployment_id=self.deployment_id,
+            task="latest",
+            enabled_tools=[],
+            presented_tools=[],
+            created_at=now,
+            updated_at=now,
+            finished_at=now,
+            source_surface="chat",
+            checkpoint_ids=["cp-new"],
+        )
+        self.app.state.app_store.put_run(older)
+        self.app.state.app_store.put_run(latest)
+        stored = self.app.state.chat.store.get(kept["id"])
+        assert stored is not None
+        stored.current_run_id = latest.id
+        stored.run_ids = [older.id, latest.id]
+        self.app.state.chat.store.put(stored)
+
+        listed = self.client.get("/v1/desktop/attention")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        matches = [item for item in listed.json() if item["run_id"] == older.id]
+        self.assertEqual(len(matches), 1, listed.text)
+        self.assertEqual(matches[0]["conversation_id"], kept["id"])
+        self.assertEqual(matches[0]["title"], "Kept chat")
+
+        dismissed = self.client.post(f"/v1/desktop/attention/{matches[0]['identity']}/dismiss")
+        self.assertEqual(dismissed.status_code, 200, dismissed.text)
+        after = self.client.get("/v1/desktop/attention").json()
+        self.assertFalse(any(item["run_id"] == older.id for item in after))
+
+        removable = self._create(title="Going away")
+        failed = AgentRun(
+            id="run_delete_fail",
+            status=AgentRunStatus.failed,
+            deployment_id=self.deployment_id,
+            task="delete me",
+            enabled_tools=[],
+            presented_tools=[],
+            created_at=now,
+            updated_at=now,
+            finished_at=now,
+            source_surface="chat",
+            checkpoint_ids=["cp-delete"],
+        )
+        self.app.state.app_store.put_run(failed)
+        doomed = self.app.state.chat.store.get(removable["id"])
+        assert doomed is not None
+        doomed.current_run_id = failed.id
+        doomed.run_ids = [failed.id]
+        self.app.state.chat.store.put(doomed)
+        present = self.client.get("/v1/desktop/attention").json()
+        self.assertTrue(any(item["conversation_id"] == removable["id"] for item in present))
+        deleted = self.client.request(
+            "DELETE",
+            f"/v1/chat/conversations/{removable['id']}",
+            json={"execute": True},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        remaining = self.client.get("/v1/desktop/attention").json()
+        self.assertFalse(any(item["run_id"] == failed.id or item["conversation_id"] == removable["id"] for item in remaining))
+
+    def test_steer_stops_the_live_turn_and_sends_the_queued_message(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self.addCleanup(set_generate_hold, None)
+        self.addCleanup(hold.set)
+        scripted = ScriptedChatModel([AIMessage(content="held first"), AIMessage(content="steered reply")])
+
+        def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            return scripted
+
+        self.app.state.harness = HarnessService(
+            lambda: self.manager,
+            model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge,
+            app_store=self.app.state.app_store,
+        )
+        conversation = self._create()
+        first = self._start(conversation["id"], "Held first.")
+        wait_for_status(self.client, first["current_run"]["id"], "running")
+        wait_for_generate_hold()
+        queued = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={"task": "Steer toward the fix.", "deployment_id": self.deployment_id},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        item_id = queued.json()["queue"][0]["id"]
+        steered = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/{item_id}/steer")
+        self.assertEqual(steered.status_code, 200, steered.text)
+        self.assertEqual(steered.json()["queue"][0]["id"], item_id)
+        self.assertEqual(steered.json()["queue"][0]["task"], "Steer toward the fix.")
+        self.assertEqual(steered.json()["current_run"]["status"], "cancel_requested")
+        hold.set()
+        wait_for_run(self.client, first["current_run"]["id"])
+        terminal = self.app.state.app_store.get_run(first["current_run"]["id"])
+        assert terminal is not None
+        self.app.state.chat.observe_terminal_run(terminal)
+        followed = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertNotEqual(followed["current_run_id"], first["current_run"]["id"])
+        self.assertTrue(any(item.get("content") == "Steer toward the fix." or item.get("task") == "Steer toward the fix." for item in followed["transcript"] + followed["queue"]))
+
 
 class HarnessProjectFilesystemTests(unittest.TestCase):
     def setUp(self) -> None:

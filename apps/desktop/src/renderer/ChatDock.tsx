@@ -39,11 +39,12 @@ export function ChatDock(props: {
   width: number;
   onOpenKnowledge?: () => void;
   onReuseAssets?: (assets: { id: string }[]) => void;
+  showPages?: boolean;
 }) {
   return <div className="chat-dock">
-    <div className="chat-dock-pages" role="tablist" aria-label="Dock pages">
+    {props.showPages === false ? null : <div className="chat-dock-pages" role="tablist" aria-label="Dock pages">
       {(["changes", "files", "library"] as const).map(page => <button key={page} type="button" role="tab" aria-selected={props.page === page} aria-pressed={props.page === page} onClick={() => props.onPage(page)}>{page === "changes" ? "Changes" : page === "files" ? "Files" : "Library"}</button>)}
-    </div>
+    </div>}
     <div className="chat-dock-body">
       {props.page === "changes" ? <ChangesPage {...props} /> : null}
       {props.page === "files" ? <FilesPage {...props} /> : null}

@@ -1,98 +1,87 @@
-.chat-queue-panel {
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--surface);
-  padding: 0.85rem;
-}
-
-.chat-queue-panel > summary {
-  align-items: center;
-  cursor: pointer;
-  display: flex;
-  font-weight: 700;
-  gap: 0.5rem;
-  justify-content: space-between;
-}
-
-.chat-queue-list {
+.composer-queue {
   display: grid;
-  gap: 0.75rem;
+  gap: 4px;
+  margin: 0 2px 6px;
+}
+
+.composer-queue-list {
+  display: grid;
+  gap: 4px;
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: 0;
   padding: 0;
 }
 
-.chat-queue-item {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  display: grid;
-  gap: 0.65rem;
-  padding: 0.75rem;
-}
-
-.chat-queue-item.is-locked {
-  background: var(--surface-muted);
-}
-
-.chat-queue-item-head,
-.chat-queue-actions,
-.chat-queue-continue {
-  align-items: center;
+.composer-queue-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 28px;
+  padding: 2px 2px 2px 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
 }
 
-.chat-queue-preview {
-  color: var(--muted);
-  font-size: 0.9rem;
-  margin: 0.2rem 0 0;
-  max-width: 48rem;
+.composer-queue-row.is-locked {
+  opacity: 0.72;
+}
+
+.composer-queue-text {
+  flex: 1;
+  min-width: 0;
+  margin: 5px 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
 }
 
-.chat-queue-edit {
-  border-top: 1px solid var(--border);
-  padding-top: 0.35rem;
+.composer-queue-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
-.chat-queue-edit > summary {
-  cursor: pointer;
-  font-weight: 650;
+.composer-queue-actions .icon-button {
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  color: var(--muted);
 }
 
-.chat-queue-status {
+.composer-queue-actions .icon-button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.composer-queue-editor {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.composer-queue-editor textarea {
+  min-height: 52px;
+  resize: vertical;
+  font-size: 13px;
+}
+
+.composer-queue-pause {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 12px;
 }
 
-.chat-queue-editor {
-  display: grid;
-  gap: 0.6rem;
-}
-
-.chat-queue-editor textarea {
-  min-height: 4.5rem;
-  resize: vertical;
-}
-
-.chat-queue-frozen-config {
-  color: var(--muted);
-  font-size: 0.86rem;
+.composer-queue-pause p {
   margin: 0;
-}
-
-.chat-queue-attachment-summary {
-  color: var(--muted);
-  font-size: 0.86rem;
-  margin: 0;
-}
-
-.chat-queue-danger {
-  border-color: var(--danger);
-  color: var(--danger);
+  color: var(--text);
 }

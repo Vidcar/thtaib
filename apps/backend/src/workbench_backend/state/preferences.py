@@ -66,6 +66,30 @@ class PreferenceStore:
         with self.store._lock:
             return self.store._conn.execute("SELECT 1 FROM attention_receipts WHERE identity=?", (identity,)).fetchone() is not None
 
+    def dismiss_attention(self, identity: str) -> None:
+        self._dismiss_keys([f"id:{identity}"])
+
+    def dismiss_runs(self, run_ids: list[str]) -> None:
+        self._dismiss_keys([f"run:{run_id}" for run_id in run_ids if run_id])
+
+    def attention_hidden(self, identity: str, run_id: str) -> bool:
+        with self.store._lock:
+            row = self.store._conn.execute(
+                "SELECT 1 FROM attention_dismissals WHERE key IN (?, ?) LIMIT 1",
+                (f"id:{identity}", f"run:{run_id}"),
+            ).fetchone()
+        return row is not None
+
+    def _dismiss_keys(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        now = utc_now()
+        with self.store._lock, self.store._conn:
+            self.store._conn.executemany(
+                "INSERT OR REPLACE INTO attention_dismissals VALUES (?, ?)",
+                [(key, now) for key in keys],
+            )
+
     def allow(self, run, action, scope: Literal["session", "always"]) -> PermissionGrant:
         grant = PermissionGrant(id=new_id("grant"), scope=scope,
             thread_id=run.thread_id if scope == "session" else None,
