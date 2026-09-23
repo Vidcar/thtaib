@@ -288,8 +288,16 @@ export function DeploymentsPanel({
       event.preventDefault(); void action("start", async () => {
         const payload = configurationPayload(), overrides = startup(), owner = selectionOwner.current;
         await preview(payload.startup, payload.per_request, owner);
-        const result = selectedActive ? await api.reconfigure(selectedActive.id, { startup: payload.startup, replace_startup: true, model_configuration_id: profileId || undefined, expected_configuration_revision: selectedProfile?.revision, expected_updated_at: selectedActive.updated_at }) : await api.startManaged(selectedBundleId, profileId || undefined, overrides);
-        if (result.status === "failed") throw new Error(result.error ?? "Model could not load. Your saved configuration is unchanged.");
+        let result: Deployment;
+        try {
+          result = selectedActive ? await api.reconfigure(selectedActive.id, { startup: payload.startup, replace_startup: true, model_configuration_id: profileId || undefined, expected_configuration_revision: selectedProfile?.revision, expected_updated_at: selectedActive.updated_at }) : await api.startManaged(selectedBundleId, profileId || undefined, overrides);
+          if (result.status === "failed") throw new Error(result.error ?? "Model could not load. Your saved configuration is unchanged.");
+        } catch (failure) {
+          // Failed rollback can leave a stopped or failed engine. Keep edits,
+          // fetch its actual state, and preserve the original lifecycle error.
+          await refresh().catch(() => {});
+          throw failure;
+        }
         await persistConfiguration(payload, false, owner);
         if (selectionOwner.current === owner) {
           dirty.current = false; setMessageTone("info");

@@ -96,7 +96,16 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
       <ResponseSettingsEditor compact value={draft.per_request_overrides ?? {}} onChange={per_request_overrides => setDraft(current => ({ ...current, per_request_overrides }))} options={options} facts={facts} disabled={busy || preview.loading} />
       {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}{notice ? <Notice tone="info">{notice}</Notice> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(reloadNeeded && contextReason)} onClick={() => void act(async () => {
-        if (reloadNeeded && deployment) { const next = await api.reconfigure(deployment.id, { startup: startup(), replace_startup: true, ...(selected && selected.id !== deployment.profile_id ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: deployment.updated_at, conversation_id: conversationId }); if (!next.health?.healthy) throw new Error(next.error ?? "Model did not become ready."); await onReloaded(); }
+        if (reloadNeeded && deployment) {
+          try {
+            const next = await api.reconfigure(deployment.id, { startup: startup(), replace_startup: true, ...(selected && selected.id !== deployment.profile_id ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: deployment.updated_at, conversation_id: conversationId });
+            if (!next.health?.healthy) throw new Error(next.error ?? "Model did not become ready.");
+          } catch (failure) {
+            await onReloaded().catch(() => {});
+            throw failure;
+          }
+          await onReloaded();
+        }
         if (currentOwner.current !== owner) return;
         await latest.current.onApply({ ...latest.current.configuration, ...draft });
         if (currentOwner.current === owner) close();

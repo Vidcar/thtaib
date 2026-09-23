@@ -20,6 +20,7 @@ try {
   await configurationNavigationOwnership(DeploymentsPanel, true);
   await chatApplyOwnership(ChatModelControls, false);
   await chatApplyOwnership(ChatModelControls, true);
+  await failedReloadFacts(DeploymentsPanel, ChatModelControls);
   await inheritedAccessAndEmptyTools(SetupConfigurationEditor);
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
 console.log("Unified settings save, revision, inheritance and explicit-none checks passed.");
@@ -185,5 +186,47 @@ async function chatApplyOwnership(Control, navigateAwayAndBack) {
       assert.deepEqual(applied[0].helper_agent_ids, ['new-helper'], 'model Apply must preserve newer helper selection');
       assert.equal(applied[0].startup_overrides.ctx_size, 16384);
     }
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function failedReloadFacts(Panel, ChatControl) {
+  const profile = { id: 'config', bundle_id: 'model', display_name: 'Default', revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
+  const bundle = { id: 'model', display_name: 'Example', default_configuration_id: 'config', disk_matches: true, files: [], companions: [] };
+  let deployment = { id: 'deploy', bundle_id: 'model', profile_id: 'config', display_name: 'Example', scope: 'managed', status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: 'old', startup_overrides: {} };
+  let renderer, reads = 0, reloads = 0;
+  const originalError = 'The previous configuration is saved; recovery is needed.';
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (path.endsWith('/v1/runtime')) return response({ status: 'ready' });
+    if (path.endsWith('/v1/deployments')) { reads++; return response([deployment]); }
+    if (path.endsWith('/projectors')) return response({ candidates: [] });
+    if (path.includes('/configuration-options')) return response({ bundle_id: 'model', context_size: { maximum: 32768, options: [4096, 8192, 16384].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32 }, startup_defaults: {}, per_request_defaults: {}, metadata: {} });
+    if (path.endsWith('/v1/settings/preview')) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
+    if (path.endsWith('/v1/setup-resolution')) return response({ configuration: { ...body.overrides, deployment_id: 'deploy' }, effective_values: { 'startup.ctx_size': { value: body.overrides.startup_overrides?.ctx_size ?? 8192, requires_reload: true } }, instruction_layers: [] });
+    if (path.endsWith('/reconfigure')) {
+      deployment = { ...deployment, status: 'failed', health: { healthy: false }, server_props: null, error: 'Recovery needed' };
+      return { ok: false, status: 409, json: async () => ({ error: originalError, code: 'reconfigure_failed', details: { recovered: false } }) };
+    }
+    throw new Error(`Unexpected failed reload request ${path}`);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: 'model', initialBundles: [bundle], initialProfiles: [profile] })); await tick(); });
+    await act(async () => renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }));
+    await act(async () => { renderer.root.findByProps({ className: 'model-settings' }).props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.ok(reads > 1, 'failed Apply refreshes the receiver state instead of retaining a stale healthy deployment');
+    const badges = renderer.root.findAll(node => node.type === 'span' && String(node.props.className).startsWith('badge '));
+    assert.equal(badges.some(node => text(node) === 'Ready'), false, 'a failed receiver is no longer labeled Ready');
+    assert.ok(text(renderer.root).includes('Needs attention'));
+    assert.ok(text(renderer.root).includes(originalError));
+    assert.equal(Number(renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.value), 16384, 'failed reload refresh preserves staged edits');
+    await act(async () => renderer.unmount()); renderer = null;
+    deployment = { ...deployment, status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 } };
+    await act(async () => { renderer = create(React.createElement(ChatControl, { profiles: [profile], deployments: [deployment], selectedDeploymentId: 'deploy', configuration: { model_configuration_id: 'config' }, onApply: () => assert.fail('failed reload must not apply'), onReloaded: async () => { reloads++; throw new Error('Secondary refresh failure'); } })); await tick(); });
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
+    await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Apply & reload').props.onClick(); await tick(); });
+    assert.equal(reloads, 1, 'Chat also refreshes failed reload facts');
+    assert.ok(text(renderer.root).includes(originalError), 'refresh failures retain the actual lifecycle failure');
+    assert.equal(text(renderer.root).includes('Secondary refresh failure'), false);
+    assert.equal(Number(renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.value), 16384);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
