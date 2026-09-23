@@ -7,6 +7,7 @@
         "max_steps": {
           "anyOf": [
             {
+              "exclusiveMinimum": 0,
               "type": "integer"
             },
             {
@@ -19,6 +20,7 @@
         "max_tool_calls": {
           "anyOf": [
             {
+              "exclusiveMinimum": 0,
               "type": "integer"
             },
             {
@@ -109,6 +111,20 @@
           "title": "Checkpoint Ids",
           "type": "array"
         },
+        "child_runs": {
+          "items": {
+            "$ref": "#/$defs/ChildRunActivity"
+          },
+          "title": "Child Runs",
+          "type": "array"
+        },
+        "completed_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completed Tool Ids",
+          "type": "array"
+        },
         "completion": {
           "anyOf": [
             {
@@ -191,6 +207,18 @@
         "deployment_id": {
           "title": "Deployment Id",
           "type": "string"
+        },
+        "dispatched_tool_calls": {
+          "default": 0,
+          "title": "Dispatched Tool Calls",
+          "type": "integer"
+        },
+        "dispatched_tool_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dispatched Tool Ids",
+          "type": "array"
         },
         "effective_setup": {
           "anyOf": [
@@ -295,6 +323,20 @@
           "default": "deepagents",
           "title": "Harness",
           "type": "string"
+        },
+        "helper_agent_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Helper Agent Ids",
+          "type": "array"
+        },
+        "helper_snapshots": {
+          "items": {
+            "$ref": "#/$defs/FrozenHelperSelection"
+          },
+          "title": "Helper Snapshots",
+          "type": "array"
         },
         "host_shell": {
           "$ref": "#/$defs/HostShellFacts"
@@ -448,6 +490,16 @@
           "title": "Related Files",
           "type": "array"
         },
+        "requires_host_shell": {
+          "default": false,
+          "title": "Requires Host Shell",
+          "type": "boolean"
+        },
+        "requires_project": {
+          "default": false,
+          "title": "Requires Project",
+          "type": "boolean"
+        },
         "resume_checkpoint_id": {
           "anyOf": [
             {
@@ -481,6 +533,12 @@
           },
           "title": "Retrieved Material",
           "type": "array"
+        },
+        "review": {
+          "$ref": "#/$defs/ReviewConfiguration"
+        },
+        "review_observation": {
+          "$ref": "#/$defs/ReviewObservation"
         },
         "skill_version_refs": {
           "items": {
@@ -566,6 +624,13 @@
           "default": null,
           "title": "Thread Id"
         },
+        "tool_authorizations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Tool Authorizations",
+          "type": "object"
+        },
         "tool_invocations": {
           "items": {
             "additionalProperties": true,
@@ -585,6 +650,15 @@
         },
         "updated_at": {
           "title": "Updated At",
+          "type": "string"
+        },
+        "work_mode": {
+          "default": "work",
+          "enum": [
+            "work",
+            "plan"
+          ],
+          "title": "Work Mode",
           "type": "string"
         },
         "workspace_id": {
@@ -610,6 +684,70 @@
         "updated_at"
       ],
       "title": "AgentRun",
+      "type": "object"
+    },
+    "ChildRunActivity": {
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Namespace",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "default": "queued",
+          "title": "Status",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        },
+        "version_id": {
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "agent_id",
+        "version_id",
+        "name"
+      ],
+      "title": "ChildRunActivity",
       "type": "object"
     },
     "CompletionReport": {
@@ -1101,6 +1239,65 @@
       "title": "FileImage",
       "type": "object"
     },
+    "FrozenHelperSelection": {
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "configuration": {
+          "$ref": "#/$defs/SetupConfiguration"
+        },
+        "instruction_layers": {
+          "items": {
+            "$ref": "#/$defs/InstructionLayer"
+          },
+          "title": "Instruction Layers",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Role"
+        },
+        "settings_snapshot": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settings Snapshot"
+        },
+        "version_id": {
+          "title": "Version Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "version_id",
+        "name",
+        "configuration"
+      ],
+      "title": "FrozenHelperSelection",
+      "type": "object"
+    },
     "GenerationObservation": {
       "properties": {
         "basis": {
@@ -1447,13 +1644,17 @@
           "title": "Model Review"
         },
         "note": {
-          "default": "Model judgement, not an executable check.",
+          "default": "No independent review was requested.",
           "title": "Note",
           "type": "string"
         },
         "source": {
-          "const": "assistant_message",
-          "default": "assistant_message",
+          "default": "not_requested",
+          "enum": [
+            "assistant_message",
+            "rubric_review",
+            "not_requested"
+          ],
           "title": "Source",
           "type": "string"
         }
@@ -1603,6 +1804,15 @@
           },
           "title": "Presented Tools",
           "type": "array"
+        },
+        "purpose": {
+          "default": "work",
+          "enum": [
+            "work",
+            "review"
+          ],
+          "title": "Purpose",
+          "type": "string"
         },
         "redacted": {
           "default": false,
@@ -2014,6 +2224,65 @@
       "title": "RelatedFile",
       "type": "object"
     },
+    "ReviewConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "criteria": {
+          "default": "",
+          "maxLength": 16000,
+          "title": "Criteria",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_revisions": {
+          "const": 2,
+          "default": 2,
+          "title": "Max Revisions",
+          "type": "integer"
+        }
+      },
+      "title": "ReviewConfiguration",
+      "type": "object"
+    },
+    "ReviewObservation": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "evaluations": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Evaluations",
+          "type": "array"
+        },
+        "evidence_scope": {
+          "default": "Recent transcript excerpts; model judgement is not executable verification.",
+          "title": "Evidence Scope",
+          "type": "string"
+        },
+        "max_revisions": {
+          "const": 2,
+          "default": 2,
+          "title": "Max Revisions",
+          "type": "integer"
+        },
+        "status": {
+          "default": "not_requested",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "title": "ReviewObservation",
+      "type": "object"
+    },
     "RunLifecycleStatus": {
       "description": "Shared run lifecycle states, including honest cancel request vs confirmed stop.",
       "enum": [
@@ -2117,6 +2386,281 @@
         }
       },
       "title": "SettingsBags",
+      "type": "object"
+    },
+    "SetupConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "ask",
+                "approve_for_me",
+                "full_access"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Mode"
+        },
+        "bundle_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bundle Id"
+        },
+        "connection_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection Ids"
+        },
+        "deployment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deployment Id"
+        },
+        "embedding_deployment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embedding Deployment Id"
+        },
+        "helper_agent_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Helper Agent Ids"
+        },
+        "inherit_deployment_settings": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inherit Deployment Settings"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "memory_version_refs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Version Refs"
+        },
+        "model_configuration_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Configuration Id"
+        },
+        "per_request_overrides": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Per Request Overrides"
+        },
+        "presented_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Presented Tools"
+        },
+        "profile_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile Id"
+        },
+        "protected_instruction_version_refs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protected Instruction Version Refs"
+        },
+        "requires_host_shell": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requires Host Shell"
+        },
+        "requires_project": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requires Project"
+        },
+        "review": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "skill_version_refs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Version Refs"
+        },
+        "startup_overrides": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Startup Overrides"
+        },
+        "work_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "work",
+                "plan"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Work Mode"
+        }
+      },
+      "title": "SetupConfiguration",
       "type": "object"
     },
     "StartupMismatch": {

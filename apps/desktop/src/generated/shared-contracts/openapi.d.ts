@@ -502,6 +502,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bundles/{bundle_id}/configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Model Configurations */
+        get: operations["model_configurations_v1_bundles__bundle_id__configurations_get"];
+        put?: never;
+        /** Save Model Configuration */
+        post: operations["save_model_configuration_v1_bundles__bundle_id__configurations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bundles/{bundle_id}/default-configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Default Configuration */
+        put: operations["set_default_configuration_v1_bundles__bundle_id__default_configuration_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bundles/{bundle_id}/delete-preview": {
         parameters: {
             query?: never;
@@ -1087,6 +1122,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/deployments/{deployment_id}/configuration-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deployment Configuration Options */
+        get: operations["deployment_configuration_options_v1_deployments__deployment_id__configuration_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/deployments/{deployment_id}/detach": {
         parameters: {
             query?: never;
@@ -1149,6 +1201,23 @@ export interface paths {
         get: operations["deployment_profile_changes_v1_deployments__deployment_id__profile_changes_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/deployments/{deployment_id}/reconfigure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconfigure Deployment */
+        post: operations["reconfigure_deployment_v1_deployments__deployment_id__reconfigure_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2058,6 +2127,10 @@ export interface components {
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /** Checkpoint Ids */
             checkpoint_ids?: string[];
+            /** Child Runs */
+            child_runs?: components["schemas"]["ChildRunActivity"][];
+            /** Completed Tool Ids */
+            completed_tool_ids?: string[];
             completion?: components["schemas"]["CompletionReport"] | null;
             /** Connection Ids */
             connection_ids?: string[];
@@ -2073,6 +2146,13 @@ export interface components {
             denied_tools?: string[];
             /** Deployment Id */
             deployment_id: string;
+            /**
+             * Dispatched Tool Calls
+             * @default 0
+             */
+            dispatched_tool_calls: number;
+            /** Dispatched Tool Ids */
+            dispatched_tool_ids?: string[];
             effective_setup?: components["schemas"]["EffectiveSetup"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
@@ -2097,6 +2177,10 @@ export interface components {
              * @constant
              */
             harness: "deepagents";
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[];
+            /** Helper Snapshots */
+            helper_snapshots?: components["schemas"]["FrozenHelperSelection"][];
             host_shell?: components["schemas"]["HostShellFacts"];
             /** Id */
             id: string;
@@ -2143,6 +2227,16 @@ export interface components {
             recorded_is_not_live_proof: boolean;
             /** Related Files */
             related_files?: components["schemas"]["RelatedFile"][];
+            /**
+             * Requires Host Shell
+             * @default false
+             */
+            requires_host_shell: boolean;
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
             /** Resume Checkpoint Id */
             resume_checkpoint_id?: string | null;
             /** Retained Asset Ids */
@@ -2151,6 +2245,8 @@ export interface components {
             retrieval_project_paths?: string[];
             /** Retrieved Material */
             retrieved_material?: string[];
+            review?: components["schemas"]["ReviewConfiguration"];
+            review_observation?: components["schemas"]["ReviewObservation"];
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /**
@@ -2172,6 +2268,10 @@ export interface components {
             task: string;
             /** Thread Id */
             thread_id?: string | null;
+            /** Tool Authorizations */
+            tool_authorizations?: {
+                [key: string]: string;
+            };
             /** Tool Invocations */
             tool_invocations?: {
                 [key: string]: unknown;
@@ -2185,6 +2285,12 @@ export interface components {
             tool_mode_label: string;
             /** Updated At */
             updated_at: string;
+            /**
+             * Work Mode
+             * @default work
+             * @enum {string}
+             */
+            work_mode: "work" | "plan";
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -2270,6 +2376,8 @@ export interface components {
             deployment_id?: string | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[];
             /**
              * Inherit Deployment Settings
              * @default true
@@ -2283,6 +2391,8 @@ export interface components {
             knowledge_version_refs?: string[];
             /** Memory Version Refs */
             memory_version_refs?: string[];
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
@@ -2310,6 +2420,7 @@ export interface components {
             retained_asset_ids?: string[];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
+            review?: components["schemas"]["ReviewConfiguration"];
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /**
@@ -2318,6 +2429,10 @@ export interface components {
              * @enum {string}
              */
             source_surface: "agent-run" | "chat" | "lab";
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** System Prompt */
             system_prompt?: string | null;
             /** Task */
@@ -2326,6 +2441,12 @@ export interface components {
             thread_id?: string | null;
             /** @default live-tool */
             tool_mode: components["schemas"]["ToolMode"];
+            /**
+             * Work Mode
+             * @default work
+             * @enum {string}
+             */
+            work_mode: "work" | "plan";
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -2352,7 +2473,7 @@ export interface components {
         /** BundleConfigurationOptions */
         BundleConfigurationOptions: {
             /** Bundle Id */
-            bundle_id: string;
+            bundle_id: string | null;
             context_size: components["schemas"]["RuntimeControlDescriptor"];
             /** Deployment Id */
             deployment_id?: string | null;
@@ -2580,6 +2701,8 @@ export interface components {
              * @constant
              */
             harness: "deepagents";
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[];
             /**
              * History Replaced
              * @default false
@@ -2594,6 +2717,8 @@ export interface components {
             inherit_deployment_settings: boolean;
             /** Memory Version Refs */
             memory_version_refs?: string[];
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             /** Per Request Overrides */
             per_request_overrides?: {
                 [key: string]: unknown;
@@ -2612,6 +2737,7 @@ export interface components {
             queue?: components["schemas"]["ChatQueueItem"][];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
+            review?: components["schemas"]["ReviewConfiguration"];
             /** Run Ids */
             run_ids?: string[];
             /**
@@ -2637,6 +2763,10 @@ export interface components {
              * @constant
              */
             source_surface: "chat";
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Thread Id */
             thread_id?: string | null;
             /** Title */
@@ -2645,6 +2775,12 @@ export interface components {
             transcript?: components["schemas"]["ChatMessage"][];
             /** Updated At */
             updated_at: string;
+            /**
+             * Work Mode
+             * @default work
+             * @enum {string}
+             */
+            work_mode: "work" | "plan";
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -2668,6 +2804,8 @@ export interface components {
             deployment_id?: string | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[] | null;
             /**
              * Inherit Deployment Settings
              * @default true
@@ -2679,6 +2817,8 @@ export interface components {
             knowledge_version_refs?: string[];
             /** Memory Version Refs */
             memory_version_refs?: string[];
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             /** Per Request Overrides */
             per_request_overrides?: {
                 [key: string]: unknown;
@@ -2695,10 +2835,17 @@ export interface components {
             protected_instruction_version_refs?: string[];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
+            review?: components["schemas"]["ReviewConfiguration"] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[];
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Title */
             title?: string | null;
+            /** Work Mode */
+            work_mode?: ("work" | "plan") | null;
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -2771,6 +2918,8 @@ export interface components {
              * @constant
              */
             harness: "deepagents";
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[];
             /**
              * History Replaced
              * @default false
@@ -2785,6 +2934,8 @@ export interface components {
             inherit_deployment_settings: boolean;
             /** Memory Version Refs */
             memory_version_refs?: string[];
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             /**
              * Note
              * @default Shared Chat. The embedded Deep Agents harness owns model/tool iteration; the application persists native interrupts and surfaces them here. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; the application persists the interrupt for Chat.
@@ -2810,6 +2961,7 @@ export interface components {
             queue?: components["schemas"]["ChatQueueItem"][];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
+            review?: components["schemas"]["ReviewConfiguration"];
             /** Run Ids */
             run_ids?: string[];
             /**
@@ -2840,6 +2992,10 @@ export interface components {
              * @constant
              */
             source_surface: "chat";
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Thread Id */
             thread_id?: string | null;
             /** Title */
@@ -2848,6 +3004,12 @@ export interface components {
             transcript?: components["schemas"]["ChatMessage"][];
             /** Updated At */
             updated_at: string;
+            /**
+             * Work Mode
+             * @default work
+             * @enum {string}
+             */
+            work_mode: "work" | "plan";
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -2951,10 +3113,13 @@ export interface components {
             }[] | null;
             /** Created At */
             created_at: string;
+            execution_snapshot?: components["schemas"]["FrozenExecutionSelection"] | null;
             /** Frozen Config */
             frozen_config?: {
                 [key: string]: unknown;
             } | null;
+            /** Helper Snapshots */
+            helper_snapshots?: components["schemas"]["FrozenHelperSelection"][] | null;
             /** Id */
             id: string;
             /** Input Message Id */
@@ -3046,6 +3211,8 @@ export interface components {
             draft_revision?: number | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[] | null;
             /**
              * Inherit Deployment Settings
              * @default true
@@ -3059,6 +3226,8 @@ export interface components {
             knowledge_version_refs?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
             /** Per Request Overrides */
             per_request_overrides?: {
@@ -3076,10 +3245,17 @@ export interface components {
             protected_instruction_version_refs?: string[] | null;
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[] | null;
+            review?: components["schemas"]["ReviewConfiguration"] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[] | null;
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
             /** Task */
             task: string;
+            /** Work Mode */
+            work_mode?: ("work" | "plan") | null;
             /** Workspace Id */
             workspace_id?: string | null;
         };
@@ -3087,6 +3263,28 @@ export interface components {
         ChatTranscriptReplaceRequest: {
             /** Messages */
             messages?: components["schemas"]["ChatMessage"][];
+        };
+        /** ChildRunActivity */
+        ChildRunActivity: {
+            /** Agent Id */
+            agent_id: string;
+            /** Error */
+            error?: string | null;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string[];
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @default queued
+             */
+            status: string;
+            /** Tool Call Id */
+            tool_call_id?: string | null;
+            /** Version Id */
+            version_id: string;
         };
         /** CompatibilityAssessRequest */
         CompatibilityAssessRequest: {
@@ -3335,6 +3533,11 @@ export interface components {
              */
             secret: string;
         };
+        /** DefaultConfigurationRequest */
+        DefaultConfigurationRequest: {
+            /** Configuration Id */
+            configuration_id: string;
+        };
         /** DeleteFilePlan */
         DeleteFilePlan: {
             /** Path */
@@ -3385,6 +3588,8 @@ export interface components {
             capability_evidence?: {
                 [key: string]: unknown;
             }[];
+            /** Configuration Revision */
+            configuration_revision?: number | null;
             /** Created At */
             created_at: string;
             /** Display Name */
@@ -3406,6 +3611,10 @@ export interface components {
             /** Profile Id */
             profile_id?: string | null;
             profile_snapshot?: components["schemas"]["SettingsBags"] | null;
+            /** Reconfiguration */
+            reconfiguration?: {
+                [key: string]: unknown;
+            } | null;
             /** Requested Startup */
             requested_startup?: {
                 [key: string]: unknown;
@@ -3578,6 +3787,37 @@ export interface components {
          * @enum {string}
          */
         FileRole: "primary_weights" | "shard" | "companion";
+        /**
+         * FrozenExecutionSelection
+         * @description Trusted app-owned queue snapshot; never accepted as start-request input.
+         */
+        FrozenExecutionSelection: {
+            selection: components["schemas"]["ResolvedSetupSelection"];
+            /** Settings */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** System Prompt */
+            system_prompt?: string | null;
+        };
+        /** FrozenHelperSelection */
+        FrozenHelperSelection: {
+            /** Agent Id */
+            agent_id: string;
+            configuration: components["schemas"]["SetupConfiguration"];
+            /** Instruction Layers */
+            instruction_layers?: components["schemas"]["InstructionLayer"][];
+            /** Name */
+            name: string;
+            /** Role */
+            role?: string | null;
+            /** Settings Snapshot */
+            settings_snapshot?: {
+                [key: string]: unknown;
+            } | null;
+            /** Version Id */
+            version_id: string;
+        };
         /** GenerationObservation */
         GenerationObservation: {
             /**
@@ -4392,6 +4632,8 @@ export interface components {
             companions?: components["schemas"]["BundleFile"][];
             /** Created At */
             created_at: string;
+            /** Default Configuration Id */
+            default_configuration_id?: string | null;
             /**
              * Disk Matches
              * @default true
@@ -4421,21 +4663,49 @@ export interface components {
             /** @default complete */
             status: components["schemas"]["ImportStatus"];
         };
+        /** ModelConfigurationWriteRequest */
+        ModelConfigurationWriteRequest: {
+            /** Agent */
+            agent?: {
+                [key: string]: unknown;
+            };
+            /** Bundle Id */
+            bundle_id?: string | null;
+            /** Configuration Id */
+            configuration_id?: string | null;
+            /** Display Name */
+            display_name: string;
+            /** Expected Revision */
+            expected_revision?: number | null;
+            /**
+             * Make Default
+             * @default false
+             */
+            make_default: boolean;
+            /** Per Request */
+            per_request?: {
+                [key: string]: unknown;
+            };
+            /** Startup */
+            startup?: {
+                [key: string]: unknown;
+            };
+        };
         /** ModelJudgement */
         ModelJudgement: {
             /** Model Review */
             model_review?: string | null;
             /**
              * Note
-             * @default Model judgement, not an executable check.
+             * @default No independent review was requested.
              */
             note: string;
             /**
              * Source
-             * @default assistant_message
-             * @constant
+             * @default not_requested
+             * @enum {string}
              */
-            source: "assistant_message";
+            source: "assistant_message" | "rubric_review" | "not_requested";
         };
         /** ModelRequestCapture */
         ModelRequestCapture: {
@@ -4495,6 +4765,12 @@ export interface components {
             }[];
             /** Presented Tools */
             presented_tools?: string[];
+            /**
+             * Purpose
+             * @default work
+             * @enum {string}
+             */
+            purpose: "work" | "review";
             /**
              * Redacted
              * @default false
@@ -4665,6 +4941,8 @@ export interface components {
             bundle_id?: string | null;
             /** Display Name */
             display_name: string;
+            /** Expected Revision */
+            expected_revision?: number | null;
             /** Per Request */
             per_request?: {
                 [key: string]: unknown;
@@ -4853,6 +5131,26 @@ export interface components {
             /** Path */
             path: string | null;
         };
+        /** ReconfigureDeploymentRequest */
+        ReconfigureDeploymentRequest: {
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Expected Configuration Revision */
+            expected_configuration_revision?: number | null;
+            /** Expected Updated At */
+            expected_updated_at?: string | null;
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
+            /**
+             * Replace Startup
+             * @default false
+             */
+            replace_startup: boolean;
+            /** Startup */
+            startup: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * RelatedFile
          * @description A file the application associates with a run. Not a checkpointer row.
@@ -4871,6 +5169,44 @@ export interface components {
             /** Display Name */
             display_name: string;
         };
+        /** ResolvedSetting */
+        ResolvedSetting: {
+            /** Default Source */
+            default_source?: string | null;
+            /** Default Value */
+            default_value?: unknown;
+            /**
+             * Inherited
+             * @default false
+             */
+            inherited: boolean;
+            /** Inherited Source */
+            inherited_source?: string | null;
+            /** Inherited Value */
+            inherited_value?: unknown;
+            /**
+             * Known
+             * @default true
+             */
+            known: boolean;
+            /** Requested Override */
+            requested_override?: unknown;
+            /**
+             * Requires Reload
+             * @default false
+             */
+            requires_reload: boolean;
+            /** Source */
+            source: string;
+            /** Source Id */
+            source_id?: string | null;
+            /** Supported */
+            supported?: boolean | null;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+            /** Value */
+            value?: unknown;
+        };
         /** ResolvedSetupSelection */
         ResolvedSetupSelection: {
             /** Agent Setup Id */
@@ -4878,6 +5214,10 @@ export interface components {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             configuration: components["schemas"]["SetupConfiguration"];
+            /** Effective Values */
+            effective_values?: {
+                [key: string]: components["schemas"]["ResolvedSetting"];
+            };
             /** Instruction Layers */
             instruction_layers?: components["schemas"]["InstructionLayer"][];
             /** Project Id */
@@ -5097,6 +5437,53 @@ export interface components {
             /** Session Id */
             session_id: string;
         };
+        /** ReviewConfiguration */
+        ReviewConfiguration: {
+            /**
+             * Criteria
+             * @default
+             */
+            criteria: string;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Revisions
+             * @default 2
+             * @constant
+             */
+            max_revisions: 2;
+        };
+        /** ReviewObservation */
+        ReviewObservation: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Evaluations */
+            evaluations?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Evidence Scope
+             * @default Recent transcript excerpts; model judgement is not executable verification.
+             */
+            evidence_scope: string;
+            /**
+             * Max Revisions
+             * @default 2
+             * @constant
+             */
+            max_revisions: 2;
+            /**
+             * Status
+             * @default not_requested
+             */
+            status: string;
+        };
         /**
          * RunLifecycleContract
          * @description Documented lifecycle vocabulary for generated consumers.
@@ -5141,12 +5528,23 @@ export interface components {
             bags: components["schemas"]["SettingsBags"];
             /** Bundle Id */
             bundle_id?: string | null;
+            /** Bundle Name */
+            readonly bundle_name?: string | null;
             /** Created At */
             created_at: string;
             /** Display Name */
             display_name: string;
+            /** Equivalent Configuration Ids */
+            readonly equivalent_configuration_ids?: string[];
             /** Id */
             id: string;
+            /** Merged Into Configuration Id */
+            readonly merged_into_configuration_id?: string | null;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
             /** Updated At */
             updated_at: string;
         };
@@ -5156,6 +5554,10 @@ export interface components {
             accepted_values?: string[] | null;
             /** Applied */
             applied?: unknown;
+            /** Default Source */
+            default_source?: string | null;
+            /** Default Value */
+            default_value?: unknown;
             /** Description */
             description: string;
             /** Flag */
@@ -5357,12 +5759,16 @@ export interface components {
             deployment_id?: string | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[] | null;
             /** Inherit Deployment Settings */
             inherit_deployment_settings?: boolean | null;
             /** Instructions */
             instructions?: string | null;
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
+            /** Model Configuration Id */
+            model_configuration_id?: string | null;
             /** Per Request Overrides */
             per_request_overrides?: {
                 [key: string]: unknown;
@@ -5377,8 +5783,15 @@ export interface components {
             requires_host_shell?: boolean | null;
             /** Requires Project */
             requires_project?: boolean | null;
+            review?: components["schemas"]["ReviewConfiguration"] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[] | null;
+            /** Startup Overrides */
+            startup_overrides?: {
+                [key: string]: unknown;
+            } | null;
+            /** Work Mode */
+            work_mode?: ("work" | "plan") | null;
         };
         /** SetupDependencyIssue */
         SetupDependencyIssue: {
@@ -5393,6 +5806,12 @@ export interface components {
         SetupResolutionRequest: {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /**
+             * Editing Layer
+             * @default conversation
+             * @enum {string}
+             */
+            editing_layer: "application" | "project" | "agent" | "conversation";
             overrides?: components["schemas"]["SetupConfiguration"];
             /** Project Id */
             project_id?: string | null;
@@ -5756,6 +6175,7 @@ export type SchemaChatQueueResumeRequest = components['schemas']['ChatQueueResum
 export type SchemaChatSearchResult = components['schemas']['ChatSearchResult'];
 export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
 export type SchemaChatTranscriptReplaceRequest = components['schemas']['ChatTranscriptReplaceRequest'];
+export type SchemaChildRunActivity = components['schemas']['ChildRunActivity'];
 export type SchemaCompatibilityAssessRequest = components['schemas']['CompatibilityAssessRequest'];
 export type SchemaCompletionReport = components['schemas']['CompletionReport'];
 export type SchemaConnectedDeploymentRequest = components['schemas']['ConnectedDeploymentRequest'];
@@ -5768,6 +6188,7 @@ export type SchemaContextCaptureRequest = components['schemas']['ContextCaptureR
 export type SchemaContextCaptureSettings = components['schemas']['ContextCaptureSettings'];
 export type SchemaContextObservation = components['schemas']['ContextObservation'];
 export type SchemaCredentialWrite = components['schemas']['CredentialWrite'];
+export type SchemaDefaultConfigurationRequest = components['schemas']['DefaultConfigurationRequest'];
 export type SchemaDeleteFilePlan = components['schemas']['DeleteFilePlan'];
 export type SchemaDeletePreview = components['schemas']['DeletePreview'];
 export type SchemaDeployment = components['schemas']['Deployment'];
@@ -5778,6 +6199,8 @@ export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaExtractedSection = components['schemas']['ExtractedSection'];
 export type SchemaFileImage = components['schemas']['FileImage'];
 export type SchemaFileRole = components['schemas']['FileRole'];
+export type SchemaFrozenExecutionSelection = components['schemas']['FrozenExecutionSelection'];
+export type SchemaFrozenHelperSelection = components['schemas']['FrozenHelperSelection'];
 export type SchemaGenerationObservation = components['schemas']['GenerationObservation'];
 export type SchemaHttpValidationError = components['schemas']['HTTPValidationError'];
 export type SchemaHealthReport = components['schemas']['HealthReport'];
@@ -5823,6 +6246,7 @@ export type SchemaManagedDeploymentRequest = components['schemas']['ManagedDeplo
 export type SchemaManagementScope = components['schemas']['ManagementScope'];
 export type SchemaMaterializedKnowledgeFact = components['schemas']['MaterializedKnowledgeFact'];
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
+export type SchemaModelConfigurationWriteRequest = components['schemas']['ModelConfigurationWriteRequest'];
 export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
 export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
 export type SchemaOutputSchemaRequest = components['schemas']['OutputSchemaRequest'];
@@ -5841,8 +6265,10 @@ export type SchemaProjectRecord = components['schemas']['ProjectRecord'];
 export type SchemaProjectUpdateRequest = components['schemas']['ProjectUpdateRequest'];
 export type SchemaProjectorCandidate = components['schemas']['ProjectorCandidate'];
 export type SchemaProjectorSelectionRequest = components['schemas']['ProjectorSelectionRequest'];
+export type SchemaReconfigureDeploymentRequest = components['schemas']['ReconfigureDeploymentRequest'];
 export type SchemaRelatedFile = components['schemas']['RelatedFile'];
 export type SchemaRenameProfileRequest = components['schemas']['RenameProfileRequest'];
+export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
 export type SchemaRetainedAsset = components['schemas']['RetainedAsset'];
@@ -5855,6 +6281,8 @@ export type SchemaRetainedAssetReuseRequest = components['schemas']['RetainedAss
 export type SchemaRetainedAssetScope = components['schemas']['RetainedAssetScope'];
 export type SchemaRetainedAssetStorage = components['schemas']['RetainedAssetStorage'];
 export type SchemaRetainedUploadRequest = components['schemas']['RetainedUploadRequest'];
+export type SchemaReviewConfiguration = components['schemas']['ReviewConfiguration'];
+export type SchemaReviewObservation = components['schemas']['ReviewObservation'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
 export type SchemaRunLifecycleStatus = components['schemas']['RunLifecycleStatus'];
 export type SchemaRunProfile = components['schemas']['RunProfile'];
@@ -6557,7 +6985,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string[];
+                        [key: string]: unknown;
                     };
                 };
             };
@@ -6968,6 +7396,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BundleConfigurationOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_configurations_v1_bundles__bundle_id__configurations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunProfile"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_model_configuration_v1_bundles__bundle_id__configurations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelConfigurationWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunProfile"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_default_configuration_v1_bundles__bundle_id__default_configuration_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultConfigurationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBundle"];
                 };
             };
             /** @description Validation Error */
@@ -8297,6 +8826,37 @@ export interface operations {
             };
         };
     };
+    deployment_configuration_options_v1_deployments__deployment_id__configuration_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deployment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleConfigurationOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     detach_deployment_v1_deployments__deployment_id__detach_post: {
         parameters: {
             query?: never;
@@ -8408,6 +8968,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentProfileChanges"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconfigure_deployment_v1_deployments__deployment_id__reconfigure_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deployment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReconfigureDeploymentRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Deployment"];
                 };
             };
             /** @description Validation Error */

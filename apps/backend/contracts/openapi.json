@@ -7,6 +7,7 @@
           "max_steps": {
             "anyOf": [
               {
+                "exclusiveMinimum": 0.0,
                 "type": "integer"
               },
               {
@@ -18,6 +19,7 @@
           "max_tool_calls": {
             "anyOf": [
               {
+                "exclusiveMinimum": 0.0,
                 "type": "integer"
               },
               {
@@ -104,6 +106,20 @@
             "title": "Checkpoint Ids",
             "type": "array"
           },
+          "child_runs": {
+            "items": {
+              "$ref": "#/components/schemas/ChildRunActivity"
+            },
+            "title": "Child Runs",
+            "type": "array"
+          },
+          "completed_tool_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Tool Ids",
+            "type": "array"
+          },
           "completion": {
             "anyOf": [
               {
@@ -183,6 +199,18 @@
           "deployment_id": {
             "title": "Deployment Id",
             "type": "string"
+          },
+          "dispatched_tool_calls": {
+            "default": 0,
+            "title": "Dispatched Tool Calls",
+            "type": "integer"
+          },
+          "dispatched_tool_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dispatched Tool Ids",
+            "type": "array"
           },
           "effective_setup": {
             "anyOf": [
@@ -281,6 +309,20 @@
             "default": "deepagents",
             "title": "Harness",
             "type": "string"
+          },
+          "helper_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Helper Agent Ids",
+            "type": "array"
+          },
+          "helper_snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenHelperSelection"
+            },
+            "title": "Helper Snapshots",
+            "type": "array"
           },
           "host_shell": {
             "$ref": "#/components/schemas/HostShellFacts"
@@ -427,6 +469,16 @@
             "title": "Related Files",
             "type": "array"
           },
+          "requires_host_shell": {
+            "default": false,
+            "title": "Requires Host Shell",
+            "type": "boolean"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
+          },
           "resume_checkpoint_id": {
             "anyOf": [
               {
@@ -459,6 +511,12 @@
             },
             "title": "Retrieved Material",
             "type": "array"
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewConfiguration"
+          },
+          "review_observation": {
+            "$ref": "#/components/schemas/ReviewObservation"
           },
           "skill_version_refs": {
             "items": {
@@ -539,6 +597,13 @@
             ],
             "title": "Thread Id"
           },
+          "tool_authorizations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Tool Authorizations",
+            "type": "object"
+          },
           "tool_invocations": {
             "items": {
               "additionalProperties": true,
@@ -558,6 +623,15 @@
           },
           "updated_at": {
             "title": "Updated At",
+            "type": "string"
+          },
+          "work_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Work Mode",
             "type": "string"
           },
           "workspace_id": {
@@ -891,6 +965,13 @@
             ],
             "title": "Embedding Deployment Id"
           },
+          "helper_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Helper Agent Ids",
+            "type": "array"
+          },
           "inherit_deployment_settings": {
             "default": true,
             "title": "Inherit Deployment Settings",
@@ -933,6 +1014,17 @@
             },
             "title": "Memory Version Refs",
             "type": "array"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "output_schema": {
             "anyOf": [
@@ -1064,6 +1156,9 @@
             "title": "Retrieval Project Paths",
             "type": "array"
           },
+          "review": {
+            "$ref": "#/components/schemas/ReviewConfiguration"
+          },
           "skill_version_refs": {
             "items": {
               "type": "string"
@@ -1080,6 +1175,18 @@
             ],
             "title": "Source Surface",
             "type": "string"
+          },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
           },
           "system_prompt": {
             "anyOf": [
@@ -1110,6 +1217,15 @@
           "tool_mode": {
             "$ref": "#/components/schemas/ToolMode",
             "default": "live-tool"
+          },
+          "work_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Work Mode",
+            "type": "string"
           },
           "workspace_id": {
             "anyOf": [
@@ -1182,8 +1298,15 @@
       "BundleConfigurationOptions": {
         "properties": {
           "bundle_id": {
-            "title": "Bundle Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
           },
           "context_size": {
             "$ref": "#/components/schemas/RuntimeControlDescriptor"
@@ -1786,6 +1909,13 @@
             "title": "Harness",
             "type": "string"
           },
+          "helper_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Helper Agent Ids",
+            "type": "array"
+          },
           "history_replaced": {
             "default": false,
             "title": "History Replaced",
@@ -1806,6 +1936,17 @@
             },
             "title": "Memory Version Refs",
             "type": "array"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "per_request_overrides": {
             "anyOf": [
@@ -1887,6 +2028,9 @@
             "title": "Retrieval Project Paths",
             "type": "array"
           },
+          "review": {
+            "$ref": "#/components/schemas/ReviewConfiguration"
+          },
           "run_ids": {
             "items": {
               "type": "string"
@@ -1956,6 +2100,18 @@
             "title": "Source Surface",
             "type": "string"
           },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
+          },
           "thread_id": {
             "anyOf": [
               {
@@ -1987,6 +2143,15 @@
           },
           "updated_at": {
             "title": "Updated At",
+            "type": "string"
+          },
+          "work_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Work Mode",
             "type": "string"
           },
           "workspace_id": {
@@ -2086,6 +2251,20 @@
             ],
             "title": "Embedding Deployment Id"
           },
+          "helper_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Agent Ids"
+          },
           "inherit_deployment_settings": {
             "default": true,
             "title": "Inherit Deployment Settings",
@@ -2115,6 +2294,17 @@
             },
             "title": "Memory Version Refs",
             "type": "array"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "per_request_overrides": {
             "anyOf": [
@@ -2189,12 +2379,34 @@
             "title": "Retrieval Project Paths",
             "type": "array"
           },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "skill_version_refs": {
             "items": {
               "type": "string"
             },
             "title": "Skill Version Refs",
             "type": "array"
+          },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
           },
           "title": {
             "anyOf": [
@@ -2208,6 +2420,21 @@
               }
             ],
             "title": "Title"
+          },
+          "work_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "work",
+                  "plan"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Mode"
           },
           "workspace_id": {
             "anyOf": [
@@ -2452,6 +2679,13 @@
             "title": "Harness",
             "type": "string"
           },
+          "helper_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Helper Agent Ids",
+            "type": "array"
+          },
           "history_replaced": {
             "default": false,
             "title": "History Replaced",
@@ -2472,6 +2706,17 @@
             },
             "title": "Memory Version Refs",
             "type": "array"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "note": {
             "default": "Shared Chat. The embedded Deep Agents harness owns model/tool iteration; the application persists native interrupts and surfaces them here. Follow-ups resume conversation.thread_id. Transcript is displayed history, not the working project and not harness context. A project folder is optional; filesystem and host-shell tools are unavailable without one. Host-shell execute pauses on Deep Agents interrupt_on; the application persists the interrupt for Chat.",
@@ -2565,6 +2810,9 @@
             "title": "Retrieval Project Paths",
             "type": "array"
           },
+          "review": {
+            "$ref": "#/components/schemas/ReviewConfiguration"
+          },
           "run_ids": {
             "items": {
               "type": "string"
@@ -2639,6 +2887,18 @@
             "title": "Source Surface",
             "type": "string"
           },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
+          },
           "thread_id": {
             "anyOf": [
               {
@@ -2670,6 +2930,15 @@
           },
           "updated_at": {
             "title": "Updated At",
+            "type": "string"
+          },
+          "work_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Work Mode",
             "type": "string"
           },
           "workspace_id": {
@@ -2968,6 +3237,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "execution_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrozenExecutionSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "frozen_config": {
             "anyOf": [
               {
@@ -2979,6 +3258,20 @@
               }
             ],
             "title": "Frozen Config"
+          },
+          "helper_snapshots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FrozenHelperSelection"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Snapshots"
           },
           "id": {
             "title": "Id",
@@ -3335,6 +3628,20 @@
             ],
             "title": "Embedding Deployment Id"
           },
+          "helper_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Agent Ids"
+          },
           "inherit_deployment_settings": {
             "default": true,
             "title": "Inherit Deployment Settings",
@@ -3391,6 +3698,17 @@
               }
             ],
             "title": "Memory Version Refs"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "output_schema": {
             "anyOf": [
@@ -3489,6 +3807,16 @@
             ],
             "title": "Retrieval Project Paths"
           },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "skill_version_refs": {
             "anyOf": [
               {
@@ -3503,9 +3831,36 @@
             ],
             "title": "Skill Version Refs"
           },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
+          },
           "task": {
             "title": "Task",
             "type": "string"
+          },
+          "work_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "work",
+                  "plan"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Mode"
           },
           "workspace_id": {
             "anyOf": [
@@ -3536,6 +3891,68 @@
           }
         },
         "title": "ChatTranscriptReplaceRequest",
+        "type": "object"
+      },
+      "ChildRunActivity": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespace",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "queued",
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "agent_id",
+          "version_id",
+          "name"
+        ],
+        "title": "ChildRunActivity",
         "type": "object"
       },
       "CompatibilityAssessRequest": {
@@ -4173,6 +4590,19 @@
         "title": "CredentialWrite",
         "type": "object"
       },
+      "DefaultConfigurationRequest": {
+        "properties": {
+          "configuration_id": {
+            "title": "Configuration Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configuration_id"
+        ],
+        "title": "DefaultConfigurationRequest",
+        "type": "object"
+      },
       "DeleteFilePlan": {
         "properties": {
           "path": {
@@ -4316,6 +4746,17 @@
             "title": "Capability Evidence",
             "type": "array"
           },
+          "configuration_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Revision"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -4406,6 +4847,18 @@
                 "type": "null"
               }
             ]
+          },
+          "reconfiguration": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconfiguration"
           },
           "requested_startup": {
             "additionalProperties": true,
@@ -4833,6 +5286,93 @@
         ],
         "title": "FileRole",
         "type": "string"
+      },
+      "FrozenExecutionSelection": {
+        "description": "Trusted app-owned queue snapshot; never accepted as start-request input.",
+        "properties": {
+          "selection": {
+            "$ref": "#/components/schemas/ResolvedSetupSelection"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          }
+        },
+        "required": [
+          "selection",
+          "settings"
+        ],
+        "title": "FrozenExecutionSelection",
+        "type": "object"
+      },
+      "FrozenHelperSelection": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "instruction_layers": {
+            "items": {
+              "$ref": "#/components/schemas/InstructionLayer"
+            },
+            "title": "Instruction Layers",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "settings_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings Snapshot"
+          },
+          "version_id": {
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "version_id",
+          "name",
+          "configuration"
+        ],
+        "title": "FrozenHelperSelection",
+        "type": "object"
       },
       "GenerationObservation": {
         "properties": {
@@ -7046,6 +7586,17 @@
             "title": "Created At",
             "type": "string"
           },
+          "default_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Configuration Id"
+          },
           "disk_matches": {
             "default": true,
             "title": "Disk Matches",
@@ -7130,6 +7681,72 @@
         "title": "ModelBundle",
         "type": "object"
       },
+      "ModelConfigurationWriteRequest": {
+        "properties": {
+          "agent": {
+            "additionalProperties": true,
+            "title": "Agent",
+            "type": "object"
+          },
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Id"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "make_default": {
+            "default": false,
+            "title": "Make Default",
+            "type": "boolean"
+          },
+          "per_request": {
+            "additionalProperties": true,
+            "title": "Per Request",
+            "type": "object"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "ModelConfigurationWriteRequest",
+        "type": "object"
+      },
       "ModelJudgement": {
         "properties": {
           "model_review": {
@@ -7144,13 +7761,17 @@
             "title": "Model Review"
           },
           "note": {
-            "default": "Model judgement, not an executable check.",
+            "default": "No independent review was requested.",
             "title": "Note",
             "type": "string"
           },
           "source": {
-            "const": "assistant_message",
-            "default": "assistant_message",
+            "default": "not_requested",
+            "enum": [
+              "assistant_message",
+              "rubric_review",
+              "not_requested"
+            ],
             "title": "Source",
             "type": "string"
           }
@@ -7295,6 +7916,15 @@
             },
             "title": "Presented Tools",
             "type": "array"
+          },
+          "purpose": {
+            "default": "work",
+            "enum": [
+              "work",
+              "review"
+            ],
+            "title": "Purpose",
+            "type": "string"
           },
           "redacted": {
             "default": false,
@@ -7620,6 +8250,17 @@
           "display_name": {
             "title": "Display Name",
             "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
           },
           "per_request": {
             "additionalProperties": true,
@@ -8170,6 +8811,69 @@
         "title": "ProjectorSelectionRequest",
         "type": "object"
       },
+      "ReconfigureDeploymentRequest": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "expected_configuration_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Configuration Revision"
+          },
+          "expected_updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Updated At"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
+          },
+          "replace_startup": {
+            "default": false,
+            "title": "Replace Startup",
+            "type": "boolean"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "required": [
+          "startup"
+        ],
+        "title": "ReconfigureDeploymentRequest",
+        "type": "object"
+      },
       "RelatedFile": {
         "description": "A file the application associates with a run. Not a checkpointer row.",
         "properties": {
@@ -8207,6 +8911,101 @@
         "title": "RenameProfileRequest",
         "type": "object"
       },
+      "ResolvedSetting": {
+        "properties": {
+          "default_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Source"
+          },
+          "default_value": {
+            "title": "Default Value"
+          },
+          "inherited": {
+            "default": false,
+            "title": "Inherited",
+            "type": "boolean"
+          },
+          "inherited_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inherited Source"
+          },
+          "inherited_value": {
+            "title": "Inherited Value"
+          },
+          "known": {
+            "default": true,
+            "title": "Known",
+            "type": "boolean"
+          },
+          "requested_override": {
+            "title": "Requested Override"
+          },
+          "requires_reload": {
+            "default": false,
+            "title": "Requires Reload",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supported"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "ResolvedSetting",
+        "type": "object"
+      },
       "ResolvedSetupSelection": {
         "properties": {
           "agent_setup_id": {
@@ -8233,6 +9032,13 @@
           },
           "configuration": {
             "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "effective_values": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResolvedSetting"
+            },
+            "title": "Effective Values",
+            "type": "object"
           },
           "instruction_layers": {
             "items": {
@@ -8917,6 +9723,65 @@
         "title": "RetainedUploadRequest",
         "type": "object"
       },
+      "ReviewConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "default": "",
+            "maxLength": 16000,
+            "title": "Criteria",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_revisions": {
+            "const": 2,
+            "default": 2,
+            "title": "Max Revisions",
+            "type": "integer"
+          }
+        },
+        "title": "ReviewConfiguration",
+        "type": "object"
+      },
+      "ReviewObservation": {
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "evaluations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Evaluations",
+            "type": "array"
+          },
+          "evidence_scope": {
+            "default": "Recent transcript excerpts; model judgement is not executable verification.",
+            "title": "Evidence Scope",
+            "type": "string"
+          },
+          "max_revisions": {
+            "const": 2,
+            "default": 2,
+            "title": "Max Revisions",
+            "type": "integer"
+          },
+          "status": {
+            "default": "not_requested",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ReviewObservation",
+        "type": "object"
+      },
       "RunLifecycleContract": {
         "description": "Documented lifecycle vocabulary for generated consumers.",
         "properties": {
@@ -8989,6 +9854,18 @@
             ],
             "title": "Bundle Id"
           },
+          "bundle_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Bundle Name"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -8997,9 +9874,34 @@
             "title": "Display Name",
             "type": "string"
           },
+          "equivalent_configuration_ids": {
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Equivalent Configuration Ids",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "merged_into_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Merged Into Configuration Id"
+          },
+          "revision": {
+            "default": 1,
+            "title": "Revision",
+            "type": "integer"
           },
           "updated_at": {
             "title": "Updated At",
@@ -9034,6 +9936,20 @@
           },
           "applied": {
             "title": "Applied"
+          },
+          "default_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Source"
+          },
+          "default_value": {
+            "title": "Default Value"
           },
           "description": {
             "title": "Description",
@@ -9584,6 +10500,20 @@
             ],
             "title": "Embedding Deployment Id"
           },
+          "helper_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Agent Ids"
+          },
           "inherit_deployment_settings": {
             "anyOf": [
               {
@@ -9619,6 +10549,17 @@
               }
             ],
             "title": "Memory Version Refs"
+          },
+          "model_configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Configuration Id"
           },
           "per_request_overrides": {
             "anyOf": [
@@ -9693,6 +10634,16 @@
             ],
             "title": "Requires Project"
           },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "skill_version_refs": {
             "anyOf": [
               {
@@ -9706,6 +10657,33 @@
               }
             ],
             "title": "Skill Version Refs"
+          },
+          "startup_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup Overrides"
+          },
+          "work_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "work",
+                  "plan"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Mode"
           }
         },
         "title": "SetupConfiguration",
@@ -9747,6 +10725,17 @@
               }
             ],
             "title": "Agent Setup Version Id"
+          },
+          "editing_layer": {
+            "default": "conversation",
+            "enum": [
+              "application",
+              "project",
+              "agent",
+              "conversation"
+            ],
+            "title": "Editing Layer",
+            "type": "string"
           },
           "overrides": {
             "$ref": "#/components/schemas/SetupConfiguration"
@@ -11419,12 +12408,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "items": {
-                      "type": "string"
-                    },
-                    "type": "array"
-                  },
+                  "additionalProperties": true,
                   "title": "Response List Agent Tools V1 Agent Tools Get",
                   "type": "object"
                 }
@@ -12099,6 +13083,145 @@
           }
         },
         "summary": "Bundle Configuration Options"
+      }
+    },
+    "/v1/bundles/{bundle_id}/configurations": {
+      "get": {
+        "operationId": "model_configurations_v1_bundles__bundle_id__configurations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunProfile"
+                  },
+                  "title": "Response Model Configurations V1 Bundles  Bundle Id  Configurations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Configurations"
+      },
+      "post": {
+        "operationId": "save_model_configuration_v1_bundles__bundle_id__configurations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigurationWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Model Configuration"
+      }
+    },
+    "/v1/bundles/{bundle_id}/default-configuration": {
+      "put": {
+        "operationId": "set_default_configuration_v1_bundles__bundle_id__default_configuration_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DefaultConfigurationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Default Configuration"
       }
     },
     "/v1/bundles/{bundle_id}/delete-preview": {
@@ -13856,6 +14979,45 @@
         "summary": "Get Deployment"
       }
     },
+    "/v1/deployments/{deployment_id}/configuration-options": {
+      "get": {
+        "operationId": "deployment_configuration_options_v1_deployments__deployment_id__configuration_options_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleConfigurationOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deployment Configuration Options"
+      }
+    },
     "/v1/deployments/{deployment_id}/detach": {
       "post": {
         "operationId": "detach_deployment_v1_deployments__deployment_id__detach_post",
@@ -14010,6 +15172,55 @@
           }
         },
         "summary": "Deployment Profile Changes"
+      }
+    },
+    "/v1/deployments/{deployment_id}/reconfigure": {
+      "post": {
+        "operationId": "reconfigure_deployment_v1_deployments__deployment_id__reconfigure_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deployment_id",
+            "required": true,
+            "schema": {
+              "title": "Deployment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconfigureDeploymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconfigure Deployment"
       }
     },
     "/v1/deployments/{deployment_id}/reload": {

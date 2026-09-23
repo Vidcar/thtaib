@@ -6,10 +6,10 @@ The Windows-first desktop for **thtaib**, a local-first AI workspace for using a
 
 On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It starts the backend if needed and opens the built desktop. Closing and reopening the desktop retains conversations and project files; the backend and any running model remain available in the background.
 
-1. Open **Models**. Under **Start managed**, select the existing **Qwen3.8-27B-UD-IQ4_XS** bundle and choose **Start**. If it is already running, use it without starting another copy. The first model check after backend startup can take time; no download is needed for an installed bundle and runtime.
-2. Open **Chat**. The running model is selected automatically. Leave **Profile** at **None** for defaults, or choose a saved profile deliberately.
-3. Send a message. For file tasks, enter an existing project folder first. The assistant can read and edit files there. Shell commands that need approval show the exact command with **Approve** and **Deny**.
-4. Use **Cancel** to stop work, and choose a saved conversation from the left to continue. Recent conversations appear first. Stop the model from **Models** when you want to release its GPU memory.
+1. Open **Models**, choose an installed model and its configuration, then load it. **Save changes** updates that configuration; **Save as variant** creates another. Loading changes use **Apply & reload**. An already running model can be used directly.
+2. Open **Chat**. New unpinned chats use the loaded model. The model menu shows effective thinking and context settings. **Apply** keeps changes in the conversation; **Save to model** explicitly updates future defaults.
+3. Add an existing project from the left rail for file tasks. **Ask** pauses before effects; **Approve for me** permits recoverable project edits; **Full access** permits enabled tools. **Plan** remains read-only at every access level. Named helpers and review are optional.
+4. Use **Stop** to cancel active work. Choose a saved conversation from the left to continue; visiting another destination retains its draft and reading position. Unload the model from **Models** when you want to release its memory.
 
 ## Install and run
 
