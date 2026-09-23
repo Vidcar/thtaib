@@ -28,7 +28,7 @@ import type { ObservedFileChange } from "./activityLine";
 import type { SchemaProjectFileChangeView } from "../generated/shared-contracts/openapi";
 import { packet03Api } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
-import { ChatMeasurements } from "./ChatMeasurements";
+import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
 import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
 import { notifyAttentionChanged } from "./AttentionPanel";
@@ -285,6 +285,9 @@ function ChatInteractionStreamContent(props: {
       runId: run?.id ?? null,
       runStatus: run?.status ?? null,
       eventCount: run?.events.length ?? null,
+    });
+    publishLiveMeasurement({
+      runId: run.id,
       generation: run.generation_observation,
       context: run.context_observation,
     });
@@ -390,7 +393,7 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
+        <AgentMessageFeed live={stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
           return retained?.content;
         }} />
@@ -470,8 +473,8 @@ function chatDeployHealthNotice(conversation: ChatConversation | null, selectedD
     return null;
   }
   const selectedIsBound = selectedDeployment?.id === conversation.deployment_id && health.deployment_id === conversation.deployment_id;
-  if (selectedIsBound && selectedDeployment?.scope === "managed" && selectedDeployment.status === "stopped") {
-    return { tone: "info", message: "This saved model setup will load when you send a message." };
+  if (selectedIsBound && selectedDeployment?.scope === "managed" && (selectedDeployment.status === "stopped" || selectedDeployment.status === "starting")) {
+    return null;
   }
   return { tone: health.healthy === false ? "error" : "warn", message: health.message };
 }
@@ -552,6 +555,7 @@ interface ChatPanelProps {
   onActiveConversationId?: (id: string | null) => void;
   onCreateProject?: () => void;
   projectRevision?: number;
+  onModelPhase?: (phase: "starting" | "ready" | "none" | "failed") => void;
 }
 
 export function ChatPanel(props: ChatPanelProps = {}) {
@@ -572,6 +576,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [fileChanges, setFileChanges] = useState<ObservedFileChange[]>([]);
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [deploymentsLoaded, setDeploymentsLoaded] = useState(false);
+  const modelWarm = useRef(false);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
@@ -772,6 +778,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setDeployments(nextDeployments.value);
       setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments.value, current));
     }
+    setDeploymentsLoaded(true);
     if (nextProfiles.status === "fulfilled") {
       setProfiles(nextProfiles.value);
       setProfileId((current) => (current === "!none" || nextProfiles.value.some((profile) => profile.id === current) ? current : ""));
@@ -856,8 +863,41 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   useEffect(() => {
     void refresh().catch((error: unknown) => {
       setLoadError(errorMessage(error));
+      setDeploymentsLoaded(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!deploymentsLoaded || modelWarm.current) return;
+    modelWarm.current = true;
+    const report = props.onModelPhase;
+    if (window.workbench?.productName !== "Local AI Workbench") {
+      report?.("none");
+      return;
+    }
+    const preferred = preferredChatDeploymentId(deployments, deploymentId);
+    const selected = deployments.find(item => item.id === preferred);
+    if (!selected || selected.scope !== "managed") {
+      report?.(selected?.status === "running" ? "ready" : "none");
+      return;
+    }
+    if (selected.status === "running") {
+      report?.("ready");
+      return;
+    }
+    if (selected.status !== "stopped") {
+      report?.(selected.status === "starting" ? "starting" : "failed");
+      return;
+    }
+    report?.("starting");
+    void api.start(selected.id).then(next => {
+      setDeployments(current => current.map(item => item.id === next.id ? next : item));
+      report?.(next.status === "running" ? "ready" : "starting");
+    }).catch(() => {
+      report?.("failed");
+      setMessage("The model did not start.");
+    });
+  }, [deploymentsLoaded]);
 
   useEffect(() => { props.onHistoryChanged?.(); }, [historySignature]);
   useEffect(() => { props.onActiveConversationId?.(conversation?.id ?? selectionLoading?.id ?? null); }, [conversation?.id, selectionLoading?.id]);
@@ -947,7 +987,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [conversation?.current_run?.id, conversation?.current_run?.status]);
 
   useEffect(() => {
-    transcriptEnd.current?.scrollIntoView({ block: "end" });
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    transcriptEnd.current?.scrollIntoView({ block: "end", behavior: reduceMotion ? "auto" : "smooth" });
   }, [transcript.length, liveRunId]);
 
   function fail(error: unknown): void {
@@ -1487,8 +1528,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <div className={`chat-workspace${railOpen ? " files-open" : ""}`}>
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
-        <div className="transcript" aria-live="polite">
-          {deployments.length === 0 && !conversation ? (
+        <div className="transcript">
+          {deploymentsLoaded && deployments.length === 0 && !conversation ? (
             <EmptyState title="Your workspace for local AI">
               <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>

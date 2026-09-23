@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -54,19 +56,49 @@ from workbench_backend.interaction.service import InteractionService
 
 PRODUCT_NAME = "Local AI Workbench"
 SURFACE = "managed-inference"
+log = logging.getLogger(__name__)
+
+
+def note_catalogue_served(application: FastAPI) -> None:
+    served = getattr(application.state, "catalogue_served", None)
+    if served is not None:
+        served.set()
+
+
+def _finish_startup(application: FastAPI) -> None:
+    """Catch up finished chats after the first lists, then drop their token rows."""
+
+    served = application.state.catalogue_served
+    stop = application.state.startup_stop
+    while not served.is_set() and not stop.is_set():
+        served.wait(timeout=0.2)
+    if stop.is_set():
+        return
+    try:
+        application.state.chat.reconcile_saved_queue_on_startup()
+    except Exception:
+        log.exception("Saved chat catch-up failed; the catalogue stays readable")
+    try:
+        if application.state.app_store.interaction_event_count() < 500:
+            return
+        removed = application.state.app_store.discard_finished_token_logs()
+        if removed:
+            application.state.app_store.reclaim_unused_space()
+    except Exception:
+        log.exception("Finished token log could not be collapsed")
 
 
 @asynccontextmanager
 async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
-    application.state.chat.reconcile_saved_queue_on_startup()
+    application.state.catalogue_served = threading.Event()
+    application.state.startup_stop = threading.Event()
     application.state.chat_coordinator = ChatCoordinator(application)
-    for conversation in application.state.chat.store.list_conversations(include_archived=True):
-        if conversation.current_run_id:
-            try:
-                application.state.chat_coordinator.observe(application.state.harness.get_run(conversation.current_run_id))
-            except HarnessError:
-                pass
+    finish = threading.Thread(target=_finish_startup, args=(application,), name="workbench-startup-finish", daemon=True)
+    finish.start()
+    application.state.startup_finish = finish
     yield
+    application.state.startup_stop.set()
+    application.state.catalogue_served.set()
     application.state.chat_coordinator.close()
     harness = getattr(application.state, "harness", None)
     if harness is not None:

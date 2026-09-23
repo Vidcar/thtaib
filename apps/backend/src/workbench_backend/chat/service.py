@@ -193,17 +193,12 @@ class ChatService:
         return self._view(self.store.put(conversation))
 
     def list_conversations(self, *, include_archived: bool = False) -> list[ChatConversationView]:
-        views: list[ChatConversationView] = []
-        for item in self.store.list_conversations(include_archived=include_archived):
-            with self.store.conversation_lock(item.id):
-                # Deletion can finish after the list snapshot was read. It
-                # removes one row, not access to every surviving conversation.
-                fresh = self.store.get(item.id)
-                if fresh is None or (fresh.archived and not include_archived):
-                    continue
-                self._persist_thread_if_missing(fresh)
-                views.append(self._view(fresh, persist=True))
-        return views
+        """Sidebar catalogue. Does not load runs, reconcile, or the token log."""
+
+        return [
+            self._light_view(item, include_transcript=False)
+            for item in self.store.list_conversations(include_archived=include_archived)
+        ]
 
     def search(self, query: str, *, include_archived: bool = False) -> list[ChatSearchResult]:
         return [
@@ -1400,6 +1395,42 @@ class ChatService:
                 status_code=400,
             )
         return None, resolved
+
+    def _light_view(self, conversation: ChatConversation, *, include_transcript: bool) -> ChatConversationView:
+        shown = conversation if include_transcript else conversation.model_copy(update={"transcript": []})
+        try:
+            deployment = self.manager.get_deployment(conversation.deployment_id)
+            deploy_health = report_chat_deploy_health(deployment, None)
+        except ManagerError as exc:
+            if exc.code != "deployment_missing":
+                raise
+            deploy_health = ChatDeployHealth(
+                deployment_id=conversation.deployment_id,
+                deployment_status="missing",
+                healthy=False,
+                code="deploy_missing",
+                message=(
+                    "The deployment bound to this conversation is no longer available. "
+                    "Select a deployment to continue."
+                ),
+                detail="The bound deployment record was not found.",
+            )
+        return ChatConversationView(
+            **shown.model_dump(),
+            current_run=None,
+            events=[],
+            pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),
+            continuity=ChatContinuity(
+                conversation_id=conversation.id,
+                thread_id=conversation.thread_id or "",
+                run_ids=list(conversation.run_ids),
+                current_run_id=conversation.current_run_id,
+            ),
+            deploy_health=deploy_health,
+            filesystem_tools_available=bool(conversation.project_path),
+            shell_tools_available=bool(conversation.project_path),
+            enabled_tools=enabled_for_project(bool(conversation.project_path)),
+        )
 
     def _view(self, conversation: ChatConversation, *, persist: bool = False) -> ChatConversationView:
         current: AgentRun | None = None

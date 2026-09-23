@@ -204,6 +204,24 @@ class ApplicationStore(ChatStateStoreMixin, InteractionStoreMixin, SetupStoreMix
             self._conn.commit()
         return run
 
+    def run_status(self, run_id: str | None) -> str | None:
+        if not run_id:
+            return None
+        with self._lock:
+            row = self._conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return str(row["status"]) if row is not None and row["status"] is not None else None
+
+    def run_ids_with_status(self, statuses: set[str]) -> list[tuple[str, str]]:
+        if not statuses:
+            return []
+        marks = ",".join("?" for _ in statuses)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT id, status FROM runs WHERE status IN ({marks}) ORDER BY created_at",
+                tuple(sorted(statuses)),
+            ).fetchall()
+        return [(str(row["id"]), str(row["status"])) for row in rows]
+
     def get_run(self, run_id: str) -> AgentRun | None:
         with self._lock:
             row = self._conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()

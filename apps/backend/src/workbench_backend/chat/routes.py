@@ -34,7 +34,11 @@ def create_conversation(request: Request, body: ChatConversationCreateRequest) -
 
 @router.get("/conversations")
 def list_conversations(request: Request, include_archived: bool = False) -> list[ChatConversationView]:
-    return get_chat(request).list_conversations(include_archived=include_archived)
+    from workbench_backend.app import note_catalogue_served
+
+    listed = get_chat(request).list_conversations(include_archived=include_archived)
+    note_catalogue_served(request.app)
+    return listed
 
 
 @router.get("/conversations/search")

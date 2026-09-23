@@ -17,7 +17,11 @@ router = APIRouter(prefix="/v1")
 
 @router.get("/projects", response_model=list[ProjectRecord])
 def projects(request: Request, include_inactive: bool = False):
-    return request.app.state.setups.list_projects(include_inactive=include_inactive)
+    from workbench_backend.app import note_catalogue_served
+
+    listed = request.app.state.setups.list_projects(include_inactive=include_inactive)
+    note_catalogue_served(request.app)
+    return listed
 
 
 @router.post("/projects", response_model=ProjectRecord)

@@ -110,6 +110,8 @@ function writePresentation(payload: Partial<PresentationSettings>): Promise<Pres
   return result;
 }
 
+const chatListFlights = new Map<string, Promise<ChatConversation[]>>();
+
 export const api = {
   health: () => request<{ status: string; product: string; surface: string }>("/health"),
   presentationSettings: readPresentation,
@@ -235,7 +237,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  chatConversations: (includeArchived = false) => request<ChatConversation[]>(`/v1/chat/conversations?include_archived=${includeArchived ? "true" : "false"}`),
+  chatConversations: (includeArchived = false) => {
+    const key = includeArchived ? "archived" : "open";
+    const existing = chatListFlights.get(key);
+    if (existing) return existing;
+    const flight = request<ChatConversation[]>(`/v1/chat/conversations?include_archived=${includeArchived ? "true" : "false"}`)
+      .finally(() => { if (chatListFlights.get(key) === flight) chatListFlights.delete(key); });
+    chatListFlights.set(key, flight);
+    return flight;
+  },
   searchChatConversations: (query: string, includeArchived = false) =>
     request<ChatSearchResult[]>(`/v1/chat/conversations/search?q=${encodeURIComponent(query)}&include_archived=${includeArchived ? "true" : "false"}`),
   chatConversation: (id: string) => request<ChatConversation>(`/v1/chat/conversations/${id}`),

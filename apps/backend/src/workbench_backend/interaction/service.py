@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import time
 from typing import Any
 from uuid import uuid4, uuid5, NAMESPACE_URL
 
@@ -47,6 +48,10 @@ class InteractionService:
         self.chat_provider = chat
         # Serializes projection transactions, never holds a graph execution lock.
         self._projection_lock = threading.RLock()
+        self._pending: dict[str, list[tuple[AgentRun, dict[str, Any]]]] = {}
+        self._pending_at: dict[str, float] = {}
+        self._flushing = False
+        self.store.before_interaction_read = self.flush_pending
 
     @property
     def harness(self) -> Any:
@@ -335,7 +340,16 @@ class InteractionService:
             if binding is None:
                 return
             if raw is not None:
+                if raw.get("method") in {"messages", "tools"}:
+                    self._enqueue_native(binding, run, raw)
+                    return
+                self._flush_thread(binding["id"])
                 self._observe_native_event(binding, run, raw)
+                return
+            self._flush_thread(binding["id"])
+            binding = self.binding(binding["id"])
+            if telemetry and is_run_lifecycle_live(run.status) and self._speed_only(binding["snapshot"], run):
+                self._observe_measurement(binding, run)
                 return
             snapshot = copy.deepcopy(binding["snapshot"])
             outgoing = []
@@ -377,15 +391,23 @@ class InteractionService:
             )
             self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id,
                                           replaceable_measurement=replaceable)
+            if run.status.value == "completed":
+                self.store.discard_finished_token_log(binding["id"])
 
     def _observe_native_event(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> None:
         """Append one native event. Rewrite the snapshot only when it changes."""
+        outgoing, snapshot = self._project_native(binding, run, raw)
+        if not outgoing and snapshot is None:
+            return
+        self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id)
+
+    def _project_native(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         stored = binding["snapshot"]
         params = raw.get("params", {})
         namespace = params.get("namespace", [])
         display_hidden = stored.get("workbench", {}).get("display_hidden_run_id") == run.id
         if display_hidden and raw.get("method") in {"messages", "tools"}:
-            return
+            return [], None
         snapshot: dict[str, Any] | None = None
         outgoing: list[dict[str, Any]] = []
 
@@ -418,9 +440,80 @@ class InteractionService:
         outgoing.extend(projected)
         if raw.get("method") == "values" and not namespace:
             outgoing.insert(0, event("values", editable()))
-        if not outgoing:
+        return outgoing, snapshot
+
+    def flush_pending(self, thread_id: str | None = None) -> None:
+        """Commit buffered tokens before a read, a snapshot, or the end of a turn."""
+        if self._flushing:
             return
-        self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id)
+        with self._projection_lock:
+            if self._flushing:
+                return
+            self._flushing = True
+            try:
+                keys = [thread_id] if thread_id is not None else list(self._pending)
+                for key in keys:
+                    self._flush_thread(key)
+            finally:
+                self._flushing = False
+
+    def _enqueue_native(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> None:
+        thread_id = binding["id"]
+        bucket = self._pending.setdefault(thread_id, [])
+        if not bucket:
+            self._pending_at[thread_id] = time.monotonic()
+        bucket.append((run, raw))
+        age = time.monotonic() - self._pending_at.get(thread_id, 0)
+        if len(bucket) >= 32 or age >= 0.016:
+            self._flush_thread(thread_id)
+
+    def _flush_thread(self, thread_id: str) -> None:
+        bucket = self._pending.pop(thread_id, [])
+        self._pending_at.pop(thread_id, None)
+        if not bucket:
+            return
+        outgoing: list[dict[str, Any]] = []
+        snapshot: dict[str, Any] | None = None
+        run_id = bucket[-1][0].id
+        for run, raw in bucket:
+            events, snap = self._project_native(self.binding(thread_id), run, raw)
+            outgoing.extend(events)
+            if snap is not None:
+                snapshot = snap
+            run_id = run.id
+        if outgoing or snapshot is not None:
+            self.store.append_interaction(thread_id, outgoing, snapshot=snapshot, run_id=run_id)
+
+    def _speed_only(self, snapshot: dict[str, Any], run: AgentRun) -> bool:
+        stored = (snapshot.get("workbench") or {}).get("run") or {}
+        if not stored or stored.get("id") != run.id:
+            return False
+        status = run.status.value if hasattr(run.status, "value") else run.status
+        if stored.get("status") != status or stored.get("error") != run.error:
+            return False
+        if len(stored.get("events") or []) != len(run.events):
+            return False
+        if list(stored.get("tool_invocations") or []) != list(run.tool_invocations):
+            return False
+        if bool(stored.get("pending_interrupt")) != bool(run.pending_interrupt):
+            return False
+        return True
+
+    def _observe_measurement(self, binding: dict[str, Any], run: AgentRun) -> None:
+        """Publish counts and speed without copying the transcript or replaying tokens."""
+        stored = binding["snapshot"]
+        workbench = dict(stored.get("workbench") or {})
+        patched = dict(workbench.get("run") or {})
+        observation = run.generation_observation.model_dump(mode="json") if run.generation_observation else None
+        patched["generation_observation"] = observation
+        patched["updated_at"] = run.updated_at if isinstance(run.updated_at, str) else run.updated_at.isoformat()
+        workbench["run"] = patched
+        snapshot = {**stored, "workbench": workbench}
+        wire = event("values", {"workbench": workbench, "__interrupt__": list(stored.get("__interrupt__") or [])})
+        wire["params"]["measurement"] = True
+        phase = run.generation_observation.phase if run.generation_observation else None
+        replaceable = phase in {None, "prompt_processing", "generating"}
+        self.store.append_interaction(binding["id"], [wire], snapshot=snapshot, run_id=run.id, replaceable_measurement=replaceable)
 
     @staticmethod
     def _measurement_only(previous: dict[str, Any], current: dict[str, Any]) -> bool:
@@ -482,6 +575,18 @@ class InteractionService:
 
     def state(self, thread_id: str) -> dict[str, Any]:
         binding = self.binding(thread_id)
+        status = self.store.run_status(binding.get("run_id"))
+        if not (status and is_run_lifecycle_live(status)):
+            with self._projection_lock:
+                binding = self.binding(thread_id)
+                snapshot = copy.deepcopy(binding["snapshot"])
+                seq = binding["seq"]
+            values = self.display_values(snapshot)
+            workbench = values.get("workbench")
+            if isinstance(workbench, dict):
+                workbench.pop("interrupt_run_id", None)
+            values["__interrupt__"] = []
+            return {"values": values, "next": [], "tasks": [], "interaction_cursor": seq}
         if binding["run_id"]:
             # Existing recovery owner reconciles orphaned workers before we
             # advertise finality. It never invokes the model on a state read.

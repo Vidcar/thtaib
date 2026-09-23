@@ -32,8 +32,14 @@ def _conversation_for_run(conversations, run_id: str):
 def attention(request: Request) -> list[AttentionItem]:
     state = request.app.state
     conversations = state.chat.store.list_conversations(include_archived=True)
+    wanted = {"failed", "queued", "running", "cancel_requested"}
+    if state.preferences.preferences().success_notifications:
+        wanted.add("completed")
     items = []
-    for run in state.harness.list_runs():
+    for run_id, _status in state.app_store.run_ids_with_status(wanted):
+        run = state.app_store.get_run(run_id)
+        if run is None:
+            continue
         kind = "question" if run.pending_interrupt and run.pending_interrupt.kind == "ask_user" else "approval" if run.pending_interrupt else "failure" if run.status == "failed" else "success" if run.status == "completed" and state.preferences.preferences().success_notifications else None
         if kind is None or run.status == "cancel_requested":
             continue

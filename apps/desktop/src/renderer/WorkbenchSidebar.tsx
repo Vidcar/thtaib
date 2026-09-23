@@ -52,6 +52,9 @@ export function WorkbenchSidebar(props: {
   onProjectChanged?: () => void;
   onHistoryNotice: (notice: HistoryNotice) => void;
   onBeforeConversationChange?: () => Promise<unknown>;
+  dotReady?: boolean;
+  dotTitle?: string;
+  onListsReady?: (ready: boolean) => void;
 }) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -61,6 +64,8 @@ export function WorkbenchSidebar(props: {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<ChatConversation | null>(null);
   const [listError, setListError] = useState("");
+  const [chatsLoaded, setChatsLoaded] = useState(false);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; x: number; y: number } | null>(null);
 
@@ -79,15 +84,55 @@ export function WorkbenchSidebar(props: {
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.chatConversations(includeArchived), workspaceApi.projects()]).then(([nextConversations, nextProjects]) => {
-      if (!cancelled) {
-        setConversations(newestConversationFirst(nextConversations));
-        setProjects(nextProjects);
-        setListError("");
+    void (async () => {
+      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
+        try {
+          const next = await api.chatConversations(includeArchived);
+          if (cancelled) return;
+          setConversations(newestConversationFirst(next));
+          setChatsLoaded(true);
+          setListError("");
+          return;
+        } catch (error: unknown) {
+          if (attempt === 29 && !cancelled) {
+            setListError(errorMessage(error));
+            setChatsLoaded(true);
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
-    }).catch((error: unknown) => { if (!cancelled) setListError(errorMessage(error)); });
+    })();
     return () => { cancelled = true; };
-  }, [includeArchived, props.historyRevision, props.projectRevision]);
+  }, [includeArchived, props.historyRevision]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (let attempt = 0; attempt < 30 && !cancelled; attempt += 1) {
+        try {
+          const next = await workspaceApi.projects();
+          if (cancelled) return;
+          setProjects(next);
+          setProjectsLoaded(true);
+          setListError("");
+          return;
+        } catch (error: unknown) {
+          if (attempt === 29 && !cancelled) {
+            setListError(errorMessage(error));
+            setProjectsLoaded(true);
+            return;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [props.projectRevision]);
+
+  useEffect(() => {
+    props.onListsReady?.(chatsLoaded && projectsLoaded);
+  }, [chatsLoaded, projectsLoaded, props.onListsReady]);
 
   const searchableRevision = useMemo(() => conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|"), [conversations]);
   useEffect(() => {
@@ -286,15 +331,15 @@ export function WorkbenchSidebar(props: {
                   </button>
                   {project ? <button type="button" className="icon-button" aria-label={`New chat in ${folder.label}`} title={`New chat in ${folder.label}`} disabled={folder.missing} onClick={() => props.onNewChatInProject?.(project)}><Icon name="plus" size={14} /></button> : null}
                 </div>
-                {open ? folder.items.length ? <ul className="nav-list">{folder.items.map(renderConversation)}</ul> : <p className="hint">No chats yet</p> : null}
+                {open ? folder.items.length ? <ul className="nav-list">{folder.items.map(renderConversation)}</ul> : chatsLoaded ? <p className="hint">No chats yet</p> : null : null}
               </section>
             );
           })}
-          {!searchMiss && !projectFolders.length && !orphans.length ? <p className="hint">No projects yet</p> : null}
+          {!searchMiss && projectsLoaded && !projectFolders.length && !orphans.length ? <p className="hint">No projects yet</p> : null}
         </div>
         <section className="sidebar-loose" aria-label="No project">
           <h3>No project</h3>
-          {searchMiss ? null : loose.length ? <ul className="nav-list">{loose.map(renderConversation)}</ul> : <p className="hint">No chats yet</p>}
+          {searchMiss ? null : loose.length ? <ul className="nav-list">{loose.map(renderConversation)}</ul> : chatsLoaded ? <p className="hint">No chats yet</p> : null}
         </section>
       </div>
       {menuProject && projectMenu ? createPortal(
@@ -305,7 +350,7 @@ export function WorkbenchSidebar(props: {
         </div>,
         document.body,
       ) : null}
-      <div className="service-indicator" title={props.backendStatus}><span className={`status-dot${props.backendOk ? " ready" : ""}`} /><span>{props.backendOk === false ? "Service unavailable" : "Local"}</span></div>
+      <div className="service-indicator" title={props.dotTitle ?? props.backendStatus}><span className={`status-dot${props.dotReady ? " ready" : ""}`} /><span>{props.backendOk === false ? "Service unavailable" : "Local"}</span></div>
       {!props.collapsed ? <PanelResize label="Resize navigation" width={props.width} onResize={props.onWidthChange} reset={232} /> : null}
     </aside>
   );

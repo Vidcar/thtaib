@@ -9,6 +9,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from workbench_backend.contracts.lifecycle import LIVE_RUN_LIFECYCLE_STATUSES
+
+_LIVE_RUN_STATUS = {item.value for item in LIVE_RUN_LIFECYCLE_STATUSES}
+
 
 INTERACTION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS interaction_threads (
@@ -53,6 +57,11 @@ class InteractionStoreMixin:
             return self.get_interaction(thread_id) or self.interaction_for_graph(graph_thread_id)
 
     def get_interaction(self, thread_id: str) -> dict[str, Any] | None:
+        # Flush only from outside the store lock. A caller that already holds
+        # it is inside append or a page read; flushing would take the projection
+        # lock and can deadlock with the writer that is waiting for this lock.
+        if not self._lock._is_owned():
+            self._flush_interaction(thread_id)
         with self._lock:
             row = self._conn.execute("SELECT * FROM interaction_threads WHERE id=?", (thread_id,)).fetchone()
             return self._interaction_row(row)
@@ -118,8 +127,80 @@ class InteractionStoreMixin:
                 raise
             return seq
 
+    def discard_finished_token_log(self, thread_id: str) -> int:
+        """Drop token rows and older snapshots once a turn is no longer live.
+
+        The thread row keeps the latest display snapshot and the cursor.
+        The newest values event and lifecycle events stay so a subscriber
+        can still see that the turn finished.
+        """
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT run_id FROM interaction_threads WHERE id = ?",
+                (thread_id,),
+            ).fetchone()
+            if row is None:
+                return 0
+            if row["run_id"]:
+                status = self._conn.execute(
+                    "SELECT status FROM runs WHERE id = ?",
+                    (row["run_id"],),
+                ).fetchone()
+                if status is not None and status["status"] in _LIVE_RUN_STATUS:
+                    return 0
+            removed = self._conn.execute(
+                """
+                DELETE FROM interaction_events
+                WHERE thread_id = ?
+                  AND json_extract(payload, '$.method') IN ('messages', 'tools')
+                """,
+                (thread_id,),
+            ).rowcount
+            removed += self._conn.execute(
+                """
+                DELETE FROM interaction_events
+                WHERE thread_id = ?
+                  AND json_extract(payload, '$.method') = 'values'
+                  AND seq < (
+                    SELECT MAX(seq) FROM interaction_events
+                    WHERE thread_id = ?
+                      AND json_extract(payload, '$.method') = 'values'
+                  )
+                """,
+                (thread_id, thread_id),
+            ).rowcount
+            self._conn.commit()
+            return int(removed or 0)
+
+    def discard_finished_token_logs(self) -> int:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT interaction_threads.id AS id, runs.status AS status
+                FROM interaction_threads
+                LEFT JOIN runs ON runs.id = interaction_threads.run_id
+                """
+            ).fetchall()
+        removed = 0
+        for row in rows:
+            if row["status"] in _LIVE_RUN_STATUS:
+                continue
+            removed += self.discard_finished_token_log(str(row["id"]))
+        return removed
+
+    def interaction_event_count(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT count(*) AS n FROM interaction_events").fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def reclaim_unused_space(self) -> None:
+        with self._lock:
+            self._conn.execute("VACUUM")
+
     def interaction_events_after(self, thread_id: str, since: int, limit: int = 128) -> list[dict[str, Any]]:
         """Read a bounded page; a slow observer never accumulates RAM backlog."""
+        self._flush_interaction(thread_id)
         with self._lock:
             rows = self._conn.execute("SELECT payload FROM interaction_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT ?",
                                      (thread_id, since, min(limit, 128))).fetchall()
@@ -130,8 +211,14 @@ class InteractionStoreMixin:
             row = self._conn.execute("SELECT MIN(seq) AS first,MAX(seq) AS last FROM interaction_events WHERE thread_id=?", (thread_id,)).fetchone()
             return int(row["first"] or 0), int(row["last"] or 0)
 
+    def _flush_interaction(self, thread_id: str) -> None:
+        hook = getattr(self, "before_interaction_read", None)
+        if hook is not None:
+            hook(thread_id)
+
     def interaction_page(self, thread_id: str, since: int) -> tuple[list[dict[str, Any]], int, bool]:
         """Read the replay page and its high-water mark in one lock scope."""
+        self._flush_interaction(thread_id)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT seq,payload,after_seq FROM interaction_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT 128",

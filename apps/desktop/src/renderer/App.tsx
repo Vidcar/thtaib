@@ -37,6 +37,24 @@ export function App() {
   const attentionRequest = useRef(0);
   const [backendStatus, setBackendStatus] = useState("Checking local services…");
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [listsReady, setListsReady] = useState(false);
+  const [modelPhase, setModelPhase] = useState<"pending" | "starting" | "ready" | "none" | "failed">("pending");
+  const dotTitle = backendOk === false
+    ? "Service unavailable"
+    : backendOk !== true
+      ? "Checking local services"
+      : !listsReady || modelPhase === "pending"
+        ? "Reading chats"
+        : modelPhase === "starting"
+          ? "Starting the model"
+          : modelPhase === "failed"
+            ? "Model did not start"
+            : modelPhase === "ready"
+              ? "Model ready"
+              : "Local";
+  const dotReady = backendOk === true && listsReady && (modelPhase === "ready" || modelPhase === "none");
+  const onListsReady = useCallback((ready: boolean) => setListsReady(ready), []);
+  const onModelPhase = useCallback((phase: "starting" | "ready" | "none" | "failed") => setModelPhase(phase), []);
   const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
   const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
@@ -166,6 +184,7 @@ export function App() {
             onReuseAssetHandled={() => setReuseAssetIds([])}
             presentation={presentation}
             productName={productName}
+            onModelPhase={onModelPhase}
           />
         );
       case "projects":
@@ -245,6 +264,9 @@ export function App() {
         onProjectChanged={() => setProjectRevision(value => value + 1)}
         onHistoryNotice={notice => { setHistoryNotice(notice); setHistoryRevision(value => value + 1); }}
         onBeforeConversationChange={() => prepareChatNavigation.current?.() ?? Promise.resolve()}
+        dotReady={dotReady}
+        dotTitle={dotTitle}
+        onListsReady={onListsReady}
       />
       <main className="app-main">{renderTab(tab)}</main>
     </div>

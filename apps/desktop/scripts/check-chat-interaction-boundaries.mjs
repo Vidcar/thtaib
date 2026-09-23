@@ -1949,7 +1949,7 @@ async function testStoppedManagedDeploymentShowsLoadOnSendNotice(vite) {
     });
     await waitFor(() => assert.doesNotMatch(allText(renderer), /Loading conversation/), "stopped managed conversation bound");
     await waitFor(() => assert.match(allText(renderer), /Loads when sent/), "stopped managed selector shows load-on-send state");
-    assert.match(allText(renderer), /This saved model setup will load when you send a message\./, "stopped managed health is presented as load-on-send");
+    assert.doesNotMatch(allText(renderer), /This saved model setup will load when you send a message\./, "startup warming does not add a load-on-send sentence");
     assert.doesNotMatch(allText(renderer), /Continuity\/thread linkage is not proof of live completion/, "stopped managed chat should not show technical unhealthy diagnostic before send");
   } finally {
     await closeHarness(renderer, harness);
@@ -2023,13 +2023,14 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
     await waitFor(() => assert.match(textOf(measurements()), /45\.6 tok\/s/), "same-event-count measurement reaches visible composer");
     assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 1000, "generation-only update preserves its prepared request context");
 
+    const readout = () => renderer.root.findByProps({ className: "chat-measurements" });
     await publish("thread_a", { ...measured, context_observation: context(1700) });
-    await waitFor(() => assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 1700), "context-only update reaches composer without a new generation or audit event");
+    await waitFor(() => assert.equal(Number(readout().props["data-estimated-input"]), 1700), "context-only update reaches composer without a new generation or audit event");
 
     const nextRequest = { ...measured, generation_observation: null, context_observation: context(2100) };
     await publish("thread_a", nextRequest);
-    await waitFor(() => assert.equal(measurements().props.run.generation_observation, null), "next model request clears previous generation");
-    assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 2100);
+    await waitFor(() => assert.equal(readout().props["data-tokens-per-second"], ""), "next model request clears previous generation");
+    assert.equal(Number(readout().props["data-estimated-input"]), 2100);
     assert.doesNotMatch(textOf(measurements()), /45\.6 tok\/s/, "pending call must not show the preceding call's speed");
 
     await act(async () => button(renderer, "Conversation B").props.onClick());
