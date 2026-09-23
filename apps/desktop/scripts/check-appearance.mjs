@@ -20,6 +20,9 @@ for (const retired of ["space-hairline", "space-row", "pad-hairline", "pad-row",
   assert.ok(!ids.includes(retired), `${retired} is folded into a control a person can tell apart`);
 }
 assert.ok(ids.length < 160, `appearance stays a shared set, not one control per element (${ids.length})`);
+const preview = readFileSync(path.join(renderer, "AppearancePreview.tsx"), "utf8");
+const missingPreview = ids.filter(id => !preview.includes(`"${id}"`));
+assert.deepEqual(missingPreview, [], `every appearance control is marked in the preview:\n${missingPreview.join("\n")}`);
 
 const aliases = new Set(["--bg", "--bg-nav", "--bg-panel", "--bg-raised", "--bg-input", "--border", "--text", "--muted", "--accent", "--warn", "--danger", "--ok", "--live", "--hover", "--shadow", "--navigation-width", "--inspector-width"]);
 const lengthRe = /(?<![\w-])(?!0(?:px|rem|em)\b)(?:\d+\.?\d*|\.\d+)(?:px|rem|em)\b/g;
