@@ -17,6 +17,7 @@ import { ModelsPanel } from "./ModelsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { WorkbenchSidebar, type ChatLaunch, type ConversationListActions, type HistoryNotice } from "./WorkbenchSidebar";
 import type { RetainedAsset } from "./packet03Api";
+import { loadAppearance, setAppearanceTheme } from "./appearanceStore";
 import type { PresentationSettings, WorkbenchSurface, WorkbenchTab } from "./types";
 
 const fallbackPresentation: PresentationSettings = {
@@ -75,7 +76,10 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = presentation.theme;
+    setAppearanceTheme(presentation.theme);
   }, [presentation.theme]);
+
+  useEffect(() => { void loadAppearance(); }, []);
 
   useEffect(() => {
     let cancelled = false;

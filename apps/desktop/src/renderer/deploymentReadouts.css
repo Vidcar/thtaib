@@ -1,15 +1,15 @@
 .model-configuration .model-applied-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 18px;
-  margin: 8px 0;
-  font-size: 12px;
+  gap: var(--model-configuration-model-applied-facts-gap-vertical) var(--model-configuration-model-applied-facts-gap-horizontal);
+  margin: var(--model-configuration-model-applied-facts-margin) 0;
+  font-size: var(--model-configuration-model-applied-facts-text-size);
 }
 
 .model-configuration .model-applied-facts > div {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--model-configuration-model-applied-facts-gap);
 }
 
 .model-configuration .model-applied-facts dt {
@@ -21,24 +21,24 @@
 }
 
 .model-configuration .settings-readout {
-  gap: 0 20px;
-  margin: 8px 0;
+  gap: 0 var(--model-configuration-settings-readout-gap);
+  margin: var(--model-configuration-settings-readout-margin) 0;
 }
 
 .model-configuration .settings-readout > div {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--model-configuration-settings-readout-gap-2);
   min-width: 0;
-  padding: 5px 0;
+  padding: var(--model-configuration-settings-readout-padding) 0;
   border-radius: 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--model-configuration-settings-readout-border-bottom) solid var(--border);
   background: transparent;
 }
 
 .model-configuration .settings-readout dt {
-  font-size: 12px;
+  font-size: var(--model-configuration-settings-readout-text-size);
 }
 
 .model-configuration .settings-readout dd {

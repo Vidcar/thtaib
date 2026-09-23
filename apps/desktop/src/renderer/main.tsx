@@ -6,6 +6,7 @@ import "./styles.css";
 import "./chatPolish.css";
 import "./workbenchTheme.css";
 import "./surfacePolish.css";
+import "./appearanceDefaults.css";
 
 const root = document.getElementById("root");
 if (!root) {

@@ -1,54 +1,54 @@
 .conversation-rename {
   display: grid;
-  gap: 0.35rem;
+  gap: var(--conversation-rename-gap);
   min-width: 0;
 }
 
 .conversation-rename-field {
   display: grid;
-  gap: 0.25rem;
+  gap: var(--conversation-rename-field-gap);
   min-width: 0;
 }
 
 .conversation-rename-field span {
   color: var(--muted, #94a3b8);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: var(--conversation-rename-field-text-size);
+  font-weight: var(--conversation-rename-field-weight);
+  letter-spacing: var(--conversation-rename-field-letter-spacing);
   text-transform: uppercase;
 }
 
 .conversation-rename input {
   background: var(--bg-input);
-  border: 1px solid var(--border, rgba(148, 163, 184, 0.28));
-  border-radius: 10px;
+  border: var(--conversation-rename-input-border) solid var(--border, rgba(148, 163, 184, 0.28));
+  border-radius: var(--conversation-rename-input-corner);
   color: var(--text, #e5e7eb);
   font: inherit;
   min-width: 0;
-  padding: 0.45rem 0.55rem;
+  padding: var(--conversation-rename-input-padding-vertical) var(--conversation-rename-input-padding-horizontal);
   width: 100%;
 }
 
 .conversation-rename input:focus {
   border-color: var(--accent, #38bdf8);
-  outline: 2px solid color-mix(in srgb, var(--accent, #38bdf8) 28%, transparent);
-  outline-offset: 1px;
+  outline: var(--conversation-rename-input-outline-2) solid color-mix(in srgb, var(--accent, #38bdf8) var(--conversation-rename-input-outline), transparent);
+  outline-offset: var(--conversation-rename-input-outline-offset);
 }
 
 .conversation-rename-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--conversation-rename-actions-gap);
   justify-content: flex-end;
 }
 
 .conversation-rename-actions button {
-  border-radius: 999px;
-  padding: 0.35rem 0.65rem;
+  border-radius: var(--conversation-rename-actions-button-corner);
+  padding: var(--conversation-rename-actions-button-padding-vertical) var(--conversation-rename-actions-button-padding-horizontal);
 }
 
 .conversation-rename-error {
   color: var(--danger, #fb7185);
-  font-size: 0.78rem;
+  font-size: var(--conversation-rename-error-text-size);
   margin: 0;
 }

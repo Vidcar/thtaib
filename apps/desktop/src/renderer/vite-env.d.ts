@@ -7,6 +7,8 @@ interface WorkbenchBridge {
   surface: WorkbenchSurface;
   backendUrl: string;
   selectPath?: (kind: "file" | "folder") => Promise<string | null>;
+  readAppearance?: () => Promise<unknown>;
+  writeAppearance?: (value: unknown) => Promise<unknown>;
   activateRestore?: (destination: string) => Promise<void>;
   saveAsset?: (input: { assetId: string; sessionId?: string; projectPath?: string }) => Promise<string | null>;
   onAttention?: (callback: (conversationId: string | null, runId: string) => void) => () => void;

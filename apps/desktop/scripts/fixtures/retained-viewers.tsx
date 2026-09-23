@@ -5,6 +5,7 @@ import { ImagePreview } from "../../src/renderer/ImagePreview";
 import { LibraryPanel } from "../../src/renderer/LibraryPanel";
 import "../../src/renderer/styles.css";
 import "../../src/renderer/workbenchTheme.css";
+import "../../src/renderer/appearanceDefaults.css";
 
 const sha = "a".repeat(64);
 const imageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9kAAAAASUVORK5CYII=";

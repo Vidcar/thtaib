@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const renderer = path.join(desktopRoot, "src/renderer");
+const catalog = readFileSync(path.join(renderer, "appearanceCatalog.ts"), "utf8");
+const ids = [...catalog.matchAll(/"id": "([^"]+)"/g)].map(match => match[1]);
+const cssVars = new Set([...catalog.matchAll(/"cssVar": "(--[^"]+)"/g)].map(match => match[1]));
+assert.equal(new Set(ids).size, ids.length, "appearance ids are unique");
+assert.ok(ids.includes("palette-bg"), "window colour is listed");
+assert.ok(ids.includes("font-editor"), "file editor text is listed");
+assert.ok(ids.includes("appearance-row-gap"), "the appearance page spacing is listed");
+
+const aliases = new Set(["--bg", "--bg-nav", "--bg-panel", "--bg-raised", "--bg-input", "--border", "--text", "--muted", "--accent", "--warn", "--danger", "--ok", "--live", "--hover", "--shadow", "--navigation-width", "--inspector-width"]);
+const lengthRe = /(?<![\w-])(?!0(?:px|rem|em)\b)(?:\d+\.?\d*|\.\d+)(?:px|rem|em)\b/g;
+const hexRe = /#[0-9a-fA-F]{3,8}\b/g;
+const leftovers = [];
+const unknownVars = [];
+
+for (const name of readdirSync(renderer).filter(item => item.endsWith(".css") && item !== "appearanceDefaults.css")) {
+  const text = readFileSync(path.join(renderer, name), "utf8");
+  const stripped = stripVars(stripComments(text));
+  for (const match of stripped.matchAll(lengthRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
+  for (const match of stripped.matchAll(hexRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
+  for (const match of text.matchAll(/var\((--[a-z0-9-]+)/g)) {
+    if (!cssVars.has(match[1]) && !aliases.has(match[1])) unknownVars.push(`${name}: ${match[1]}`);
+  }
+}
+
+const structural = leftovers.filter(item => !/@media|@container/.test(item));
+assert.deepEqual(structural, [], `visual values must be appearance controls:\n${structural.join("\n")}`);
+assert.deepEqual([...new Set(unknownVars)], [], `unknown appearance variables:\n${[...new Set(unknownVars)].join("\n")}`);
+
+const defaults = readFileSync(path.join(renderer, "appearanceDefaults.css"), "utf8");
+assert.match(defaults, /--palette-bg:\s*#212121/, "dark window colour stays the shipped dark value");
+assert.match(defaults, /--palette-bg:\s*#ffffff/, "light window colour stays the shipped light value");
+
+const valueSource = readFileSync(path.join(renderer, "appearanceValue.ts"), "utf8");
+const compiled = ts.transpileModule(valueSource, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+const { appearanceValueValid, readAppearanceFile, resolvedAppearanceValue } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+const length = { id: "wide", kind: "length", unit: "px", shipped: "14px", shippedLight: null, theme: "all", allowNegative: false, min: null, max: null };
+const weight = { id: "weight", kind: "number", unit: "", shipped: "600", shippedLight: null, theme: "all", allowNegative: false, min: 1, max: 1000 };
+const colour = { id: "palette-bg", kind: "color", unit: "", shipped: "#212121", shippedLight: "#ffffff", theme: "split", allowNegative: false };
+assert.equal(appearanceValueValid(length, "12000px"), true, "a very wide measurement is valid");
+assert.equal(appearanceValueValid(length, "-4px"), false, "negative padding is not a valid length");
+assert.equal(appearanceValueValid(weight, "1001"), false, "font weight stays inside the valid range");
+assert.equal(appearanceValueValid(colour, "#ff00aa80"), true, "colour transparency is valid");
+assert.equal(appearanceValueValid(colour, "red"), false);
+const stored = readAppearanceFile({ version: 1, values: { wide: "12000px", missing: "4px", weight: "nope" }, light: { "palette-bg": "#010101" } }, [length, weight, colour]);
+assert.equal(stored.values.wide, "12000px");
+assert.equal(stored.values.missing, undefined);
+assert.equal(stored.values.weight, undefined);
+assert.equal(resolvedAppearanceValue(colour, stored, "light"), "#010101");
+assert.equal(resolvedAppearanceValue(colour, stored, "dark"), "#212121");
+console.log(`Appearance catalogue checks passed (${ids.length} controls).`);
+
+function stripComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function stripVars(text) {
+  let out = "";
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.startsWith("var(", index) || text.startsWith("url(", index)) {
+      const end = matchingParen(text, text.indexOf("(", index));
+      index = end;
+      continue;
+    }
+    out += text[index];
+  }
+  return out;
+}
+
+function matchingParen(value, openIndex) {
+  let depth = 0;
+  for (let index = openIndex; index < value.length; index += 1) {
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return value.length - 1;
+}
+
+function lineOf(text, index) {
+  const start = text.lastIndexOf("\n", index) + 1;
+  const end = text.indexOf("\n", index);
+  return text.slice(start, end === -1 ? text.length : end);
+}

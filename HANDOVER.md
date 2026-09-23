@@ -1,6 +1,8 @@
 # Current handover
 
-Updated 2026-09-23. Live chat paint is merged as well: a streaming answer parses only its open tail, the transcript follows the newest line directly, and a speed update does not replay the token log. The long live-model check in `chat-stream-follow` task 4.2 is still open.
+Updated 2026-09-23. Settings → Appearance lists every shipped colour, text size, corner, spacing, line, and effect, including the settings page itself. Each number has a slider and a typeable value with no screen-size cap. Apply stores overrides in `%LOCALAPPDATA%\\LocalAIWorkbench\\appearance.json`. Cancel restores the last save. Reset on a row restores the shipped value. Media and container breakpoints stay fixed. The long live-model check in `chat-stream-follow` task 4.2 is still open.
+
+Live chat paint is merged as well: a streaming answer parses only its open tail, the transcript follows the newest line directly, and a speed update does not replay the token log. The long live-model check in `chat-stream-follow` task 4.2 is still open.
 
 Opening the app reads projects and chats separately, and the chat list no longer loads full runs. A finished answer drops its token rows. The existing log was collapsed from about 800 MB to about 24 MB; the 11 chats and ScratchArea are still there. The lower-left dot stays the status: hover says when the catalogue is loading, the model is starting, or the model is ready. One preferred stopped managed model is warmed after the lists are requested. Desktop `pnpm run build` passed. Focused chat and interaction tests passed. `openspec validate --all` passed. The live window was restarted on the new build; the long ScratchArea poem opened with its saved text. Active change: `startup-catalogue`.
 

@@ -7,6 +7,7 @@ import {
   type PermissionGrant,
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
+import { AppearanceSettings } from "./AppearanceSettings";
 import { HoverHelp } from "./HoverHelp";
 import { pickWorkbenchPath } from "./PathField";
 import { Icon } from "./Icon";
@@ -250,6 +251,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             />
             Show reasoning and tool details by default
           </label>
+          <AppearanceSettings theme={preferences.theme} />
         </section>
         <section className="packet03-item">
           <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
