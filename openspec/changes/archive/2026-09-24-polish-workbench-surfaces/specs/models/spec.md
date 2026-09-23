@@ -65,7 +65,11 @@ Idle managed deployments SHALL support validated reconfiguration with expected-v
 
 ### Requirement: MOD-023 - Consolidate saved configuration without changing meaning
 
-Ordinary saving SHALL update the selected configuration with stale-edit protection; creating a variant SHALL be explicit. A quiet idempotent migration SHALL merge equivalent configuration duplicates, retain meaningful referenced variants and preserve instructions, historical runtime snapshots, model weights and conversation records. Runtime instances MUST NOT appear as indistinguishable saved presets.
+Ordinary saving SHALL update the selected configuration with stale-edit protection; creating a variant SHALL be explicit. A quiet idempotent migration SHALL merge equivalent legacy configuration duplicates, retain meaningful referenced variants and preserve instructions, historical runtime snapshots, model weights and conversation records. Explicitly created named variants SHALL remain distinct even while their settings are equal. Runtime instances MUST NOT appear as indistinguishable saved presets.
+
+#### Scenario: Intentional equal variant
+- **WHEN** a user chooses Save as variant without changing the selected configuration's settings
+- **THEN** the new named variant remains selectable after reload and restart, without creating another deployment or changing the model default
 
 #### Scenario: Repeat save and migration
 - **WHEN** a configuration is saved twice and consolidation is rerun

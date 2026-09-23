@@ -318,7 +318,7 @@ On the Changes page, for the selected turn, consecutive recorded edits of the sa
 
 ### Requirement: API-037 - Say when a saved permission let the tool proceed
 
-When the chat is on Ask, and a tool that would have paused proceeds because a saved grant allows it, that call's activity line SHALL say a saved permission was used. The line names the grant in plain words. The full grant remains available on the further disclosure and in Settings, where it can still be revoked. Saved grants remain explicit exceptions to the access rules, are attributed by the backend, and MUST NOT override Plan mode or enable a disabled tool.
+When the chat is on Ask, and a tool that would have paused proceeds because a saved grant allows it, that call's activity line SHALL say a saved permission was used. The line names the grant in plain words. The full grant remains available on the further disclosure and in Settings, where it can still be revoked. The backend captures the exact matched grant when authorizing the call; later edits or revocation do not rewrite that recorded evidence. Historical records without a captured grant identity show only proven saved-permission use, never an invented identity. Saved grants remain explicit exceptions to the access rules, are attributed by the backend, and MUST NOT override Plan mode or enable a disabled tool.
 
 #### Scenario: Ask uses a saved grant
 
