@@ -10,7 +10,9 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
-from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration
+from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
+from workbench_backend.agents.helpers import freeze_helpers, freeze_settings
+from contextlib import ExitStack
 from workbench_backend.assets.schemas import RetainedAssetReuseRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
@@ -145,7 +147,7 @@ class ChatService:
             project = selections.create_project(ProjectCreateRequest(path=request.project_path))
         overrides = configuration_from_request(request)
         cleared_fields = cleared_configuration_fields(request)
-        selection = selections.resolve(project_id=project.id if project else None, agent_setup_version_id=request.agent_setup_version_id, overrides=overrides, override_cleared_fields=cleared_fields, validate=bool(project or request.agent_setup_version_id))
+        selection = selections.resolve(project_id=project.id if project else None, agent_setup_version_id=request.agent_setup_version_id, overrides=overrides, override_cleared_fields=cleared_fields, validate=bool(project or request.agent_setup_version_id), prepare_model=True)
         request = request.model_copy(update={k: v for k, v in selection.configuration.model_dump(exclude_none=True).items() if k in type(request).model_fields})
         if not request.deployment_id:
             raise ChatError("Choose a model or an agent with a model before starting Chat.", code="setup_deployment_required", status_code=400)
@@ -175,6 +177,11 @@ class ChatService:
             setup_cleared_fields=cleared_fields,
             presented_tools=selection.configuration.presented_tools,
             approval_mode=selection.configuration.approval_mode or "ask",
+            work_mode=selection.configuration.work_mode or "work",
+            helper_agent_ids=selection.configuration.helper_agent_ids or [],
+            review=selection.configuration.review or {},
+            model_configuration_id=selection.configuration.model_configuration_id,
+            startup_overrides=selection.configuration.startup_overrides,
             connection_ids=selection.configuration.connection_ids,
             per_request_overrides=selection.configuration.per_request_overrides,
             profile_id=profile_id,
@@ -351,9 +358,20 @@ class ChatService:
                     merged_config = dict(item.intended_config)
                     merged_config.update(dict(request.intended_config))
                     item.intended_config = merged_config
-                    item.instruction_layers = self._instruction_snapshot(conversation, self._request_from_queue_item(item))
+                    intended_request = self._request_from_queue_item(item)
+                    self._reject_session_area_change(conversation, intended_request)
+                    item.intended_config = self._resolved_config(conversation, intended_request)
+                    item.instruction_layers = self._instruction_snapshot(conversation, intended_request)
+                    item.helper_snapshots = freeze_helpers(self._setups(), item.intended_config.get("helper_agent_ids", []), project_id=conversation.project_id,
+                        parent_configuration=SetupConfiguration.model_validate({key: value for key, value in item.intended_config.items() if key in SetupConfiguration.model_fields}))
+                    item.execution_snapshot = self._execution_snapshot(item, conversation.project_id)
                 item.updated_at = utc_now()
-                updated = self.app_store.update_conversation(conversation)
+                with ExitStack() as reservations:
+                    for deployment_id, profile_id in [(item.intended_config.get("deployment_id"), item.intended_config.get("profile_id")),
+                            *((helper.configuration.deployment_id, helper.configuration.profile_id) for helper in item.helper_snapshots or [])]:
+                        if deployment_id:
+                            reservations.enter_context(self.manager.reserve_deployment(deployment_id, profile_id=profile_id))
+                    updated = self.app_store.update_conversation(conversation)
             return self._view(updated)
 
     def steer_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
@@ -622,14 +640,25 @@ class ChatService:
     ) -> ChatConversation:
         next_conversation = conversation.model_copy(deep=True)
         self._reject_session_area_change(next_conversation, request)
-        self._apply_start_configuration(next_conversation, request)
+        frozen = queue_item.execution_snapshot if queue_item is not None else None
+        if frozen is None:
+            self._apply_start_configuration(next_conversation, request)
+        else:
+            # Queue records were admitted by this application. Reuse their
+            # resolved values; current mutable defaults affect future messages.
+            for key, value in queue_item.intended_config.items():
+                if key in type(next_conversation).model_fields:
+                    if key == "review":
+                        value = ReviewConfiguration.model_validate(value)
+                    setattr(next_conversation, key, value)
         self._preflight_start_request(next_conversation, request)
         self._ensure_thread(next_conversation)
         now = utc_now()
         next_conversation.history_replaced = False
         input_message_id = self._dispatch_input_message_id(request, queue_item)
         content_blocks = self._content_blocks_with_attachments(next_conversation, request)
-        submission = self._submission_record(next_conversation, request, content_blocks)
+        submission = self._submission_record(next_conversation, request, content_blocks,
+            intended_config=queue_item.intended_config if frozen is not None else None)
         existing_message = next(
             (message for message in next_conversation.transcript if message.role == "user" and message.id == input_message_id),
             None,
@@ -662,7 +691,7 @@ class ChatService:
                     item.pause_error_code = None
                     item.pause_error = None
                     item.input_message_id = input_message_id
-                    item.frozen_config = self._resolved_config(next_conversation, request)
+                    item.frozen_config = dict(queue_item.intended_config) if frozen is not None else self._resolved_config(next_conversation, request)
                     item.updated_at = now
                     break
         next_conversation.updated_at = now
@@ -691,6 +720,11 @@ class ChatService:
                         output_schema=request.output_schema,
                         presented_tools=next_conversation.presented_tools,
                         approval_mode=next_conversation.approval_mode,
+                        work_mode=next_conversation.work_mode,
+                        helper_agent_ids=next_conversation.helper_agent_ids,
+                        review=next_conversation.review,
+                        model_configuration_id=next_conversation.model_configuration_id,
+                        startup_overrides=next_conversation.startup_overrides,
                         system_prompt=(
                             CHAT_SYSTEM_PROMPT
                             if next_conversation.project_path
@@ -714,6 +748,8 @@ class ChatService:
                         retrieval_project_paths=list(next_conversation.retrieval_project_paths),
                     ),
                     **({"instruction_snapshot": queue_item.instruction_layers} if queue_item is not None and queue_item.instruction_layers is not None else {}),
+                    **({"helper_snapshot": queue_item.helper_snapshots} if queue_item is not None and queue_item.helper_snapshots is not None else {}),
+                    **({"execution_snapshot": frozen} if frozen is not None else {}),
                 )
             except (HarnessError, ManagerError) as exc:
                 recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
@@ -785,6 +821,11 @@ class ChatService:
         conversation: ChatConversation,
         request: ChatStartRequest,
     ) -> ChatConversation:
+        with self.manager.reserve_deployment(request.deployment_id or conversation.deployment_id,
+                profile_id=request.profile_id or conversation.profile_id):
+            return self._append_queue_item_reserved(conversation, request)
+
+    def _append_queue_item_reserved(self, conversation: ChatConversation, request: ChatStartRequest) -> ChatConversation:
         with self.app_store._lock:
             queued = conversation.model_copy(deep=True)
             self.assets.require_active_assets(
@@ -819,14 +860,22 @@ class ChatService:
                 attachment_ids=list(request.attachment_ids),
                 output_schema=output_schema,
                 intended_config=intended_config,
+                helper_snapshots=freeze_helpers(self._setups(), intended_config.get("helper_agent_ids", []), project_id=queued.project_id,
+                    parent_configuration=SetupConfiguration.model_validate({key: value for key, value in intended_config.items() if key in SetupConfiguration.model_fields})),
                 instruction_layers=self._instruction_snapshot(queued, request),
                 created_at=now,
                 updated_at=now,
             )
+            item.execution_snapshot = self._execution_snapshot(item, queued.project_id)
             queued.queue.append(item)
             self.app_store._clear_chat_draft_if_revision_locked(queued, request.draft_revision, now)
             queued.updated_at = now
-            return self.store.put(queued)
+            with ExitStack() as reservations:
+                for deployment_id, profile_id in [(intended_config.get("deployment_id"), intended_config.get("profile_id")),
+                        *((helper.configuration.deployment_id, helper.configuration.profile_id) for helper in item.helper_snapshots or [])]:
+                    if deployment_id:
+                        reservations.enter_context(self.manager.reserve_deployment(deployment_id, profile_id=profile_id))
+                return self.store.put(queued)
 
     def _dispatch_steered(self, conversation: ChatConversation, item_id: str) -> ChatConversation:
         steered = conversation.model_copy(deep=True)
@@ -986,6 +1035,7 @@ class ChatService:
         conversation: ChatConversation,
         request: ChatStartRequest,
         content_blocks: list[object],
+        *, intended_config: dict[str, object] | None = None,
     ) -> dict[str, object]:
         return {
             "task": request.task.strip(),
@@ -993,7 +1043,7 @@ class ChatService:
             "content_blocks": [block.model_dump(mode="json") for block in content_blocks] if content_blocks else None,
             "attachment_ids": list(request.attachment_ids),
             "output_schema": request.output_schema.model_dump(mode="json") if request.output_schema else None,
-            "intended_config": self._resolved_config(conversation, request),
+            "intended_config": intended_config if intended_config is not None else self._resolved_config(conversation, request),
         }
 
     def _message_submission_record(self, message: ChatMessage) -> dict[str, object]:
@@ -1190,13 +1240,22 @@ class ChatService:
             self._bind_profile(request.profile_id)
         if not request.deployment_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
             raise ChatError("The Chat conversation's model setup is no longer available. Select a model to continue.", code="deploy_missing", status_code=409, details={"deployment_id": conversation.deployment_id})
-        has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
+        has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or request.model_configuration_id or conversation.model_configuration_id or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
         if not has_layered_setup and "instructions" in fields_set:
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"instructions": request.instructions})
         if not has_layered_setup and "approval_mode" in fields_set and request.approval_mode:
             # Keep explicit access choices when application defaults later add
             # a setup layer to an existing General conversation.
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"approval_mode": request.approval_mode})
+        if not has_layered_setup:
+            additions = {key: getattr(request, key) for key in ("work_mode", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides") if key in fields_set and getattr(request, key) is not None}
+            conversation.setup_overrides = conversation.setup_overrides.model_copy(update=additions)
+            resets = {key for key in fields_set if key in SetupConfiguration.model_fields and getattr(request, key) is None}
+            conversation.setup_overrides = SetupConfiguration.model_validate({key: value for key, value in conversation.setup_overrides.model_dump(exclude_none=True).items() if key not in resets})
+            defaults = {'work_mode': 'work', 'helper_agent_ids': [], 'review': ReviewConfiguration(), 'approval_mode': 'ask'}
+            for key in resets:
+                if key in defaults:
+                    setattr(conversation, key, defaults[key])
         if has_layered_setup:
             if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
                 conversation.agent_setup_version_id = request.agent_setup_version_id
@@ -1204,6 +1263,9 @@ class ChatService:
                 conversation.setup_cleared_fields = []
             explicit = configuration_from_request(request).model_dump(exclude_none=True)
             overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
+            for key in fields_set:
+                if key in SetupConfiguration.model_fields and getattr(request, key) is None:
+                    overrides.pop(key, None)
             if "profile_id" in fields_set and request.profile_id is None:
                 overrides.pop("profile_id", None)
             conversation.setup_overrides = SetupConfiguration.model_validate(overrides)
@@ -1212,18 +1274,23 @@ class ChatService:
                     conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
                     if getattr(request, key) is None:
                         conversation.setup_cleared_fields.append(key)
-            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields)
+            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=True)
             values = selection.configuration.model_dump(exclude_none=True)
             values.update({field: None for field in conversation.setup_cleared_fields})
             for key in ("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"):
                 values.setdefault(key, [])
             values.setdefault("profile_id", None)
+            values.setdefault("model_configuration_id", None)
+            values.setdefault("startup_overrides", None)
             values.setdefault("presented_tools", None)
             # An inherited empty mode means Ask, including when leaving a
             # Full access setup. Never carry the old setup's authority forward.
             values.setdefault("approval_mode", "ask")
             values.setdefault("connection_ids", None)
             values.setdefault("per_request_overrides", None)
+            values.setdefault("work_mode", "work")
+            values.setdefault("helper_agent_ids", [])
+            values["review"] = selection.configuration.review or ReviewConfiguration()
             request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
             fields_set = request.model_fields_set
         if "presented_tools" in fields_set:
@@ -1234,6 +1301,9 @@ class ChatService:
             conversation.connection_ids = request.connection_ids
         if "per_request_overrides" in fields_set:
             conversation.per_request_overrides = request.per_request_overrides
+        for key in ("work_mode", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides"):
+            if key in fields_set and (getattr(request, key) is not None or key in {"model_configuration_id", "startup_overrides"}):
+                setattr(conversation, key, getattr(request, key))
         if request.deployment_id:
             self.manager.get_deployment(request.deployment_id)
             conversation.deployment_id = request.deployment_id
@@ -1314,6 +1384,11 @@ class ChatService:
             "workspace_id": clone.workspace_id,
             "presented_tools": clone.presented_tools,
             "approval_mode": clone.approval_mode,
+            "work_mode": clone.work_mode,
+            "helper_agent_ids": clone.helper_agent_ids,
+            "review": clone.review.model_dump(mode="json"),
+            "model_configuration_id": clone.model_configuration_id,
+            "startup_overrides": clone.startup_overrides,
             "attachment_ids": list(request.attachment_ids),
             "memory_version_refs": list(clone.memory_version_refs),
             "skill_version_refs": list(clone.skill_version_refs),
@@ -1335,6 +1410,14 @@ class ChatService:
         clone = conversation.model_copy(deep=True)
         self._apply_start_configuration(clone, request)
         return self._setups().resolve(project_id=clone.project_id, agent_setup_version_id=clone.agent_setup_version_id, overrides=clone.setup_overrides, override_cleared_fields=clone.setup_cleared_fields).instruction_layers
+
+    def _execution_snapshot(self, item: ChatQueueItem, project_id: str | None):
+        configuration = SetupConfiguration.model_validate({key: value for key, value in item.intended_config.items() if key in SetupConfiguration.model_fields})
+        version_id = item.intended_config.get("agent_setup_version_id")
+        version = self._setups().get_version(version_id) if version_id else None
+        selection = ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None,
+            agent_setup_version_id=version_id, configuration=configuration, instruction_layers=item.instruction_layers or [])
+        return FrozenExecutionSelection(selection=selection, settings=freeze_settings(self.manager, configuration))
 
     def _ensure_thread(self, conversation: ChatConversation) -> str:
         """Stable LangGraph thread for this conversation. Legacy rows get one."""

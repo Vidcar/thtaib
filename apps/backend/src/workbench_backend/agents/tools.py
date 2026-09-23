@@ -64,6 +64,27 @@ def enabled_catalogue() -> list[str]:
     return list(ENABLED_TOOL_NAMES)
 
 
+def tool_descriptions() -> list[dict[str, str]]:
+    descriptions = {
+        "echo": ("Echo", "Return supplied text unchanged for a connection check."),
+        "time_now": ("Current time", "Read the current time."),
+        "ls": ("List files", "List files in the authorized project or selected knowledge."),
+        "read_file": ("Read files", "Read authorized text files with line ranges."),
+        "write_file": ("Create files", "Write a project file; Access determines approval."),
+        "edit_file": ("Edit files", "Replace matching text and retain a captured change."),
+        "glob": ("Find files", "Find file paths matching a pattern."),
+        "grep": ("Search files", "Find matching text inside authorized files."),
+        "rename_file": ("Rename files", "Rename one project file without replacing an existing destination."),
+        "delete_file": ("Delete files", "Remove one project file; folders and recursive deletion are unsupported."),
+        "execute": ("Run commands", "Execute a command on this computer in the bound project folder."),
+        "write_todos": ("Checklist", "Maintain the visible task checklist."),
+        "ask_user": ("Ask questions", "Pause for your answer to a task question."),
+        "propose_memory": ("Suggest memory", "Propose a durable memory change for separate review."),
+        "read_attachment": ("Read attachments", "Read the retained files attached to this conversation."),
+    }
+    return [{"id": name, "name": descriptions[name][0], "description": descriptions[name][1]} for name in ENABLED_TOOL_NAMES]
+
+
 def enabled_for_project(
     project_bound: bool,
     *,

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.file_changes import ProjectFileChangeView
-from workbench_backend.agents.tools import enabled_catalogue
+from workbench_backend.agents.tools import enabled_catalogue, tool_descriptions
 from workbench_backend.chat.service import ChatService
 
 router = APIRouter(prefix="/v1")
@@ -22,8 +22,8 @@ def get_chat(request: Request) -> ChatService:
 
 
 @router.get("/agent-tools")
-def list_agent_tools() -> dict[str, list[str]]:
-    return {"enabled": enabled_catalogue()}
+def list_agent_tools() -> dict[str, object]:
+    return {"enabled": enabled_catalogue(), "tools": tool_descriptions()}
 
 
 @router.get("/agent-runs")

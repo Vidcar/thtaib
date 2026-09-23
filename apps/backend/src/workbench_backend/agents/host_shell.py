@@ -20,6 +20,8 @@ to routed prefixes. ``interrupt_on`` is the human gate for ``execute``.
 
 from __future__ import annotations
 
+from workbench_backend.errors import HarnessError
+
 import re
 from typing import Any
 
@@ -78,8 +80,8 @@ HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
     "LocalShellBackend with the bound project as cwd and inherit the backend "
     "process environment. permissions= apply only to routed filesystem "
-    "prefixes while the default backend is a sandbox. interrupt_on pauses "
-    "dangerous execute calls; the application persists native interrupts and "
+    "prefixes while the default backend is a sandbox. Access or an explicit "
+    "saved permission controls execution; the application persists native interrupts and "
     "surfaces them through shared Chat."
 )
 
@@ -305,7 +307,7 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for protected tools. The run's approval mode chooses which pauses remain.
 
-    Ask keeps every pause. Approve for me lets selected rename and delete proceed.
+    Ask keeps every pause. Approve for me permits recoverable project text changes.
     Full access also lets a selected shell command and external tool proceed.
     A typed question and a memory proposal are not decided here.
     """
@@ -314,14 +316,23 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     auto_file = mode in {"approve_for_me", "full_access"}
     auto_external = mode == "full_access"
 
+    def saved_permission(name, args, request):
+        if grants is None or not grants.matches(run, name, args):
+            return False
+        call = request.tool_call
+        ident = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+        if ident:
+            run.tool_authorizations[ident] = "saved_permission"
+        return True
+
     def requires_approval(request: ToolCallRequest) -> bool:
         call = request.tool_call
         args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
         if auto_external:
             return False
-        if grants is not None and grants.matches(run, "execute", args):
+        if saved_permission("execute", args, request):
             return False
-        return execute_requires_approval(request)
+        return True
 
     result = {
         "execute": {
@@ -333,15 +344,20 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             ),
         }
     } if host_shell_requested(run) else {}
-    for name in ("rename_file", "delete_file"):
+    for name in ("write_file", "edit_file", "rename_file", "delete_file"):
         if name not in run.presented_tools:
             continue
         def file_approval(request: ToolCallRequest, name=name) -> bool:
-            if auto_file:
-                return False
             call = request.tool_call
             args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
-            return grants is None or not grants.matches(run, name, args)
+            if auto_external:
+                return False
+            if auto_file and reversible_file_request(run, name, args):
+                ident = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+                if ident:
+                    run.tool_authorizations[ident] = "recoverable_edit"
+                return False
+            return not saved_permission(name, args, request)
         result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
             "description": "Change a file in this project. Review the exact source and destination before allowing it."}
     for connection in run.connection_snapshots:
@@ -356,7 +372,7 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
                     return False
                 call = request.tool_call
                 args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
-                return grants is None or not grants.matches(run, name, args)
+                return not saved_permission(name, args, request)
             result[name] = {"allowed_decisions": ["approve", "reject"], "when": external_approval,
                 "description": f"Use {selected.remote_name} through {connection.name}. Review the exact inputs before allowing this external action."}
     return result or None
@@ -372,15 +388,13 @@ def approval_mode_instructions(mode: str) -> str:
         )
     elif mode == "approve_for_me":
         policy = (
-            "Access for this turn: Approve for me. Selected file mutations proceed "
-            "without a permission card. Protected shell commands and external tools "
-            "still pause unless a saved matching grant or the read-only shell policy allows them. "
+            "Access for this turn: Approve for me. Selected reversible project text edits proceed "
+            "without a permission card when a complete recovery image can be recorded. Shell commands, other file mutations and external tools "
+            "still pause unless a saved matching grant allows them. "
         )
     else:
         policy = (
-            "Access for this turn: Ask. Selected rename and delete operations, protected "
-            "shell commands, and external tools pause unless a saved matching grant "
-            "or the read-only shell policy allows them. Selected file writes and edits proceed. "
+            "Access for this turn: Ask. Selected file mutations, shell commands, and external tools pause unless a saved matching grant allows them. "
         )
     return policy + (
         "Use selected tools directly to carry out the person's task; the application "
@@ -390,6 +404,33 @@ def approval_mode_instructions(mode: str) -> str:
         "enable unselected tools, expand the authorized task, bypass tool restrictions, "
         "or permit automatic memory saving."
     )
+
+
+def reversible_file_request(run: AgentRun, name: str, args: dict[str, Any]) -> bool:
+    """Auto-approval requires the same complete images as the file recorder."""
+    from pathlib import Path
+    from workbench_backend.agents.file_changes import file_image, project_file, TEXT_LIMIT
+    if not run.project_path:
+        return False
+    try:
+        source = project_file(Path(run.project_path), str(args.get("file_path", "")))
+        before = file_image(source)
+        if before.exists and before.text is None:
+            return False
+        if name == "write_file":
+            text = args.get("content")
+            return isinstance(text, str) and len(text.encode("utf-8")) <= TEXT_LIMIT
+        if name == "edit_file":
+            old, new = args.get("old_string"), args.get("new_string")
+            if before.text is None or not isinstance(old, str) or not old or not isinstance(new, str):
+                return False
+            result = before.text.replace(old, new, -1 if args.get("replace_all") else 1)
+            return len(result.encode("utf-8")) <= TEXT_LIMIT
+        if name == "rename_file":
+            return before.exists and not project_file(Path(run.project_path), str(args.get("destination", ""))).exists()
+        return name == "delete_file" and before.exists
+    except (OSError, ValueError, HarnessError):
+        return False
 
 
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:

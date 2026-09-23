@@ -3,6 +3,7 @@
 import base64
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -77,6 +78,9 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
     def chat_service(self) -> ChatService:
         class Manager:
             paths = WorkbenchPaths(Path(self.tmp.name))
+
+            def reserve_deployment(self, _deployment_id, *, profile_id=None):
+                return nullcontext()
 
             def get_deployment(self, _deployment_id: str):
                 raise ManagerError("missing deployment", code="deployment_missing", status_code=404)

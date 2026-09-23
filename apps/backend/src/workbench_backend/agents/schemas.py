@@ -11,6 +11,7 @@ from workbench_backend.agents.context import ContextObservation
 from workbench_backend.agents.file_changes import ProjectFileChange
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
+from workbench_backend.agents.setup_schemas import FrozenHelperSelection, ReviewConfiguration
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
 from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.inference.user_content import UserContentBlock
@@ -25,8 +26,8 @@ AgentRunStatus = RunLifecycleStatus
 class AgentBudgets(BaseModel):
     """Optional user-selected product budgets. Unset by default (AGT-003)."""
 
-    max_steps: int | None = None
-    max_tool_calls: int | None = None
+    max_steps: int | None = Field(default=None, gt=0)
+    max_tool_calls: int | None = Field(default=None, gt=0)
 
 
 class ExecutableCheck(BaseModel):
@@ -44,8 +45,28 @@ class ExpectedArtifact(BaseModel):
 
 class ModelJudgement(BaseModel):
     model_review: str | None = None
-    source: Literal["assistant_message"] = "assistant_message"
-    note: str = "Model judgement, not an executable check."
+    # Existing history remains readable; new completions never label the answer as review.
+    source: Literal["assistant_message", "rubric_review", "not_requested"] = "not_requested"
+    note: str = "No independent review was requested."
+
+
+class ReviewObservation(BaseModel):
+    enabled: bool = False
+    max_revisions: Literal[2] = 2
+    status: str = "not_requested"
+    evaluations: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_scope: str = "Recent transcript excerpts; model judgement is not executable verification."
+
+
+class ChildRunActivity(BaseModel):
+    tool_call_id: str | None = None
+    run_id: str
+    agent_id: str
+    version_id: str
+    name: str
+    namespace: list[str] = Field(default_factory=list)
+    status: str = "queued"
+    error: str | None = None
 
 
 class CompletionReport(BaseModel):
@@ -66,6 +87,7 @@ class AgentEvent(BaseModel):
 
 
 class ModelRequestCapture(BaseModel):
+    purpose: Literal["work", "review"] = "work"
     at: str
     request_prepared: bool = True
     transport_attempted: bool = False
@@ -191,6 +213,11 @@ class AgentStartRequest(BaseModel):
     retained_asset_ids: list[str] = Field(default_factory=list, max_length=32)
     instructions: str | None = None
     per_request_overrides: dict[str, Any] | None = None
+    model_configuration_id: str | None = None
+    startup_overrides: dict[str, Any] | None = None
+    work_mode: Literal["work", "plan"] = "work"
+    helper_agent_ids: list[str] = Field(default_factory=list)
+    review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
@@ -248,6 +275,16 @@ class AgentRun(BaseModel):
     enabled_tools: list[str]
     presented_tools: list[str]
     approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    work_mode: Literal["work", "plan"] = "work"
+    helper_agent_ids: list[str] = Field(default_factory=list)
+    helper_snapshots: list[FrozenHelperSelection] = Field(default_factory=list)
+    child_runs: list[ChildRunActivity] = Field(default_factory=list)
+    review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
+    review_observation: ReviewObservation = Field(default_factory=ReviewObservation)
+    dispatched_tool_calls: int = 0
+    dispatched_tool_ids: list[str] = Field(default_factory=list)
+    completed_tool_ids: list[str] = Field(default_factory=list)
+    tool_authorizations: dict[str, str] = Field(default_factory=dict)
     framework_read_paths: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None

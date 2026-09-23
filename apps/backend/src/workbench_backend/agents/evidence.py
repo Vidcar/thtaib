@@ -65,7 +65,8 @@ def build_completion(run: AgentRun) -> CompletionReport:
             "expected_artifacts": [item.model_dump() for item in artifacts],
         },
         judgement=ModelJudgement(
-            model_review=reply,
-            note="Model judgement, not an executable check. Rubric middleware is not required.",
+            model_review=(run.review_observation.evaluations[-1].get("explanation") if run.review_observation.evaluations else None),
+            source="rubric_review" if run.review_observation.evaluations else "not_requested",
+            note=("Independent model review of transcript excerpts, not an executable check." if run.review_observation.evaluations else "No independent review was performed."),
         ),
     )
