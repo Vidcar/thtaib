@@ -78,11 +78,13 @@ class TelemetryStreamingTests(unittest.TestCase):
             def observed(predicate):
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
-                    value = app.state.app_store.get_run(run_id).generation_observation
+                    # Live samples stay on the in-memory run and the interaction
+                    # snapshot. They do not rewrite the captured model requests.
+                    value = app.state.harness.get_run(run_id).generation_observation
                     if predicate(value):
                         return value
                     time.sleep(.01)
-                self.fail("Expected telemetry did not reach durable run state")
+                self.fail("Expected telemetry did not reach the live run")
 
             first = observed(lambda value: value is not None and value.phase == "generating")
             self.assertEqual(first.context_used_tokens, 110)
@@ -94,7 +96,7 @@ class TelemetryStreamingTests(unittest.TestCase):
                                 if item.get("params", {}).get("data", {}).get("workbench", {}).get("run", {}).get("generation_observation")))
             release_first.set()
             self.assertTrue(second_entered.wait(10), client.get(f"/v1/agent-runs/{run_id}").json().get("error"))
-            self.assertIsNone(app.state.app_store.get_run(run_id).generation_observation)
+            self.assertIsNone(app.state.harness.get_run(run_id).generation_observation)
             self.assertIsNone(app.state.app_store.get_interaction(conversation_id)["snapshot"]["workbench"]["run"]["generation_observation"])
             start_second.set()
             second = observed(lambda value: value is not None and value.request_id != first.request_id)

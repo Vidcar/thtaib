@@ -4,13 +4,17 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
+from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
 from workbench_backend.interaction.projection import event, partial_archive
 from workbench_backend.interaction.service import InteractionService
+from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore
 
@@ -129,3 +133,53 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertTrue(gap)
         self.assertNotIn("after_seq", json.dumps(page))
         self.assertNotIn("replaceable_measurement", json.dumps(page))
+
+    def test_token_events_do_not_copy_the_run_or_rewrite_the_snapshot(self):
+        harness = HarnessService(lambda: None, app_store=self.store, interaction_observer=self.service.observe)
+        before = self.store.get_interaction("display")
+        snapshot = json.dumps(before["snapshot"], sort_keys=True)
+        seq = before["seq"]
+        started = time.perf_counter()
+        with patch("workbench_backend.agents.harness.apply_run_diagnostic_policy") as policy, \
+                patch.object(self.store, "put_run") as put_run:
+            for _index in range(200):
+                harness._observe_interaction(self.run, event("messages", {
+                    "event": "content-block-delta", "index": 0,
+                    "delta": {"type": "text-delta", "text": "x"},
+                }))
+            harness._observe_interaction(self.run, event("checkpoints", {"checkpoint_id": "hidden"}))
+            self.run.generation_observation = GenerationObservation(
+                request_id="request", phase="generating", input_tokens=100, output_tokens=200,
+                context_used_tokens=300, elapsed_seconds=1, tokens_per_second=40,
+                measured_at=self.run.updated_at, basis="llama_cpp_timings",
+                interval="current_model_call_generation")
+            with harness._lock:
+                harness._persist_and_notify(self.run, telemetry=True)
+        self.assertLess(time.perf_counter() - started, 5)
+        policy.assert_not_called()
+        put_run.assert_not_called()
+        after = self.store.get_interaction("display")
+        self.assertEqual(after["seq"], seq + 201)
+        self.assertEqual(after["snapshot"]["workbench"]["run"]["generation_observation"]["output_tokens"], 200)
+        unchanged = json.loads(snapshot)
+        self.assertEqual(after["snapshot"]["messages"], unchanged["messages"])
+        self.run.status = AgentRunStatus.completed
+        with patch.object(harness, "_capture_settings", return_value=ContextCaptureSettings()), harness._lock:
+            harness._persist_and_notify(self.run)
+        final = self.store.get_interaction("display")
+        self.assertEqual(final["snapshot"]["workbench"]["run"]["status"], "completed")
+        methods = []
+        cursor = seq
+        while page := self.store.interaction_events_after("display", cursor):
+            methods.extend(item["method"] for item in page)
+            cursor = page[-1]["seq"]
+        self.assertEqual(methods.count("messages"), 200)
+        self.assertIn("lifecycle", methods)
+        self.assertEqual(self.store.get_run(self.run.id).status, AgentRunStatus.completed)
+        harness._startup_reconciled = True
+        harness._runs[self.run.id] = self.run
+        with patch("workbench_backend.agents.harness.apply_run_diagnostic_policy") as policy:
+            projected = harness.projection_run(self.run.id)
+        policy.assert_not_called()
+        self.assertEqual(projected["model_requests"], [])
+        self.assertEqual(projected["status"], "completed")

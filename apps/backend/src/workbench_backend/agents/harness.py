@@ -1423,8 +1423,28 @@ class HarnessService:
     def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         if self._interaction_observer is None:
             return
+        # Token and measurement updates must not scan or copy captured model
+        # requests. That copy was slower than generation and left Chat on Running
+        # after llama.cpp had already finished the call.
+        if event is not None or telemetry:
+            self._interaction_observer(run, event, **({"telemetry": True} if telemetry else {}))
+            return
         safe = apply_run_diagnostic_policy(run, self._capture_settings())
-        self._interaction_observer(safe.model_copy(deep=True), event, **({"telemetry": True} if telemetry else {}))
+        self._interaction_observer(safe, None)
+
+    def projection_run(self, run_id: str) -> dict[str, Any]:
+        """Run fields for a live display frame, without captured model requests."""
+        self._reconcile_startup_once()
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                stored = self.store.get_run(run_id)
+                if stored is None:
+                    raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+                run = stored
+            data = run.model_dump(mode="json")
+        data["model_requests"] = []
+        return data
 
     async def _close_native_stream(self, stream: Any) -> None:
         if stream is None:
@@ -1875,7 +1895,8 @@ class HarnessService:
         self.store.put_run(run.model_copy(deep=True))
 
     def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
-        self._persist(run)
+        if not telemetry:
+            self._persist(run)
         self._observe_interaction(run, None, telemetry=telemetry)
         self._updates.notify_all()
 

@@ -106,9 +106,12 @@ class InteractionStoreMixin:
                             (thread_id, old["seq"], thread_id, successor["seq"], old["seq"]),
                         )
                         self._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", (thread_id, old["seq"]))
-                self._conn.execute("UPDATE interaction_threads SET seq=?,snapshot=?,run_id=? WHERE id=?",
-                                   (seq, json.dumps(snapshot if snapshot is not None else row["snapshot"]),
-                                    run_id or row["run_id"], thread_id))
+                if snapshot is None:
+                    self._conn.execute("UPDATE interaction_threads SET seq=?,run_id=? WHERE id=?",
+                                       (seq, run_id or row["run_id"], thread_id))
+                else:
+                    self._conn.execute("UPDATE interaction_threads SET seq=?,snapshot=?,run_id=? WHERE id=?",
+                                       (seq, json.dumps(snapshot), run_id or row["run_id"], thread_id))
                 self._conn.commit()
             except BaseException:
                 self._conn.rollback()

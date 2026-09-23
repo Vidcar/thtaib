@@ -69,7 +69,7 @@ class InteractionService:
         workbench = result.get("workbench", {})
         run = workbench.get("run")
         if run and run.get("id"):
-            workbench["run"] = _without_file_preimages(self.harness.get_run(run["id"]).model_dump(mode="json"))
+            workbench["run"] = _without_file_preimages(self.harness.projection_run(run["id"]))
         result["workbench"] = WorkbenchInteractionMetadata.model_validate(workbench).model_dump(
             mode="json",
             exclude_none=True,
@@ -334,74 +334,93 @@ class InteractionService:
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
                 return
+            if raw is not None:
+                self._observe_native_event(binding, run, raw)
+                return
             snapshot = copy.deepcopy(binding["snapshot"])
             outgoing = []
-            if raw is not None:
-                params = raw.get("params", {})
-                namespace = params.get("namespace", [])
-                display_hidden = snapshot.get("workbench", {}).get("display_hidden_run_id") == run.id
-                if display_hidden and raw.get("method") in {"messages", "tools"}:
-                    return
-                if raw.get("method") == "values":
-                    data = params.get("data", {})
-                    if not namespace:
-                        excluded = set(snapshot.get("workbench", {}).get("display_excluded_message_ids", []))
-                        incoming = archive_messages([], data.get("messages", []))
-                        if display_hidden:
-                            excluded.update(m["id"] for m in incoming)
-                            snapshot["workbench"]["display_excluded_message_ids"] = sorted(excluded)
-                        snapshot["messages"] = archive_messages(snapshot.get("messages", []),
-                            [m for m in incoming if m["id"] not in excluded])
-                    else:
-                        outgoing.append(event("values", {"messages": archive_messages([], data.get("messages", []))}, namespace))
-                projected = native_event(raw)
-                for item in projected:
-                    if item["method"] == "input.requested":
-                        p = item["params"]
-                        snapshot["__interrupt__"] = [{"id": p["data"]["interrupt_id"], "value": p["data"]["payload"], "namespace": p["namespace"]}]
-                        snapshot["workbench"]["interrupt_run_id"] = run.id
-                outgoing.extend(projected)
-                if raw.get("method") == "values" and not namespace:
-                    outgoing.insert(0, event("values", snapshot))
-            else:
-                previous = snapshot.get("workbench", {}).get("run") or {}
-                snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
-                if previous.get("id") != run.id:
-                    snapshot["workbench"]["run_started_seq"] = binding["seq"]
-                    snapshot["workbench"].pop("recovery", None)
-                if run.input_message_id and snapshot["workbench"].get("display_hidden_run_id") != run.id:
-                    snapshot["messages"] = archive_messages(snapshot.get("messages", []), [{
-                        "type": "human", "id": run.input_message_id, "content": user_message_content(run.task, run.content_blocks),
-                    }])
-                # Registration/reconnect may occur after the framework emitted
-                # input.requested. Recover its saved exact identity, never a new
-                # interrupt or a replay of the effectful command.
-                if recovered_interrupts := self._saved_interrupts(run):
-                    snapshot["__interrupt__"] = recovered_interrupts
-                    snapshot["workbench"]["interrupt_run_id"] = run.id
-                if not run.pending_interrupt and (previous.get("pending_interrupt") or previous.get("id") != run.id or not is_run_lifecycle_live(run.status)):
-                    snapshot["__interrupt__"] = []
-                    snapshot["workbench"].pop("interrupt_run_id", None)
-                if not is_run_lifecycle_live(run.status) and previous.get("status") not in {"completed", "failed", "cancelled"} and snapshot["workbench"].get("display_hidden_run_id") != run.id:
-                    partials, incomplete = partial_archive(self.replay(binding["id"], snapshot["workbench"].get("run_started_seq", 0), binding["seq"]))
-                    snapshot["messages"] = archive_messages(snapshot.get("messages", []), partials)
-                    snapshot["workbench"]["incomplete_message_ids"] = sorted(
-                        set(snapshot["workbench"].get("incomplete_message_ids", [])) | set(incomplete))
-                outgoing.append(event("values", snapshot))
-                state = self._lifecycle(run)
-                prior_state = self._lifecycle_dict(previous)
-                if state != prior_state or previous.get("id") != run.id:
-                    outgoing.append(event("lifecycle", {"event": state, "run_id": run.id,
-                        "graph_name": "local-ai-workbench", "app_status": run.status.value,
-                        **({"error": run.error} if run.error else {})}))
+            previous = snapshot.get("workbench", {}).get("run") or {}
+            snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
+            if previous.get("id") != run.id:
+                snapshot["workbench"]["run_started_seq"] = binding["seq"]
+                snapshot["workbench"].pop("recovery", None)
+            if run.input_message_id and snapshot["workbench"].get("display_hidden_run_id") != run.id:
+                snapshot["messages"] = archive_messages(snapshot.get("messages", []), [{
+                    "type": "human", "id": run.input_message_id, "content": user_message_content(run.task, run.content_blocks),
+                }])
+            # Registration/reconnect may occur after the framework emitted
+            # input.requested. Recover its saved exact identity, never a new
+            # interrupt or a replay of the effectful command.
+            if recovered_interrupts := self._saved_interrupts(run):
+                snapshot["__interrupt__"] = recovered_interrupts
+                snapshot["workbench"]["interrupt_run_id"] = run.id
+            if not run.pending_interrupt and (previous.get("pending_interrupt") or previous.get("id") != run.id or not is_run_lifecycle_live(run.status)):
+                snapshot["__interrupt__"] = []
+                snapshot["workbench"].pop("interrupt_run_id", None)
+            if not is_run_lifecycle_live(run.status) and previous.get("status") not in {"completed", "failed", "cancelled"} and snapshot["workbench"].get("display_hidden_run_id") != run.id:
+                partials, incomplete = partial_archive(self.replay(binding["id"], snapshot["workbench"].get("run_started_seq", 0), binding["seq"]))
+                snapshot["messages"] = archive_messages(snapshot.get("messages", []), partials)
+                snapshot["workbench"]["incomplete_message_ids"] = sorted(
+                    set(snapshot["workbench"].get("incomplete_message_ids", [])) | set(incomplete))
+            outgoing.append(event("values", snapshot))
+            state = self._lifecycle(run)
+            prior_state = self._lifecycle_dict(previous)
+            if state != prior_state or previous.get("id") != run.id:
+                outgoing.append(event("lifecycle", {"event": state, "run_id": run.id,
+                    "graph_name": "local-ai-workbench", "app_status": run.status.value,
+                    **({"error": run.error} if run.error else {})}))
             observation = run.generation_observation
             replaceable = (
-                telemetry and raw is None and len(outgoing) == 1 and is_run_lifecycle_live(run.status)
+                telemetry and len(outgoing) == 1 and is_run_lifecycle_live(run.status)
                 and (observation is None or observation.phase in {"prompt_processing", "generating"})
                 and self._measurement_only(binding["snapshot"], snapshot)
             )
             self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id,
                                           replaceable_measurement=replaceable)
+
+    def _observe_native_event(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> None:
+        """Append one native event. Rewrite the snapshot only when it changes."""
+        stored = binding["snapshot"]
+        params = raw.get("params", {})
+        namespace = params.get("namespace", [])
+        display_hidden = stored.get("workbench", {}).get("display_hidden_run_id") == run.id
+        if display_hidden and raw.get("method") in {"messages", "tools"}:
+            return
+        snapshot: dict[str, Any] | None = None
+        outgoing: list[dict[str, Any]] = []
+
+        def editable() -> dict[str, Any]:
+            nonlocal snapshot
+            if snapshot is None:
+                snapshot = copy.deepcopy(stored)
+            return snapshot
+
+        if raw.get("method") == "values":
+            data = params.get("data", {})
+            if not namespace:
+                current = editable()
+                excluded = set(current.get("workbench", {}).get("display_excluded_message_ids", []))
+                incoming = archive_messages([], data.get("messages", []))
+                if display_hidden:
+                    excluded.update(message["id"] for message in incoming)
+                    current["workbench"]["display_excluded_message_ids"] = sorted(excluded)
+                current["messages"] = archive_messages(current.get("messages", []),
+                    [message for message in incoming if message["id"] not in excluded])
+            else:
+                outgoing.append(event("values", {"messages": archive_messages([], data.get("messages", []))}, namespace))
+        projected = native_event(raw)
+        for item in projected:
+            if item["method"] == "input.requested":
+                current = editable()
+                requested = item["params"]
+                current["__interrupt__"] = [{"id": requested["data"]["interrupt_id"], "value": requested["data"]["payload"], "namespace": requested["namespace"]}]
+                current["workbench"]["interrupt_run_id"] = run.id
+        outgoing.extend(projected)
+        if raw.get("method") == "values" and not namespace:
+            outgoing.insert(0, event("values", editable()))
+        if not outgoing:
+            return
+        self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id)
 
     @staticmethod
     def _measurement_only(previous: dict[str, Any], current: dict[str, Any]) -> bool:
