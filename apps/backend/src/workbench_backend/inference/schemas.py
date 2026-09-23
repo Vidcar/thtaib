@@ -256,6 +256,7 @@ class RunProfile(BaseModel):
     bundle_name: str | None = Field(default=None, json_schema_extra={"readOnly": True})
     equivalent_configuration_ids: list[str] = Field(default_factory=list, json_schema_extra={"readOnly": True})
     merged_into_configuration_id: str | None = Field(default=None, json_schema_extra={"readOnly": True})
+    configuration_origin: Literal["legacy", "recovered", "named"] = Field(default="legacy", json_schema_extra={"readOnly": True})
     bags: SettingsBags
     created_at: str
     updated_at: str

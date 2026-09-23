@@ -61,8 +61,14 @@ def _merge_equivalent_profiles(store: RecordStore, bundle_id: str, default_id: s
     profiles.sort(key=lambda profile: (profile.id == default_id, profile.updated_at, profile.id), reverse=True)
     canonical: list[RunProfile] = []
     for profile in profiles:
+        # Equal settings do not make two deliberately named variants the same
+        # user choice. Only recovered legacy duplicates acquire an alias.
+        if profile.configuration_origin != "legacy":
+            canonical.append(profile)
+            continue
         equivalent = next((item for item in canonical if requested_identity(item.bags) == requested_identity(profile.bags)), None)
         if equivalent is None:
+            profile = store.put_profile(profile.model_copy(update={"configuration_origin": "recovered"}))
             canonical.append(profile)
         else:
             # Preserve the old authored bags for immutable historical references;

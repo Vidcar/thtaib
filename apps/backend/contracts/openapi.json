@@ -9866,6 +9866,17 @@
             "readOnly": true,
             "title": "Bundle Name"
           },
+          "configuration_origin": {
+            "default": "legacy",
+            "enum": [
+              "legacy",
+              "recovered",
+              "named"
+            ],
+            "readOnly": true,
+            "title": "Configuration Origin",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"

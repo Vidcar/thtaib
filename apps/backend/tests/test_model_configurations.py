@@ -51,8 +51,10 @@ class ModelConfigurationTests(unittest.TestCase):
 
     def test_equivalent_configurations_share_chooser_entry_and_live_model_name(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
-        duplicate = self.manager.save_model_configuration(self.bundle_id,
-            ModelConfigurationWriteRequest(display_name="Old duplicate"))
+        # This record predates named configurations, unlike an explicit Save as
+        # variant action whose chosen identity must remain in the selector.
+        duplicate = self.manager.store.put_profile(original.model_copy(update={
+            "id": "legacy_duplicate", "display_name": "Old duplicate", "configuration_origin": "legacy"}))
         self.assertEqual([p.id for p in self.manager.list_model_configurations(self.bundle_id)], [original.id])
         self.assertEqual([p.id for p in self.manager.list_profiles()], [original.id])
         self.assertEqual(self.manager.list_profiles()[0].equivalent_configuration_ids, [duplicate.id])
@@ -73,6 +75,25 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual([p.id for p in self.manager.list_model_configurations(self.bundle_id)], [original.id])
         self.assertEqual(self.manager.canonical_configuration(duplicate.id).bags.startup.requested["ctx_size"], 8192)
         self.assertEqual(self.manager.get_profile(duplicate.id).bags.startup.requested, {})
+
+    def test_explicit_equal_named_variants_keep_identity_after_listing_and_restart(self):
+        original = self.manager.list_model_configurations(self.bundle_id)[0]
+        variant = self.manager.save_model_configuration(self.bundle_id,
+            ModelConfigurationWriteRequest(display_name="My experiment"))
+        self.assertEqual(variant.bags, original.bags)
+        self.assertEqual(variant.configuration_origin, "named")
+        for _ in range(2):
+            self.assertEqual({p.id for p in self.manager.list_model_configurations(self.bundle_id)}, {original.id, variant.id})
+            self.assertEqual(self.manager.canonical_configuration(variant.id).id, variant.id)
+        self.manager.set_default_configuration(self.bundle_id, variant.id)
+        reopened = ModelManager(self.paths)
+        self.addCleanup(reopened.imports.close)
+        self.assertEqual({p.id for p in reopened.list_profiles()}, {original.id, variant.id})
+        self.assertEqual(reopened.get_bundle(self.bundle_id).default_configuration_id, variant.id)
+        changed = reopened.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=variant.id, display_name="My experiment", per_request={"temperature": 0.5}))
+        self.assertEqual(changed.id, variant.id)
+        self.assertEqual(reopened.get_profile(original.id).bags, original.bags)
 
     def test_configuration_names_are_unique_and_legacy_instructions_are_not_lost(self):
         from workbench_backend.inference.schemas import ProfileWriteRequest

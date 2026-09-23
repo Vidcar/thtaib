@@ -5530,6 +5530,12 @@ export interface components {
             bundle_id?: string | null;
             /** Bundle Name */
             readonly bundle_name?: string | null;
+            /**
+             * Configuration Origin
+             * @default legacy
+             * @enum {string}
+             */
+            readonly configuration_origin: "legacy" | "recovered" | "named";
             /** Created At */
             created_at: string;
             /** Display Name */

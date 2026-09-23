@@ -311,6 +311,7 @@ class ModelManager:
         profile = RunProfile(
             id=new_id("profile"),
             display_name=request.display_name,
+            configuration_origin="named",
             bundle_id=request.bundle_id,
             bags=resolve_bags(
                 startup=request.startup,
@@ -342,6 +343,7 @@ class ModelManager:
                 ),
                 "updated_at": utc_now(),
                 "revision": existing.revision + 1,
+                "configuration_origin": "named",
             }
         )
         return self.store.put_profile(updated)
@@ -350,7 +352,8 @@ class ModelManager:
         display_name = request if isinstance(request, str) else request.display_name
         existing = self.get_profile(profile_id)
         return self.store.put_profile(
-            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1})
+            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1,
+                "configuration_origin": "named"})
         )
 
     def duplicate_profile(
@@ -368,6 +371,8 @@ class ModelManager:
                 "created_at": now,
                 "updated_at": now,
                 "revision": 1,
+                "configuration_origin": "named",
+                "merged_into_configuration_id": None,
             },
             deep=True,
         )
