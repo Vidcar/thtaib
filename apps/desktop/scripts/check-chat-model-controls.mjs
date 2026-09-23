@@ -51,6 +51,11 @@ async function render(overrides = {}, resolve = preview) {
 
 try {
   {
+    const state = await render({ configuration: {}, selectedDeploymentId: "", selectedConfigurationId: "model_b", projectId: "project_with_model_choice" }, config => preview({ ...config, model_configuration_id: "model_b" }));
+    assert.equal(state.renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Chat model settings: Second model").length, 1, "the trigger names an inherited configuration even before its model is loaded");
+    await state.close();
+  }
+  {
     const state = await render();
     const { renderer, applied, saved } = state;
     assert.equal(renderer.root.findAll(node => node.props["aria-label"] === "Preset").length, 0, "there is one model choice, without a separate preset path");

@@ -24,6 +24,7 @@ export interface ChatModelControlsProps {
   deployments: Deployment[];
   profiles: RunProfile[];
   selectedDeploymentId: string;
+  selectedConfigurationId?: string;
   configuration: SetupConfiguration;
   projectId?: string | null;
   agentSetupVersionId?: string | null;
@@ -34,7 +35,7 @@ export interface ChatModelControlsProps {
   onReloaded: () => Promise<void>;
 }
 
-export function ChatModelControls({ deployments, profiles, selectedDeploymentId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, onApply, onReloaded }: ChatModelControlsProps) {
+export function ChatModelControls({ deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, onApply, onReloaded }: ChatModelControlsProps) {
   const [draft, setDraft] = useState(() => modelSettings(configuration));
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
@@ -68,7 +69,7 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   const modelChoice = draft.model_configuration_id ? `configuration:${findConfiguration(profiles, draft.model_configuration_id)?.id ?? draft.model_configuration_id}` : draft.deployment_id && deployments.find(item => item.id === draft.deployment_id)?.scope === "connected" ? `deployment:${draft.deployment_id}` : "";
   const inheritedSource = !modelChoice ? facts.model_selection?.source : undefined;
   const automaticLabel = inheritedSource === "Loaded model" ? "Use loaded model" : inheritedSource?.startsWith("Project:") || inheritedSource?.startsWith("Agent:") ? `Use ${inheritedSource}` : inheritedSource?.startsWith("Application default") ? "Use app default" : "Use chat default";
-  const modelName = configurationLabel(findConfiguration(profiles, configuration.model_configuration_id)) ?? deployments.find(item => item.id === selectedDeploymentId)?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
+  const modelName = configurationLabel(findConfiguration(profiles, configuration.model_configuration_id ?? selectedConfigurationId)) ?? deployments.find(item => item.id === selectedDeploymentId)?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
   const loadedContext = deployment?.server_props?.n_ctx;
   const desiredContext = typeof draft.startup_overrides?.ctx_size === "number" ? draft.startup_overrides.ctx_size : typeof facts["startup.ctx_size"]?.value === "number" ? facts["startup.ctx_size"].value as number : loadedContext;
   const contextChoices = options?.context_size.options.flatMap(item => typeof item.value === "number" && item.value > 0 ? [item.value] : []) ?? [];
