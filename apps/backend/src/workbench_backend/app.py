@@ -102,6 +102,7 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     finish.start()
     application.state.startup_finish = finish
     yield
+    application.state.shutdown_requested.set()
     application.state.startup_stop.set()
     application.state.catalogue_served.set()
     finish.join(timeout=20)
@@ -131,6 +132,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         openapi_url=None,
         lifespan=_app_lifespan,
     )
+    application.state.shutdown_requested = threading.Event()
     application.add_middleware(
         CORSMiddleware,
         allow_origins=[

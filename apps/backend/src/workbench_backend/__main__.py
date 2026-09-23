@@ -28,16 +28,20 @@ def main(argv: list[str] | None = None) -> None:
     from workbench_backend.app import app, create_app
     application = app
     while True:
-        server = uvicorn.Server(uvicorn.Config(application, host=host, port=args.port, reload=False))
+        server = uvicorn.Server(uvicorn.Config(application, host=host, port=args.port, reload=False,
+            timeout_graceful_shutdown=5))
         restart_requested = False
+
+        def shutdown_backend():
+            # The application has already confirmed durable work stopped before
+            # calling this hook. Observers must finish before ASGI lifespan exits.
+            application.state.shutdown_requested.set()
+            server.should_exit = True
 
         def restart_backend():
             nonlocal restart_requested
             restart_requested = True
-            server.should_exit = True
-
-        def shutdown_backend():
-            server.should_exit = True
+            shutdown_backend()
 
         application.state.restart_backend = restart_backend
         application.state.shutdown_backend = shutdown_backend

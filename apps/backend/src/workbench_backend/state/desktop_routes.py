@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import WorkbenchError
+from workbench_backend.state.backup import BackupError
 
 router = APIRouter(prefix="/v1/desktop")
 
@@ -81,7 +82,12 @@ def active_work(request: Request) -> dict:
 @router.post("/stop-owned-work")
 def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict:
     state = request.app.state
-    state.maintenance_gate.begin("desktop_quit")
+    try:
+        state.maintenance_gate.begin("desktop_quit")
+    except BackupError as exc:
+        # Failed admission belongs to the existing maintenance owner. Do not
+        # release its gate or signal the server to shut down.
+        raise WorkbenchError(str(exc), code=exc.code, status_code=409) from exc
     try:
         for conversation in state.chat.store.list_conversations(include_archived=True):
             with state.chat.store.conversation_lock(conversation.id):
