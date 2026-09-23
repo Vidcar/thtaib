@@ -21,26 +21,40 @@ class AttentionItem(BaseModel):
     notified: bool = False
 
 
+def _conversation_for_run(conversations, run_id: str):
+    current = next((conversation for conversation in conversations if conversation.current_run_id == run_id), None)
+    if current is not None:
+        return current
+    return next((conversation for conversation in conversations if run_id in conversation.run_ids), None)
+
+
 @router.get("/attention")
 def attention(request: Request) -> list[AttentionItem]:
     state = request.app.state
     conversations = state.chat.store.list_conversations(include_archived=True)
-    owners = {c.current_run_id: c for c in conversations if c.current_run_id}
     items = []
     for run in state.harness.list_runs():
         kind = "question" if run.pending_interrupt and run.pending_interrupt.kind == "ask_user" else "approval" if run.pending_interrupt else "failure" if run.status == "failed" else "success" if run.status == "completed" and state.preferences.preferences().success_notifications else None
         if kind is None or run.status == "cancel_requested":
             continue
-        owner = owners.get(run.id)
+        owner = _conversation_for_run(conversations, run.id)
         if run.source_surface == "chat" and owner is None:
             continue
         fingerprint = run.pending_interrupt.interrupt_id if run.pending_interrupt else hashlib.sha256(
             json.dumps({"checkpoints": sorted(run.checkpoint_ids), "finished": run.finished_at}, sort_keys=True).encode()).hexdigest()[:24]
         identity = f"{run.id}:{kind}:{fingerprint}"
+        if state.preferences.attention_hidden(identity, run.id):
+            continue
         items.append(AttentionItem(run_id=run.id, conversation_id=owner.id if owner else None,
             title=owner.title or "Chat" if owner else "Agent run", kind=kind,
             identity=identity, notified=state.preferences.notification_sent(identity)))
     return items
+
+
+@router.post("/attention/{identity}/dismiss")
+def dismiss_attention(request: Request, identity: str) -> dict:
+    request.app.state.preferences.dismiss_attention(identity)
+    return {"dismissed": True}
 
 
 @router.post("/attention/{identity}/claim")

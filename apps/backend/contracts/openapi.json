@@ -12957,6 +12957,54 @@
         "summary": "Update Conversation Queue Item"
       }
     },
+    "/v1/chat/conversations/{conversation_id}/queue/{item_id}/steer": {
+      "post": {
+        "operationId": "steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Steer Conversation Queue Item"
+      }
+    },
     "/v1/chat/conversations/{conversation_id}/reopen": {
       "post": {
         "operationId": "reopen_conversation_v1_chat_conversations__conversation_id__reopen_post",

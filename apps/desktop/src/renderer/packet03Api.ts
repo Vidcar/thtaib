@@ -134,5 +134,6 @@ export const packet03Api = {
       body: JSON.stringify({ archive_path: archivePath, destination_root: destinationRoot }),
     }),
   attention: () => packet03Request<AttentionItem[]>("/v1/desktop/attention"),
+  dismissAttention: (identity: string) => packet03Request<{ dismissed: true }>(`/v1/desktop/attention/${encodeURIComponent(identity)}/dismiss`, { method: "POST" }),
   activeWork: () => packet03Request<{ active_run_ids: string[] }>("/v1/desktop/work"),
 };

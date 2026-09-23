@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ChatModelControls } from "./ChatModelControls";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { errorMessage } from "./errors";
+import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { packet03Request } from "./packet03Api";
 import { isAgentRunLive, type ChatConversation, type ChatQueueItem, type Deployment, type RunProfile } from "./types";
@@ -32,6 +33,7 @@ const EMPTY_QUEUE: ChatQueueItem[] = [];
 export function ChatQueuePanel({ conversation, deployments, profiles, disabled = false, onUpdated, onError }: ChatQueuePanelProps) {
   const queue = conversation.queue ?? EMPTY_QUEUE;
   const [drafts, setDrafts] = useState<Record<string, QueueDraft>>({});
+  const [openEditors, setOpenEditors] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [continueBusy, setContinueBusy] = useState(false);
   const [ackUncertain, setAckUncertain] = useState(false);
@@ -95,6 +97,20 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
     }
   }
 
+  async function steerQueueItem(item: ChatQueueItem): Promise<void> {
+    if (isQueueItemLocked(item) || disabled || itemBusy || item.pause_reason === "dispatch_uncertain") {
+      return;
+    }
+    setBusyItemId(item.id);
+    try {
+      onUpdated(await packet03Request<ChatConversation>(`${queueItemPath(conversation.id, item.id)}/steer`, { method: "POST" }));
+    } catch (error) {
+      onError(errorMessage(error));
+    } finally {
+      setBusyItemId(null);
+    }
+  }
+
   async function continueQueue(): Promise<void> {
     if (disabled || continueBusy || runActive || (hasDispatchUncertain && !ackUncertain)) {
       return;
@@ -118,16 +134,10 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
   }
 
   return (
-    <details className="chat-queue-panel" open>
-      <summary>
-        <span>Queue</span>
-        <span className="badge">{queue.length} turn{queue.length === 1 ? "" : "s"}</span>
-      </summary>
-
+    <div className="composer-queue" aria-label="Queued messages">
       {paused.length ? (
-        <section className="notice notice-warn" aria-label="Paused queue">
-          <strong>Queue paused</strong>
-          <p>{hasDispatchUncertain ? "A previous dispatch may have had external effects. Review the queued work before continuing." : "Review the paused item before continuing."}</p>
+        <section className="composer-queue-pause" aria-label="Paused queue">
+          <p>{hasDispatchUncertain ? "A previous dispatch may have had external effects." : "The queue is paused."}</p>
           {hasDispatchUncertain ? (
             <label className="check-row">
               <input
@@ -139,45 +149,29 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
               I understand continuing may repeat earlier effects.
             </label>
           ) : null}
-          <div className="chat-queue-continue">
-            <button type="button" disabled={disabled || continueBusy || runActive || (hasDispatchUncertain && !ackUncertain)} onClick={() => void continueQueue()}>
-              {continueBusy ? "Continuing..." : "Continue queue"}
-            </button>
-            {runActive ? <p className="hint">Continue is available after the live turn or pending cancellation finishes. You can still edit queued items now.</p> : null}
-          </div>
+          <button type="button" disabled={disabled || continueBusy || runActive || (hasDispatchUncertain && !ackUncertain)} onClick={() => void continueQueue()}>
+            {continueBusy ? "Continuing..." : "Continue queue"}
+          </button>
         </section>
       ) : null}
-
-      <ol className="chat-queue-list">
-        {queue.map((item, index) => {
+      <ol className="composer-queue-list">
+        {queue.map((item) => {
           const draft = drafts[item.id] ?? draftFromQueueItem(item, conversation);
           const locked = isQueueItemLocked(item);
           const savingThisItem = busyItemId === item.id;
           const itemDisabled = disabled || itemBusy || locked;
+          const editorOpen = Boolean(openEditors[item.id]);
+          const preview = draft.task.trim() || (draft.attachmentIds.length ? "Attachment only" : "Empty message");
           return (
-            <li key={item.id} className={locked ? "chat-queue-item is-locked" : "chat-queue-item"}>
-              <div className="chat-queue-item-head">
-                <div>
-                  <strong>Queued turn {index + 1}</strong>
-                  <p className="chat-queue-preview">{draft.task.trim() || (draft.attachmentIds.length ? "Attachment-only queued turn" : "Empty queued turn")}</p>
-                </div>
-                <div className="chat-queue-status">
-                  <span className="badge">{queueStatusLabel(item)}</span>
-                  {item.frozen_config ? <span className="badge">Captured setup</span> : null}
-                </div>
-              </div>
-              {item.pause_error ? <Notice tone="error">{item.pause_error}</Notice> : null}
-              {item.pause_reason ? <p className="hint">{pauseReasonLabel(item)}</p> : null}
-              {item.frozen_config ? <p className="chat-queue-frozen-config">{frozenConfigLabel(item)}</p> : null}
-
-              <details className="chat-queue-edit">
-                <summary>{locked ? "View queued turn" : "Edit queued turn"}</summary>
-                <div className="chat-queue-editor">
+            <li key={item.id} className={locked ? "composer-queue-row is-locked" : "composer-queue-row"}>
+              {editorOpen ? (
+                <div className="composer-queue-editor">
                   <label>
-                    Message
+                    <span className="sr-only">Queued message</span>
                     <textarea
                       value={draft.task}
                       disabled={itemDisabled}
+                      aria-label="Queued message"
                       onChange={(event) => updateDraft(item.id, { task: event.target.value })}
                     />
                   </label>
@@ -192,11 +186,6 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                       }
                     }}
                   />
-                  <p className="chat-queue-attachment-summary">
-                    {draft.attachmentIds.length
-                      ? `${draft.attachmentIds.length} attachment${draft.attachmentIds.length === 1 ? "" : "s"} staged for this queued turn.`
-                      : "No attachments staged for this queued turn."}
-                  </p>
                   <ChatModelControls
                     deployments={deployments}
                     profiles={profiles}
@@ -211,27 +200,31 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                     onInheritDeploymentSettingsChange={(inheritDeploymentSettings) => updateDraft(item.id, { inheritDeploymentSettings })}
                     onPerRequestOverridesChange={(perRequestOverrides) => updateDraft(item.id, { perRequestOverrides })}
                   />
-                </div>
-
-                <div className="chat-queue-actions">
-                  <button type="button" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
-                    {savingThisItem ? "Saving..." : "Save queued turn"}
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-queue-danger"
-                    disabled={itemDisabled}
-                    onClick={() => void removeQueueItem(item)}
-                  >
-                    Remove queued turn
+                  {item.pause_error ? <Notice tone="error">{item.pause_error}</Notice> : null}
+                  {item.frozen_config ? <p className="hint">{frozenConfigLabel(item)}</p> : null}
+                  <button type="button" aria-label="Save queued turn" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
+                    {savingThisItem ? "Saving..." : "Save"}
                   </button>
                 </div>
-              </details>
+              ) : (
+                <p className="composer-queue-text" title={preview}>{preview}</p>
+              )}
+              <div className="composer-queue-actions">
+                <button type="button" className="icon-button" aria-label="Edit queued turn" title={locked ? "View queued message" : "Edit queued message"} disabled={disabled || itemBusy} onClick={() => setOpenEditors((current) => ({ ...current, [item.id]: !current[item.id] }))}>
+                  <Icon name="edit" size={14} />
+                </button>
+                <button type="button" className="icon-button" aria-label="Remove queued turn" title="Remove from queue" disabled={itemDisabled} onClick={() => void removeQueueItem(item)}>
+                  <Icon name="close" size={14} />
+                </button>
+                <button type="button" className="icon-button" aria-label="Steer the conversation" title="Steer the live reply with this message" disabled={itemDisabled || item.pause_reason === "dispatch_uncertain"} onClick={() => void steerQueueItem(item)}>
+                  <Icon name="steer" size={14} />
+                </button>
+              </div>
             </li>
           );
         })}
       </ol>
-    </details>
+    </div>
   );
 
   function updateDraft(itemId: string, patch: Partial<Omit<QueueDraft, "dirty">>): void {
@@ -294,25 +287,6 @@ function hasSendableContent(draft: QueueDraft): boolean {
 
 function queueItemPath(conversationId: string, itemId: string): string {
   return `/v1/chat/conversations/${encodeURIComponent(conversationId)}/queue/${encodeURIComponent(itemId)}`;
-}
-
-function queueStatusLabel(item: ChatQueueItem): string {
-  if (item.status === "dispatching") return "Running";
-  if (item.status === "paused") return "Paused";
-  return "Queued";
-}
-
-function pauseReasonLabel(item: ChatQueueItem): string {
-  if (item.pause_reason === "dispatch_uncertain") {
-    return "Paused because the last dispatch had uncertain effects.";
-  }
-  if (item.pause_reason === "cancelled") {
-    return "Paused after cancellation.";
-  }
-  if (item.pause_reason === "failed") {
-    return "Paused after a failed turn.";
-  }
-  return "Paused.";
 }
 
 function frozenConfigLabel(item: ChatQueueItem): string {

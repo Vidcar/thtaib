@@ -108,7 +108,7 @@ async function checkAttentionTargets(AttentionPanel) {
       await tick();
     });
     const buttons = renderer.root.findAll(node => node.type === "button" && textOf(node).includes("Open"));
-    await act(async () => { for (const target of buttons) target.props.onClick(); });
+    await act(async () => { await Promise.all(buttons.map((target) => Promise.resolve(target.props.onClick()))); });
     assert.deepEqual(opened, items, "Attention preserves the exact conversation or task target rather than dropping non-Chat identity");
   } finally {
     if (renderer) await act(async () => renderer.unmount());

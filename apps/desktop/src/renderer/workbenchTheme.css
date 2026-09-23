@@ -130,15 +130,10 @@ details[open] > summary { color: var(--text); margin-bottom: 8px; }
   position: relative;
   flex: 0 0 32px;
 }
-.app-nav-collapsed .side-tabs button.packet03-attention-button strong {
-  position: absolute;
+.app-nav-collapsed .side-tabs button.packet03-attention-button .attention-count {
   top: 1px;
   right: 1px;
-  margin: 0;
-  min-width: 13px;
-  padding: 0 3px;
-  font-size: 9px;
-  line-height: 13px;
+  left: auto;
 }
 .answer-actions { display: flex; gap: 2px; align-items: center; margin-top: 6px; }
 .answer-actions .icon-button, .answer-actions .copy-code { width: 28px; height: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0; color: var(--muted); background: transparent; }
@@ -234,6 +229,8 @@ details[open] > summary { color: var(--text); margin-bottom: 8px; }
 .approval-mode button:disabled { opacity: .5; cursor: default; }
 .approval-mode-field { display: grid; gap: 8px; }
 .compose .icon-button.is-pressed { color: var(--text); background: var(--bg-panel); }
+.compose .icon-button.is-on,
+.chat-header .icon-button.is-on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .composer-menu > summary { padding: 5px; font-size: 11px; gap: 5px; }
 .composer-menu > summary svg { width: 16px; height: 16px; }
 .composer-popover, .compose .chat-model-controls-panel, .history-menu-panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px; padding: 15px; box-shadow: var(--shadow); max-height: min(65vh, 580px); overflow: auto; font-size: 12px; }

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type CSS
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import { AnswerActions } from "./AnswerActions";
 import { areaLabel, newestConversationFirst } from "./conversationAreas";
-import { HoverHelp } from "./HoverHelp";
 import { useDismissibleDetails } from "./useDismissibleDetails";
 
 import { api, ApiError, request } from "./api";
@@ -13,6 +12,17 @@ import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { ChatDock, type DockPage } from "./ChatDock";
+import { ConversationSetup } from "./ConversationSetup";
+
+type RailPage = "setup" | DockPage | "actions";
+
+function readRailPage(): RailPage {
+  try {
+    const saved = sessionStorage.getItem("workbench.chat.rail.page");
+    if (saved === "setup" || saved === "changes" || saved === "files" || saved === "library" || saved === "actions") return saved;
+  } catch { /* Keep the default page. */ }
+  return "changes";
+}
 import { ChatDockContext } from "./chatDockContext";
 import type { ObservedFileChange } from "./activityLine";
 import type { SchemaProjectFileChangeView } from "../generated/shared-contracts/openapi";
@@ -21,17 +31,16 @@ import { ChatModelControls } from "./ChatModelControls";
 import { ChatMeasurements } from "./ChatMeasurements";
 import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
+import { notifyAttentionChanged } from "./AttentionPanel";
 import { ChatHistoryActions } from "./ChatHistoryActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import { AgentMessageFeed } from "./AgentMessageFeed";
-import { conversationTitle, displayedTranscript, formatWhen, shortId } from "./display";
+import { conversationTitle, displayedTranscript, formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
 import { InterruptApproval } from "./InterruptApproval";
-import { knowledgeKindLabel } from "./labels";
 import { Notice } from "./Notice";
-import { SettingsNotes } from "./settingsNotes";
 import { StatusBadge } from "./StatusBadge";
 import {
   isAgentRunLive,
@@ -455,12 +464,6 @@ function isDeploymentAvailable(deployment: Deployment): boolean {
   return deployment.status === "running";
 }
 
-function chatModelLabel(deployment: Deployment): string {
-  const name = deployment.display_name.replace(/^(managed|connected):/, "");
-  const status = deployment.status === "running" ? "Ready" : deployment.scope === "managed" && deployment.status === "stopped" ? "Loads when sent" : deployment.status;
-  return `${name} · ${status}`;
-}
-
 function chatDeployHealthNotice(conversation: ChatConversation | null, selectedDeployment: Deployment | undefined): { tone: "info" | "warn" | "error"; message: string } | null {
   const health = conversation?.deploy_health;
   if (!conversation || !health?.message) {
@@ -559,8 +562,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     onNavigate,
     presentation = fallbackPresentation,
   } = props;
-  const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 380, 280, 720);
-  const [dockPage, setDockPage] = useState<DockPage>("changes");
+  const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 320, 280, 720);
+  const [railPage, setRailPage] = useState<RailPage>(() => readRailPage());
+  const [railOpen, setRailOpen] = useState(() => {
+    try { return sessionStorage.getItem("workbench.chat.rail") === "open"; } catch { return false; }
+  });
   const [selectedChangeId, setSelectedChangeId] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
   const [fileChanges, setFileChanges] = useState<ObservedFileChange[]>([]);
@@ -593,23 +599,26 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [fileDragActive, setFileDragActive] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
   const [perRequestOverrides, setPerRequestOverrides] = useState<Record<string, unknown>>({});
-  const [setupOpen, setSetupOpen] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
+
   const reuseClaim = useRef<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
   const retainedAssets = useChatRetainedAssets(conversation?.id ?? "");
+  const openRail = useCallback((page: RailPage) => {
+    setRailOpen(true);
+    setRailPage(page);
+    try {
+      sessionStorage.setItem("workbench.chat.rail", "open");
+      sessionStorage.setItem("workbench.chat.rail.page", page);
+    } catch { /* The rail still opens for this view. */ }
+  }, []);
   const openChange = useCallback((id: string) => {
-    setFilesOpen(true);
-    setDockPage("changes");
+    openRail("changes");
     setSelectedChangeId(id);
-    setSetupOpen(false);
-  }, []);
+  }, [openRail]);
   const openFile = useCallback((path: string) => {
-    setFilesOpen(true);
-    setDockPage("files");
+    openRail("files");
     setSelectedPath(path);
-    setSetupOpen(false);
-  }, []);
+  }, [openRail]);
   const runIdsKey = conversation?.run_ids.join("|") ?? "";
   useEffect(() => {
     const ids = conversation?.run_ids ?? [];
@@ -1107,6 +1116,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function removeConversation(id: string): void {
     historyMutations.current.set(id, "deleted");
+    notifyAttentionChanged();
     setConversations(current => current.filter(item => item.id !== id));
     if (activeOwner.current.conversationId === id || selectionLoading?.id === id || conversation?.id === id) startFresh();
   }
@@ -1288,7 +1298,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         if (cancelled) return;
         startFresh();
         await chooseSetup(launch.projectId ?? null, launch.agentSetupVersionId ?? null);
-        if (!cancelled) { setSetupOpen(true); props.onWorkspaceLaunchHandled?.(); }
+        if (!cancelled) props.onWorkspaceLaunchHandled?.();
       } catch (error) { if (!cancelled) { fail(error); props.onWorkspaceLaunchHandled?.(); } }
     });
     return () => { cancelled = true; };
@@ -1398,6 +1408,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       })
       .catch((error: unknown) => {
         if (!cancelled && selectionRequest.current === requestedSelection && historyMutations.current.get(attentionConversationId) !== "deleted") {
+          if (error instanceof ApiError && error.status === 404) {
+            setMessage("That chat is no longer available.");
+            return;
+          }
           fail(error);
         }
       })
@@ -1464,108 +1478,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : "New conversation"}</h2>
           </div>
-          <div className="chat-header-status">
-            <button type="button" className="icon-button" aria-label="Conversation setup" title="Conversation setup" aria-expanded={setupOpen} onClick={() => { setSetupOpen(value => !value); setFilesOpen(false); }}><Icon name="tune" /></button>
-          </div>
-          <button type="button" className="icon-button" aria-label="Dock" title="Changes and files" aria-pressed={filesOpen} onClick={() => { setFilesOpen(value => !value); setSetupOpen(false); }}><Icon name="files" /></button>
-          {conversation ? <details className="history-menu" onToggle={event => { if (event.currentTarget.open) setSetupOpen(false); }}><summary aria-label="Conversation actions" title="Conversation actions"><Icon name="more" /></summary><div className="history-menu-panel"><ChatHistoryActions
-            key={conversation.id}
-            conversation={conversation}
-            disabled={runBusy || selectionBusy || sending}
-            onConversationCreated={(next) => {
-              cacheConversation(next);
-              if (activeOwner.current.conversationId === conversation.id) chooseConversation(next);
-            }}
-            onDeleted={removeConversation}
-            onError={setMessage}
-          /></div></details> : null}
-        <div className="setup-popover" hidden={!setupOpen}>
-          <div className="setup-grid">
-            <label><span>Project <HoverHelp title="About projects">File tools work inside the selected folder. A chat stays with its original project.</HoverHelp></span><select aria-label="Chat project" value={projectId ?? ""} disabled={Boolean(conversation) || selectionBusy || sending} onChange={event => void chooseSetup(event.target.value || null, agentSetupVersionId)}><option value="">General · no project</option>{projects.map(project => <option key={project.id} value={project.id} disabled={project.missing}>{project.name}{project.missing ? " · folder unavailable" : ""}</option>)}{projectId && !projects.some(project => project.id === projectId) ? <option value={projectId}>Unavailable project</option> : null}</select></label>
-            <label><span>Agent <HoverHelp title="About saved agents">Applies the selected saved version to the next message. Existing runs and queued messages keep their own setup.</HoverHelp></span><select aria-label="Chat agent" value={agentSetupVersionId ?? ""} disabled={selectionBusy || sending} onChange={event => void chooseSetup(projectId, event.target.value || null)}><option value="">Default setup</option>{agentSetups.map(setup => <option key={setup.id} value={setup.current_version_id} disabled={Boolean(setup.missing_dependencies?.length)}>{setup.name}{setup.missing_dependencies?.length ? " · needs repair" : ""}</option>)}{agentSetupVersionId && !agentSetups.some(setup => setup.current_version_id === agentSetupVersionId) ? <option value={agentSetupVersionId}>Saved earlier agent version</option> : null}</select></label>
-          </div>
-          {setupResolving ? <p className="hint" role="status">Applying setup…</p> : null}
-          <div className="actions"><button type="button" onClick={() => navigateAway("projects")}>Manage projects</button><button type="button" onClick={() => navigateAway("agents")}>Manage agents</button></div>
-          {instructionLayers?.length ? <details><summary>Effective instructions · {instructionLayers.length} layers</summary>{instructionLayers.map((layer, index) => <section key={`${layer.source_id ?? layer.name}-${index}`}><h4>{layer.name}</h4><pre className="wrapped-text">{layer.content}</pre></section>)}</details> : null}
-          {missingDeployment ? (
-            <Notice tone="warn">This conversation's model connection is unavailable. Its history is preserved. Choose a model before sending another message.</Notice>
-          ) : null}
-          {selectedProfile ? (
-            <SettingsNotes
-              unsupported={selectedProfile.bags.startup.unsupported}
-              retired={selectedProfile.bags.startup.retired}
-            />
-          ) : null}
-          {selectedProfile?.bags.agent.unsupported.length ? (
-            <Notice tone="warn">Unsupported agent settings: {selectedProfile.bags.agent.unsupported.join(", ")}. These saved values do not govern execution.</Notice>
-          ) : null}
-          <details>
-            <summary>Knowledge <HoverHelp title="About conversation knowledge">Choose memories and instructions for this chat. Document search needs a running embedding model.</HoverHelp></summary>
-            <label>
-              Document search model
-              <select
-                value={embeddingDeploymentId}
-                disabled={selectionBusy || sending}
-                onChange={(event) => { markSetupEdited("embedding_deployment_id"); setEmbeddingDeploymentId(event.target.value); }}
-              >
-                <option value="">None — no retrieval</option>
-                {embedderDeployments.map((deployment) => (
-                  <option key={deployment.id} value={deployment.id}>
-                    {chatModelLabel(deployment)}
-                  </option>
-                ))}
-                {embedderDeployments.length === 0
-                  ? deployments
-                      .filter((item) => !isDeclaredEmbedder(item))
-                      .map((deployment) => (
-                        <option key={deployment.id} value={deployment.id}>
-                          {chatModelLabel(deployment)} (not marked for retrieval)
-                        </option>
-                      ))
-                  : null}
-              </select>
-            </label>
-            <fieldset className="choice-set">
-              <legend>Knowledge versions</legend>
-              {knowledgeEntries.length === 0 ? (
-                <p className="hint">None yet. Create them on Knowledge.</p>
-              ) : (
-                knowledgeEntries.map((entry) => (
-                  <label key={entry.id} className="check-row">
-                    <input
-                      type="checkbox"
-                      checked={selectedKnowledgeIds.includes(entry.current_version_id)}
-                      onChange={() => {
-                        markSetupEdited("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs");
-                        const versionId = entry.current_version_id;
-                        setSelectedKnowledgeIds((current) =>
-                          current.includes(versionId)
-                            ? current.filter((item) => item !== versionId)
-                            : [...current, versionId],
-                        );
-                      }}
-                    />
-                    {knowledgeKindLabel(entry.kind)} · {entry.display_name ?? shortId(entry.id)}
-                  </label>
-                ))
-              )}
-            </fieldset>
-          </details>
-          {conversation && tools.length > 0 ? (
-            <details>
-              <summary>{tools.length} {tools.length === 1 ? "tool available" : "tools available"}</summary>
-              <p className="hint">{tools.join(", ")}</p>
-            </details>
-          ) : <p className="hint">{conversation ? "No tools available." : "Available tools depend on the project you choose."}</p>}
-          {(conversation?.filesystem_tools_available === false || conversation?.shell_tools_available === false) && <p className="hint">
-            {conversation && conversation.filesystem_tools_available === false
-              ? "Project files unavailable. "
-              : ""}
-            {conversation && conversation.shell_tools_available === false ? "Host shell unavailable." : ""}
-          </p>}
-        </div>
+          <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, changes, files, and actions"} onClick={() => {
+            const next = !railOpen;
+            setRailOpen(next);
+            try { sessionStorage.setItem("workbench.chat.rail", next ? "open" : "closed"); } catch { /* The toggle still applies. */ }
+          }}><Icon name="panelRight" /></button>
         </header>
-        <div className={`chat-workspace${filesOpen ? " files-open" : ""}`}>
+        <div className={`chat-workspace${railOpen ? " files-open" : ""}`}>
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript" aria-live="polite">
@@ -1643,10 +1562,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           <div ref={transcriptEnd} />
         </div>
 
-        {canObserveInteraction && conversation?.current_run && (isAgentRunLive(conversation.current_run.status) || (!runBusy && conversation.current_run.status === "failed")) ? (
-          <p className="activity-status"><Icon name="activity" size={14} /> Activity <StatusBadge status={conversation.current_run.status} /> <button type="button" onClick={stopCurrentWork}>Cancel</button></p>
-        ) : null}
-
         {deployHealthNotice && !runBusy ? (
           <Notice tone={deployHealthNotice.tone}>
             {deployHealthNotice.message}
@@ -1657,42 +1572,81 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         ) : null}
         {setupError ? <Notice tone="error">{setupError}</Notice> : null}
 
-        {conversation ? <ChatQueuePanel
-          key={conversation.id}
-          conversation={conversation}
-          deployments={modelChoices}
-          profiles={profiles}
-          disabled={selectionBusy || sending}
-          onUpdated={applyConversationUpdate}
-          onError={setMessage}
-        /> : null}
-
         </div>
-        {filesOpen ? <aside className="chat-files-panel" aria-label="Dock">
-          <PanelResize label="Resize dock" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={380} reverse />
-          <header><h3>Dock</h3><button type="button" className="icon-button" aria-label="Close dock" onClick={() => setFilesOpen(false)}><Icon name="close" size={16} /></button></header>
-          <ChatDock
-            page={dockPage}
-            onPage={setDockPage}
-            projectId={conversation?.project_id ?? projectId}
-            runIds={conversation?.run_ids ?? []}
-            currentRunId={conversation?.current_run_id}
-            currentRunStatus={conversation?.current_run?.status}
-            selectedChangeId={selectedChangeId}
-            selectedPath={selectedPath}
-            onSelectChange={setSelectedChangeId}
-            onSelectPath={setSelectedPath}
-            conversationId={conversation?.id}
-            projectPath={conversation?.project_path}
-            width={filesWidth}
-            onOpenKnowledge={() => navigateAway("knowledge")}
-            onReuseAssets={assets => {
-              draftRevision.current += 1;
-              setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
-              setAttachmentsOpen(true);
-            }}
-          />
-        </aside> : null}
+        <aside className="chat-files-panel chat-rail" aria-label="Conversation rail" hidden={!railOpen}>
+          <PanelResize label="Resize conversation rail" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={320} reverse />
+          <div className="chat-rail-tabs" role="tablist" aria-label="Conversation rail pages">
+            {(["setup", "changes", "files", "library", "actions"] as const).map(page => (
+              <button key={page} type="button" role="tab" aria-selected={railPage === page} onClick={() => openRail(page)}>{page === "setup" ? "Setup" : page === "changes" ? "Changes" : page === "files" ? "Files" : page === "library" ? "Library" : "Actions"}</button>
+            ))}
+            <button type="button" className="icon-button chat-rail-close" aria-label="Close conversation rail" title="Close" onClick={() => { setRailOpen(false); try { sessionStorage.setItem("workbench.chat.rail", "closed"); } catch { /* Closed for this view. */ } }}><Icon name="close" size={14} /></button>
+          </div>
+          <div className="chat-rail-body">
+            <div hidden={railPage !== "setup"}><ConversationSetup
+              projectId={projectId}
+              projects={projects}
+              conversation={Boolean(conversation)}
+              selectionBusy={selectionBusy}
+              sending={sending}
+              agentSetupVersionId={agentSetupVersionId}
+              agentSetups={agentSetups}
+              onProject={value => void chooseSetup(value, agentSetupVersionId)}
+              onAgent={value => void chooseSetup(projectId, value)}
+              setupResolving={setupResolving}
+              onManageProjects={() => navigateAway("projects")}
+              onManageAgents={() => navigateAway("agents")}
+              instructionLayers={instructionLayers}
+              missingDeployment={missingDeployment}
+              selectedProfile={selectedProfile}
+              embeddingDeploymentId={embeddingDeploymentId}
+              onEmbedding={value => { markSetupEdited("embedding_deployment_id"); setEmbeddingDeploymentId(value); }}
+              embedderDeployments={embedderDeployments}
+              deployments={deployments}
+              knowledgeEntries={knowledgeEntries}
+              selectedKnowledgeIds={selectedKnowledgeIds}
+              onToggleKnowledge={versionId => {
+                markSetupEdited("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs");
+                setSelectedKnowledgeIds(current => current.includes(versionId) ? current.filter(item => item !== versionId) : [...current, versionId]);
+              }}
+              tools={tools}
+              filesystemToolsAvailable={conversation?.filesystem_tools_available}
+              shellToolsAvailable={conversation?.shell_tools_available}
+            /></div>
+            {railPage === "actions" ? conversation ? <ChatHistoryActions
+              key={conversation.id}
+              conversation={conversation}
+              disabled={runBusy || selectionBusy || sending}
+              onConversationCreated={(next) => {
+                cacheConversation(next);
+                if (activeOwner.current.conversationId === conversation.id) chooseConversation(next);
+              }}
+              onDeleted={removeConversation}
+              onError={setMessage}
+            /> : <p className="hint">Start a chat to rename, export, or delete it.</p> : null}
+            {railPage === "changes" || railPage === "files" || railPage === "library" ? <ChatDock
+              page={railPage}
+              showPages={false}
+              onPage={page => openRail(page)}
+              projectId={conversation?.project_id ?? projectId}
+              runIds={conversation?.run_ids ?? []}
+              currentRunId={conversation?.current_run_id}
+              currentRunStatus={conversation?.current_run?.status}
+              selectedChangeId={selectedChangeId}
+              selectedPath={selectedPath}
+              onSelectChange={setSelectedChangeId}
+              onSelectPath={setSelectedPath}
+              conversationId={conversation?.id}
+              projectPath={conversation?.project_path}
+              width={filesWidth}
+              onOpenKnowledge={() => navigateAway("knowledge")}
+              onReuseAssets={assets => {
+                draftRevision.current += 1;
+                setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
+                setAttachmentsOpen(true);
+              }}
+            /> : null}
+          </div>
+        </aside>
 
         <form
           className="compose"
@@ -1702,6 +1656,15 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             void sendTurn();
           }}
         >
+          {conversation ? <ChatQueuePanel
+            key={conversation.id}
+            conversation={conversation}
+            deployments={modelChoices}
+            profiles={profiles}
+            disabled={selectionBusy || sending}
+            onUpdated={applyConversationUpdate}
+            onError={setMessage}
+          /> : null}
           {conversation ? <div hidden={!attachmentsOpen}><ComposerAttachments
             key={conversation.id}
             sessionId={conversation.id}
@@ -1743,17 +1706,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               </div>
             </details>
             <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={chooseDeployment} onProfileChange={value => { markSetupEdited("profile_id", "inherit_deployment_settings"); setProfileId(value); }} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={value => { markSetupEdited("per_request_overrides"); setPerRequestOverrides(value); }} onInheritDeploymentSettingsChange={inherit => { markSetupEdited("profile_id", "inherit_deployment_settings"); if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />
-            <button type="button" className={`icon-button${presentation.detailed_streams ? " is-pressed" : ""}`} aria-pressed={presentation.detailed_streams} aria-label="Detailed activity" title="Show reasoning and tool detail" disabled={selectionBusy} onClick={() => { const next = { detailed_streams: !presentation.detailed_streams }; void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail); }}><Icon name="activity" size={16} /></button>
+            <button type="button" className={`icon-button${presentation.detailed_streams ? " is-on" : ""}`} aria-pressed={presentation.detailed_streams} aria-label={presentation.detailed_streams ? "Hide reasoning and tool detail" : "Show reasoning and tool detail"} title={presentation.detailed_streams ? "Reasoning and tool detail on" : "Reasoning and tool detail off"} disabled={selectionBusy} onClick={() => { const next = { detailed_streams: !presentation.detailed_streams }; void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail); }}><Icon name="reasoning" size={16} /></button>
             <span className="composer-spacer" />
             <ChatMeasurements run={conversation?.current_run} />
             <button
               type="submit"
-              aria-label={runBusy ? "Queue" : selectionBusy || sending ? "Sending…" : "Send"}
+              aria-label={runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}
               className="send-button"
-              title={runBusy ? "Add to queue" : "Send message"}
+              title={runBusy ? "Queue this message" : "Send message"}
               disabled={!selectedDeployment || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
             >
-              {runBusy ? <span>Queue</span> : <Icon name="send" />}<span className="sr-only">{runBusy ? "Queue" : selectionBusy || sending ? "Sending…" : "Send"}</span>
+              <Icon name="send" /><span className="sr-only">{runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}</span>
             </button>
 
             <button

@@ -29,6 +29,7 @@ from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.checkpointer import delete_checkpoint_thread
+from workbench_backend.state.preferences import PreferenceStore
 from workbench_backend.state.store import ApplicationStore
 
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
@@ -169,6 +170,7 @@ class AssetLifecycleService:
                     deleted_threads.append(thread_id)
             self._delete_application_rows(conversation_id, deletable_run_ids,
                 deleted_thread_ids=deleted_threads, include_diagnostics=include_diagnostics)
+            PreferenceStore(self.app_store).dismiss_runs(deletable_run_ids)
         return preview.model_copy(
             update={
                 "affected_assets": asset_preview.affected_asset_ids,

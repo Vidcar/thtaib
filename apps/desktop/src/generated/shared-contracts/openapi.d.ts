@@ -760,6 +760,23 @@ export interface paths {
         patch: operations["update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch"];
         trace?: never;
     };
+    "/v1/chat/conversations/{conversation_id}/queue/{item_id}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Steer Conversation Queue Item */
+        post: operations["steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations/{conversation_id}/reopen": {
         parameters: {
             query?: never;
@@ -7546,6 +7563,38 @@ export interface operations {
                 "application/json": components["schemas"]["ChatQueueItemUpdateRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

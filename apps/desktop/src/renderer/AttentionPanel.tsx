@@ -26,6 +26,12 @@ function attentionKindLabel(kind: AttentionItem["kind"]): string {
   }
 }
 
+export function notifyAttentionChanged(): void {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new Event("workbench-attention"));
+  }
+}
+
 export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
   const [items, setItems] = useState<AttentionItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,6 +42,34 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
     setMessage("");
     try {
       setItems(await packet03Api.attention());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismiss(item: AttentionItem): Promise<void> {
+    setBusy(true);
+    setMessage("");
+    try {
+      await packet03Api.dismissAttention(item.identity);
+      notifyAttentionChanged();
+      setItems(await packet03Api.attention());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openItem(item: AttentionItem): Promise<void> {
+    setBusy(true);
+    setMessage("");
+    try {
+      await packet03Api.dismissAttention(item.identity);
+      notifyAttentionChanged();
+      onOpenItem?.(item);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -70,9 +104,14 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
                 </div>
                 <HoverHelp title="Item details">Run: {item.run_id}<br />Record: {item.identity}</HoverHelp>
               </div>
-              <button type="button" disabled={!onOpenItem} onClick={() => onOpenItem?.(item)}>
-                <Icon name="chat" size={14} /> Open
-              </button>
+              <div className="actions">
+                <button type="button" disabled={busy || !onOpenItem} onClick={() => openItem(item)}>
+                  <Icon name="chat" size={14} /> Open
+                </button>
+                <button type="button" className="icon-button" aria-label={`Dismiss ${item.title || "notice"}`} title="Dismiss" disabled={busy} onClick={() => void dismiss(item)}>
+                  <Icon name="close" size={14} />
+                </button>
+              </div>
             </div>
           </li>
         ))}
@@ -106,9 +145,13 @@ export function AttentionButton({ onOpen, active = false, collapsed = false, cla
       }
     }
     void refresh();
+    const onChanged = () => { void refresh(); };
+    const listen = typeof window.addEventListener === "function";
+    if (listen) window.addEventListener("workbench-attention", onChanged);
     const timer = window.setInterval(() => void refresh(), 30000);
     return () => {
       cancelled = true;
+      if (listen) window.removeEventListener("workbench-attention", onChanged);
       window.clearInterval(timer);
     };
   }, []);
@@ -117,7 +160,7 @@ export function AttentionButton({ onOpen, active = false, collapsed = false, cla
     <button type="button" className={`tab packet03-attention-button${active ? " active" : ""}${collapsed ? " is-collapsed" : ""} ${className}`} onClick={onOpen} aria-current={active ? "page" : undefined} aria-label={`Attention, ${count} item${count === 1 ? "" : "s"}`} title={`Attention · ${count} item${count === 1 ? "" : "s"}`}>
       <Icon name="attention" size={18} />
       {!collapsed ? <span className="nav-label">Attention</span> : null}
-      {count ? <strong>{count}</strong> : null}
+      {count ? <strong className="attention-count">{count}</strong> : null}
     </button>
   );
 }

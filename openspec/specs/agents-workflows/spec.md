@@ -169,7 +169,7 @@ Omitted tool selection SHALL inherit and an explicitly empty selection SHALL mea
 
 ### Requirement: AGT-010 - Keep drafts and queued turns separate from execution
 
-Drafts and queued follow-ups SHALL survive navigation/reopening without becoming submitted history. Each queued item SHALL show editable intended configuration and attachments and be removable. Successful completion advances automatically; failure/cancellation pauses until deliberate continuation; an approval/input wait is not completion. Dispatch SHALL freeze that item's setup and recheck authorization, model/history compatibility and shared admission, including active Lab reservation. Selector changes MUST NOT silently alter a queued item or steer a live turn.
+Drafts and queued follow-ups SHALL survive navigation/reopening without becoming submitted history. Each queued item SHALL show editable intended configuration and attachments and be removable. Successful completion advances automatically; failure/cancellation pauses until deliberate continuation; an approval/input wait is not completion. Dispatch SHALL freeze that item's setup and recheck authorization, model/history compatibility and shared admission, including active Lab reservation. Selector changes MUST NOT silently alter a queued item or steer a live turn. Steer is an explicit action on a queued message: it stops the live step and sends that message on the same thread. It is not a silent side effect of changing the model or setup.
 
 #### Scenario: Queue progression
 
