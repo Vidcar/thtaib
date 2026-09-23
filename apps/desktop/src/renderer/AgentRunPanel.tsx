@@ -321,7 +321,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
   }
 
   return (
-    <section className="surface">
+    <section className="surface workflow-surface">
       <header className="surface-head">
         <div className="entity-head"><h2>Workflows</h2><HoverHelp title="About task runs">Run a task with tools, approvals and progress in one place. Use Chat for an ongoing conversation.</HoverHelp></div>
       </header>

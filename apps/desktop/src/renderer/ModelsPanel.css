@@ -24,6 +24,8 @@
 .models-surface .local-model-form > :is(label, .actions, .setting-title) {margin: 0;}
 .models-surface .local-model-form > button {justify-self: start;}
 .models-surface .models-workspace {gap: var(--space-stack);}
+.models-surface .model-detail {width: 100%; min-width: 0; max-width: 760px;}
+.models-surface > .card {width: 100%; max-width: 760px;}
 .models-surface .model-library {padding: var(--pad-compact);}
 .models-surface .model-tile {padding: var(--pad-compact) var(--pad-compact);}
 .models-surface .model-tile .nav-item-title {font-size: var(--text-body);}
