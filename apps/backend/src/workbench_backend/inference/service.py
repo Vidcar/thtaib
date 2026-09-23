@@ -212,19 +212,54 @@ class ModelManager:
 
     def list_profiles(self) -> list[RunProfile]:
         ensure_model_configurations(self.store)
-        return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
+        defaults = {bundle.default_configuration_id for bundle in self.store.list_bundles()}
+        profiles = [self._resolved_profile(profile) for profile in self.store.list_profiles()]
+        profiles.sort(key=lambda profile: (profile.id in defaults, profile.updated_at, profile.id), reverse=True)
+        canonical = [profile for profile in profiles if profile.merged_into_configuration_id is None]
+        indexed = {profile.id: profile for profile in profiles}
+        for profile in profiles:
+            owner = profile
+            seen = {profile.id}
+            while owner.merged_into_configuration_id in indexed and owner.merged_into_configuration_id not in seen:
+                seen.add(owner.merged_into_configuration_id)
+                owner = indexed[owner.merged_into_configuration_id]
+            if owner.id != profile.id and owner in canonical:
+                owner.equivalent_configuration_ids.append(profile.id)
+        return canonical
 
     def list_model_configurations(self, bundle_id: str) -> list[RunProfile]:
         self._require_profile_bundle(bundle_id)
         return [profile for profile in self.list_profiles() if profile.bundle_id == bundle_id]
 
+    def canonical_configuration(self, configuration_id: str) -> RunProfile:
+        profile = self.get_profile(configuration_id)
+        if profile.bundle_id:
+            canonical = next((item for item in self.list_model_configurations(profile.bundle_id)
+                if item.id == profile.id or profile.id in item.equivalent_configuration_ids), None)
+            if canonical is not None:
+                return canonical
+            if profile.merged_into_configuration_id:
+                raise ManagerError("This configuration was merged into one that was removed. Choose another configuration.", code="profile_missing", status_code=404)
+        return profile
+
     def save_model_configuration(self, bundle_id: str, request: ModelConfigurationWriteRequest) -> RunProfile:
         with self.store.configuration_lock():
             self.list_model_configurations(bundle_id)
-            body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default"}), "bundle_id": bundle_id})
-            if request.configuration_id:
-                existing = self.get_profile(request.configuration_id)
+            name = request.display_name.strip()
+            if not name:
+                raise ManagerError("Name this configuration.", code="configuration_name_required", status_code=400)
+            existing = self.canonical_configuration(request.configuration_id) if request.configuration_id else None
+            if existing is not None:
                 self._validate_profile_bundle(existing, bundle_id)
+            if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None) and not profile.merged_into_configuration_id
+                    and profile.display_name.strip().casefold() == name.casefold() for profile in self.store.list_profiles()):
+                raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
+            legacy_agent = existing.bags.agent.requested if existing else {}
+            if request.agent and request.agent != legacy_agent:
+                raise ManagerError("Put instructions in an Agent setup. Model configurations save loading and response settings.", code="configuration_agent_instructions", status_code=400)
+            body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default"}),
+                "display_name": name, "bundle_id": bundle_id, "agent": legacy_agent})
+            if request.configuration_id:
                 profile = self.update_profile(existing.id, body)
             else:
                 profile = self.create_profile(body)
@@ -237,7 +272,7 @@ class ModelManager:
             bundle = self.store.get_bundle(bundle_id)
             if bundle is None:
                 raise ManagerError("Unknown model", code="bundle_missing", status_code=404)
-            profile = self.get_profile(configuration_id)
+            profile = self.canonical_configuration(configuration_id)
             if profile.bundle_id != bundle_id:
                 raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
             return self.store.put_bundle(bundle.model_copy(update={"default_configuration_id": profile.id}))
@@ -257,9 +292,11 @@ class ModelManager:
 
     def _resolved_profile(self, profile: RunProfile) -> RunProfile:
         """Re-resolve requested keys so pre-correction profiles show retired notes."""
-
+        bundle = self.store.get_bundle(profile.bundle_id) if profile.bundle_id else None
         return profile.model_copy(
             update={
+                "bundle_name": bundle.display_name if bundle else None,
+                "equivalent_configuration_ids": [],
                 "bags": resolve_bags(
                     startup=profile.bags.startup.requested,
                     per_request=profile.bags.per_request.requested,
@@ -549,7 +586,7 @@ class ModelManager:
             if deployment.scope != ManagementScope.managed:
                 raise ManagerError("This model is controlled by an external server.", code="connected_no_lifecycle", status_code=409)
             bundle = self._require_deployable_bundle(deployment.bundle_id or "")
-            profile = self.get_profile(request.model_configuration_id) if request.model_configuration_id else None
+            profile = self.canonical_configuration(request.model_configuration_id) if request.model_configuration_id else None
             if profile is not None:
                 if profile.bundle_id != deployment.bundle_id:
                     raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)

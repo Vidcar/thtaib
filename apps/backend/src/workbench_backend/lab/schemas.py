@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from workbench_backend.agents.schemas import AgentBudgets, TaskCriteria, ToolMode
+from workbench_backend.agents.setup_schemas import FrozenExecutionSelection, FrozenHelperSelection
 from workbench_backend.knowledge.redaction import DETECTOR_LIMITATIONS
 from workbench_backend.knowledge.schemas import KnowledgeBinding
 
@@ -99,6 +100,8 @@ class LabCase(BaseModel):
     deployment_id: str | None = None
     presented_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None
+    execution_snapshot: FrozenExecutionSelection | None = None
+    helper_snapshots: list[FrozenHelperSelection] = Field(default_factory=list)
     criteria: TaskCriteria = Field(default_factory=TaskCriteria)
     budgets: AgentBudgets | None = None
     tool_fixtures: list[dict[str, Any]] = Field(default_factory=list)
@@ -145,6 +148,8 @@ class RerunRequest(BaseModel):
 class AppliedConfig(BaseModel):
     deployment_id: str | None = None
     profile_id: str | None = None
+    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    work_mode: Literal["work", "plan"] = "work"
     presented_tools: list[str] = Field(default_factory=list)
     tool_mode: ToolMode
     system_prompt: str | None = None

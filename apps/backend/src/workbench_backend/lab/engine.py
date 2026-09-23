@@ -122,6 +122,8 @@ def measure_engine(
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             check=False,
             cwd=str(paths.runtimes),

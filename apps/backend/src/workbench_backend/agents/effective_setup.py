@@ -181,6 +181,7 @@ def resolve_effective_setup(
     surface_system_prompt: str | None,
     default_system_prompt: str,
     per_request_overrides: dict[str, Any] | None = None,
+    startup_overrides: dict[str, Any] | None = None,
     embedding_deployment: Deployment | None = None,
     selected_embedding_deployment_id: str | None = None,
     retrieval_requested: bool = False,
@@ -218,6 +219,11 @@ def resolve_effective_setup(
     validate_model_reasoning(deployment, per_request)
     agent = deployment.settings.agent if inherited else _resolve_agent(profile)
     startup_selected = deployment.settings.startup if inherited else _resolve_startup(profile)
+    if startup_overrides:
+        startup_requested = {**startup_selected.requested, **startup_overrides}
+        startup_selected = resolve_bags(startup={
+            key: value for key, value in startup_requested.items() if value is not None
+        }).startup
     mismatches = _startup_mismatches(startup_selected, deployment.applied_startup)
     loaded = [_loaded_fact(version) for version in knowledge_versions]
     system_prompt = compose_system_prompt(

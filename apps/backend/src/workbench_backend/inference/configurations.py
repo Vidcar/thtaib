@@ -25,6 +25,7 @@ def ensure_model_configurations(store: RecordStore) -> None:
     with store.configuration_lock():
         for bundle in store.list_bundles():
             if bundle.default_configuration_id and store.get_profile(bundle.default_configuration_id):
+                _merge_equivalent_profiles(store, bundle.id, bundle.default_configuration_id)
                 continue
             profiles = [p for p in store.list_profiles() if p.bundle_id == bundle.id]
             deployments = sorted(
@@ -51,3 +52,19 @@ def ensure_model_configurations(store: RecordStore) -> None:
                     RunProfile(id=f"config_{bundle.id}", display_name="Default", bundle_id=bundle.id,
                         bags=resolve_bags(), created_at=utc_now(), updated_at=utc_now()))
             store.put_bundle(bundle.model_copy(update={"default_configuration_id": default.id}))
+            _merge_equivalent_profiles(store, bundle.id, default.id)
+
+
+def _merge_equivalent_profiles(store: RecordStore, bundle_id: str, default_id: str) -> None:
+    profiles = [profile for profile in store.list_profiles() if profile.bundle_id == bundle_id
+        and profile.merged_into_configuration_id is None]
+    profiles.sort(key=lambda profile: (profile.id == default_id, profile.updated_at, profile.id), reverse=True)
+    canonical: list[RunProfile] = []
+    for profile in profiles:
+        equivalent = next((item for item in canonical if requested_identity(item.bags) == requested_identity(profile.bags)), None)
+        if equivalent is None:
+            canonical.append(profile)
+        else:
+            # Preserve the old authored bags for immutable historical references;
+            # live selectors keep following the single editable owner after edits.
+            store.put_profile(profile.model_copy(update={"merged_into_configuration_id": equivalent.id}))

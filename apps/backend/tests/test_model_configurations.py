@@ -49,6 +49,47 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "configuration_revision_conflict")
         self.assertEqual(self.manager.store.get_bundle(self.bundle_id).default_configuration_id, variant.id)
 
+    def test_equivalent_configurations_share_chooser_entry_and_live_model_name(self):
+        original = self.manager.list_model_configurations(self.bundle_id)[0]
+        duplicate = self.manager.save_model_configuration(self.bundle_id,
+            ModelConfigurationWriteRequest(display_name="Old duplicate"))
+        self.assertEqual([p.id for p in self.manager.list_model_configurations(self.bundle_id)], [original.id])
+        self.assertEqual([p.id for p in self.manager.list_profiles()], [original.id])
+        self.assertEqual(self.manager.list_profiles()[0].equivalent_configuration_ids, [duplicate.id])
+        with open_application_store(self.paths) as store:
+            resolved = SetupService(store, self.manager).resolve(overrides=SetupConfiguration(model_configuration_id=duplicate.id))
+            self.assertEqual(resolved.configuration.model_configuration_id, original.id)
+            self.assertEqual(resolved.configuration.profile_id, original.id)
+        self.assertEqual(self.manager.get_profile(duplicate.id).id, duplicate.id)
+        bundle = self.manager.store.get_bundle(self.bundle_id)
+        self.manager.store.put_bundle(bundle.model_copy(update={"display_name": "Renamed model"}))
+        self.assertEqual(self.manager.get_profile(original.id).bundle_name, "Renamed model")
+        self.assertEqual(self.manager.list_model_configurations(self.bundle_id)[0].bundle_name, "Renamed model")
+        self.assertNotIn('"bundle_name"', self.manager.store.profiles_path.read_text())
+        self.manager.set_default_configuration(self.bundle_id, duplicate.id)
+        self.assertEqual([p.id for p in self.manager.list_model_configurations(self.bundle_id)], [original.id])
+        self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=original.id, display_name="Default", startup={"ctx_size": 8192}))
+        self.assertEqual([p.id for p in self.manager.list_model_configurations(self.bundle_id)], [original.id])
+        self.assertEqual(self.manager.canonical_configuration(duplicate.id).bags.startup.requested["ctx_size"], 8192)
+        self.assertEqual(self.manager.get_profile(duplicate.id).bags.startup.requested, {})
+
+    def test_configuration_names_are_unique_and_legacy_instructions_are_not_lost(self):
+        from workbench_backend.inference.schemas import ProfileWriteRequest
+        legacy = self.manager.create_profile(ProfileWriteRequest(display_name="Legacy", bundle_id=self.bundle_id,
+            agent={"system_prompt": "Retain the authored instructions."}))
+        saved = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=legacy.id, display_name="Legacy", per_request={"temperature": 0.5}))
+        self.assertEqual(saved.bags.agent.requested, legacy.bags.agent.requested)
+        for name, code in ((" ", "configuration_name_required"), (" legacy ", "configuration_name_conflict")):
+            with self.subTest(name=name), self.assertRaises(ManagerError) as error:
+                self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name=name))
+            self.assertEqual(error.exception.code, code)
+        with self.assertRaises(ManagerError) as error:
+            self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                display_name="New", agent={"system_prompt": "Wrong owner"}))
+        self.assertEqual(error.exception.code, "configuration_agent_instructions")
+
     def test_fixed_port_collision_is_rejected_before_process_creation(self):
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))

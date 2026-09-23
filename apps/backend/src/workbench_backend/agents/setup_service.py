@@ -297,6 +297,10 @@ class SetupService:
         if configuration_id and hasattr(self, "manager"):
             profile = self.manager.store.get_profile(configuration_id)
             if profile is not None:
+                profile = self.manager.canonical_configuration(profile.id)
+                values["model_configuration_id"] = profile.id
+                if "model_configuration_id" in effective:
+                    effective["model_configuration_id"].value = profile.id
                 values.update(profile_id=profile.id, bundle_id=profile.bundle_id, inherit_deployment_settings=True)
                 selected = self.manager.store.get_deployment(values.get("deployment_id") or "")
                 matching = self.manager.configuration_deployment(profile.id)

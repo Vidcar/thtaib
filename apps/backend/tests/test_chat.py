@@ -135,6 +135,9 @@ class ChatHarnessTests(unittest.TestCase):
             "deployment_id": self.deployment_id,
             "profile_id": self.profile_id,
             "project_path": str(self.project),
+            # This fixture exercises automatic project edits; Ask is covered by
+            # the explicit approval journey and dedicated permission tests.
+            "approval_mode": "approve_for_me",
             **extra,
         }
         response = self.client.post("/v1/chat/conversations", json=payload)
@@ -1032,7 +1035,7 @@ class ChatHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        conversation = self._create()
+        conversation = self._create(approval_mode="full_access")
         self._start(conversation["id"], task="Write hello.txt and an offload file.")
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
@@ -1904,7 +1907,7 @@ class ChatHarnessTests(unittest.TestCase):
                 AIMessage(content="queued after approval"),
             ]
         )
-        conversation = self._create()
+        conversation = self._create(approval_mode="ask")
         started = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/start",
             json={"task": "Wait for approval.", "presented_tools": ["execute"]},
@@ -2762,6 +2765,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Write direct.md",
+                "approval_mode": "approve_for_me",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file"],
             },

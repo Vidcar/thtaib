@@ -223,12 +223,56 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(result["tool_mode"], "live-tool")
         self.assertTrue(result["parent_workspace_unchanged"])
         self.assertTrue(result["evidence"]["executable_checks"][0]["passed"])
-        self.assertIn("not an executable check", result["judgement"]["note"].lower())
+        self.assertIsNone(result["judgement"]["model_review"])
+        self.assertEqual(result["judgement"]["source"], "not_requested")
         parent_final = self.client.get(f"/v1/lab/workspaces/{workspace['id']}/files").json()["files"]
         self.assertEqual(parent_final["notes.md"], "parent changed after capture")
         source = self.client.get(f"/v1/agent-runs/{run['id']}").json()
         self.assertEqual(source["status"], "completed")
         self.assertEqual(source["id"], run["id"])
+
+    def test_rerun_preserves_executed_settings_after_profile_changes_and_tools_off(self) -> None:
+        workspace = self._workspace()
+        profile = self.client.post("/v1/profiles", json={
+            "display_name": "Captured settings", "per_request": {"temperature": 0.23},
+            "agent": {"system_prompt": "Stable source instructions."},
+        }).json()
+        started = self.client.post("/v1/agent-runs", json={
+            "deployment_id": self.deployment_id, "profile_id": profile["id"],
+            "task": "Echo then answer.", "workspace_id": workspace["id"],
+            "presented_tools": ["echo"], "approval_mode": "full_access", "work_mode": "plan",
+        })
+        self.assertEqual(started.status_code, 200, started.text)
+        source = wait_for_run(self.client, started.json()["id"])
+        self.assertEqual(source["status"], "completed", source.get("error"))
+        captured = self.client.post("/v1/lab/cases/capture", json={
+            "workspace_id": workspace["id"], "run_id": source["id"],
+        })
+        self.assertEqual(captured.status_code, 200, captured.text)
+        case = captured.json()
+        self.assertEqual(case["profile_id"], profile["id"])
+        changed = self.client.put(f"/v1/profiles/{profile['id']}", json={
+            "display_name": "Edited later", "per_request": {"temperature": 0.9},
+            "agent": {"system_prompt": "These later instructions must not be used."},
+        })
+        self.assertEqual(changed.status_code, 200, changed.text)
+        restored = self.client.post(f"/v1/lab/cases/{case['id']}/restore").json()
+        rerun = self.client.post(f"/v1/lab/cases/{case['id']}/rerun", json={
+            "tool_mode": "live-tool", "workspace_id": restored["workspace"]["id"],
+            "presented_tools": [],
+        })
+        self.assertEqual(rerun.status_code, 200, rerun.text)
+        result = wait_for_lab_result(self.client, rerun.json()["id"])
+        repeated = self.client.get(f"/v1/agent-runs/{result['agent_run_id']}").json()
+        self.assertEqual(repeated["status"], "completed", repeated.get("error"))
+        self.assertEqual(repeated["profile_id"], profile["id"])
+        self.assertEqual(repeated["approval_mode"], "full_access")
+        self.assertEqual(repeated["work_mode"], "plan")
+        self.assertEqual(repeated["presented_tools"], [])
+        self.assertEqual(repeated["effective_setup"]["bags"]["per_request"]["applied"]["temperature"], 0.23)
+        self.assertEqual(repeated["system_prompt"], source["system_prompt"])
+        self.assertEqual(result["applied_config"]["approval_mode"], "full_access")
+        self.assertEqual(result["applied_config"]["work_mode"], "plan")
 
     def test_snapshot_excludes_secrets_weights_scratch_venv_and_credentials(self) -> None:
         workspace = self._workspace({"keep.md": "safe"})
@@ -543,6 +587,7 @@ class LabApiTests(unittest.TestCase):
                 "workspace_id": workspace["id"],
                 "project_path": workspace["path"],
                 "presented_tools": ["write_file"],
+                "approval_mode": "approve_for_me",
             },
         )
         self.assertEqual(started.status_code, 200, started.text)

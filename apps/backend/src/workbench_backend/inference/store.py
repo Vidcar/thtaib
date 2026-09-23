@@ -280,7 +280,7 @@ class RecordStore:
             return TypeAdapter(list[model]).validate_python(raw)
 
     def _write_list(self, path: Path, items: list[BaseModel]) -> None:
-        self._write_json(path, [item.model_dump(mode="json") for item in items])
+        self._write_json(path, [item.model_dump(mode="json", exclude={"bundle_name", "equivalent_configuration_ids"} if isinstance(item, RunProfile) else None) for item in items])
 
     def _upsert(self, path: Path, model: type[T], item: T) -> T:
         with _STORE_LOCK:
