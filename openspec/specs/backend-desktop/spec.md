@@ -187,7 +187,7 @@ The desktop SHALL provide one collapsible sidebar on every page. Destinations SH
 
 Adding a project SHALL ask for a name and one existing folder. It SHALL NOT choose memory or grant edit permission beyond the selected folder. Creating a project SHALL NOT start or move a chat.
 
-Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files, previews, and changes open in the dock in API-023, API-024, and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stacks with a bounded height or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
+Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files, previews, and changes open in the dock in API-023, API-024, and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stays a side column or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
 
 Light and dark themes SHALL follow Windows by default with a user override. Compact controls SHALL retain readable labels, accessible names, visible keyboard focus and usable click targets. Reduced motion SHALL be respected. Settings SHALL expose appearance, notifications, saved grants and manual backup/restore; connection management is added by Packet 04 using the same surface.
 
@@ -308,7 +308,7 @@ Packet 03 SHALL include an early Chat layout review after the basic arrangement 
 
 ### Requirement: API-023 - Keep one dock beside the conversation
 
-Chat SHALL use one right-hand rail. It starts closed. One header control opens and closes it, and that choice stays while the person moves between chats. Opening it adds a column and narrows the transcript. Closing it returns that width. A splitter SHALL resize the rail within bounds. Exactly one page is open at a time; switching pages replaces the rail and MUST NOT open a second card. The pages are Setup, Changes, Files, Library, and Actions. Choosing a file or a change in the transcript opens the rail on that item. That is the only automatic open. Widening the rail SHALL keep a readable conversation column. On a narrow conversation column the rail SHALL stack with a bounded height. The rail MUST NOT be painted over the transcript or the composer, and it MUST NOT hide the conversation in order to grow. Navigation and the rail keep bounded resize, collapse, and reopen without losing content or run state. Light and dark follow the application theme.
+Chat SHALL use one right-hand rail. It starts closed. One header control opens and closes it, and that choice stays while the person moves between chats. Opening it adds a column and narrows the transcript. Closing it returns that width. A splitter SHALL resize the rail within bounds. Exactly one page is open at a time; switching pages replaces the rail and MUST NOT open a second card. The pages are Setup, Changes, Files, Library, and Actions. Choosing a file or a change in the transcript opens the rail on that item. That is the only automatic open. Widening the rail SHALL keep a readable conversation column. The rail stays beside the transcript and composer at every window width, including about half a screen. It MUST NOT move above the composer. The rail MUST NOT be painted over the transcript or the composer, and it MUST NOT hide the conversation in order to grow. Navigation and the rail keep bounded resize, collapse, and reopen without losing content or run state. Light and dark follow the application theme.
 
 #### Scenario: Open, resize, and close
 
@@ -319,7 +319,7 @@ Chat SHALL use one right-hand rail. It starts closed. One header control opens a
 #### Scenario: Narrow window
 
 - **WHEN** the conversation column is about half a screen wide and the rail is open
-- **THEN** the rail stacks with a bounded height
+- **THEN** the rail remains a column on the right of the transcript and composer
 - **AND** the transcript and composer remain usable.
 
 ### Requirement: API-024 - Review changes in the loaded diff editor
