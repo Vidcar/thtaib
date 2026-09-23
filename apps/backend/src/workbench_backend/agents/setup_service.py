@@ -324,6 +324,7 @@ class SetupService:
         if hasattr(self, "manager"):
             from workbench_backend.agents.effective_setup import effective_setting_values
             effective.update(effective_setting_values(self.manager, configuration, effective))
+            effective.update(self._model_selection_facts(configuration, effective))
         if prepare_model and any(value.requires_reload for value in effective.values()):
             raise HarnessError("Apply the changed model settings before sending a message.", code="model_reload_required", status_code=409)
         if validate:
@@ -335,6 +336,58 @@ class SetupService:
                 if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                     raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
         return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions, effective_values=effective)
+
+    def _model_selection_facts(self, configuration: SetupConfiguration, facts: dict) -> dict[str, ResolvedSetting]:
+        """Describe the loaded choice and explicit-save target without selecting it.
+
+        A recovered configuration can be the destination of Save to model while
+        execution continues to use the loaded snapshot. In particular, looking
+        up that destination must not apply a subsequently edited model default.
+        """
+        from workbench_backend.inference.configurations import requested_identity
+        from workbench_backend.inference.settings import resolve_bags
+
+        deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
+        profile = self.manager.store.get_profile(configuration.model_configuration_id or configuration.profile_id or "")
+        bundle_id = profile.bundle_id if profile and profile.bundle_id else deployment.bundle_id if deployment else configuration.bundle_id
+        bundle = self.manager.store.get_bundle(bundle_id or "")
+        name = bundle.display_name if bundle else deployment.display_name.removeprefix("managed:").removeprefix("connected:") if deployment else None
+        loaded = bool(deployment and deployment.status.value == "running" and deployment.health and deployment.health.healthy
+            and (deployment.scope.value == "connected" or deployment.process_identity is not None))
+        result = {}
+        if name:
+            selected_source = facts.get("model_configuration_id") or facts.get("profile_id") or facts.get("deployment_id")
+            source = selected_source.source if selected_source else "Selected model"
+            if profile is None and source in {"Turn overrides", "Loaded model", "Selected model"}:
+                source = "Loaded model" if loaded else "Selected model"
+            result["model_selection"] = ResolvedSetting(value=f"{name} · {profile.display_name}" if profile else name,
+                source=source, source_id=selected_source.source_id if selected_source else None,
+                inherited=selected_source.inherited if selected_source else True)
+        if loaded:
+            result["loaded_model"] = ResolvedSetting(value=deployment.id, source=name or deployment.display_name,
+                source_id=deployment.id, inherited=True)
+        target = None
+        if bundle:
+            configurations = self.manager.list_model_configurations(bundle.id)
+            bundle = self.manager.store.get_bundle(bundle.id)
+            if profile and profile.bundle_id == bundle.id:
+                target = self.manager.canonical_configuration(profile.id)
+            elif deployment and deployment.profile_id:
+                bound = self.manager.store.get_profile(deployment.profile_id)
+                if bound and bound.bundle_id == bundle.id:
+                    target = self.manager.canonical_configuration(bound.id)
+            if target is None and deployment:
+                loaded_bags = resolve_bags(startup=deployment.requested_startup,
+                    per_request=deployment.settings.per_request.requested, agent=deployment.settings.agent.requested)
+                matching = [item for item in configurations if requested_identity(item.bags) == requested_identity(loaded_bags)]
+                target = next((item for item in matching if item.id == bundle.default_configuration_id), next(iter(matching), None))
+            if target is None:
+                target = next((item for item in configurations if item.id == bundle.default_configuration_id), None)
+        result["model_configuration_target"] = ResolvedSetting(value=target.id if target else None,
+            source=f"{bundle.display_name} · {target.display_name}" if target and bundle else "No saved model configuration",
+            source_id=target.id if target else None, inherited=True, supported=bool(target),
+            unavailable_reason=None if target else "Connected models are configured by their external server." if deployment and deployment.scope.value == "connected" else "Choose a saved model configuration first.")
+        return result
 
     def _resolve_model_selector_layer(self, values: dict, effective: dict, explicit: dict) -> None:
         """A higher model choice cannot be replaced by a lower incompatible one."""

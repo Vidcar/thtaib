@@ -2898,6 +2898,12 @@ export interface components {
             deploy_health?: components["schemas"]["ChatDeployHealth"] | null;
             /** Deployment Id */
             deployment_id: string;
+            /**
+             * Display Title
+             * @description Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.
+             * @default New conversation
+             */
+            display_title: string;
             draft?: components["schemas"]["ChatDraft"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;

@@ -219,6 +219,51 @@ class ModelConfigurationTests(unittest.TestCase):
             self.assertEqual(resolved.effective_values["per_request.temperature"].inherited_value, 0.3)
             self.assertEqual(resolved.effective_values["per_request.temperature"].requested_override, 0.7)
 
+    def test_legacy_loaded_model_has_save_target_without_replacing_its_snapshot(self):
+        from workbench_backend.inference.schemas import DeploymentStatus, HealthReport, ProcessIdentity
+        deployment = self.deployment(ctx_size=8192)
+        default = self.manager.list_model_configurations(self.bundle_id)[0]
+        deployment = self.manager.store.put_deployment(deployment.model_copy(update={
+            "status": DeploymentStatus.running,
+            "health": HealthReport(healthy=True, endpoint="fixture", checked="now"),
+            "process_identity": ProcessIdentity(pid=42, create_time=1, executable="fixture")}))
+        other = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Larger default", startup={"ctx_size": 16384}, make_default=True))
+        with open_application_store(self.paths) as store:
+            service = SetupService(store, self.manager)
+            for overrides in (None, SetupConfiguration(deployment_id=deployment.id)):
+                preview = service.resolve(overrides=overrides)
+                self.assertIsNone(preview.configuration.model_configuration_id)
+                self.assertIsNone(preview.configuration.profile_id)
+                self.assertEqual(preview.configuration.deployment_id, deployment.id)
+                self.assertEqual(preview.effective_values["model_configuration_target"].value, default.id)
+                self.assertEqual(preview.effective_values["model_selection"].source, "Loaded model")
+                self.assertEqual(preview.effective_values["loaded_model"].value, deployment.id)
+                self.assertEqual(preview.effective_values["startup.ctx_size"].value, 8192)
+                self.assertFalse(preview.effective_values["startup.ctx_size"].requires_reload)
+            self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                configuration_id=default.id, display_name=default.display_name, startup={"ctx_size": 32768}))
+            # With no exact saved recipe left, Save targets the current model
+            # default; merely previewing still cannot apply that different recipe.
+            preview = service.resolve(overrides=SetupConfiguration(deployment_id=deployment.id))
+            self.assertEqual(preview.effective_values["model_configuration_target"].value, other.id)
+            self.assertEqual(preview.effective_values["startup.ctx_size"].value, 8192)
+            self.assertFalse(preview.effective_values["startup.ctx_size"].requires_reload)
+            self.assertEqual(self.manager.get_deployment(deployment.id).requested_startup, deployment.requested_startup)
+
+    def test_connected_choice_has_truthful_source_but_no_owned_save_target(self):
+        from workbench_backend.inference.schemas import ConnectedDeploymentRequest
+        deployment = self.manager.attach_connected(ConnectedDeploymentRequest(
+            display_name="External model", endpoint="http://127.0.0.1:9/v1"))
+        with open_application_store(self.paths) as store:
+            store.put_setup_defaults(SetupConfiguration(deployment_id=deployment.id))
+            preview = SetupService(store, self.manager).resolve()
+        self.assertEqual(preview.effective_values["model_selection"].source, "Application defaults")
+        self.assertEqual(preview.effective_values["model_selection"].value, "External model")
+        self.assertFalse(preview.effective_values["model_configuration_target"].supported)
+        self.assertIsNone(preview.effective_values["model_configuration_target"].value)
+        self.assertIn("external server", preview.effective_values["model_configuration_target"].unavailable_reason)
+
     def test_explicit_other_model_overrides_inherited_selector_but_same_model_keeps_variant(self):
         from workbench_backend.inference.schemas import ConnectedDeploymentRequest
         first = self.deployment(ctx_size=8192)

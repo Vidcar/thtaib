@@ -2632,6 +2632,12 @@
             "title": "Deployment Id",
             "type": "string"
           },
+          "display_title": {
+            "default": "New conversation",
+            "description": "Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.",
+            "title": "Display Title",
+            "type": "string"
+          },
           "draft": {
             "anyOf": [
               {
