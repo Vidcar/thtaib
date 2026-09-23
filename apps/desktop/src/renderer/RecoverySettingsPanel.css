@@ -1,6 +1,6 @@
-.settings-surface {gap: var(--space-row); max-width: 1000px;}
+.settings-surface {gap: var(--space-row); max-width: none;}
 .settings-surface > .packet03-row {margin-bottom: var(--space-hairline);}
-.settings-surface .settings-preferences-grid {gap: var(--space-row); grid-template-columns: repeat(2, minmax(0, 1fr));}
+.settings-surface .settings-preferences {display: grid; gap: var(--space-row); grid-template-columns: minmax(0, 1fr);}
 .settings-surface .packet03-item {padding: var(--pad-card) var(--pad-card); border-radius: var(--radius-card); gap: var(--space-row);}
 .settings-surface .packet03-item > :is(h3, h4, p, label) {margin: 0;}
 .settings-surface .settings-theme {display: flex; align-items: center; justify-content: space-between; gap: var(--space-row);}
@@ -14,6 +14,4 @@
 .settings-surface details.packet03-item[open] > summary {margin-bottom: var(--space-row);}
 .settings-surface .settings-permissions .packet03-list {gap: 0;}
 .settings-surface .settings-permissions .packet03-list .packet03-item {padding: var(--pad-row) 0; border: 0; border-bottom: var(--line-hairline) solid var(--border); border-radius: 0;}
-@container workbench-surface (max-width: 640px) {
-  .settings-surface .settings-preferences-grid {grid-template-columns: minmax(0, 1fr);}
-}
+
