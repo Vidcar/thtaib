@@ -98,6 +98,80 @@ def content_digest(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def effective_setting_values(manager, configuration, provenance: dict) -> dict:
+    """Display the same saved bags and overrides consumed by execution.
+
+    A known server/template default describes omitted settings; it never adds
+    a synthetic override to the outbound request.
+    """
+    from workbench_backend.agents.setup_schemas import ResolvedSetting
+    from workbench_backend.inference.configuration_options import bundle_configuration_options
+    from workbench_backend.inference.schemas import GgufRuntimeMetadata
+
+    deployment = manager.store.get_deployment(configuration.deployment_id or "")
+    profile = manager.store.get_profile(configuration.profile_id or "")
+    inherited = profile is None and configuration.inherit_deployment_settings is not False
+    bags = profile.bags if profile else deployment.settings if deployment and inherited else SettingsBags()
+    selected_source = f"Configuration: {profile.display_name}" if profile else "Loaded model" if deployment and inherited else "Model default"
+    source_id = profile.id if profile else deployment.id if deployment else None
+    result = {}
+    metadata = GgufRuntimeMetadata()
+    # Metadata is only needed when no loaded server template is available.
+    bundle_id = configuration.bundle_id or (deployment.bundle_id if deployment else None)
+    options = None
+    if bundle_id and hasattr(manager, "get_bundle_configuration_options"):
+        try:
+            options = manager.get_bundle_configuration_options(bundle_id, deployment_id=deployment.id if deployment else None)
+        except Exception:
+            # A missing/offline model remains editable. Unknown values remain unknown.
+            pass
+    if options is None:
+        options = bundle_configuration_options(bundle_id or "", metadata, deployment=deployment)
+    defaults = {"startup": {**options.startup_defaults, "ctx_size": options.context_size}, "per_request": options.per_request_defaults}
+    for bag_name, selected, overrides in (("startup", bags.startup.requested, configuration.startup_overrides or {}),
+            ("per_request", bags.per_request.requested, configuration.per_request_overrides or {})):
+        requested = {**selected, **overrides}
+        keys = set(requested) | set(defaults[bag_name])
+        for key in keys:
+            path = f"{bag_name}.{key}"
+            descriptor = defaults[bag_name].get(key)
+            value = requested.get(key)
+            is_default = value is None or (key == "reasoning_effort" and value == "default") or (key == "reasoning" and value == "auto")
+            origin = provenance.get(path)
+            source = origin.source if origin else selected_source
+            known = True
+            if is_default:
+                if descriptor and descriptor.default_value is not None:
+                    value, source = descriptor.default_value, descriptor.default_source or descriptor.source
+                elif descriptor and descriptor.observed is not None:
+                    value, source = descriptor.observed, "Loaded model"
+                elif descriptor and descriptor.applied not in (None, "auto", "default"):
+                    value, source = descriptor.applied, descriptor.source
+                else:
+                    value, source, known = None, "Model default", False
+            default_value = descriptor.default_value if descriptor else None
+            default_source = descriptor.default_source if descriptor else None
+            if descriptor and default_value is None and descriptor.applied not in (None, "auto", "default"):
+                default_value, default_source = descriptor.applied, descriptor.source
+            parent_value = origin.inherited_value if origin and origin.inherited_source else selected.get(key)
+            parent_source = origin.inherited_source if origin and origin.inherited_source else selected_source
+            if parent_value is None or (key == "reasoning_effort" and parent_value == "default") or (key == "reasoning" and parent_value == "auto"):
+                parent_value, parent_source = default_value, default_source
+            reload = False
+            if bag_name == "startup" and deployment and key in requested:
+                normalized = resolve_bags(startup={**selected, **overrides}).startup.applied
+                loaded = deployment.applied_startup.get(key)
+                reload = normalized.get(key) != loaded
+            result[path] = ResolvedSetting(value=value, source=source, source_id=origin.source_id if origin else source_id,
+                inherited=origin.inherited if origin else True, known=known, requires_reload=reload,
+                requested_override=origin.requested_override if origin else None,
+                default_value=default_value, default_source=default_source,
+                inherited_value=parent_value, inherited_source=parent_source,
+                supported=descriptor.supported if descriptor else None,
+                unavailable_reason=descriptor.description if descriptor and descriptor.supported is False else None)
+    return result
+
+
 def resolve_effective_setup(
     *,
     deployment: Deployment,
@@ -298,13 +372,13 @@ def _resolve_per_request(
     if profile is not None:
         requested = dict(profile.bags.per_request.requested)
         requested.update(overrides or {})
-        return resolve_bag(requested, PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS)
     if not inherit_deployment_settings:
-        return resolve_bag(dict(overrides or {}), PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in (overrides or {}).items() if value is not None}, PER_REQUEST_KEYS)
     requested = dict(deployment.settings.per_request.requested)
     requested.update(overrides or {})
     if requested:
-        return resolve_bag(requested, PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS)
     return deployment.settings.per_request
 
 

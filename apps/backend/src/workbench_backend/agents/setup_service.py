@@ -10,7 +10,7 @@ from workbench_backend.agents.setup_schemas import (
     AgentSetupCreateRequest, AgentSetupRecord, AgentSetupUpdateRequest, AgentSetupVersion,
     AgentSetupView, InstructionLayer, ProjectCreateRequest, ProjectFile, ProjectFileContent,
     ProjectFiles, ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
-    SetupDependencyIssue,
+    SetupDependencyIssue, ResolvedSetting,
 )
 from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
 from workbench_backend.errors import HarnessError, KnowledgeError
@@ -184,9 +184,9 @@ class SetupService:
 
     def dependencies(self, configuration: SetupConfiguration) -> list[SetupDependencyIssue]:
         issues = []
-        if configuration.bundle_id and not configuration.deployment_id:
+        if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
             issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="choose a saved deployment for this model"))
-        for field, getter in [("deployment_id", self.manager.store.get_deployment), ("embedding_deployment_id", self.manager.store.get_deployment), ("profile_id", self.manager.store.get_profile), ("bundle_id", self.manager.store.get_bundle)]:
+        for field, getter in [("deployment_id", self.manager.store.get_deployment), ("embedding_deployment_id", self.manager.store.get_deployment), ("profile_id", self.manager.store.get_profile), ("model_configuration_id", self.manager.store.get_profile), ("bundle_id", self.manager.store.get_bundle)]:
             selected = getattr(configuration, field)
             if selected and getter(selected) is None:
                 issues.append(SetupDependencyIssue(kind=field, id=selected, reason="missing"))
@@ -224,23 +224,35 @@ class SetupService:
                 issues.append(SetupDependencyIssue(kind="tool", id=tool, reason="not in the current selected catalogue"))
         return issues
 
-    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True) -> ResolvedSetupSelection:
+    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False) -> ResolvedSetupSelection:
         project = self.get_project(project_id, require_active=True) if project_id else None
         version = self.get_version(agent_setup_version_id, require_active=True) if agent_setup_version_id else None
-        layers = [("Application defaults", None, self.store.get_setup_defaults())]
-        if project:
-            layers.append((f"Project: {project.name}", project.id, project.defaults))
-        if version:
-            layers.append((f"Agent: {version.name}", version.id, version.configuration))
-        if overrides is not None:
+        layers = [("Application defaults", None, overrides or SetupConfiguration())] if editing_layer == "application" else [("Application defaults", None, self.store.get_setup_defaults())]
+        if project and editing_layer != "application":
+            layers.append((f"Project: {project.name}", project.id, (overrides or SetupConfiguration()) if editing_layer == "project" else project.defaults))
+        elif editing_layer == "project":
+            layers.append(("Project", None, overrides or SetupConfiguration()))
+        if version and editing_layer not in {"application", "project"}:
+            layers.append((f"Agent: {version.name}", version.id, (overrides or SetupConfiguration()) if editing_layer == "agent" else version.configuration))
+        elif editing_layer == "agent":
+            layers.append(("Agent", None, overrides or SetupConfiguration()))
+        if overrides is not None and editing_layer == "conversation":
             layers.append(("Turn overrides", None, overrides))
         values = {}
+        effective = {}
+        builtin_values = {"approval_mode": "ask", "work_mode": "work", "helper_agent_ids": [], "connection_ids": []}
         instructions = []
         protected = []
         for name, source_id, configuration in layers:
             if configuration.inherit_deployment_settings is False and configuration.profile_id is None:
                 values.pop("profile_id", None)
             for key, value in configuration.model_dump(exclude_none=True).items():
+                prior = effective.get(key)
+                effective[key] = ResolvedSetting(value=value, source=name, source_id=source_id,
+                    inherited=(name != layers[-1][0] or configuration is not overrides),
+                    requested_override=value if configuration is overrides else None,
+                    inherited_value=prior.value if prior else builtin_values.get(key),
+                    inherited_source=prior.source if prior else "Application default" if key in builtin_values else None)
                 if key == "instructions":
                     if value.strip():
                         instructions.append(InstructionLayer(name=name, source_id=source_id, content=value.strip()))
@@ -249,16 +261,65 @@ class SetupService:
                 elif key in {"requires_project", "requires_host_shell"}:
                     # Requirements are restrictions, not optional scalar preferences.
                     values[key] = bool(values.get(key) or value)
-                elif key == "per_request_overrides":
+                    effective[key].value = values[key]
+                elif key in {"per_request_overrides", "startup_overrides"}:
                     values[key] = {**values.get(key, {}), **value}
+                    prefix = "per_request" if key == "per_request_overrides" else "startup"
+                    for setting, selected in value.items():
+                        path = f"{prefix}.{setting}"
+                        parent = effective.get(path)
+                        effective[path] = ResolvedSetting(value=selected, source=name, source_id=source_id,
+                            inherited=(configuration is not overrides), requested_override=selected if configuration is overrides else None,
+                            inherited_value=parent.value if parent else None, inherited_source=parent.source if parent else None)
                 else:
                     values[key] = value
         if protected:
             values["protected_instruction_version_refs"] = protected
+            effective["protected_instruction_version_refs"].value = protected
         for key in override_cleared_fields or []:
             if key in {"profile_id", "embedding_deployment_id"}:
                 values[key] = None
+        configuration_id = values.get("model_configuration_id")
+        if not any(values.get(key) for key in ("bundle_id", "profile_id", "deployment_id", "model_configuration_id")) and hasattr(self, "manager") and editing_layer == "conversation":
+            ready = [item for item in self.manager.store.list_deployments() if item.status.value == "running" and item.health and item.health.healthy
+                and (item.scope.value == "connected" or item.process_identity is not None)]
+            if ready:
+                selected = max(ready, key=lambda item: item.updated_at)
+                values.update(deployment_id=selected.id, bundle_id=selected.bundle_id)
+                effective["deployment_id"] = ResolvedSetting(value=selected.id, source="Loaded model", source_id=selected.id, inherited=True)
+        if not configuration_id and values.get("bundle_id") and not values.get("deployment_id") and hasattr(self, "manager"):
+            self.manager.list_model_configurations(values["bundle_id"])
+            bundle = self.manager.store.get_bundle(values["bundle_id"])
+            configuration_id = bundle.default_configuration_id if bundle else None
+            if configuration_id:
+                values["model_configuration_id"] = configuration_id
+                effective["model_configuration_id"] = ResolvedSetting(value=configuration_id, source="Model default configuration", source_id=bundle.id, inherited=True)
+        if configuration_id and hasattr(self, "manager"):
+            profile = self.manager.store.get_profile(configuration_id)
+            if profile is not None:
+                values.update(profile_id=profile.id, bundle_id=profile.bundle_id, inherit_deployment_settings=True)
+                selected = self.manager.store.get_deployment(values.get("deployment_id") or "")
+                matching = self.manager.configuration_deployment(profile.id)
+                if selected is None or selected.bundle_id != profile.bundle_id:
+                    selected = matching
+                if selected is None and prepare_model:
+                    from workbench_backend.inference.schemas import ManagedDeploymentRequest
+                    selected = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=profile.bundle_id,
+                        profile_id=profile.id, startup=values.get("startup_overrides") or {}, auto_start=False))
+                values["deployment_id"] = selected.id if selected else None
+                source = effective.get("model_configuration_id")
+                for key in ("profile_id", "bundle_id", "deployment_id"):
+                    effective[key] = ResolvedSetting(value=values[key], source=source.source if source else "Model configuration", source_id=profile.id,
+                        inherited=source.inherited if source else True)
         configuration = SetupConfiguration.model_validate(values)
+        for key, value in builtin_values.items():
+            if getattr(configuration, key) is None:
+                effective[key] = ResolvedSetting(value=value, source="Application default", inherited=True)
+        if hasattr(self, "manager"):
+            from workbench_backend.agents.effective_setup import effective_setting_values
+            effective.update(effective_setting_values(self.manager, configuration, effective))
+        if prepare_model and any(value.requires_reload for value in effective.values()):
+            raise HarnessError("Apply the changed model settings before sending a message.", code="model_reload_required", status_code=409)
         if validate:
             issues = self.dependencies(configuration)
             if issues:
@@ -267,7 +328,7 @@ class SetupService:
                 deployment = self.manager.store.get_deployment(configuration.deployment_id)
                 if deployment is not None and deployment.bundle_id != configuration.bundle_id:
                     raise HarnessError("The selected deployment uses a different model from this setup.", code="setup_model_mismatch", status_code=409)
-        return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions)
+        return ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None, agent_setup_version_id=version.id if version else None, configuration=configuration, instruction_layers=instructions, effective_values=effective)
 
     @staticmethod
     def _project_view(project: ProjectRecord) -> ProjectRecord:

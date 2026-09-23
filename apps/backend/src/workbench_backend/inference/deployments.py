@@ -136,7 +136,10 @@ class DeploymentService:
             agent=agent,
         )
         _require_valid_managed_startup(bags.startup)
-        host, port, overrides = self._allocate_listen(bags.startup.applied)
+        # A stopped record does not reserve an OS port. Recheck at launch.
+        host = str(bags.startup.applied.get("host") or "127.0.0.1")
+        port = int(bags.startup.applied.get("port") or 8080)
+        overrides = {"host": host, "port": port}
         bags = resolve_bags(
             startup=requested_startup,
             per_request=per_request,
@@ -156,6 +159,7 @@ class DeploymentService:
             applied_startup=bags.startup.applied,
             startup_overrides=dict(request.startup or {}),
             profile_snapshot=profile.bags.model_copy(deep=True) if profile else None,
+            configuration_revision=profile.revision if profile else None,
             settings=bags,
             created_at=utc_now(),
             updated_at=utc_now(),
@@ -201,7 +205,10 @@ class DeploymentService:
         deployment = self._require(deployment_id)
         with self.lifecycle.reserve(deployment):
             with self._lock_for(deployment_id):
-                return self._start_locked(deployment_id)
+                # Serialize port selection through listen ownership verification.
+                # The OS port is not reserved merely by saving a deployment.
+                with self._guard:
+                    return self._start_locked(deployment_id)
 
     def stop(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
@@ -257,7 +264,12 @@ class DeploymentService:
                 continue
             with self._lock_for(deployment.id):
                 current = self._require(deployment.id)
-                updated.append(self._reconcile_locked(current))
+                current = self._reconcile_locked(current)
+                if current.reconfiguration and current.reconfiguration.get("phase") == "applying":
+                    current = self.store.put_deployment(current.model_copy(update={"reconfiguration": {
+                        **current.reconfiguration, "phase": "recovery_required",
+                        "error": "The application restarted while settings were being applied. Reload to restore the previous configuration."}}))
+                updated.append(current)
         return updated
 
     def live_owned(self) -> list[Deployment]:
@@ -281,6 +293,8 @@ class DeploymentService:
 
     def _start_locked(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
+        if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
+            raise ManagerError("Reload this model to restore the previous configuration before using it.", code="reconfigure_recovery_required", status_code=409)
         if deployment.scope != ManagementScope.managed:
             raise ManagerError(
                 "Connected endpoints cannot be started by Local AI Workbench.",
@@ -307,10 +321,12 @@ class DeploymentService:
                 code="bundle_not_deployable",
                 status_code=409,
             )
-        startup_overrides: dict[str, Any] = {}
-        for key in ("host", "port"):
-            if key in deployment.applied_startup:
-                startup_overrides[key] = deployment.applied_startup[key]
+        requested_bags = resolve_bags(startup=deployment.requested_startup)
+        _require_valid_managed_startup(requested_bags.startup)
+        host, port, startup_overrides = self._allocate_listen(
+            requested_bags.startup.applied,
+            fixed=deployment.requested_startup.get("port") is not None,
+        )
         bags = resolve_bags(
             startup=deployment.requested_startup,
             per_request=deployment.settings.per_request.requested,
@@ -324,6 +340,7 @@ class DeploymentService:
                     update={
                         "applied_startup": bags.startup.applied,
                         "settings": bags,
+                        "endpoint": f"http://{host}:{port}/v1",
                         "updated_at": utc_now(),
                     }
                 )
@@ -670,6 +687,8 @@ class DeploymentService:
     def _allocate_listen(
         self,
         requested: dict[str, Any],
+        *,
+        fixed: bool = False,
     ) -> tuple[str, int, dict[str, Any]]:
         host = str(requested.get("host") or "127.0.0.1")
         try:
@@ -681,7 +700,17 @@ class DeploymentService:
                 status_code=400,
                 details={"unsupported": ["port"], "retired": []},
             ) from exc
-        port = _first_free_port(host, requested_port)
+        if fixed and not _port_available(host, requested_port):
+            conflict = next((item for item in self.store.list_deployments()
+                if item.endpoint and _endpoint_port(item.endpoint) == requested_port
+                and item.process_identity is not None), None)
+            owner = conflict.display_name if conflict else "another application"
+            raise ManagerError(
+                f"Port {requested_port} is already in use by {owner}. Choose Automatic or another port.",
+                code="managed_port_conflict", status_code=409,
+                details={"port": requested_port, "deployment_id": conflict.id if conflict else None},
+            )
+        port = requested_port if fixed else _first_free_port(host, requested_port)
         overrides: dict[str, Any] = {"host": host, "port": port}
         return host, port, overrides
 
@@ -746,15 +775,20 @@ def _endpoint_port(endpoint: str | None) -> int | None:
 
 def _first_free_port(host: str, start: int) -> int:
     for port in range(start, min(start + 50, 65536)):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                sock.bind((host, port))
-            except OSError:
-                continue
+        if _port_available(host, port):
             return port
     raise ManagerError(
         "No free listen port found",
         code="no_free_port",
         status_code=409,
     )
+
+
+def _port_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        # SO_REUSEADDR on Windows permits binding an occupied port. Do not use it.
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+        return True

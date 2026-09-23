@@ -85,6 +85,7 @@ class ModelBundle(BaseModel):
     created_at: str
     status: ImportStatus = ImportStatus.complete
     disk_matches: bool = True
+    default_configuration_id: str | None = None
 
 
 class ProjectorSelectionRequest(BaseModel):
@@ -239,6 +240,7 @@ class ProfileWriteRequest(BaseModel):
     startup: dict[str, Any] = Field(default_factory=dict)
     per_request: dict[str, Any] = Field(default_factory=dict)
     agent: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int | None = None
 
 
 class SettingsPreviewRequest(BaseModel):
@@ -254,6 +256,22 @@ class RunProfile(BaseModel):
     bags: SettingsBags
     created_at: str
     updated_at: str
+    revision: int = 1
+
+
+class DefaultConfigurationRequest(BaseModel):
+    configuration_id: str
+
+
+class ModelConfigurationWriteRequest(ProfileWriteRequest):
+    configuration_id: str | None = None
+    make_default: bool = False
+
+
+class ReconfigureDeploymentRequest(BaseModel):
+    startup: dict[str, Any]
+    expected_updated_at: str | None = None
+    conversation_id: str | None = None
 
 
 class RenameProfileRequest(BaseModel):
@@ -404,6 +422,8 @@ class RuntimeControlDescriptor(BaseModel):
     applied: Any = None
     recommended: Any = None
     observed: Any = None
+    default_value: Any = None
+    default_source: str | None = None
     maximum: int | None = None
     supported: bool | None = None
     accepted_values: list[str] | None = None
@@ -456,6 +476,8 @@ class Deployment(BaseModel):
     server_props: ServerProperties | None = None
     capability_evidence: list[dict[str, Any]] = Field(default_factory=list)
     inference_identity: dict[str, Any] = Field(default_factory=dict)
+    configuration_revision: int | None = None
+    reconfiguration: dict[str, Any] | None = None
     error: str | None = None
     created_at: str
     updated_at: str

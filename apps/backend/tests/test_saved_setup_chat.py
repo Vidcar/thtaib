@@ -51,7 +51,7 @@ class SavedSetupChatTests(unittest.TestCase):
                 bundle_id=bundle.bundle_id, profile_id=profile.id, auto_start=False,
             ))
             manager.update_profile(profile.id, ProfileWriteRequest(
-                display_name='Edited preset', startup={'ctx_size': 8192},
+                display_name='Edited preset', startup={'ctx_size': 4096},
                 per_request={'temperature': 0.91}, agent={'system_prompt': 'EDITED-PRESET-INSTRUCTION'},
             ))
             app.state.harness = HarnessService(

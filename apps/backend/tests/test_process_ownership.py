@@ -223,7 +223,10 @@ class ProcessOwnershipTests(unittest.TestCase):
         port = int(created.applied_startup["port"])
         self._occupy("127.0.0.1", port)
         self.manager.pin_runtime(PinRuntimeRequest(local_executable=self._dying_script()))
-        started = self.manager.start_deployment(created.id)
+        # Simulate a foreign listener winning the race after port preflight.
+        # Ownership must still reject an endpoint answered by another process.
+        with patch("workbench_backend.inference.deployments._port_available", return_value=True):
+            started = self.manager.start_deployment(created.id)
         self.assertEqual(started.status, DeploymentStatus.failed)
         self.assertIsNone(started.pid)
         self.assertIsNone(started.process_identity)

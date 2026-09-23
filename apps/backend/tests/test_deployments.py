@@ -30,6 +30,7 @@ from workbench_backend.inference.schemas import (
     ManagementScope,
     PinRuntimeRequest,
     ProfileWriteRequest,
+    ReconfigureDeploymentRequest,
     ServerProperties,
     SettingsBags,
 )
@@ -234,6 +235,33 @@ class DeploymentTests(unittest.TestCase):
                 for key in keys:
                     self.assertIn(key, caught.exception.message)
                 self.assertEqual(self.supervisor.launched, [])
+
+    def test_reconfigure_commits_new_loaded_snapshot_after_owned_health(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18130, "ctx_size":1024}))
+        changed = self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":2048}))
+        self.assertEqual(changed.status, DeploymentStatus.running)
+        self.assertNotEqual(changed.pid, deployment.pid)
+        self.assertEqual(changed.requested_startup["ctx_size"], 2048)
+        self.assertIsNone(changed.reconfiguration)
+        argv = self.supervisor.launched[-1]
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "2048")
+
+    def test_reconfigure_failed_launch_restores_previous_process_and_config(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port":18131,"ctx_size":1024}))
+        start = self.supervisor.start
+        def fail_changed(argv, **kwargs):
+            if "--ctx-size" in argv and argv[argv.index("--ctx-size") + 1] == "2048":
+                raise OSError("simulated launch failure")
+            return start(argv, **kwargs)
+        with patch.object(self.supervisor, "start", side_effect=fail_changed):
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":2048}))
+        self.assertEqual(caught.exception.code, "reconfigure_failed")
+        restored = self.manager.get_deployment(deployment.id)
+        self.assertEqual(restored.status, DeploymentStatus.running)
+        self.assertEqual(restored.requested_startup["ctx_size"], 1024)
+        self.assertEqual(restored.reconfiguration["phase"], "rolled_back")
+        self.assertTrue(restored.health.healthy)
 
     def test_valid_load_mode_replaces_retired_flags(self) -> None:
         deployment = self.manager.create_managed(
