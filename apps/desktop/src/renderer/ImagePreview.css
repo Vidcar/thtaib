@@ -1,17 +1,17 @@
-.image-preview-button {display: inline-flex; position: relative; width: fit-content; max-width: 100%; padding: 0; overflow: hidden; border: var(--image-preview-button-border) solid var(--border); border-radius: var(--image-preview-button-corner); background: var(--bg-panel); cursor: zoom-in;}
-.image-preview-button img {display: block; width: auto; height: auto; max-width: var(--image-preview-button-maximum-width); max-height: var(--image-preview-button-maximum-height); object-fit: contain;}
-.image-preview-button > span {position: absolute; right: var(--image-preview-button-right); bottom: var(--image-preview-button-bottom); display: flex; align-items: center; gap: var(--image-preview-button-gap); padding: var(--image-preview-button-padding-vertical) var(--image-preview-button-padding-horizontal); border-radius: var(--image-preview-button-corner-2); background: var(--image-preview-button-background); color: white; font-size: var(--image-preview-button-text-size);}
-.image-preview-button.is-small img {max-width: var(--image-preview-button-is-small-maximum-width); max-height: var(--image-preview-button-is-small-maximum-height);}
+.image-preview-button {display: inline-flex; position: relative; width: fit-content; max-width: 100%; padding: 0; overflow: hidden; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); cursor: zoom-in;}
+.image-preview-button img {display: block; width: auto; height: auto; max-width: 240px; max-height: 150px; object-fit: contain;}
+.image-preview-button > span {position: absolute; right: 5px; bottom: 5px; display: flex; align-items: center; gap: var(--space-tight); padding: var(--pad-hairline) var(--pad-tight); border-radius: var(--radius-small); background: var(--hover); color: white; font-size: var(--text-caption);}
+.image-preview-button.is-small img {max-width: 72px; max-height: 48px;}
 .image-preview-button.is-small > span {display: none;}
-.retained-image {min-height: var(--retained-image-minimum-height); min-width: var(--retained-image-minimum-width);}
-.retained-image.is-small {display: flex; align-items: center; max-width: var(--retained-image-is-small-maximum-width);}
-dialog.image-viewer {width: min(var(--image-viewer-width), var(--image-viewer-width-2)); max-width: var(--image-viewer-maximum-width); max-height: var(--image-viewer-maximum-height); padding: 0; border: var(--image-viewer-border) solid var(--border); border-radius: var(--image-viewer-corner); background: var(--bg-raised); color: var(--text); box-shadow: var(--image-viewer-shadow);}
-.image-viewer::backdrop {background: var(--image-viewer-background);}
-.image-viewer > header {display: flex; align-items: center; gap: var(--image-viewer-gap); padding: var(--image-viewer-padding-vertical) var(--image-viewer-padding-horizontal); border-bottom: var(--image-viewer-border-bottom) solid var(--border);}
-.image-viewer > header strong {flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--image-viewer-text-size);}
-.image-viewer > header button {font-size: var(--image-viewer-button-text-size);}
-.image-viewer > p {padding: 0 var(--image-viewer-p-padding); font-size: var(--image-viewer-p-text-size);}
-.image-viewer-canvas {display: flex; justify-content: center; padding: var(--image-viewer-canvas-padding); overflow: auto; max-height: calc(var(--image-viewer-canvas-maximum-height) - var(--image-viewer-canvas-maximum-height-2)); background: var(--image-viewer-canvas-background);}
-.image-viewer-canvas img {object-fit: contain; max-width: 100%; max-height: calc(var(--image-viewer-canvas-maximum-height-3) - var(--image-viewer-canvas-maximum-height-4));}
+.retained-image {min-height: var(--control-height-lg); min-width: 64px;}
+.retained-image.is-small {display: flex; align-items: center; max-width: 76px;}
+dialog.image-viewer {width: min(var(--layout-page), 94vw); max-width: 94vw; max-height: 92vh; padding: 0; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow);}
+.image-viewer::backdrop {background: var(--palette-scrim);}
+.image-viewer > header {display: flex; align-items: center; gap: var(--space-row); padding: var(--pad-row) var(--pad-row); border-bottom: var(--line-hairline) solid var(--border);}
+.image-viewer > header strong {flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-body);}
+.image-viewer > header button {font-size: var(--text-compact);}
+.image-viewer > p {padding: 0 var(--pad-row); font-size: var(--text-compact);}
+.image-viewer-canvas {display: flex; justify-content: center; padding: var(--pad-row); overflow: auto; max-height: calc(90vh - 70px); background: var(--bg-panel);}
+.image-viewer-canvas img {object-fit: contain; max-width: 100%; max-height: calc(88vh - 95px);}
 .image-viewer-canvas.is-zoomed {display: block;}
 .image-viewer-canvas.is-zoomed img {max-width: none; max-height: none;}

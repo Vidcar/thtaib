@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-23. Settings → Appearance lists every shipped colour, text size, corner, spacing, line, and effect, including the settings page itself. Each number has a slider and a typeable value with no screen-size cap. Apply stores overrides in `%LOCALAPPDATA%\\LocalAIWorkbench\\appearance.json`. Cancel restores the last save. Reset on a row restores the shipped value. Media and container breakpoints stay fixed. The long live-model check in `chat-stream-follow` task 4.2 is still open.
+Updated 2026-09-23. Settings → Appearance uses 87 shared controls: the colour palette, a type scale, corners, separate inset and between-item spacing steps, line thickness, and layout sizes such as page width, reading width, and control height. Near-identical values share one control. Apply stores overrides in `%LOCALAPPDATA%\\LocalAIWorkbench\\appearance.json`. Cancel restores the last save. Reset on a row restores the shipped value. Older per-element overrides in that file are ignored. Viewport sizes, breakpoints, and one-off positions stay fixed. The long live-model check in `chat-stream-follow` task 4.2 is still open.
 
 Live chat paint is merged as well: a streaming answer parses only its open tail, the transcript follows the newest line directly, and a speed update does not replay the token log. The long live-model check in `chat-stream-follow` task 4.2 is still open.
 

@@ -1,12 +1,12 @@
-.source-reference-link {display: inline-flex; align-items: center; gap: var(--source-reference-link-gap); border: 0; padding: var(--source-reference-link-padding-vertical) var(--source-reference-link-padding-horizontal); color: var(--accent); background: var(--bg-raised); font-size: inherit; vertical-align: baseline; max-width: 100%; overflow-wrap: anywhere;}
+.source-reference-link {display: inline-flex; align-items: center; gap: var(--space-tight); border: 0; padding: var(--pad-hairline) var(--pad-tight); color: var(--accent); background: var(--bg-raised); font-size: inherit; vertical-align: baseline; max-width: 100%; overflow-wrap: anywhere;}
 .source-reference-link:hover {text-decoration: underline;}
-.read-sources {margin: var(--read-sources-margin-top) 0 var(--read-sources-margin-horizontal) var(--read-sources-margin-bottom); font-size: var(--read-sources-text-size); color: var(--muted);}
-.read-sources ul {list-style: none; padding: var(--read-sources-padding) 0; margin: 0; display: grid; gap: var(--read-sources-gap);}
-.source-viewer {width: min(var(--source-viewer-width-3), calc(var(--source-viewer-width) - var(--source-viewer-width-2))); max-height: calc(var(--source-viewer-maximum-height) - var(--source-viewer-maximum-height-2)); border: var(--source-viewer-border) solid var(--border); border-radius: var(--source-viewer-corner); color: var(--text); background: var(--bg-panel); padding: 0;}
-.source-viewer::backdrop {background: var(--source-viewer-background);}
-.source-viewer header, .source-viewer footer {display: flex; align-items: center; justify-content: space-between; gap: var(--source-viewer-source-viewer-gap); padding: var(--source-viewer-source-viewer-padding);}
-.source-viewer header div {display: grid; gap: var(--source-viewer-gap); min-width: 0; overflow-wrap: anywhere;}
-.source-viewer header span, .source-viewer footer span {color: var(--muted); font-size: var(--source-viewer-source-viewer-text-size);}
-.source-viewer pre {padding: var(--source-viewer-pre-padding); margin: 0; overflow: auto; max-height: var(--source-viewer-pre-maximum-height); white-space: pre-wrap; overflow-wrap: anywhere; border-block: var(--source-viewer-pre-border-block) solid var(--border);}
-.source-viewer > p {padding: 0 var(--source-viewer-p-padding);}
+.read-sources {margin: var(--space-hairline) 0 var(--space-compact) var(--space-section); font-size: var(--text-small); color: var(--muted);}
+.read-sources ul {list-style: none; padding: var(--pad-tight) 0; margin: 0; display: grid; gap: var(--space-tight);}
+.source-viewer {width: min(760px, calc(100vw - 40px)); max-height: calc(100vh - 48px); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); color: var(--text); background: var(--bg-panel); padding: 0;}
+.source-viewer::backdrop {background: var(--palette-scrim);}
+.source-viewer header, .source-viewer footer {display: flex; align-items: center; justify-content: space-between; gap: var(--space-stack); padding: var(--pad-card);}
+.source-viewer header div {display: grid; gap: var(--space-tight); min-width: 0; overflow-wrap: anywhere;}
+.source-viewer header span, .source-viewer footer span {color: var(--muted); font-size: var(--text-small);}
+.source-viewer pre {padding: var(--pad-card); margin: 0; overflow: auto; max-height: 55vh; white-space: pre-wrap; overflow-wrap: anywhere; border-block: var(--line-hairline) solid var(--border);}
+.source-viewer > p {padding: 0 var(--pad-card);}
 .source-viewer footer {flex-wrap: wrap;}

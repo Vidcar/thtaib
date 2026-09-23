@@ -1,11 +1,11 @@
 .chat-retained-files {
-  border: var(--chat-retained-files-border) solid var(--border);
-  border-radius: var(--chat-retained-files-corner-2);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-card);
   background: var(--bg-raised);
   display: grid;
-  gap: var(--chat-retained-files-gap-2);
-  margin: var(--chat-retained-files-margin) 0;
-  padding: var(--chat-retained-files-padding-2);
+  gap: var(--space-row);
+  margin: var(--space-row) 0;
+  padding: var(--pad-row);
 }
 
 .chat-retained-files-head,
@@ -14,7 +14,7 @@
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--chat-retained-files-actions-chat-retained-file-meta-gap);
+  gap: var(--space-compact);
 }
 
 .chat-retained-files-head {
@@ -28,34 +28,34 @@
 
 .chat-retained-file-groups {
   display: grid;
-  gap: var(--chat-retained-file-groups-gap);
+  gap: var(--space-row);
 }
 
 .chat-retained-file-group {
   display: grid;
-  gap: var(--chat-retained-file-group-gap);
+  gap: var(--space-compact);
 }
 
 .chat-retained-file-group ul {
   display: grid;
-  gap: var(--chat-retained-file-group-gap-2);
+  gap: var(--space-compact);
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
 .chat-retained-file-card {
-  border: var(--chat-retained-file-card-border) solid var(--border);
-  border-radius: var(--chat-retained-file-card-corner-2);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-card);
   background: var(--bg-input);
   display: grid;
-  gap: var(--chat-retained-file-card-gap);
-  padding: var(--chat-retained-file-card-padding);
+  gap: var(--space-tight);
+  padding: var(--pad-row);
 }
 
 .chat-retained-file-meta {
   color: var(--muted);
-  font-size: var(--chat-retained-file-meta-text-size);
+  font-size: var(--text-small);
 }
 
 .chat-retained-file-meta span {
@@ -63,24 +63,24 @@
 }
 
 .chat-retained-preview {
-  border-top: var(--chat-retained-preview-border-top) solid var(--border);
-  padding-top: var(--chat-retained-preview-padding-top);
+  border-top: var(--line-hairline) solid var(--border);
+  padding-top: var(--pad-compact);
 }
 
 .chat-retained-preview summary {
   color: var(--text);
   cursor: pointer;
-  font-weight: var(--chat-retained-preview-summary-weight);
+  font-weight: var(--weight-bold);
 }
 
 .chat-retained-preview pre {
   background: var(--bg-input);
-  border: var(--chat-retained-preview-pre-border) solid var(--border);
-  border-radius: var(--chat-retained-preview-pre-corner);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-card);
   color: var(--text);
-  max-height: var(--chat-retained-preview-pre-maximum-height);
+  max-height: 18rem;
   overflow: auto;
-  padding: var(--chat-retained-preview-pre-padding);
+  padding: var(--pad-row);
   white-space: pre-wrap;
 }
 
@@ -93,9 +93,9 @@
     width: 100%;
   }
 }
-.chat-retained-files.compact {border: 0; padding: 0; margin-top: var(--chat-retained-files-compact-margin-top); background: transparent;}
-.chat-retained-files.compact .chat-retained-file-card {padding: var(--compact-chat-retained-file-card-padding-vertical) var(--compact-chat-retained-file-card-padding-horizontal); gap: var(--compact-chat-retained-file-card-gap);}
-.retained-file-name {display: flex; align-items: center; gap: var(--retained-file-name-gap); border: 0; background: transparent; padding: var(--retained-file-name-padding); text-align: left;}
+.chat-retained-files.compact {border: 0; padding: 0; margin-top: var(--space-compact); background: transparent;}
+.chat-retained-files.compact .chat-retained-file-card {padding: var(--pad-compact) var(--pad-compact); gap: var(--space-tight);}
+.retained-file-name {display: flex; align-items: center; gap: var(--space-compact); border: 0; background: transparent; padding: var(--pad-hairline); text-align: left;}
 .retained-file-name span {overflow-wrap: anywhere;}
 .retained-file-name small {color: var(--muted); white-space: nowrap;}
-.chat-retained-files.compact .chat-retained-files-actions button {padding: var(--compact-chat-retained-files-actions-button-padding-vertical) var(--compact-chat-retained-files-actions-button-padding-horizontal); font-size: var(--compact-chat-retained-files-actions-button-text-size); border: 0; background: transparent; color: var(--muted);}
+.chat-retained-files.compact .chat-retained-files-actions button {padding: var(--pad-hairline) var(--pad-tight); font-size: var(--text-caption); border: 0; background: transparent; color: var(--muted);}

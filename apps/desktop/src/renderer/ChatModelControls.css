@@ -1,21 +1,21 @@
 .chat-model-controls {
   position: relative;
-  max-width: var(--chat-model-controls-maximum-width);
+  max-width: var(--layout-panel);
 }
 
 .chat-model-controls-trigger {
   align-items: center;
   background: var(--bg-input);
-  border: var(--chat-model-controls-trigger-border) solid var(--border);
-  border-radius: var(--chat-model-controls-trigger-corner);
-  box-shadow: 0 var(--chat-model-controls-trigger-shadow-2) var(--chat-model-controls-trigger-shadow-3) color-mix(in srgb, var(--bg) var(--chat-model-controls-trigger-shadow), transparent);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) var(--tint-strong), transparent);
   color: var(--text);
   cursor: pointer;
   display: inline-flex;
-  gap: var(--chat-model-controls-trigger-gap);
+  gap: var(--space-row);
   list-style: none;
-  min-height: var(--chat-model-controls-trigger-minimum-height);
-  padding: var(--chat-model-controls-trigger-padding-top) var(--chat-model-controls-trigger-padding-right) var(--chat-model-controls-trigger-padding-bottom) var(--chat-model-controls-trigger-padding-left);
+  min-height: var(--control-height-lg);
+  padding: var(--pad-tight) var(--pad-compact) var(--pad-tight) var(--pad-tight);
   user-select: none;
 }
 
@@ -24,68 +24,68 @@
 }
 
 .chat-model-controls-trigger:focus-visible {
-  outline: var(--chat-model-controls-trigger-outline-2) solid color-mix(in srgb, var(--accent) var(--chat-model-controls-trigger-outline), transparent);
-  outline-offset: var(--chat-model-controls-trigger-outline-offset);
+  outline: var(--focus-ring) solid color-mix(in srgb, var(--accent) var(--tint-half), transparent);
+  outline-offset: var(--focus-offset);
 }
 
 .chat-model-controls-icon {
   align-items: center;
   background: var(--bg-panel);
-  border: var(--chat-model-controls-icon-border) solid var(--border);
-  border-radius: var(--chat-model-controls-icon-corner);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-pill);
   color: var(--accent);
   display: inline-flex;
-  height: var(--chat-model-controls-icon-height);
+  height: var(--control-height);
   justify-content: center;
-  width: var(--chat-model-controls-icon-width);
+  width: var(--control-height);
 }
 
 .chat-model-controls-icon svg {
   fill: currentColor;
-  height: var(--chat-model-controls-icon-height-2);
-  opacity: var(--chat-model-controls-icon-fade);
-  width: var(--chat-model-controls-icon-width-2);
+  height: var(--icon-sm);
+  opacity: 0.92;
+  width: var(--icon-sm);
 }
 
 .chat-model-controls-main {
   display: grid;
-  gap: var(--chat-model-controls-main-gap);
-  min-width: var(--chat-model-controls-main-minimum-width);
+  gap: var(--space-hairline);
+  min-width: 10rem;
 }
 
 .chat-model-controls-model {
-  font-size: var(--chat-model-controls-model-text-size);
-  font-weight: var(--chat-model-controls-model-weight);
-  line-height: var(--chat-model-controls-model-line-spacing);
+  font-size: var(--text-body);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
 }
 
 .chat-model-controls-subtitle {
   color: var(--muted);
-  font-size: var(--chat-model-controls-subtitle-text-size);
-  line-height: var(--chat-model-controls-subtitle-line-spacing);
+  font-size: var(--text-caption);
+  line-height: var(--leading-tight);
 }
 
 .chat-model-controls .chat-model-controls-panel,
 .compose .chat-model-controls .chat-model-controls-panel {
   background: var(--bg-panel);
-  border: var(--chat-model-controls-chat-model-controls-panel-border) solid var(--border);
-  border-radius: var(--chat-model-controls-chat-model-controls-panel-corner);
-  bottom: calc(100% + var(--chat-model-controls-chat-model-controls-panel-bottom));
-  box-shadow: 0 var(--chat-model-controls-chat-model-controls-panel-shadow-2) var(--chat-model-controls-chat-model-controls-panel-shadow-3) color-mix(in srgb, var(--bg) var(--chat-model-controls-chat-model-controls-panel-shadow), transparent);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-card);
+  bottom: calc(100% + 0.65rem);
+  box-shadow: 0 24px 60px color-mix(in srgb, var(--bg) var(--tint-strong), transparent);
   color: var(--text);
   display: grid;
-  gap: var(--chat-model-controls-chat-model-controls-panel-gap);
+  gap: var(--space-row);
   left: 0;
-  max-width: calc(var(--chat-model-controls-chat-model-controls-panel-maximum-width) - var(--chat-model-controls-chat-model-controls-panel-maximum-width-2));
-  padding: var(--chat-model-controls-chat-model-controls-panel-padding);
+  max-width: calc(100vw - 2rem);
+  padding: var(--pad-row);
   position: absolute;
-  width: min(var(--chat-model-controls-chat-model-controls-panel-width-3), calc(var(--chat-model-controls-chat-model-controls-panel-width) - var(--chat-model-controls-chat-model-controls-panel-width-2)));
+  width: min(var(--layout-dialog), calc(100vw - var(--layout-narrow)));
   z-index: 20;
 }
 
 .chat-model-controls .chat-model-controls-grid {
   display: grid;
-  gap: var(--chat-model-controls-chat-model-controls-grid-gap);
+  gap: var(--space-compact);
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -94,16 +94,16 @@
   color: var(--text);
   display: grid;
   align-items: center;
-  grid-template-columns: var(--chat-model-controls-chat-model-control-row-label-grid-template-columns) minmax(0, 1fr);
-  font-size: var(--chat-model-controls-chat-model-control-row-label-text-size);
-  font-weight: var(--chat-model-controls-chat-model-control-row-label-weight);
-  gap: var(--chat-model-controls-chat-model-control-row-label-gap);
+  grid-template-columns: 58px minmax(0, 1fr);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  gap: var(--space-compact);
   margin: 0;
 }
 
-.chat-model-controls-grid > label > span, .chat-model-control-label {display: inline-flex; align-items: center; gap: var(--chat-model-controls-grid-chat-model-control-label-label-gap);}
+.chat-model-controls-grid > label > span, .chat-model-control-label {display: inline-flex; align-items: center; gap: var(--space-hairline);}
 .chat-model-controls .chat-model-control-label label {display: inline; margin: 0; font-size: inherit; font-weight: inherit;}
-.chat-model-controls .chat-model-controls-panel select {min-height: var(--chat-model-controls-chat-model-controls-panel-minimum-height); padding: var(--chat-model-controls-chat-model-controls-panel-padding-vertical) var(--chat-model-controls-chat-model-controls-panel-padding-horizontal); font-size: var(--chat-model-controls-chat-model-controls-panel-text-size); font-weight: var(--chat-model-controls-chat-model-controls-panel-weight); border-radius: var(--chat-model-controls-chat-model-controls-panel-corner-2);}
+.chat-model-controls .chat-model-controls-panel select {min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small); font-weight: var(--weight-regular); border-radius: var(--radius-small);}
 
 .chat-model-controls-grid select {
   min-width: 0;
@@ -113,13 +113,13 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--chat-model-controls-chat-model-controls-facts-gap-vertical) var(--chat-model-controls-chat-model-controls-facts-gap-horizontal);
+  gap: var(--space-tight) var(--space-row);
   margin: 0;
 }
 
 .chat-model-controls .chat-model-controls-facts > div {
   display: inline-flex;
-  gap: var(--chat-model-controls-chat-model-controls-facts-gap);
+  gap: var(--space-tight);
   align-items: baseline;
   background: transparent;
   border: 0;
@@ -129,15 +129,15 @@
 
 .chat-model-controls .chat-model-controls-facts dt {
   color: var(--muted);
-  font-size: var(--chat-model-controls-chat-model-controls-facts-text-size);
-  font-weight: var(--chat-model-controls-chat-model-controls-facts-weight);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-regular);
   margin: 0;
   text-transform: none;
 }
 
 .chat-model-controls .chat-model-controls-facts dd {
   color: var(--text);
-  font-size: var(--chat-model-controls-chat-model-controls-facts-text-size-2);
+  font-size: var(--text-caption);
   margin: 0;
   word-break: normal;
   overflow-wrap: anywhere;
@@ -146,70 +146,70 @@
 .chat-model-controls .chat-model-controls-thinking {
   background: transparent;
   border: 0;
-  border-top: var(--chat-model-controls-chat-model-controls-thinking-border-top) solid var(--border);
+  border-top: var(--line-hairline) solid var(--border);
   border-radius: 0;
   display: grid;
-  gap: var(--chat-model-controls-chat-model-controls-thinking-gap);
-  padding: var(--chat-model-controls-chat-model-controls-thinking-padding) 0 0;
+  gap: var(--space-tight);
+  padding: var(--pad-compact) 0 0;
 }
 
 .chat-model-controls-thinking-head {
   align-items: center;
   display: flex;
   justify-content: space-between;
-  gap: var(--chat-model-controls-thinking-head-gap);
+  gap: var(--space-compact);
 }
 
-.chat-model-controls-thinking-head > select {width: auto; max-width: var(--chat-model-controls-thinking-head-maximum-width);}
-.chat-model-controls-effort-value {display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--chat-model-controls-effort-value-text-size);}
-.chat-model-controls-effort-value strong {color: var(--text); font-size: var(--chat-model-controls-effort-value-text-size-2); font-weight: var(--chat-model-controls-effort-value-weight);}
+.chat-model-controls-thinking-head > select {width: auto; max-width: var(--tint-half);}
+.chat-model-controls-effort-value {display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--text-caption);}
+.chat-model-controls-effort-value strong {color: var(--text); font-size: var(--text-caption); font-weight: var(--weight-medium);}
 
 .chat-model-controls .chat-model-controls-thinking-head > span {
   display: inline-flex;
   align-items: center;
-  gap: var(--chat-model-controls-chat-model-controls-thinking-head-gap);
+  gap: var(--space-tight);
   color: var(--text);
-  font-size: var(--chat-model-controls-chat-model-controls-thinking-head-text-size);
-  font-weight: var(--chat-model-controls-chat-model-controls-thinking-head-weight);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
 }
 
 .chat-model-controls .chat-model-controls-thinking-head strong {
   color: var(--text);
-  font-size: var(--chat-model-controls-chat-model-controls-thinking-head-text-size-2);
-  font-weight: var(--chat-model-controls-chat-model-controls-thinking-head-weight-2);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
 }
 
 .chat-model-controls-thinking input[type="range"] {
   accent-color: var(--accent);
   width: 100%;
-  height: var(--chat-model-controls-thinking-input-height);
-  min-height: var(--chat-model-controls-thinking-input-minimum-height);
-  margin: var(--chat-model-controls-thinking-input-margin) 0;
+  height: 22px;
+  min-height: 22px;
+  margin: -2px 0;
   padding: 0;
 }
 
 .chat-model-controls .chat-model-controls-efforts {
   color: var(--muted);
   display: flex;
-  font-size: var(--chat-model-controls-chat-model-controls-efforts-text-size);
+  font-size: var(--text-micro);
   justify-content: space-between;
   text-transform: capitalize;
 }
 
 .chat-model-controls .chat-model-controls-note {
   color: var(--muted);
-  font-size: var(--chat-model-controls-chat-model-controls-note-text-size);
-  line-height: var(--chat-model-controls-chat-model-controls-note-line-spacing);
+  font-size: var(--text-small);
+  line-height: var(--leading-tight);
   margin: 0;
 }
 
 @media (max-width: 760px) {
   .compose .chat-model-controls .chat-model-controls-panel {
-    bottom: var(--chat-model-controls-chat-model-controls-panel-bottom-2) !important;
+    bottom: 130px !important;
     left: auto !important;
     position: fixed !important;
-    right: var(--chat-model-controls-chat-model-controls-panel-right) !important;
-    width: min(var(--chat-model-controls-chat-model-controls-panel-width-6), calc(var(--chat-model-controls-chat-model-controls-panel-width-4) - var(--chat-model-controls-chat-model-controls-panel-width-5))) !important;
+    right: 12px !important;
+    width: min(var(--layout-dialog), calc(100vw - 78px)) !important;
   }
 
 }

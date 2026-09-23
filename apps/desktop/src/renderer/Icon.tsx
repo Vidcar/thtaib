@@ -13,7 +13,15 @@ const icons = {
 } as const;
 
 export type IconName = keyof typeof icons;
+function iconVariable(size: number): string {
+  if (size <= 15) return "--icon-sm";
+  if (size <= 18) return "--icon-md";
+  if (size <= 24) return "--icon-lg";
+  return "--icon-xl";
+}
+
 export function Icon({ name, size = 20, style }: { name: IconName; size?: number; style?: CSSProperties }) {
   const Component = icons[name];
-  return <Component size={size} strokeWidth={1.7} aria-hidden="true" focusable="false" style={{ width: `var(--icon-${size}, ${size}px)`, height: `var(--icon-${size}, ${size}px)`, strokeWidth: "var(--icon-stroke, 1.7)", ...style }} />;
+  const variable = iconVariable(size);
+  return <Component size={size} strokeWidth={1.7} aria-hidden="true" focusable="false" style={{ width: `var(${variable})`, height: `var(${variable})`, strokeWidth: "var(--icon-stroke)", ...style }} />;
 }

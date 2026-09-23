@@ -1,12 +1,12 @@
 .composer-queue {
   display: grid;
-  gap: var(--composer-queue-gap);
-  margin: 0 var(--composer-queue-margin-vertical) var(--composer-queue-margin-horizontal);
+  gap: var(--space-tight);
+  margin: 0 var(--space-hairline) var(--space-tight);
 }
 
 .composer-queue-list {
   display: grid;
-  gap: var(--composer-queue-list-gap);
+  gap: var(--space-tight);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -15,27 +15,27 @@
 .composer-queue-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--composer-queue-row-gap);
-  min-height: var(--composer-queue-row-minimum-height);
-  padding: var(--composer-queue-row-padding-top) var(--composer-queue-row-padding-right) var(--composer-queue-row-padding-bottom) var(--composer-queue-row-padding-left);
-  border-radius: var(--composer-queue-row-corner);
-  background: color-mix(in srgb, var(--bg) var(--composer-queue-row-background), transparent);
+  gap: var(--space-hairline);
+  min-height: var(--control-height);
+  padding: var(--pad-hairline) var(--pad-hairline) var(--pad-hairline) var(--pad-compact);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--bg) var(--tint-half), transparent);
 }
 
 .composer-queue-row.is-locked {
-  opacity: var(--composer-queue-row-is-locked-fade);
+  opacity: var(--fade-quiet);
 }
 
 .composer-queue-text {
   flex: 1;
   min-width: 0;
-  margin: var(--composer-queue-text-margin) 0;
+  margin: var(--space-tight) 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: var(--composer-queue-text-text-size);
-  line-height: var(--composer-queue-text-line-spacing);
+  font-size: var(--text-compact);
+  line-height: var(--leading-body);
 }
 
 .composer-queue-actions {
@@ -45,10 +45,10 @@
 }
 
 .composer-queue-actions .icon-button {
-  width: var(--composer-queue-actions-icon-button-width);
-  height: var(--composer-queue-actions-icon-button-height);
-  min-width: var(--composer-queue-actions-icon-button-minimum-width);
-  min-height: var(--composer-queue-actions-icon-button-minimum-height);
+  width: var(--control-height);
+  height: var(--control-height);
+  min-width: 26px;
+  min-height: var(--control-height);
   color: var(--muted);
 }
 
@@ -59,26 +59,26 @@
 .composer-queue-editor {
   display: grid;
   flex: 1;
-  gap: var(--composer-queue-editor-gap);
+  gap: var(--space-tight);
   min-width: 0;
-  padding: var(--composer-queue-editor-padding) 0;
+  padding: var(--pad-tight) 0;
 }
 
 .composer-queue-editor textarea {
-  min-height: var(--composer-queue-editor-textarea-minimum-height);
+  min-height: 52px;
   resize: vertical;
-  font-size: var(--composer-queue-editor-textarea-text-size);
+  font-size: var(--text-body);
 }
 
 .composer-queue-pause {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--composer-queue-pause-gap);
-  padding: var(--composer-queue-pause-padding-vertical) var(--composer-queue-pause-padding-horizontal);
-  border-radius: var(--composer-queue-pause-corner);
-  background: color-mix(in srgb, var(--warn) var(--composer-queue-pause-background), transparent);
-  font-size: var(--composer-queue-pause-text-size);
+  gap: var(--space-compact);
+  padding: var(--pad-tight) var(--pad-compact);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--warn) var(--tint-quiet), transparent);
+  font-size: var(--text-compact);
 }
 
 .composer-queue-pause p {
