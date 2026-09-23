@@ -1,6 +1,8 @@
 # Current handover
 
-Updated 2026-09-23. The consolidated contract is on main. Current specs are `openspec/specs/`. `rewrite-loaded-boundaries` is merged in pull request 123. The remaining active change is `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
+Updated 2026-09-23. Chat leaves Running when the model call finishes. Token events are stored without copying the captured model requests or rewriting the snapshot, so a finished reply is not held on the generating state. A live ScratchArea reply of "pong" cleared Running, Cancel, and Queue while the model slot was idle. The default backend suite passed, 621 tests. Restarting the backend to load that fix stopped the earlier sand-sim turn and marked it failed.
+
+The consolidated contract is on main. Current specs are `openspec/specs/`. `rewrite-loaded-boundaries` is merged in pull request 123. The remaining active change is `consolidate-product-contract`. The old open plan folders `04` through `08`, `compact-workbench-experience`, and `familiar-chat-sidebar` are removed. Their surviving behaviour is in the current specs. Archived changes stay.
 
 Opening a chat paints the saved transcript and continues after `interaction_cursor`. It does not play earlier tokens again. A live answer is included in that snapshot. The desktop stream sends that cursor on the first subscribe and again after a disconnect. An approval is shown only after the run is actually waiting for it.
 
