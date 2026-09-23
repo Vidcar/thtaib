@@ -138,7 +138,7 @@ try {
     new AIMessage({id: "saved-call", content: "", tool_calls: [{id: "call-old", name: "lookup", args: {q: "retained"}}]}),
     new ToolMessage({id: "saved-result", tool_call_id: "call-old", name: "lookup", content: "Saved lookup result"}),
   ]}));
-  assert.match(historical, /bubble-settled/, "a finished answer stays in the page and can skip off-screen layout");
+  assert.match(historical, /Saved lookup result/, "a finished answer retains its readable saved result");
   assert.ok(historical.includes("lookup") && historical.includes("retained"), "public contentBlocks must preserve hydrated tool calls without live tool events");
   assert.equal((historical.match(/class="message-tools"/g) ?? []).length, 1, "retained call and result must render one compact named activity");
   assert.match(historical, /Called lookup/, "a finished call leads with the action");
@@ -197,7 +197,11 @@ try {
   const preparingCall = { callId: "write-live", id: "write-live", name: "write_file", namespace: [], input: rawWrite, args: rawWrite, output: null, status: "preparing", error: undefined };
   const preparingClosed = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall] }));
   assert.match(preparingClosed, /stream-bench\.html/, "a live write names the file on the row");
-  assert.match(preparingClosed, /KB written/, "a live write shows how much has been written");
+  assert.match(preparingClosed, /KB proposed/, "streamed input describes proposed bytes until the tool succeeds");
+  const awaitingApproval = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [new AIMessage({ id: "needs-approval", content: "", tool_calls: [{ id: preparingCall.callId, name: "write_file", args: { file_path: "stream-bench.html", content: fileBody } }] })], toolCalls: [preparingCall], live: true, waiting: true, detailedStreams: true }));
+  assert.match(awaitingApproval, /Waiting for your response/);
+  assert.match(awaitingApproval, /Proposed change to stream-bench.html/);
+  assert.doesNotMatch(awaitingApproval, /characters written|KB written|>Writing<|Created stream-bench|Creating stream-bench/, "awaiting authorization cannot claim an executing or completed write");
   assert.doesNotMatch(preparingClosed, /rule 10|bench-160/, "a collapsed live write does not paint the file");
   const preparingOpen = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true }));
   assert.doesNotMatch(preparingOpen, /Showing the latest 4,000 characters/);
@@ -391,7 +395,7 @@ try {
   const originalResizeObserver = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class {
     constructor(callback) { this.callback = callback; resizeCallbacks.add(callback); }
-    observe() {}
+    observe() { resizeCallbacks.add(this.callback); }
     disconnect() { resizeCallbacks.delete(this.callback); }
   };
   class Transcript {

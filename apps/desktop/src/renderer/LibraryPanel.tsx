@@ -17,6 +17,7 @@ import {
 import "./packet03Panels.css";
 import "./fileBrowser.css";
 import { RetainedImage } from "./ImagePreview";
+import { workspaceApi } from "./workspaceApi";
 
 interface LibraryPanelProps {
   sessionId?: string | null;
@@ -68,9 +69,17 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("recent");
+  const [projectLabels, setProjectLabels] = useState<Record<string, string>>({});
   const loadGeneration = useRef(0);
   const detailGeneration = useRef(0);
   const actionGeneration = useRef(0);
+  useEffect(() => {
+    let cancelled = false;
+    void workspaceApi.projects(true).then(projects => {
+      if (!cancelled) setProjectLabels(Object.fromEntries(projects.map(project => [project.path.replaceAll("\\", "/").toLowerCase(), project.name])));
+    }).catch(() => { /* Folder names remain available when project labels cannot load. */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const selectedAssets = useMemo(
     () => assets.filter((asset) => selectedIds.includes(asset.id)),
@@ -276,7 +285,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
             <tbody>{visibleAssets.map(asset => <tr key={asset.id} className={`${preview?.id === asset.id ? "is-active " : ""}${asset.deleted_at ? "is-deleted" : ""}`}>
               <td className="file-check"><input type="checkbox" aria-label={`Select ${asset.filename}`} disabled={Boolean(asset.deleted_at)} checked={selectedIds.includes(asset.id)} onChange={event => { setDeletionPreview(null); setSelectedIds(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id)); }} /></td>
               <td><button type="button" className="file-name" disabled={Boolean(asset.deleted_at)} aria-label={`Preview ${asset.filename}`} onClick={() => void showPreview(asset)}><Icon name="files" size={17} /><span><strong>{asset.filename}</strong><small>{asset.deleted_at ? "Deleted" : assetOriginLabel(asset.origin)}</small></span></button></td>
-              <td className="file-location"><span title={asset.project_path ?? undefined}>{asset.project_path?.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? "Chat"}</span></td>
+              <td className="file-location"><span title={asset.project_path ?? undefined}>{asset.project_path ? projectLabels[asset.project_path.replaceAll("\\", "/").toLowerCase()] ?? asset.project_path.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) : "Conversation"}</span></td>
               <td className="file-size">{formatBytes(asset.size_bytes)}</td>
               <td className="file-date">{new Date(asset.observed_at).toLocaleDateString()}</td>
             </tr>)}</tbody>
@@ -292,7 +301,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
           </div>
           {preview.truncated ? <p className="hint">Preview shortened. Open full text to read the entire saved file.</p> : null}
           {activeAsset?.content_kind === "image" ? <RetainedImage asset={activeAsset} sessionId={sessionId ?? undefined} /> : <pre className="file-preview-content">{preview.preview}</pre>}
-          {preview.extraction ? <p className="hint">{preview.extraction.note ?? `Text extracted locally · ${preview.extraction.parser}`}</p> : null}
+          {preview.extraction ? <p className="hint">{preview.extraction.status === "no_text" ? "No text found" : "Text extracted locally"} <HoverHelp title="Extraction details">{preview.extraction.note ?? preview.extraction.parser}</HoverHelp></p> : null}
         </aside> : null}
       </div>
     </section>

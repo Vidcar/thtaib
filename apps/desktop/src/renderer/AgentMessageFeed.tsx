@@ -274,10 +274,10 @@ function writtenFileContent(args: unknown): string | null {
   return null;
 }
 
-function writtenAmount(count: number): string {
-  if (count < 1024) return `${count.toLocaleString()} characters written`;
+function proposedAmount(count: number): string {
+  if (count < 1024) return `${count.toLocaleString()} characters proposed`;
   const kilobytes = count / 1024;
-  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes).toLocaleString()} KB written`;
+  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes).toLocaleString()} KB proposed`;
 }
 
 function toolIsStreaming(tool: ToolBlock): boolean {
@@ -550,6 +550,7 @@ function todoState(toolBlocks: ToolBlock[]): { items: TodoItem[]; failure: strin
 function ToolBlockList({
   defaultOpen,
   live,
+  waiting,
   messageKey,
   onToggle,
   openStates,
@@ -557,6 +558,7 @@ function ToolBlockList({
 }: {
   defaultOpen: boolean;
   live?: boolean;
+  waiting?: boolean;
   messageKey: string;
   onToggle: (id: string, open: boolean) => void;
   openStates: ReadonlyMap<string, boolean>;
@@ -581,7 +583,9 @@ function ToolBlockList({
     const finished = !incomplete && !error;
     const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
     const path = toolFilePath(tool.args);
-    const label = stopped
+    const label = waiting && incomplete
+      ? path ? `Proposed change to ${path}` : `Waiting: ${tool.name}`
+      : stopped
       ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
       : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
     const counts = !error && finished ? lineCounts(change) : "";
@@ -603,14 +607,14 @@ function ToolBlockList({
             if (change) dock?.openChange(change.id);
             else if (path) dock?.openFile(path);
           }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
-          {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
+          {streaming && writing ? <span className="tool-call-progress">{proposedAmount(writing.length)}</span> : null}
           {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission</span> : null}
         </>}
       >
         {incomplete && !open ? null : <div className="tool-call-details">
           {path ? <p className="hint tool-identity">{path}</p> : tool.name === "execute" ? <p className="hint tool-identity">{readableToolText(tool.args)}</p> : null}
           {readableInput !== null ? <section aria-label="Tool input">
-            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Writing" : "File content"}</span>
+            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Proposed content" : "File content"}</span>
             <div className="code-block-wrap"><CopyIconButton text={readableInput} label="Copy tool input" /><ToolInputText text={readableInput} /></div>
           </section> : null}
           {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
@@ -691,12 +695,22 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     // without delivering another token. Observe those changes in the same
     // scroll owner rather than adding a second competing smooth scroll.
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => follow());
-    observer?.observe(transcript);
-    if (rootRef.current) observer?.observe(rootRef.current);
-    follow();
+    const observeContent = () => {
+      observer?.disconnect();
+      observer?.observe(transcript);
+      // Approval cards and run summaries are siblings of the message feed.
+      // Their arrival changes scrollHeight without resizing the scroll owner.
+      for (const child of Array.from(transcript.children ?? [])) observer?.observe(child);
+      if (rootRef.current) observer?.observe(rootRef.current);
+      follow();
+    };
+    const contentObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(observeContent);
+    contentObserver?.observe(transcript, { childList: true });
+    observeContent();
     return () => {
       transcript.removeEventListener("scroll", onScroll);
       observer?.disconnect();
+      contentObserver?.disconnect();
     };
   }, [follow, hasContent, transcriptElement]);
 
@@ -768,6 +782,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   toolsLive?: boolean;
   type: string;
   writing: boolean;
+  waiting: boolean;
 }) {
   if (!props.incomplete) {
     finishedBubbleRenders += 1;
@@ -777,7 +792,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
-        {props.incomplete ? <span className="message-state" aria-label={props.writing ? "Response in progress" : "Incomplete response"}>{props.writing ? "Writing" : "Partial"}</span> : null}
+        {props.incomplete ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? "Writing" : "Partial"}</span> : null}
       </header>
       <div className="message-body">
         <ReasoningDetails
@@ -789,7 +804,7 @@ const MessageBubble = memo(function MessageBubble(props: {
         />
         {props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
         <AttachmentList attachments={props.attachments} />
-        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
+        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
       </div>
       {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
       {props.renderMessageFooter?.(props.message)}
@@ -803,6 +818,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.continuation === next.continuation
     && previous.toolsKey === next.toolsKey
     && previous.toolsLive === next.toolsLive
+    && previous.waiting === next.waiting
     && previous.detailedStreams === next.detailedStreams
     && previous.openStates === next.openStates
     && previous.onToggle === next.onToggle
@@ -817,6 +833,7 @@ export function AgentMessageFeed(props: {
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   live?: boolean;
+  waiting?: boolean;
   fallback?: React.ReactNode;
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
@@ -891,7 +908,7 @@ export function AgentMessageFeed(props: {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id ? liveById.get(result.id) : undefined))]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id ? liveById.get(result.id) : undefined))]} /></div>;
         }
         const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined)));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
@@ -916,10 +933,11 @@ export function AgentMessageFeed(props: {
             toolsLive={live}
             type={type}
             writing={Boolean(props.live && message.id === lastAiId)}
+            waiting={Boolean(props.waiting && message.id === lastAiId)}
           />
         );
       })}
-      <ToolBlockList defaultOpen={detailedStreams} live={props.live} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} />
+      <ToolBlockList defaultOpen={detailedStreams} live={props.live} waiting={props.waiting} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} />
       {showJump ? <button type="button" className="chat-jump-latest" aria-label="Jump to latest message" onClick={jumpToLatest}>↓ Latest</button> : null}
     </div></SourceScope.Provider>
   );

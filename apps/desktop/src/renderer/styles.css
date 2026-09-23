@@ -442,11 +442,6 @@ h4 {
   justify-self: start;
 }
 
-.bubble-settled {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 140px;
-}
-
 .bubble-system {
   justify-self: stretch;
   color: var(--muted);
