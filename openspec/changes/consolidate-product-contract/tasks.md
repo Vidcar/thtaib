@@ -1,5 +1,7 @@
 # Tasks
 
+The approved `polish-workbench-surfaces` delivery now owns the overlapping everyday workspace, named helpers and existing-surface repair below. Their original checkboxes remain unchecked until verified there; this is not a completion claim. The new Lab suite, visual workflow canvas and media integrations remain outside that delivery.
+
 ## 1. Everyday workspace
 
 - [ ] 1.1 Build the compact destination treatment from API-027 and verify Chat, Lab, Workflows, and Settings share type, focus, and help on hover without horizontal scrolling.
