@@ -27,7 +27,7 @@ console.log("Unified settings save, revision, inheritance and explicit-none chec
 async function configurations(Panel) {
   const calls = [];
   const bundle = { id: "model", display_name: "Example model", default_configuration_id: "default", disk_matches: true, files: [], companions: [] };
-  let profiles = [{ id: "default", bundle_id: "model", display_name: "Example model", revision: 4, bags: { startup: bag({ ctx_size: 8192, parallel: 1 }), per_request: bag({ temperature: 0.5 }), agent: bag({}) } }];
+  let profiles = [{ id: "default", bundle_id: "model", display_name: "Example model", revision: 4, bags: { startup: bag({ ctx_size: 8192, parallel: 1 }), per_request: bag({ temperature: 0.5, max_tokens: 512 }), agent: bag({}) } }];
   let renderer;
   const options = { bundle_id: "model", context_size: { maximum: 32768, options: [4096, 8192, 16384, 32768].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: {}, metadata: {} };
   globalThis.fetch = async (url, init = {}) => {
@@ -37,7 +37,16 @@ async function configurations(Panel) {
     if (path.endsWith("/v1/deployments")) return response([]);
     if (path.includes("/configuration-options")) return response(options);
     if (path.endsWith("/projectors")) return response({ candidates: [] });
-    if (path.endsWith("/v1/setup-resolution")) return response({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
+    if (path.endsWith("/v1/setup-resolution")) {
+      const changes = body.overrides.per_request_overrides ?? {};
+      const facts = Object.fromEntries(['temperature', 'max_tokens'].map(key => {
+        const specified = Object.hasOwn(changes, key);
+        const requested = specified ? changes[key] : profiles.find(item => item.id === body.overrides.model_configuration_id)?.bags.per_request.requested[key];
+        const value = requested ?? (key === 'temperature' ? 0.8 : null);
+        return [`per_request.${key}`, { value, known: value != null, source: requested == null ? 'Model default' : specified ? 'Application defaults' : 'Configuration: Example model' }];
+      }));
+      return response({ configuration: body.overrides, effective_values: facts, instruction_layers: [] });
+    }
     if (path.endsWith("/v1/settings/preview")) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
     if (path.endsWith("/configurations")) {
       const old = profiles.find(item => item.id === body.configuration_id);
@@ -52,8 +61,21 @@ async function configurations(Panel) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, props()), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
     const button = label => renderer.root.findAllByType("button").find(node => text(node) === label);
+    const lastPreview = () => calls.findLast(call => call.path.endsWith('/v1/setup-resolution')).body;
+    assert.deepEqual(lastPreview().overrides.per_request_overrides, {}, 'unchanged saved response settings retain named configuration provenance');
+    assert.equal(lastPreview().editing_layer, 'application', 'Models replacement preview excludes application and Chat overrides');
+    assert.ok(text(renderer.root).includes('0.5 · Configuration: Example model'));
+    const numeric = label => renderer.root.findAllByType('label').find(node => text(node).startsWith(label)).findByType('input');
+    await act(async () => { numeric('Temperature').props.onChange({ target: { value: '' } }); await tick(); });
+    assert.equal(lastPreview().overrides.per_request_overrides.temperature, null, 'clearing a saved response setting explicitly resets the authoritative preview');
+    assert.equal(numeric('Temperature').props.placeholder, '0.8', 'known model default replaces the removed saved value');
+    await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
+    assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
+    assert.equal(numeric('Reply limit').props.placeholder, 'Default not reported', 'unknown default is not invented from the saved value');
     assert.ok(button("Save changes"), "save is available without a running deployment");
     await act(async () => { button("Save changes").props.onClick(); await tick(); });
+    assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
+    assert.equal(profiles[0].bags.per_request.requested.max_tokens, undefined);
     await act(async () => { button("Save changes").props.onClick(); await tick(); });
     assert.equal(profiles.length, 1, "ordinary repeated saving does not create another configuration");
     assert.equal(profiles[0].revision, 6);

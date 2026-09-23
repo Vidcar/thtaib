@@ -83,7 +83,15 @@ export function DeploymentsPanel({
   const bundles = initialBundles;
   const profiles = initialProfiles;
   const selectedProfile = profiles.find(item => item.id === profileId);
-  const responsePreview = useSetupPreview({ model_configuration_id: profileId || null, per_request_overrides: response });
+  const savedResponses = selectedProfile?.bags.per_request.requested ?? {};
+  const responseChanges = Object.fromEntries([...new Set([...Object.keys(savedResponses), ...Object.keys(response)])]
+    .filter(key => JSON.stringify(savedResponses[key]) !== JSON.stringify(response[key]))
+    .map(key => [key, response[key] ?? null]));
+  // Preview a replacement configuration, excluding unrelated application/Chat
+  // overrides. Null edits explicitly ask the backend for the model default.
+  const responsePreview = useSetupPreview({ model_configuration_id: profileId || null, per_request_overrides: responseChanges }, null, null, "application");
+  const responseFacts = Object.fromEntries(Object.entries(responsePreview.data?.effective_values ?? {})
+    .map(([key, fact]) => [key, fact.source === "Application defaults" ? { ...fact, source: "Unsaved changes" } : fact]));
   const selected = bundles.find(b => b.id === selectedBundleId);
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
@@ -325,7 +333,7 @@ export function DeploymentsPanel({
         <div className="setting-title"><label htmlFor="additional-startup">Additional settings</label><Help label="Additional settings">JSON for supported template and draft-model controls. Use the named controls above for settings already shown.</Help></div>
         <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder="{}" />
       </details>
-      <section className="settings-group"><h4>Responses</h4><ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responsePreview.data?.effective_values ?? {}} options={configuration} disabled={Boolean(busy)} />{responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}</section>
+      <section className="settings-group"><h4>Responses</h4><ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" />{responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}</section>
       <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
         <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { const owner = selectionOwner.current; await preview(); if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); } }); }}>Check settings</button>
         <button type="button" disabled={Boolean(busy) || !configurationName.trim()} onClick={() => { if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration()); }}>Save changes</button>
