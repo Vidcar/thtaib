@@ -8,7 +8,7 @@ import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
 interface AttentionPanelProps {
-  onOpenItem?: (item: AttentionItem) => void;
+  onOpenItem?: (item: AttentionItem) => boolean | void | Promise<boolean | void>;
 }
 
 function attentionKindLabel(kind: AttentionItem["kind"]): string {
@@ -67,9 +67,10 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
     setBusy(true);
     setMessage("");
     try {
+      if (!onOpenItem || await onOpenItem(item) === false) return;
       await packet03Api.dismissAttention(item.identity);
       notifyAttentionChanged();
-      onOpenItem?.(item);
+      setItems(current => current.filter(currentItem => currentItem.identity !== item.identity));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {

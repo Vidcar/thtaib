@@ -70,6 +70,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   const [sort, setSort] = useState("recent");
   const loadGeneration = useRef(0);
   const detailGeneration = useRef(0);
+  const actionGeneration = useRef(0);
 
   const selectedAssets = useMemo(
     () => assets.filter((asset) => selectedIds.includes(asset.id)),
@@ -116,7 +117,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
     setSelectedIds([]);
     setDeletionPreview(null);
     void loadAssets();
-    return () => { loadGeneration.current += 1; detailGeneration.current += 1; };
+    return () => { loadGeneration.current += 1; detailGeneration.current += 1; actionGeneration.current += 1; };
   }, [origin, scope, includeDeleted, sessionId, projectPath]);
 
   async function showPreview(asset: RetainedAsset): Promise<void> {
@@ -173,6 +174,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
       return;
     }
     if (!sessionId || !onReuseAssets) return;
+    const requestGeneration = ++actionGeneration.current;
     setBusy(true);
     setMessage("");
     try {
@@ -182,34 +184,42 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
         project_path: projectPath,
         allow_cross_session_reuse: scope === "all",
       });
+      if (actionGeneration.current !== requestGeneration) return;
       onReuseAssets(result, selectedAssets);
       setMessage("Ready to reuse in a draft.");
     } catch (error) {
+      if (actionGeneration.current !== requestGeneration) return;
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      if (actionGeneration.current === requestGeneration) setBusy(false);
     }
   }
 
   async function previewDeletion(): Promise<void> {
     if (selectedIds.length === 0) return;
+    const requestGeneration = ++actionGeneration.current;
     setBusy(true);
     setMessage("");
     try {
-      setDeletionPreview(await packet03Api.deleteAssetPreview(selectedIds));
+      const result = await packet03Api.deleteAssetPreview(selectedIds);
+      if (actionGeneration.current !== requestGeneration) return;
+      setDeletionPreview(result);
     } catch (error) {
+      if (actionGeneration.current !== requestGeneration) return;
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      if (actionGeneration.current === requestGeneration) setBusy(false);
     }
   }
 
   async function confirmDelete(): Promise<void> {
     if (!deletionPreview?.affected_asset_ids.length) return;
+    const requestGeneration = ++actionGeneration.current;
     setBusy(true);
     setMessage("");
     try {
       const result = await packet03Api.deleteAssets(deletionPreview.affected_asset_ids);
+      if (actionGeneration.current !== requestGeneration) return;
       detailGeneration.current += 1;
       setPreview(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
       setFullContent(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
@@ -218,9 +228,10 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
       setMessage(deleteOutcomeText(result));
       await loadAssets({ clearMessage: false });
     } catch (error) {
+      if (actionGeneration.current !== requestGeneration) return;
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setBusy(false);
+      if (actionGeneration.current === requestGeneration) setBusy(false);
     }
   }
 

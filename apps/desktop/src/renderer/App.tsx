@@ -131,8 +131,8 @@ export function App() {
   const openAttentionTarget = useCallback(async (conversationId: string | null, runId: string) => {
     const request = ++attentionRequest.current;
     const originTab = activeTab.current;
-    if (prepareChatNavigation.current && !await prepareChatNavigation.current()) return;
-    if (attentionRequest.current !== request || activeTab.current !== originTab) return;
+    if (prepareChatNavigation.current && !await prepareChatNavigation.current()) return false;
+    if (attentionRequest.current !== request || activeTab.current !== originTab) return false;
     if (conversationId) {
       setAttentionConversationId(conversationId);
       setTab("chat");
@@ -140,6 +140,7 @@ export function App() {
       setAttentionRunId(runId);
       setTab("agent-run");
     }
+    return true;
   }, []);
   const clearAttentionConversation = useCallback((id: string) => {
     setAttentionConversationId(current => current === id ? null : current);

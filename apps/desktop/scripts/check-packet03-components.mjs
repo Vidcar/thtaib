@@ -31,16 +31,69 @@ try {
   await checkComposerUploadStaleGuard(ComposerAttachments);
   await checkDropWaitsForSavedAttachments(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
+  await checkLibraryReuseKeepsItsConversation(LibraryPanel);
   await checkChatHistoryActions(ChatHistoryActions, AnswerActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
   await checkChatMeasurements(ChatMeasurements);
   await checkAttentionTargets(AttentionPanel);
+  await checkBlockedAttentionNavigationPreservesItem(AttentionPanel);
 } finally {
   await vite.close();
 }
 
 console.log("Packet03 component checks passed.");
+
+async function checkLibraryReuseKeepsItsConversation(LibraryPanel) {
+  const originalFetch = globalThis.fetch;
+  const held = createDeferred();
+  const reused = [], requests = [];
+  let renderer;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes("/reuse")) {
+      const body = JSON.parse(init.body); requests.push(body);
+      return body.session_id === "chat_a" ? held.promise : jsonResponse({ asset_ids: body.asset_ids, session_id: body.session_id });
+    }
+    return jsonResponse([asset("asset_a", "a.txt", "chat_a")]);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(LibraryPanel, { sessionId: "chat_a", onReuseAssets: (...value) => reused.push(value) })); await tick(); });
+    await act(async () => renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } }));
+    await act(async () => { button(renderer, "Use in Chat").props.onClick(); await tick(); });
+    assert.equal(requests[0].session_id, "chat_a");
+    await act(async () => { renderer.update(React.createElement(LibraryPanel, { sessionId: "chat_b", onReuseAssets: (...value) => reused.push(value) })); await tick(); });
+    await act(async () => { held.resolve(jsonResponse({ asset_ids: ["asset_a"], session_id: "chat_a" })); await tick(); });
+    assert.deepEqual(reused, [], "late reuse cannot append files to the newly selected conversation");
+    assert.doesNotMatch(textOf(renderer.root), /Ready to reuse in a draft/, "old reuse success cannot appear on another conversation");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } }));
+    assert.equal(button(renderer, "Use in Chat").props.disabled, false, "a stale completion cannot leave the new conversation busy");
+    await act(async () => { button(renderer, "Use in Chat").props.onClick(); await tick(); });
+    assert.equal(reused.length, 1);
+    assert.equal(reused[0][0].session_id, "chat_b", "a fresh reuse still publishes its own session result");
+  } finally { held.resolve(jsonResponse({ asset_ids: ["asset_a"] })); if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkBlockedAttentionNavigationPreservesItem(AttentionPanel) {
+  const originalFetch = globalThis.fetch;
+  const dismissed = [];
+  const navigation = createDeferred();
+  let renderer;
+  const item = { identity: "approval-pending", kind: "approval", title: "Needs approval", conversation_id: "chat_a", run_id: "run_a" };
+  globalThis.fetch = async (url, init = {}) => { if (init.method === "POST") { dismissed.push(String(url)); return jsonResponse({ dismissed: true }); } return jsonResponse([item]); };
+  try {
+    await act(async () => { renderer = create(React.createElement(AttentionPanel, { onOpenItem: () => navigation.promise })); await tick(); });
+    let opening;
+    await act(async () => { opening = button(renderer, "Open").props.onClick(); await tick(); });
+    assert.deepEqual(dismissed, [], "attention stays visible while draft navigation is being checked");
+    await act(async () => { navigation.resolve(false); await opening; });
+    assert.deepEqual(dismissed, [], "a blocked navigation cannot acknowledge or hide unfinished attention");
+    assert.ok(textOf(renderer.root).includes("Needs approval"));
+    await act(async () => renderer.update(React.createElement(AttentionPanel, { onOpenItem: async () => true })));
+    await act(async () => { await button(renderer, "Open").props.onClick(); });
+    assert.equal(dismissed.length, 1, "accepted navigation acknowledges the exact item once");
+    assert.ok(dismissed[0].includes("approval-pending/dismiss"));
+  } finally { navigation.resolve(false); if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
 
 async function checkChatMeasurements(ChatMeasurements) {
   const originals = { window: globalThis.window, document: globalThis.document };
