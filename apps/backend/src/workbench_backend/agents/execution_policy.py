@@ -15,6 +15,14 @@ PLAN_INSTRUCTIONS = "Plan mode: investigate and produce a plan. Read-only tools,
 CURRENT_TOOL_CALL: ContextVar[str] = ContextVar("workbench_current_tool_call", default="")
 
 
+def require_setup_capabilities(configuration, *, project_bound: bool, presented_tools: list[str] | None) -> None:
+    """Requirements remain restrictions after Plan and parent-tool intersection."""
+    if configuration.requires_project and not project_bound:
+        raise HarnessError("This agent setup requires a project folder.", code="setup_project_required", status_code=409)
+    if configuration.requires_host_shell and (not project_bound or presented_tools is not None and "execute" not in presented_tools):
+        raise HarnessError("This agent setup requires the host-shell tool in a project. Select it explicitly before running.", code="setup_shell_required", status_code=409)
+
+
 class ExecutionControl:
     def __init__(self, root: Any, publish=None):
         self.root = root

@@ -33,7 +33,7 @@ from workbench_backend.agents.setup_service import SetupService, configuration_f
 from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.helpers import freeze_helpers
-from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS
+from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root
@@ -331,10 +331,8 @@ class HarnessService:
             raise HarnessError("The frozen helper selection does not match this queued turn.", code="helper_snapshot_mismatch", status_code=409)
         if not request.deployment_id:
             raise HarnessError("Choose a model or an agent setup with a model.", code="setup_deployment_required", status_code=400)
-        if selection.configuration.requires_project and not (request.project_path or request.workspace_id):
-            raise HarnessError("This agent setup requires a project folder.", code="setup_project_required", status_code=409)
-        if selection.configuration.requires_host_shell and (not (request.project_path or request.workspace_id) or request.presented_tools is not None and "execute" not in request.presented_tools):
-            raise HarnessError("This agent setup requires the host-shell tool in a project. Select it explicitly before running.", code="setup_shell_required", status_code=409)
+        require_setup_capabilities(selection.configuration,
+            project_bound=bool(request.project_path or request.workspace_id), presented_tools=request.presented_tools)
         admission = self.manager.reserve_deployment(
             request.deployment_id,
             profile_id=request.profile_id,
@@ -447,6 +445,8 @@ class HarnessService:
                 presented = [*presented, "task"]
             if request.work_mode == "plan":
                 presented = [name for name in presented if name in PLAN_TOOLS]
+            require_setup_capabilities(selection.configuration,
+                project_bound=project_path is not None, presented_tools=presented)
             if request.resume_checkpoint_id:
                 if request.source_surface != "chat" or not request.thread_id:
                     raise HarnessError(
@@ -619,6 +619,8 @@ class HarnessService:
                 enabled_tools=enabled,
                 presented_tools=presented,
                 approval_mode=request.approval_mode,
+                requires_project=bool(selection.configuration.requires_project),
+                requires_host_shell=bool(selection.configuration.requires_host_shell),
                 work_mode=request.work_mode,
                 helper_agent_ids=list(request.helper_agent_ids),
                 helper_snapshots=helpers,

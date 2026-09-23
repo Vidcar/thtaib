@@ -9,7 +9,7 @@ from langgraph.errors import GraphInterrupt
 
 from workbench_backend.agents.context import observe_context, require_context_fit
 from workbench_backend.agents.effective_setup import resolve_effective_setup
-from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, PLAN_TOOLS
+from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, PLAN_TOOLS, require_setup_capabilities
 from workbench_backend.agents.host_shell import approval_mode_instructions
 from workbench_backend.agents.schemas import AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria
 from workbench_backend.agents.setup_schemas import ReviewConfiguration
@@ -34,6 +34,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     work_mode = "plan" if parent.work_mode == "plan" or config.work_mode == "plan" else "work"
     if work_mode == "plan":
         presented = [name for name in presented if name in PLAN_TOOLS]
+    require_setup_capabilities(config, project_bound=bool(parent.project_path), presented_tools=presented)
     rank = {"ask": 0, "approve_for_me": 1, "full_access": 2}
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
     selected_connections = [ident for ident in (config.connection_ids if config.connection_ids is not None else parent.connection_ids) if ident in parent.connection_ids]
@@ -71,6 +72,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         presented_tools=presented, enabled_tools=[name for name in parent.enabled_tools if name != "task"],
         denied_tools=[name for name in selected_tools if name not in presented], approval_mode=approval,
         work_mode=work_mode, helper_agent_ids=[], helper_snapshots=[], child_runs=[],
+        requires_project=bool(config.requires_project), requires_host_shell=bool(config.requires_host_shell),
         review=ReviewConfiguration(), review_observation=ReviewObservation(), criteria=TaskCriteria(),
         profile_id=setup.selected_profile_id, effective_setup=setup, system_prompt=setup.system_prompt,
         memory_version_refs=refs.memory_version_refs, skill_version_refs=refs.skill_version_refs,

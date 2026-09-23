@@ -10,7 +10,7 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
-from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
+from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.agents.helpers import freeze_helpers, freeze_settings
 from contextlib import ExitStack
 from workbench_backend.assets.schemas import RetainedAssetReuseRequest
@@ -1414,10 +1414,13 @@ class ChatService:
     def _execution_snapshot(self, item: ChatQueueItem, project_id: str | None):
         configuration = SetupConfiguration.model_validate({key: value for key, value in item.intended_config.items() if key in SetupConfiguration.model_fields})
         version_id = item.intended_config.get("agent_setup_version_id")
-        version = self._setups().get_version(version_id) if version_id else None
-        selection = ResolvedSetupSelection(project_id=project_id, agent_setup_id=version.setup_id if version else None,
-            agent_setup_version_id=version_id, configuration=configuration, instruction_layers=item.instruction_layers or [])
-        return FrozenExecutionSelection(selection=selection, settings=freeze_settings(self.manager, configuration))
+        # Freeze the entire resolved authority, including monotonic requirements.
+        # The conversation's editable settings are only a subset of that contract.
+        selection = self._setups().resolve(project_id=project_id, agent_setup_version_id=version_id,
+            overrides=configuration, override_cleared_fields=[key for key in ("profile_id", "embedding_deployment_id")
+                if key in item.intended_config and item.intended_config[key] is None])
+        selection = selection.model_copy(update={"instruction_layers": item.instruction_layers or []})
+        return FrozenExecutionSelection(selection=selection, settings=freeze_settings(self.manager, selection.configuration))
 
     def _ensure_thread(self, conversation: ChatConversation) -> str:
         """Stable LangGraph thread for this conversation. Legacy rows get one."""

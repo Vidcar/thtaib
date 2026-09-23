@@ -44,6 +44,57 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertNotIn("write_file", finished["presented_tools"])
         self.assertEqual(finished["work_mode"], "plan")
 
+    def test_queue_keeps_required_project_and_shell_authority(self):
+        model_calls = []
+        self.harness(lambda *args: model_calls.append(args) or ScriptedChatModel([AIMessage(content="Must not run")]))
+        for requirement, expected, project in (
+            ("requires_project", "setup_project_required", None),
+            ("requires_host_shell", "setup_shell_required", self.project()),
+        ):
+            with self.subTest(requirement=requirement):
+                agent = self.setup(**{requirement: True}, presented_tools=[])
+                chat = self.post('/v1/chat/conversations', {
+                    "deployment_id": self.deployment.id, "project_id": project['id'] if project else None,
+                    "agent_setup_version_id": agent['current_version_id'], "presented_tools": []})
+                queued = self.post(f'/v1/chat/conversations/{chat["id"]}/queue', {"task": "Run"})
+                frozen = queued['queue'][0]['execution_snapshot']['selection']['configuration']
+                self.assertTrue(frozen[requirement])
+                resumed = self.post(f'/v1/chat/conversations/{chat["id"]}/queue/resume', {})
+                self.assertEqual(resumed['run_ids'], [])
+                self.assertEqual(resumed['queue'][0]['pause_error_code'], expected)
+        self.assertEqual(model_calls, [])
+
+    def test_helper_requirements_survive_parent_tool_intersection(self):
+        child_calls = []
+        for requirement, tools, path, error in (
+            ("requires_project", ["echo"], None, "requires a project folder"),
+            ("requires_host_shell", ["execute", "echo"], str(self.folder), "requires the host-shell tool"),
+        ):
+            with self.subTest(requirement=requirement):
+                helper = self.setup(**{requirement: True}, presented_tools=tools)
+                main = ScriptedChatModel([call('task', {'subagent_type': helper['id'], 'description': 'Report'}, 'delegate'), AIMessage(content='Done')])
+                self.harness(lambda run, _sink: child_calls.append(run) or ScriptedChatModel([AIMessage(content='Must not run')]) if run.parent_run_id else main)
+                final = wait_for_run(self.client, self.start(project_path=path, presented_tools=['echo'], helper_agent_ids=[helper['id']])['id'])
+                self.assertEqual(final['status'], 'failed', final)
+                self.assertIn(error, final['error'])
+                self.assertEqual(final['child_runs'], [])
+        self.assertEqual(child_calls, [])
+
+    def test_plan_cannot_silently_drop_required_shell_and_run_keeps_requirements(self):
+        model_calls = []
+        self.harness(lambda *args: model_calls.append(args) or ScriptedChatModel([AIMessage(content='Done')]))
+        agent = self.setup(requires_project=True, requires_host_shell=True, presented_tools=['execute'])
+        request = {'deployment_id': self.deployment.id, 'agent_setup_version_id': agent['current_version_id'],
+            'project_path': str(self.folder), 'task': 'Plan', 'work_mode': 'plan'}
+        response = self.client.post('/v1/agent-runs', json=request)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()['code'], 'setup_shell_required')
+        self.assertEqual(model_calls, [])
+        request['work_mode'] = 'work'
+        final = wait_for_run(self.client, self.post('/v1/agent-runs', request)['id'])
+        self.assertTrue(final['requires_project'])
+        self.assertTrue(final['requires_host_shell'])
+
     def test_named_helper_uses_parent_scope_and_persists_child(self):
         helper = self.setup(presented_tools=["echo", "write_file"], approval_mode="full_access")
         main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Read and report"}, "delegate"), AIMessage(content="Parent done.")])

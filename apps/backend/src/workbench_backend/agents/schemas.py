@@ -276,6 +276,8 @@ class AgentRun(BaseModel):
     presented_tools: list[str]
     approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
     work_mode: Literal["work", "plan"] = "work"
+    requires_project: bool = False
+    requires_host_shell: bool = False
     helper_agent_ids: list[str] = Field(default_factory=list)
     helper_snapshots: list[FrozenHelperSelection] = Field(default_factory=list)
     child_runs: list[ChildRunActivity] = Field(default_factory=list)
