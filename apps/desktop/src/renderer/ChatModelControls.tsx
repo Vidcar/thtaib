@@ -41,8 +41,11 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const incoming = JSON.stringify(modelSettings(configuration));
-  const identity = `${conversationId}:${incoming}`;
-  const currentIdentity = useRef(identity); currentIdentity.current = identity;
+  const identity = `${conversationId}:${projectId}:${agentSetupVersionId}:${incoming}`;
+  const currentOwner = useRef({ identity });
+  if (currentOwner.current.identity !== identity) currentOwner.current = { identity };
+  const owner = currentOwner.current;
+  const latest = useRef({ configuration, onApply }); latest.current = { configuration, onApply };
   useEffect(() => { setDraft(JSON.parse(incoming) as SetupConfiguration); setError(""); setNotice(""); }, [incoming, conversationId]);
   const preview = useSetupPreview({ ...configuration, ...draft }, projectId, agentSetupVersionId);
   const resolved = preview.data?.configuration;
@@ -73,7 +76,7 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   async function act(operation: () => Promise<void>) {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setNotice("");
-    try { await operation(); } catch (failure) { setError(errorMessage(failure)); } finally { pending.current = false; setBusy(false); }
+    try { await operation(); } catch (failure) { if (currentOwner.current === owner) setError(errorMessage(failure)); } finally { pending.current = false; setBusy(false); }
   }
   return <MenuPopover label={`Chat model settings: ${modelName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{modelName}</span></>} disabled={disabled}>
     {close => <><div className="chat-model-controls-grid"><label>Model<select aria-label="Model" value={modelChoice} disabled={busy} onChange={event => {
@@ -94,13 +97,14 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
       {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}{notice ? <Notice tone="info">{notice}</Notice> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(reloadNeeded && contextReason)} onClick={() => void act(async () => {
         if (reloadNeeded && deployment) { const next = await api.reconfigure(deployment.id, { startup: startup(), replace_startup: true, ...(selected && selected.id !== deployment.profile_id ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: deployment.updated_at, conversation_id: conversationId }); if (!next.health?.healthy) throw new Error(next.error ?? "Model did not become ready."); await onReloaded(); }
-        if (currentIdentity.current !== identity) return;
-        await onApply({ ...configuration, ...draft }); close();
+        if (currentOwner.current !== owner) return;
+        await latest.current.onApply({ ...latest.current.configuration, ...draft });
+        if (currentOwner.current === owner) close();
       })}>{busy ? "Applying…" : reloadNeeded ? "Apply & reload" : "Apply"}</button>
       <button type="button" disabled={busy || !savedConfiguration?.bundle_id} title={!savedConfiguration ? "Choose a saved model configuration first" : "Update this model configuration for future work"} onClick={() => void act(async () => {
         if (!savedConfiguration?.bundle_id) return;
         await api.saveModelConfiguration(savedConfiguration.bundle_id, { display_name: savedConfiguration.display_name, configuration_id: savedConfiguration.id, expected_revision: savedConfiguration.revision, startup: startup(), per_request: mergedStartup(savedConfiguration.bags.per_request.requested, draft.per_request_overrides ?? {}) });
-        await onReloaded(); setNotice("Saved to model. Apply separately to use these chat changes.");
+        await onReloaded(); if (currentOwner.current === owner) setNotice("Saved to model. Apply separately to use these chat changes.");
       })}>Save to model</button></div>
     </>}
   </MenuPopover>;

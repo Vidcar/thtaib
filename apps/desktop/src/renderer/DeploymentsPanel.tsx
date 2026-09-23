@@ -47,7 +47,9 @@ export function DeploymentsPanel({
 } = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const selection = useRef(selectedBundleId); selection.current = selectedBundleId;
-  const hydrated = useRef({ bundle: "", deployment: "" });
+  const selectionOwner = useRef({ id: selectedBundleId, generation: 0 });
+  if (selectionOwner.current.id !== selectedBundleId) selectionOwner.current = { id: selectedBundleId, generation: selectionOwner.current.generation + 1 };
+  const hydrated = useRef({ bundle: "", deployment: "", profile: "", revision: 0 });
   const dirty = useRef(false);
   const actionPending = useRef(false);
   const changedStartup = useRef(new Set<string>());
@@ -118,14 +120,15 @@ export function DeploymentsPanel({
   useEffect(() => {
     if (!loaded) return;
     const changedModel = hydrated.current.bundle !== selectedBundleId;
-    const shouldHydrate = changedModel || (!profileId && !dirty.current && profiles.some(item => item.bundle_id === selectedBundleId)) || (selectedRunning && !dirty.current && hydrated.current.deployment !== selectedRunning.id);
+    const saved = (!changedModel ? selectedProfile : undefined) ?? profiles.find(item => item.id === (selectedRunning?.profile_id ?? selected?.default_configuration_id)) ?? profiles.find(item => item.bundle_id === selectedBundleId);
+    const changedProfile = saved && (hydrated.current.profile !== saved.id || hydrated.current.revision !== saved.revision);
+    const shouldHydrate = changedModel || (!dirty.current && changedProfile) || (selectedRunning && !dirty.current && hydrated.current.deployment !== selectedRunning.id);
     if (changedModel) { dirty.current = false; setMessage(""); setProfileId(""); }
     let cancelled = false;
     setConfiguration(null); setMaximumContext(null); setLayers(null); setContextChoices([]); setModelInfo("Loading model details…");
     if (shouldHydrate) {
     changedStartup.current = new Set(Object.keys(selectedRunning?.startup_overrides ?? {}));
-    hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "" };
-    const saved = profiles.find(item => item.id === (selectedRunning?.profile_id ?? selected?.default_configuration_id)) ?? profiles.find(item => item.bundle_id === selectedBundleId);
+    hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "", profile: saved?.id ?? "", revision: saved?.revision ?? 0 };
     setProfileId(saved?.id ?? ""); setConfigurationName(saved?.display_name ?? selected?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {});
     const starting = { ...initialSettings };
     const extra: Record<string, unknown> = {};
@@ -152,7 +155,7 @@ export function DeploymentsPanel({
     }).catch(() => { if (!cancelled) setModelInfo("Model details unavailable · refresh to retry"); });
     return () => { cancelled = true; };
   // Load existing settings once per selection; stopping a model must not erase edits.
-  }, [selectedBundleId, loaded, selectedRunning?.id, profiles.length]);
+  }, [selectedBundleId, loaded, selectedRunning?.id, profiles.length, selectedProfile?.id, selectedProfile?.revision, selected?.default_configuration_id]);
   useEffect(() => {
     const loading = deployments.filter(d => d.scope === "managed" && ["starting", "unhealthy"].includes(d.status));
     if (!loading.length) return;
@@ -182,8 +185,9 @@ export function DeploymentsPanel({
   async function action(key: string, operation: () => Promise<unknown>) {
     if (actionPending.current) return;
     actionPending.current = true;
+    const owner = selectionOwner.current;
     setBusy(key); setMessage("");
-    try { await operation(); } catch (error) { setMessage(errorMessage(error)); setMessageTone("error"); } finally { actionPending.current = false; setBusy(""); }
+    try { await operation(); } catch (error) { if (selectionOwner.current === owner) { setMessage(errorMessage(error)); setMessageTone("error"); } } finally { actionPending.current = false; setBusy(""); }
   }
   function startup(): Record<string, unknown> {
     const values = startupPayload(settings, advancedStartup, profiles.find(profile => profile.id === profileId)?.bags.startup.requested, changedStartup.current);
@@ -194,24 +198,35 @@ export function DeploymentsPanel({
     }
     return values;
   }
-  async function preview() {
-    const result = await api.previewSettings(mergedStartup(profiles.find(profile => profile.id === profileId)?.bags.startup.requested ?? {}, startup()), response, {}); setSettingsPreview(result);
+  async function preview(startupValues = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), responseValues = response, owner = selectionOwner.current) {
+    const result = await api.previewSettings(startupValues, responseValues, {});
+    if (selectionOwner.current === owner) setSettingsPreview(result);
     if (result.startup.unsupported.length || result.startup.retired.length || result.per_request.unsupported.length || result.per_request.retired.length) throw new Error("Some settings need attention. See the details below.");
     return result;
   }
-  async function saveConfiguration(asVariant = false) {
-    await preview();
+  function configurationPayload(asVariant = false) {
     const name = (asVariant ? variantName : configurationName).trim();
     if (!name) throw new Error("Enter a configuration name.");
-    const saved = await api.saveModelConfiguration(selectedBundleId, {
+    return {
       display_name: name,
       startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), per_request: response,
       ...(asVariant ? {} : { configuration_id: profileId || undefined, expected_revision: selectedProfile?.revision }),
-    });
-    setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false;
-    setCreatingVariant(false); setVariantName(""); await onBundlesChanged?.(); await refresh();
-    setMessageTone("ok"); setMessage(asVariant ? "Variant saved." : "Configuration saved. Active and queued turns keep their settings.");
+    };
+  }
+  async function persistConfiguration(payload: ReturnType<typeof configurationPayload>, asVariant: boolean, owner: typeof selectionOwner.current) {
+    const saved = await api.saveModelConfiguration(owner.id, payload);
+    if (selectionOwner.current === owner) {
+      setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false;
+      setCreatingVariant(false); setVariantName("");
+    }
+    await onBundlesChanged?.(); await refresh();
+    if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(asVariant ? "Variant saved." : "Configuration saved. Active and queued turns keep their settings."); }
     return saved;
+  }
+  async function saveConfiguration(asVariant = false) {
+    const payload = configurationPayload(asVariant), owner = selectionOwner.current;
+    await preview(payload.startup, payload.per_request, owner);
+    return persistConfiguration(payload, asVariant, owner);
   }
   const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number) =>
     <Choice key={key} id={`model-${key}`} label={label} help={help} flag={`--${key.replaceAll("_", "-")}`} value={settings[key]} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} />;
@@ -263,18 +278,20 @@ export function DeploymentsPanel({
     {selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}
     {selected ? <section className="card model-setup"><h3>Configuration</h3><form ref={formRef} className="model-settings" onSubmit={event => {
       event.preventDefault(); void action("start", async () => {
-        await preview();
-        const desired = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup());
-        const result = selectedActive ? await api.reconfigure(selectedActive.id, { startup: desired, replace_startup: true, model_configuration_id: profileId || undefined, expected_configuration_revision: selectedProfile?.revision, expected_updated_at: selectedActive.updated_at }) : await api.startManaged(selectedBundleId, profileId || undefined, startup());
+        const payload = configurationPayload(), overrides = startup(), owner = selectionOwner.current;
+        await preview(payload.startup, payload.per_request, owner);
+        const result = selectedActive ? await api.reconfigure(selectedActive.id, { startup: payload.startup, replace_startup: true, model_configuration_id: profileId || undefined, expected_configuration_revision: selectedProfile?.revision, expected_updated_at: selectedActive.updated_at }) : await api.startManaged(selectedBundleId, profileId || undefined, overrides);
         if (result.status === "failed") throw new Error(result.error ?? "Model could not load. Your saved configuration is unchanged.");
-        await saveConfiguration();
-        if (result.status !== "failed") dirty.current = false;
-        setMessageTone(result.status === "failed" ? "error" : "info");
-        setMessage(result.error ?? (result.health?.healthy ? `${selected.display_name} is ready. Open Chat to get started.` : "Loading your model. Its status will update automatically.")); await refresh();
+        await persistConfiguration(payload, false, owner);
+        if (selectionOwner.current === owner) {
+          dirty.current = false; setMessageTone("info");
+          setMessage(result.error ?? (result.health?.healthy ? `${selected.display_name} is ready. Open Chat to get started.` : "Loading your model. Its status will update automatically."));
+        }
+        await refresh();
       });
     }}>
       <div className="section-heading"><span className="hint model-capacity">{modelInfo}</span><button type="button" className="icon-button" aria-label="Refresh model details" title="Re-read model metadata and supported controls" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true)); })}><Icon name="refresh" size={16} /></button></div>
-      <div className="setup-form-grid"><label>Configuration<select value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">Default</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id ? " · default" : ""}</option>)}</select></label><label>Name<input value={configurationName} disabled={Boolean(busy)} onChange={event => setConfigurationName(event.target.value)} /></label></div>
+      <div className="setup-form-grid"><label>Configuration<select value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">Default</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id && profile.display_name.trim().toLowerCase() !== "default" ? " · default" : ""}</option>)}</select></label><label>Name<input value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label></div>
       {selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" className="quiet-button" disabled={Boolean(busy)} onClick={() => void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); })}>Use as model default</button> : null}
       {selectedActive ? <div className="inline-note">{selectedRunning ? `Running with ${selectedRunning.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context` : "the settings shown in Details"}.` : "This model is loading or waiting for a connection."} Changes apply after a safe reload.</div> : null}
       <div className="model-settings-grid">
@@ -310,7 +327,7 @@ export function DeploymentsPanel({
       </details>
       <section className="settings-group"><h4>Responses</h4><ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responsePreview.data?.effective_values ?? {}} options={configuration} disabled={Boolean(busy)} />{responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}</section>
       <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
-        <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { await preview(); setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); }); }}>Check settings</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { const owner = selectionOwner.current; await preview(); if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); } }); }}>Check settings</button>
         <button type="button" disabled={Boolean(busy) || !configurationName.trim()} onClick={() => { if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration()); }}>Save changes</button>
         <button type="button" disabled={Boolean(busy)} onClick={() => { setCreatingVariant(true); setVariantName(`${configurationName} variant`); }}>Save as variant</button>
         <button type="submit" className="primary-button" disabled={Boolean(busy) || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={!runtimeReady ? "Set up the local engine first" : !selected.disk_matches ? "Repair or verify model files first" : selectedActive && !selectedRunning ? "Wait for the model to finish loading" : undefined}>{busy === "start" ? "Applying…" : selectedActive ? "Apply & reload" : "Load model"}</button>
