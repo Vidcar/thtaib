@@ -509,6 +509,8 @@ class HarnessService:
             setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode)))
             if request.work_mode == "plan":
                 setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
+            if execution_snapshot is not None and execution_snapshot.system_prompt is not None:
+                setup.system_prompt = execution_snapshot.system_prompt
             _, structured_output = response_format_for_run(
                 output_schema=request.output_schema,
                 deployment=deployment,

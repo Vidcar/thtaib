@@ -13,7 +13,7 @@ from tests import test_project_agent_setups as fixtures
 from tests.support import wait_for_run
 from tests import test_host_shell as approval_fixtures
 from tests import test_chat as chat_fixtures
-from workbench_backend.inference.schemas import ProfileWriteRequest
+from workbench_backend.inference.schemas import ProfileWriteRequest, ConnectedDeploymentRequest
 
 
 def call(name, args, ident):
@@ -59,6 +59,17 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(saved["helper_agent_ids"], [])
         self.assertEqual(saved["agent_setup_version_id"], helper["current_version_id"])
         self.assertTrue(any(item["kind"] == "tool_result" for item in saved["events"]))
+
+    def test_helper_uses_its_explicit_other_connected_model(self):
+        other = self.app.state.manager.attach_connected(ConnectedDeploymentRequest(display_name='Other model', endpoint='http://127.0.0.1:10/v1'))
+        helper = self.setup(deployment_id=other.id, presented_tools=['echo'])
+        main = ScriptedChatModel([call('task', {'subagent_type':helper['id'], 'description':'Report'}, 'delegate'), AIMessage(content='Done')])
+        child = ScriptedChatModel([AIMessage(content='Different model result')])
+        self.harness(lambda run, _sink: child if run.parent_run_id else main)
+        finished = wait_for_run(self.client, self.start(presented_tools=['echo'], helper_agent_ids=[helper['id']])['id'])
+        self.assertEqual(finished['status'], 'completed', finished.get('error'))
+        saved = self.client.get('/v1/agent-runs/' + finished['child_runs'][0]['run_id']).json()
+        self.assertEqual(saved['deployment_id'], other.id)
 
     def test_review_is_distinct_and_stops_after_two_revisions(self):
         verdict = {"result": "needs_revision", "explanation": "The requested evidence is missing.",

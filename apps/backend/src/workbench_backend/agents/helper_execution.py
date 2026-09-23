@@ -27,7 +27,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     if not config.deployment_id and (config.bundle_id or config.model_configuration_id):
         raise HarnessError(f"Helper {snapshot.name} needs its selected model loaded before starting.", code="helper_model_unavailable", status_code=409)
     deployment = owner.manager.get_deployment(config.deployment_id or parent.deployment_id)
-    if deployment.id != parent.deployment_id and deployment.kind == "managed" and deployment.status != "running":
+    if deployment.id != parent.deployment_id and deployment.scope == "managed" and deployment.status != "running":
         raise HarnessError(f"Helper {snapshot.name} needs a different loaded model. Load a compatible model before starting; the active model was kept.", code="helper_model_unavailable", status_code=409)
     selected_tools = config.presented_tools if config.presented_tools is not None else parent.presented_tools
     presented = [name for name in selected_tools if name in parent.presented_tools and name != "task"]

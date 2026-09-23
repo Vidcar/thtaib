@@ -183,6 +183,7 @@ class FrozenExecutionSelection(BaseModel):
 
     selection: ResolvedSetupSelection
     settings: dict[str, Any]
+    system_prompt: str | None = None
 
 
 class SetupResolutionRequest(BaseModel):
