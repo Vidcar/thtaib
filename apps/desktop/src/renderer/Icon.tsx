@@ -14,7 +14,6 @@ const icons = {
 
 export type IconName = keyof typeof icons;
 function iconVariable(size: number): string {
-  if (size <= 15) return "--icon-sm";
   if (size <= 18) return "--icon-md";
   if (size <= 24) return "--icon-lg";
   return "--icon-xl";

@@ -59,7 +59,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
         <button type="button" className="primary-button" disabled={!dirty || saving} onClick={() => void onApply()}>Apply</button>
       </div>
       {message ? <p className="hint" role="status">{message}</p> : null}
-      <p className="appearance-note hint">Each row is one shared look: a colour, a text size, a corner, an inset, the space between items, a line, or a layout size. The same step is used everywhere it appears, including this page. Inset stays separate from the space between items, and different steps stay separate. The window follows the draft. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value. A slider covers a wide range; the number beside it accepts any valid value. Viewport sizes, breakpoints, and one-off positions stay fixed.</p>
+      <p className="appearance-note hint">Each row is one shared look, used everywhere it appears, including this page. Inset is the padding inside something. Space is the gap between things. Only the steps you can tell apart are listed. The window follows the draft. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value. A slider covers a wide range; the number beside it accepts any valid value. Viewport sizes, breakpoints, and one-off positions stay fixed.</p>
       <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
       <div className="appearance-groups" role="group" aria-label="Appearance groups">
         {groups.map(item => (
@@ -285,6 +285,8 @@ function capLength(value: string, cap: number): string {
 }
 
 function meterWidth(value: string): string {
-  const amount = lengthAmount(value) ?? 0;
+  const match = /^(-?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i.exec(value.trim());
+  const amount = match ? Number(match[1]) : 0;
+  if (match?.[2] === "%") return `${Math.max(8, Math.min(100, amount))}%`;
   return `${Math.max(8, Math.min(100, (amount / 1500) * 100))}%`;
 }

@@ -3,7 +3,7 @@
   flex-wrap: wrap;
   gap: var(--space-tight) var(--space-stack);
   margin: var(--space-compact) 0;
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
 }
 
 .model-configuration .model-applied-facts > div {
@@ -29,7 +29,7 @@
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: var(--space-row);
+  gap: var(--space-compact);
   min-width: 0;
   padding: var(--pad-tight) 0;
   border-radius: 0;
@@ -38,7 +38,7 @@
 }
 
 .model-configuration .settings-readout dt {
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
 }
 
 .model-configuration .settings-readout dd {

@@ -75,16 +75,42 @@ export function readAppearanceFile(raw: unknown, tokens: AppearanceToken[]): App
   return file;
 }
 
+const retiredAppearance: Record<string, string> = {
+  "space-hairline": "space-tight",
+  "space-row": "space-compact",
+  "pad-hairline": "pad-tight",
+  "pad-row": "pad-compact",
+  "text-micro": "text-small",
+  "text-caption": "text-small",
+  "text-compact": "text-body",
+  "text-subhead": "text-heading",
+  "leading-relaxed": "leading-body",
+  "radius-small": "radius-control",
+  "icon-sm": "icon-md",
+};
+
 function copyValid(target: Record<string, string>, source: Record<string, unknown>, tokens: AppearanceToken[], theme: "light" | "dark"): void {
+  const retired: Array<[string, string]> = [];
   for (const [id, value] of Object.entries(source)) {
-    const token = tokens.find(item => item.id === id);
-    if (!token || typeof value !== "string") continue;
-    if (token.theme === "split" && theme === "dark" && !appearanceValueValid(token, value)) continue;
-    if (token.theme !== "split" && theme === "light") continue;
-    if (!appearanceValueValid(token, value)) continue;
-    if (value === shippedValue(token, theme)) continue;
-    target[id] = value;
+    if (typeof value !== "string") continue;
+    const successor = retiredAppearance[id];
+    if (successor) retired.push([successor, value]);
+    else acceptAppearanceValue(target, tokens, theme, id, value);
   }
+  for (const [id, value] of retired) {
+    if (target[id]) continue;
+    acceptAppearanceValue(target, tokens, theme, id, value);
+  }
+}
+
+function acceptAppearanceValue(target: Record<string, string>, tokens: AppearanceToken[], theme: "light" | "dark", id: string, value: string): void {
+  const token = tokens.find(item => item.id === id);
+  if (!token) return;
+  if (token.theme === "split" && theme === "dark" && !appearanceValueValid(token, value)) return;
+  if (token.theme !== "split" && theme === "light") return;
+  if (!appearanceValueValid(token, value)) return;
+  if (value === shippedValue(token, theme)) return;
+  target[id] = value;
 }
 
 export function resolvedAppearanceValue(token: AppearanceToken, file: AppearanceFile, theme: "light" | "dark"): string {

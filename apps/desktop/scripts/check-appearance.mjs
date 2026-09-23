@@ -15,6 +15,10 @@ assert.ok(ids.includes("font-editor"), "file editor text is listed");
 assert.ok(ids.includes("text-body"), "body text is listed");
 assert.ok(ids.includes("pad-page"), "page inset is listed");
 assert.ok(ids.includes("space-compact"), "the space between items is listed separately from inset");
+assert.ok(ids.includes("layout-message"), "a person's message width is its own control");
+for (const retired of ["space-hairline", "space-row", "pad-hairline", "pad-row", "text-micro", "text-caption", "text-compact", "text-subhead", "radius-small", "icon-sm", "font-serif", "tracking-tight", "tracking-open", "leading-relaxed"]) {
+  assert.ok(!ids.includes(retired), `${retired} is folded into a control a person can tell apart`);
+}
 assert.ok(ids.length < 160, `appearance stays a shared set, not one control per element (${ids.length})`);
 
 const aliases = new Set(["--bg", "--bg-nav", "--bg-panel", "--bg-raised", "--bg-input", "--border", "--text", "--muted", "--accent", "--warn", "--danger", "--ok", "--live", "--hover", "--shadow", "--navigation-width", "--inspector-width"]);
@@ -25,6 +29,7 @@ const unknownVars = [];
 
 for (const name of readdirSync(renderer).filter(item => item.endsWith(".css") && item !== "appearanceDefaults.css")) {
   const text = readFileSync(path.join(renderer, name), "utf8");
+  assert.doesNotMatch(text, /(?:^|[;{])\s*(?:max-width|min-width|width)\s*:[^;{]*var\(--tint-/, `${name} must not use a colour mix as a width`);
   const stripped = stripVars(stripComments(text));
   for (const match of stripped.matchAll(lengthRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
   for (const match of stripped.matchAll(hexRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
@@ -58,6 +63,12 @@ assert.equal(stored.values.missing, undefined);
 assert.equal(stored.values.weight, undefined);
 assert.equal(resolvedAppearanceValue(colour, stored, "light"), "#010101");
 assert.equal(resolvedAppearanceValue(colour, stored, "dark"), "#212121");
+const itemSpace = { id: "space-compact", kind: "length", unit: "px", shipped: "8px", shippedLight: null, theme: "all", allowNegative: false, min: null, max: null };
+const smallText = { id: "text-small", kind: "length", unit: "px", shipped: "11px", shippedLight: null, theme: "all", allowNegative: false, min: null, max: null };
+const retired = readAppearanceFile({ version: 1, values: { "space-row": "18px", "space-compact": "9px", "text-caption": "15px", "font-serif": "Georgia, serif" } }, [itemSpace, smallText]);
+assert.equal(retired.values["space-compact"], "9px", "an explicit survivor wins over a folded control");
+assert.equal(retired.values["text-small"], "15px", "a folded text size keeps its saved override");
+assert.equal(retired.values["font-serif"], undefined);
 console.log(`Appearance catalogue checks passed (${ids.length} controls).`);
 
 function stripComments(text) {

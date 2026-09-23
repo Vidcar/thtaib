@@ -9,7 +9,7 @@
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -18,20 +18,20 @@
 .hover-help-bubble.chat-usage-bubble {width: var(--layout-column); padding: var(--pad-card) var(--pad-card); line-height: var(--leading-body);}
 .chat-usage-bubble .usage-heading,
 .chat-usage-bubble .usage-context-value,
-.chat-usage-bubble .usage-speed {display: flex; align-items: center; justify-content: space-between; gap: var(--space-row);}
-.chat-usage-bubble .usage-heading {margin-bottom: var(--space-row);}
+.chat-usage-bubble .usage-speed {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact);}
+.chat-usage-bubble .usage-heading {margin-bottom: var(--space-compact);}
 .chat-usage-bubble .usage-heading strong {font-size: var(--text-body);}
 .chat-usage-bubble .usage-state {color: var(--muted); font-size: var(--text-small);}
 .chat-usage-bubble .usage-state.is-live {color: var(--accent);}
 .chat-usage-bubble .usage-context-value {font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-context-value > :last-child:not(:first-child) {color: var(--muted); font-size: var(--text-small);}
-.chat-usage-bubble .usage-meter {height: 4px; margin-top: var(--space-compact); overflow: hidden; border-radius: var(--radius-small); background: var(--border);}
+.chat-usage-bubble .usage-meter {height: 4px; margin-top: var(--space-compact); overflow: hidden; border-radius: var(--radius-control); background: var(--border);}
 .chat-usage-bubble .usage-meter > span {display: block; height: 100%; background: var(--accent); border-radius: inherit;}
 .chat-usage-bubble .usage-caption {margin: var(--space-tight) 0 0; color: var(--muted); font-size: var(--text-small);}
-.chat-usage-bubble .usage-token-counts {display: flex; gap: var(--space-stack); margin: var(--space-row) 0 0; font-variant-numeric: tabular-nums;}
+.chat-usage-bubble .usage-token-counts {display: flex; gap: var(--space-stack); margin: var(--space-compact) 0 0; font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-token-counts > div {display: flex; gap: var(--space-compact);}
 .chat-usage-bubble .usage-token-counts dt {color: var(--muted); font-size: var(--text-small);}
-.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--text-compact);}
-.chat-usage-bubble .usage-speed {padding-top: var(--pad-row); margin-top: var(--space-row); border-top: var(--line-hairline) solid var(--border); font-variant-numeric: tabular-nums;}
+.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--text-body);}
+.chat-usage-bubble .usage-speed {padding-top: var(--pad-compact); margin-top: var(--space-compact); border-top: var(--line-hairline) solid var(--border); font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-speed > span {color: var(--muted);}
 .chat-measurements .usage-live-dot {width: 5px; height: 5px; border-radius: var(--radius-circle); background: var(--accent);}

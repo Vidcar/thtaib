@@ -1,46 +1,46 @@
 .surface.workspace-records-surface {container: workbench-surface workspace-records / inline-size;}
-.workspace-records-surface .surface-head {display: flex; justify-content: space-between; gap: var(--space-row); align-items: center;}
+.workspace-records-surface .surface-head {display: flex; justify-content: space-between; gap: var(--space-compact); align-items: center;}
 .workspace-records-layout {display: grid; grid-template-columns: minmax(var(--layout-side), var(--layout-side)) minmax(0, 1fr); gap: var(--space-stack); align-items: start;}
 .workspace-record-list {min-width: 0; max-height: 65vh; overflow: auto;}
 .workspace-record-list .nav-list {padding: 0; margin: 0; list-style: none;}
-.workspace-record-list .nav-item {width: 100%; padding: var(--pad-compact) var(--pad-row); border-radius: var(--radius-control);}
+.workspace-record-list .nav-item {width: 100%; padding: var(--pad-compact) var(--pad-compact); border-radius: var(--radius-control);}
 .workspace-record-list .nav-item-meta {overflow-wrap: anywhere; font-size: var(--text-small); white-space: normal;}
-.workspace-record-detail {display: grid; gap: var(--space-row); min-width: 0;}
-.workspace-records-surface .card {display: grid; gap: var(--space-row); padding: var(--pad-card) var(--pad-card); border-radius: var(--radius-card); min-width: 0;}
+.workspace-record-detail {display: grid; gap: var(--space-compact); min-width: 0;}
+.workspace-records-surface .card {display: grid; gap: var(--space-compact); padding: var(--pad-card) var(--pad-card); border-radius: var(--radius-card); min-width: 0;}
 .workspace-records-surface details.card:not([open]) {display: block;}
 .workspace-records-surface :is(h3, h4, p) {margin: 0;}
 .workspace-records-surface :is(input, select, textarea) {min-width: 0; width: 100%;}
-.workspace-records-surface .workspace-editor {display: grid; gap: var(--space-row);}
-.workspace-records-surface details > .workspace-editor {margin-top: var(--space-row);}
+.workspace-records-surface .workspace-editor {display: grid; gap: var(--space-compact);}
+.workspace-records-surface details > .workspace-editor {margin-top: var(--space-compact);}
 .workspace-records-surface .workspace-editor > button {justify-self: start;}
 .workspace-records-surface label {margin: 0;}
 .workspace-records-surface .section-heading {gap: var(--space-compact); flex-wrap: wrap;}
-.setup-form-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-row);}
-.setup-configuration-editor {display: grid; gap: var(--space-row); min-width: 0;}
+.setup-form-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-compact);}
+.setup-configuration-editor {display: grid; gap: var(--space-compact); min-width: 0;}
 .setup-configuration-editor textarea {min-height: 100px; resize: vertical;}
 .setup-options {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
-.setup-options > summary {font-size: var(--text-compact);}
-.setup-selection-group {display: grid; gap: var(--space-compact); margin-top: var(--space-row);}
-.setup-selection-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-row);}
+.setup-options > summary {font-size: var(--text-body);}
+.setup-selection-group {display: grid; gap: var(--space-compact); margin-top: var(--space-compact);}
+.setup-selection-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact);}
 .setup-selection-heading select {width: 130px;}
 .setup-selection-options {display: grid; gap: var(--space-tight); max-height: 230px; overflow: auto; padding: var(--pad-compact) var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control);}
 .workspace-records-surface .check-row {display: flex; gap: var(--space-compact); align-items: flex-start;}
-.workspace-records-surface .check-row input {width: var(--icon-sm); height: var(--icon-sm); min-height: 0; flex: 0 0 14px;}
+.workspace-records-surface .check-row input {width: var(--icon-md); height: var(--icon-md); min-height: 0; flex: 0 0 14px;}
 .workspace-records-surface .hint {font-size: var(--text-small); overflow-wrap: anywhere;}
-.workspace-text {white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-compact); line-height: var(--leading-relaxed);}
-.workspace-records-surface .wrapped-text, .chat-setup .wrapped-text {white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--layout-menu); overflow: auto; margin: var(--space-compact) 0; font-size: var(--text-compact); line-height: var(--leading-relaxed);}
-.workspace-path {color: var(--muted); overflow-wrap: anywhere; font-size: var(--text-compact);}
+.workspace-text {white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-body); line-height: var(--leading-body);}
+.workspace-records-surface .wrapped-text, .chat-setup .wrapped-text {white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--layout-menu); overflow: auto; margin: var(--space-compact) 0; font-size: var(--text-body); line-height: var(--leading-body);}
+.workspace-path {color: var(--muted); overflow-wrap: anywhere; font-size: var(--text-body);}
 .workspace-versions .plain-list {display: grid; gap: var(--space-compact);}
 .workspace-versions li {display: grid; gap: var(--space-compact); padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
 .workspace-versions li > button {justify-self: start;}
 .project-files .plain-list {margin: 0;}
-.project-files li {display: flex; align-items: center; gap: var(--space-row); justify-content: space-between; padding: var(--pad-tight) 0;}
+.project-files li {display: flex; align-items: center; gap: var(--space-compact); justify-content: space-between; padding: var(--pad-tight) 0;}
 .project-files li > :is(button, span) {display: inline-flex; align-items: center; gap: var(--space-compact); min-width: 0;}
-.project-files li > button {padding: var(--pad-hairline) var(--pad-compact); border: 0; text-align: left;}
+.project-files li > button {padding: var(--pad-tight) var(--pad-compact); border: 0; text-align: left;}
 .project-files li > :is(button, span) > span {overflow-wrap: anywhere;}
 .project-files li > small {flex-shrink: 0;}
 .workspace-remove {justify-self: start;}
-.knowledge-search {display: flex; align-items: center; gap: var(--space-row); color: var(--muted); font-size: var(--text-compact);}
+.knowledge-search {display: flex; align-items: center; gap: var(--space-compact); color: var(--muted); font-size: var(--text-body);}
 .knowledge-search input {flex: 1;}
 .knowledge-surface .workspace-records-layout > .card > label > textarea {min-height: 180px; resize: vertical;}
 .knowledge-surface .workspace-records-layout > .card {align-content: start;}

@@ -3,9 +3,9 @@
   border-radius: var(--radius-card);
   background: var(--bg-raised);
   display: grid;
-  gap: var(--space-row);
-  margin: var(--space-row) 0;
-  padding: var(--pad-row);
+  gap: var(--space-compact);
+  margin: var(--space-compact) 0;
+  padding: var(--pad-compact);
 }
 
 .chat-retained-files-head,
@@ -28,7 +28,7 @@
 
 .chat-retained-file-groups {
   display: grid;
-  gap: var(--space-row);
+  gap: var(--space-compact);
 }
 
 .chat-retained-file-group {
@@ -50,7 +50,7 @@
   background: var(--bg-input);
   display: grid;
   gap: var(--space-tight);
-  padding: var(--pad-row);
+  padding: var(--pad-compact);
 }
 
 .chat-retained-file-meta {
@@ -80,7 +80,7 @@
   color: var(--text);
   max-height: 18rem;
   overflow: auto;
-  padding: var(--pad-row);
+  padding: var(--pad-compact);
   white-space: pre-wrap;
 }
 
@@ -95,7 +95,7 @@
 }
 .chat-retained-files.compact {border: 0; padding: 0; margin-top: var(--space-compact); background: transparent;}
 .chat-retained-files.compact .chat-retained-file-card {padding: var(--pad-compact) var(--pad-compact); gap: var(--space-tight);}
-.retained-file-name {display: flex; align-items: center; gap: var(--space-compact); border: 0; background: transparent; padding: var(--pad-hairline); text-align: left;}
+.retained-file-name {display: flex; align-items: center; gap: var(--space-compact); border: 0; background: transparent; padding: var(--pad-tight); text-align: left;}
 .retained-file-name span {overflow-wrap: anywhere;}
 .retained-file-name small {color: var(--muted); white-space: nowrap;}
-.chat-retained-files.compact .chat-retained-files-actions button {padding: var(--pad-hairline) var(--pad-tight); font-size: var(--text-caption); border: 0; background: transparent; color: var(--muted);}
+.chat-retained-files.compact .chat-retained-files-actions button {padding: var(--pad-tight) var(--pad-tight); font-size: var(--text-small); border: 0; background: transparent; color: var(--muted);}

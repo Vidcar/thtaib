@@ -1,14 +1,14 @@
 .connections-panel {min-width: 0;}
-.connections-panel .surface-head {align-items: center; gap: var(--space-row);}
+.connections-panel .surface-head {align-items: center; gap: var(--space-compact);}
 .connections-panel h3, .connections-panel h4, .connections-panel p {margin: 0 0 var(--space-tight);}
-.connection-row {padding: var(--pad-row) 0; border-bottom: var(--line-hairline) solid var(--border);}
-.connection-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-row);}
+.connection-row {padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
+.connection-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact);}
 .connection-heading:has(.lifecycle-preview) {flex-wrap: wrap;}
 .connection-heading:has(.lifecycle-preview) > .actions {flex-basis: 100%;}
-.connection-title {display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-tight); text-align: left; min-width: 0; background: transparent; border: 0; padding: var(--pad-hairline) 0;}
+.connection-title {display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-tight); text-align: left; min-width: 0; background: transparent; border: 0; padding: var(--pad-tight) 0;}
 .connection-title strong, .connection-detail {overflow-wrap: anywhere;}
-.connection-detail {display: grid; gap: var(--space-row); margin-top: var(--space-row);}
-.connection-editor, .connection-token {display: grid; gap: var(--space-row); margin: var(--space-row) 0;}
-.connection-form-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-row);}
+.connection-detail {display: grid; gap: var(--space-compact); margin-top: var(--space-compact);}
+.connection-editor, .connection-token {display: grid; gap: var(--space-compact); margin: var(--space-compact) 0;}
+.connection-form-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-compact);}
 .connection-editor label, .connection-token label {display: grid; gap: var(--space-tight); min-width: 0;}
 @media(max-width: 760px) { .connection-heading {align-items: flex-start; flex-direction: column;} .connection-form-grid {grid-template-columns: 1fr;} }
