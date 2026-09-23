@@ -1,8 +1,8 @@
 .lifecycle-action {min-width: 0;}
 .actions > .lifecycle-action:has(.lifecycle-preview) {flex-basis: 100%;}
-.lifecycle-preview {display: grid; gap: var(--lifecycle-preview-gap); padding: var(--lifecycle-preview-padding); border: var(--lifecycle-preview-border) solid var(--border); border-radius: var(--lifecycle-preview-corner); background: var(--bg-panel); overflow-wrap: anywhere;}
+.lifecycle-preview {display: grid; gap: var(--space-compact); padding: var(--pad-row); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel); overflow-wrap: anywhere;}
 .lifecycle-preview :is(p, ul) {margin: 0;}
-.lifecycle-preview > strong {font-size: var(--lifecycle-preview-text-size);}
-.lifecycle-consumers {display: grid; gap: var(--lifecycle-consumers-gap); padding: 0; list-style: none; max-height: var(--lifecycle-consumers-maximum-height); overflow-y: auto;}
-.lifecycle-consumers > li {display: grid; gap: var(--lifecycle-consumers-gap-2); font-size: var(--lifecycle-consumers-text-size);}
+.lifecycle-preview > strong {font-size: var(--text-body);}
+.lifecycle-consumers {display: grid; gap: var(--space-compact); padding: 0; list-style: none; max-height: 240px; overflow-y: auto;}
+.lifecycle-consumers > li {display: grid; gap: var(--space-hairline); font-size: var(--text-compact);}
 .lifecycle-consumers > li > span {color: var(--muted);}

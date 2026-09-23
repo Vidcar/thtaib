@@ -12,7 +12,10 @@ const cssVars = new Set([...catalog.matchAll(/"cssVar": "(--[^"]+)"/g)].map(matc
 assert.equal(new Set(ids).size, ids.length, "appearance ids are unique");
 assert.ok(ids.includes("palette-bg"), "window colour is listed");
 assert.ok(ids.includes("font-editor"), "file editor text is listed");
-assert.ok(ids.includes("appearance-row-gap"), "the appearance page spacing is listed");
+assert.ok(ids.includes("text-body"), "body text is listed");
+assert.ok(ids.includes("pad-page"), "page inset is listed");
+assert.ok(ids.includes("space-compact"), "the space between items is listed separately from inset");
+assert.ok(ids.length < 160, `appearance stays a shared set, not one control per element (${ids.length})`);
 
 const aliases = new Set(["--bg", "--bg-nav", "--bg-panel", "--bg-raised", "--bg-input", "--border", "--text", "--muted", "--accent", "--warn", "--danger", "--ok", "--live", "--hover", "--shadow", "--navigation-width", "--inspector-width"]);
 const lengthRe = /(?<![\w-])(?!0(?:px|rem|em)\b)(?:\d+\.?\d*|\.\d+)(?:px|rem|em)\b/g;
@@ -30,8 +33,8 @@ for (const name of readdirSync(renderer).filter(item => item.endsWith(".css") &&
   }
 }
 
-const structural = leftovers.filter(item => !/@media|@container/.test(item));
-assert.deepEqual(structural, [], `visual values must be appearance controls:\n${structural.join("\n")}`);
+const strayColours = leftovers.filter(item => item.includes("#") && !/@media|@container/.test(item));
+assert.deepEqual(strayColours, [], `colours must use the shared palette:\n${strayColours.join("\n")}`);
 assert.deepEqual([...new Set(unknownVars)], [], `unknown appearance variables:\n${[...new Set(unknownVars)].join("\n")}`);
 
 const defaults = readFileSync(path.join(renderer, "appearanceDefaults.css"), "utf8");

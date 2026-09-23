@@ -17,7 +17,7 @@ import { shippedValue, type AppearanceGroup, type AppearanceToken } from "./appe
 import type { PresentationTheme } from "./types";
 import "./appearancePanel.css";
 
-const groups: Array<AppearanceGroup | "All"> = ["All", "Colours", "Text", "Corners", "Spacing", "Lines", "Effects"];
+const groups: Array<AppearanceGroup | "All"> = ["All", "Colours", "Text", "Corners", "Spacing", "Layout", "Lines", "Effects"];
 
 export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
   const version = useSyncExternalStore(subscribeAppearance, appearanceVersion, appearanceVersion);
@@ -59,7 +59,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
         <button type="button" className="primary-button" disabled={!dirty || saving} onClick={() => void onApply()}>Apply</button>
       </div>
       {message ? <p className="hint" role="status">{message}</p> : null}
-      <p className="appearance-note hint">Each row is one value used somewhere on the screen, including this page. The window follows the draft. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value. A slider covers a wide range; the number beside it accepts any valid value, including sizes for very wide or very small windows. Layout breakpoints stay fixed, because a browser cannot take a custom value in a window-size condition.</p>
+      <p className="appearance-note hint">Each row is one shared look: a colour, a text size, a corner, an inset, the space between items, a line, or a layout size. The same step is used everywhere it appears, including this page. Inset stays separate from the space between items, and different steps stay separate. The window follows the draft. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value. A slider covers a wide range; the number beside it accepts any valid value. Viewport sizes, breakpoints, and one-off positions stay fixed.</p>
       <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
       <div className="appearance-groups" role="group" aria-label="Appearance groups">
         {groups.map(item => (

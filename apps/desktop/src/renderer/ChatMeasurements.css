@@ -2,36 +2,36 @@
 .chat-measurements .chat-usage-trigger {
   display: inline-flex;
   align-items: center;
-  gap: var(--chat-measurements-chat-usage-trigger-gap);
-  min-height: var(--chat-measurements-chat-usage-trigger-minimum-height);
-  padding: var(--chat-measurements-chat-usage-trigger-padding-vertical) var(--chat-measurements-chat-usage-trigger-padding-horizontal);
+  gap: var(--space-tight);
+  min-height: var(--control-height);
+  padding: var(--pad-tight) var(--pad-compact);
   border: 0;
-  border-radius: var(--chat-measurements-chat-usage-trigger-corner);
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
-  font-size: var(--chat-measurements-chat-usage-trigger-text-size);
+  font-size: var(--text-compact);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .chat-measurements .chat-usage-trigger:hover,
 .chat-measurements .chat-usage-trigger:focus-visible {background: var(--bg-raised); color: var(--text);}
-.hover-help-bubble.chat-usage-bubble {width: var(--hover-help-bubble-chat-usage-bubble-width); padding: var(--hover-help-bubble-chat-usage-bubble-padding-vertical) var(--hover-help-bubble-chat-usage-bubble-padding-horizontal); line-height: var(--hover-help-bubble-chat-usage-bubble-line-spacing);}
+.hover-help-bubble.chat-usage-bubble {width: var(--layout-column); padding: var(--pad-card) var(--pad-card); line-height: var(--leading-body);}
 .chat-usage-bubble .usage-heading,
 .chat-usage-bubble .usage-context-value,
-.chat-usage-bubble .usage-speed {display: flex; align-items: center; justify-content: space-between; gap: var(--chat-usage-bubble-usage-speed-gap);}
-.chat-usage-bubble .usage-heading {margin-bottom: var(--chat-usage-bubble-usage-heading-margin-bottom);}
-.chat-usage-bubble .usage-heading strong {font-size: var(--chat-usage-bubble-usage-heading-text-size);}
-.chat-usage-bubble .usage-state {color: var(--muted); font-size: var(--chat-usage-bubble-usage-state-text-size);}
+.chat-usage-bubble .usage-speed {display: flex; align-items: center; justify-content: space-between; gap: var(--space-row);}
+.chat-usage-bubble .usage-heading {margin-bottom: var(--space-row);}
+.chat-usage-bubble .usage-heading strong {font-size: var(--text-body);}
+.chat-usage-bubble .usage-state {color: var(--muted); font-size: var(--text-small);}
 .chat-usage-bubble .usage-state.is-live {color: var(--accent);}
 .chat-usage-bubble .usage-context-value {font-variant-numeric: tabular-nums;}
-.chat-usage-bubble .usage-context-value > :last-child:not(:first-child) {color: var(--muted); font-size: var(--chat-usage-bubble-usage-context-value-text-size);}
-.chat-usage-bubble .usage-meter {height: var(--chat-usage-bubble-usage-meter-height); margin-top: var(--chat-usage-bubble-usage-meter-margin-top); overflow: hidden; border-radius: var(--chat-usage-bubble-usage-meter-corner); background: var(--border);}
+.chat-usage-bubble .usage-context-value > :last-child:not(:first-child) {color: var(--muted); font-size: var(--text-small);}
+.chat-usage-bubble .usage-meter {height: 4px; margin-top: var(--space-compact); overflow: hidden; border-radius: var(--radius-small); background: var(--border);}
 .chat-usage-bubble .usage-meter > span {display: block; height: 100%; background: var(--accent); border-radius: inherit;}
-.chat-usage-bubble .usage-caption {margin: var(--chat-usage-bubble-usage-caption-margin) 0 0; color: var(--muted); font-size: var(--chat-usage-bubble-usage-caption-text-size);}
-.chat-usage-bubble .usage-token-counts {display: flex; gap: var(--chat-usage-bubble-usage-token-counts-gap); margin: var(--chat-usage-bubble-usage-token-counts-margin) 0 0; font-variant-numeric: tabular-nums;}
-.chat-usage-bubble .usage-token-counts > div {display: flex; gap: var(--chat-usage-bubble-usage-token-counts-gap-2);}
-.chat-usage-bubble .usage-token-counts dt {color: var(--muted); font-size: var(--chat-usage-bubble-usage-token-counts-text-size);}
-.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--chat-usage-bubble-usage-token-counts-text-size-2);}
-.chat-usage-bubble .usage-speed {padding-top: var(--chat-usage-bubble-usage-speed-padding-top); margin-top: var(--chat-usage-bubble-usage-speed-margin-top); border-top: var(--chat-usage-bubble-usage-speed-border-top) solid var(--border); font-variant-numeric: tabular-nums;}
+.chat-usage-bubble .usage-caption {margin: var(--space-tight) 0 0; color: var(--muted); font-size: var(--text-small);}
+.chat-usage-bubble .usage-token-counts {display: flex; gap: var(--space-stack); margin: var(--space-row) 0 0; font-variant-numeric: tabular-nums;}
+.chat-usage-bubble .usage-token-counts > div {display: flex; gap: var(--space-compact);}
+.chat-usage-bubble .usage-token-counts dt {color: var(--muted); font-size: var(--text-small);}
+.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--text-compact);}
+.chat-usage-bubble .usage-speed {padding-top: var(--pad-row); margin-top: var(--space-row); border-top: var(--line-hairline) solid var(--border); font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-speed > span {color: var(--muted);}
-.chat-measurements .usage-live-dot {width: var(--chat-measurements-usage-live-dot-width); height: var(--chat-measurements-usage-live-dot-height); border-radius: var(--chat-measurements-usage-live-dot-corner); background: var(--accent);}
+.chat-measurements .usage-live-dot {width: 5px; height: 5px; border-radius: var(--radius-circle); background: var(--accent);}

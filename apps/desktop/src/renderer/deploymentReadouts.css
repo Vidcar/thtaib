@@ -1,15 +1,15 @@
 .model-configuration .model-applied-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--model-configuration-model-applied-facts-gap-vertical) var(--model-configuration-model-applied-facts-gap-horizontal);
-  margin: var(--model-configuration-model-applied-facts-margin) 0;
-  font-size: var(--model-configuration-model-applied-facts-text-size);
+  gap: var(--space-tight) var(--space-stack);
+  margin: var(--space-compact) 0;
+  font-size: var(--text-compact);
 }
 
 .model-configuration .model-applied-facts > div {
   display: flex;
   align-items: baseline;
-  gap: var(--model-configuration-model-applied-facts-gap);
+  gap: var(--space-tight);
 }
 
 .model-configuration .model-applied-facts dt {
@@ -21,24 +21,24 @@
 }
 
 .model-configuration .settings-readout {
-  gap: 0 var(--model-configuration-settings-readout-gap);
-  margin: var(--model-configuration-settings-readout-margin) 0;
+  gap: 0 var(--space-section);
+  margin: var(--space-compact) 0;
 }
 
 .model-configuration .settings-readout > div {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: var(--model-configuration-settings-readout-gap-2);
+  gap: var(--space-row);
   min-width: 0;
-  padding: var(--model-configuration-settings-readout-padding) 0;
+  padding: var(--pad-tight) 0;
   border-radius: 0;
-  border-bottom: var(--model-configuration-settings-readout-border-bottom) solid var(--border);
+  border-bottom: var(--line-hairline) solid var(--border);
   background: transparent;
 }
 
 .model-configuration .settings-readout dt {
-  font-size: var(--model-configuration-settings-readout-text-size);
+  font-size: var(--text-compact);
 }
 
 .model-configuration .settings-readout dd {

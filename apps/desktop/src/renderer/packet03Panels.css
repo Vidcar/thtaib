@@ -1,7 +1,7 @@
 .packet03-panel {
   display: grid;
-  gap: var(--packet03-panel-gap);
-  padding: var(--packet03-panel-padding);
+  gap: var(--space-stack);
+  padding: var(--pad-card);
 }
 
 .packet03-panel h2,
@@ -13,14 +13,14 @@
 .packet03-row,
 .packet03-actions {
   display: flex;
-  gap: var(--packet03-row-packet03-actions-gap);
+  gap: var(--space-compact);
   align-items: center;
   flex-wrap: wrap;
 }
 
 .packet03-list {
   display: grid;
-  gap: var(--packet03-list-gap);
+  gap: var(--space-row);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -28,83 +28,83 @@
 
 .packet03-item {
   display: grid;
-  gap: var(--packet03-item-gap);
-  padding: var(--packet03-item-padding-vertical) var(--packet03-item-padding-horizontal);
-  border: var(--packet03-item-border) solid var(--border);
+  gap: var(--space-compact);
+  padding: var(--pad-row) var(--pad-card);
+  border: var(--line-hairline) solid var(--border);
   background: var(--bg-raised);
 }
 
 .packet03-item[aria-disabled="true"] {
-  opacity: var(--packet03-item-fade);
+  opacity: var(--fade-quiet);
 }
 
 .packet03-meta {
   display: flex;
-  gap: var(--packet03-meta-gap);
+  gap: var(--space-tight);
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: var(--packet03-meta-text-size);
+  font-size: var(--text-small);
 }
 
 .packet03-details {
-  margin-top: var(--packet03-details-margin-top);
+  margin-top: var(--space-tight);
 }
 
 .packet03-details summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: var(--packet03-details-summary-text-size);
+  font-size: var(--text-compact);
 }
 
 .packet03-attention-button {
   position: relative;
   display: inline-flex;
-  gap: var(--packet03-attention-button-gap);
+  gap: var(--space-tight);
   align-items: center;
 }
 
 .packet03-attention-button .attention-count {
   position: absolute;
-  top: var(--packet03-attention-button-attention-count-top-2);
-  left: var(--packet03-attention-button-attention-count-left);
-  min-width: var(--packet03-attention-button-attention-count-minimum-width);
-  height: var(--packet03-attention-button-attention-count-height);
+  top: 5px;
+  left: 18px;
+  min-width: 14px;
+  height: 14px;
   margin: 0;
-  padding: 0 var(--packet03-attention-button-attention-count-padding);
-  border-radius: var(--packet03-attention-button-attention-count-corner);
+  padding: 0 var(--pad-hairline);
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--bg);
-  font-size: var(--packet03-attention-button-attention-count-text-size);
-  font-weight: var(--packet03-attention-button-attention-count-weight);
-  line-height: var(--packet03-attention-button-attention-count-line-spacing);
+  font-size: var(--text-micro);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
   text-align: center;
-  box-shadow: 0 0 0 var(--packet03-attention-button-attention-count-shadow) var(--bg-nav);
+  box-shadow: 0 0 0 var(--focus-ring) var(--bg-nav);
 }
 
 .packet03-preview {
-  max-height: var(--packet03-preview-maximum-height);
+  max-height: 18rem;
   overflow: auto;
   white-space: pre-wrap;
-  padding: var(--packet03-preview-padding);
-  border: var(--packet03-preview-border) solid var(--border);
+  padding: var(--pad-row);
+  border: var(--line-hairline) solid var(--border);
   background: var(--bg-input);
 }
 
 .packet03-grid {
   display: grid;
-  gap: var(--packet03-grid-gap);
+  gap: var(--space-stack);
 }
 
 .packet03-attachments {
   display: grid;
-  gap: var(--packet03-attachments-gap);
+  gap: var(--space-row);
 }
 
 .packet03-dropzone {
   display: grid;
-  gap: var(--packet03-dropzone-gap);
-  padding: var(--packet03-dropzone-padding-vertical) var(--packet03-dropzone-padding-horizontal);
-  border: var(--packet03-dropzone-border) dashed var(--border);
+  gap: var(--space-tight);
+  padding: var(--pad-row) var(--pad-card);
+  border: var(--line-hairline) dashed var(--border);
   background: var(--bg-raised);
 }
 
@@ -114,6 +114,6 @@
 
 @media (min-width: 980px) {
   .packet03-grid {
-    grid-template-columns: minmax(0, 1.15fr) minmax(var(--packet03-grid-grid-template-columns), 0.85fr);
+    grid-template-columns: minmax(0, 1.15fr) minmax(var(--layout-column), 0.85fr);
   }
 }

@@ -1,4 +1,4 @@
-export type AppearanceGroup = "Colours" | "Text" | "Corners" | "Spacing" | "Lines" | "Effects";
+export type AppearanceGroup = "Colours" | "Text" | "Corners" | "Spacing" | "Layout" | "Lines" | "Effects";
 
 export type AppearanceKind = "length" | "number" | "color" | "family" | "shadow";
 
