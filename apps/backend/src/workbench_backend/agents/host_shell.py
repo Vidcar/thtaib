@@ -362,6 +362,36 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     return result or None
 
 
+def approval_mode_instructions(mode: str) -> str:
+    """Explain the same per-turn policy enforced by the tool approval gates."""
+
+    if mode == "full_access":
+        policy = (
+            "Access for this turn: Full access. Selected file mutations, shell commands, "
+            "and external tools proceed under this mode without a permission card. "
+        )
+    elif mode == "approve_for_me":
+        policy = (
+            "Access for this turn: Approve for me. Selected file mutations proceed "
+            "without a permission card. Protected shell commands and external tools "
+            "still pause unless a saved matching grant or the read-only shell policy allows them. "
+        )
+    else:
+        policy = (
+            "Access for this turn: Ask. Selected rename and delete operations, protected "
+            "shell commands, and external tools pause unless a saved matching grant "
+            "or the read-only shell policy allows them. Selected file writes and edits proceed. "
+        )
+    return policy + (
+        "Use selected tools directly to carry out the person's task; the application "
+        "handles any required permission decision. Do not duplicate that decision with "
+        "a separate chat question. Ask for missing task choices when necessary. "
+        "Questions still require the person's answer in every mode. Access does not "
+        "enable unselected tools, expand the authorized task, bypass tool restrictions, "
+        "or permit automatic memory saving."
+    )
+
+
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     """Normalize a LangGraph / HITL interrupt value into the run record."""
 

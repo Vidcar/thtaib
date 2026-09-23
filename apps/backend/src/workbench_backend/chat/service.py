@@ -55,7 +55,7 @@ CHAT_SYSTEM_PROMPT = (
     "Prefer these file tools over shell commands for reading and editing files. "
     "The host shell execute tool "
     "runs on this machine in the project working directory with no isolation; "
-    "dangerous commands pause for approval. Do not invent durable knowledge "
+    "the application's per-turn Access policy controls permission decisions. Do not invent durable knowledge "
     "or retrieval."
 )
 CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT = (
@@ -195,10 +195,16 @@ class ChatService:
     def list_conversations(self, *, include_archived: bool = False) -> list[ChatConversationView]:
         """Sidebar catalogue. Does not load runs, reconcile, or the token log."""
 
-        return [
-            self._light_view(item, include_transcript=False)
-            for item in self.store.list_conversations(include_archived=include_archived)
-        ]
+        views = []
+        for item in self.store.list_conversations(include_archived=include_archived):
+            # Deletion and archive can race the initial catalogue snapshot.
+            # The store read is atomic and does not wait for a conversation's
+            # model-start admission lock or load runs/token history.
+            current = self.store.get(item.id)
+            if current is None or (current.archived and not include_archived):
+                continue
+            views.append(self._light_view(current, include_transcript=False))
+        return views
 
     def search(self, query: str, *, include_archived: bool = False) -> list[ChatSearchResult]:
         return [
@@ -439,13 +445,16 @@ class ChatService:
                         self._pause_queue(conversation, terminal)
             return
 
-    def reconcile_saved_queue_on_startup(self) -> int:
+    def reconcile_saved_queue_on_startup(self, *, pending_only: bool = False) -> int:
         """Reconcile saved Chat queues without replaying uncertain work."""
 
         reconciled = 0
         for item in self.store.list_conversations(include_archived=True):
             with self.store.conversation_lock(item.id):
                 conversation = self._require(item.id)
+                if (pending_only and not conversation.queue and
+                        not self.app_store.pending_chat_submission_cancels(conversation.id)):
+                    continue
                 before = conversation.model_dump_json()
                 conversation = self._recover_dispatching_queue(conversation)
                 conversation = self._resolve_orphan_pending_cancellations(conversation)
@@ -475,7 +484,9 @@ class ChatService:
         dispatched = 0
         for item in candidates:
             with self.store.conversation_lock(item.id):
-                conversation = self._require(item.id)
+                conversation = self._require(item.id) if conversation_id is not None else self.store.get(item.id)
+                if conversation is None:
+                    continue
                 before_run_ids = set(conversation.run_ids)
                 conversation = self._recover_dispatching_queue(conversation)
                 updated = self._dispatch_next_queued(conversation)
@@ -833,6 +844,8 @@ class ChatService:
         return self._dispatch_next_queued(self.store.put(steered))
 
     def _dispatch_next_queued(self, conversation: ChatConversation) -> ChatConversation:
+        if not conversation.queue or conversation.queue[0].status != "queued":
+            return conversation
         if conversation.current_run_id:
             try:
                 current = self.harness.get_run(conversation.current_run_id)
@@ -840,8 +853,6 @@ class ChatService:
                 current = None
             if current is not None and is_run_lifecycle_live(current.status):
                 return conversation
-        if not conversation.queue or conversation.queue[0].status != "queued":
-            return conversation
         next_item = conversation.queue[0]
         request = self._request_from_queue_item(next_item)
         return self._dispatch_request(conversation, request, queue_item=next_item)
@@ -1182,6 +1193,10 @@ class ChatService:
         has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
         if not has_layered_setup and "instructions" in fields_set:
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"instructions": request.instructions})
+        if not has_layered_setup and "approval_mode" in fields_set and request.approval_mode:
+            # Keep explicit access choices when application defaults later add
+            # a setup layer to an existing General conversation.
+            conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"approval_mode": request.approval_mode})
         if has_layered_setup:
             if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
                 conversation.agent_setup_version_id = request.agent_setup_version_id
@@ -1204,7 +1219,9 @@ class ChatService:
                 values.setdefault(key, [])
             values.setdefault("profile_id", None)
             values.setdefault("presented_tools", None)
-            values.setdefault("approval_mode", None)
+            # An inherited empty mode means Ask, including when leaving a
+            # Full access setup. Never carry the old setup's authority forward.
+            values.setdefault("approval_mode", "ask")
             values.setdefault("connection_ids", None)
             values.setdefault("per_request_overrides", None)
             request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})

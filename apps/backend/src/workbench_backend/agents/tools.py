@@ -166,7 +166,7 @@ def project_mutation_tools(project_path: str) -> list[BaseTool]:
 
     @tool("rename_file")
     def rename_file(file_path: str, destination: str) -> str:
-        """Rename one regular project file to a new, unused project path. Requires approval. Does not move folders or overwrite an existing destination."""
+        """Rename one regular project file to a new, unused project path. The application applies the current Access approval policy. Does not move folders or overwrite an existing destination."""
         try:
             source, target = project_file(root, file_path), project_file(root, destination)
             if not source.is_file():
@@ -182,7 +182,7 @@ def project_mutation_tools(project_path: str) -> list[BaseTool]:
 
     @tool("delete_file")
     def delete_file(file_path: str) -> str:
-        """Delete one regular project file after approval. Folder and recursive deletion are unsupported. Complete small UTF-8 preimages can be reviewed and restored."""
+        """Delete one regular project file under the current Access approval policy. Folder and recursive deletion are unsupported. Complete small UTF-8 preimages can be reviewed and restored."""
         try:
             path = project_file(root, file_path)
             if not path.is_file():

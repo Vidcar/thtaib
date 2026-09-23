@@ -9,7 +9,7 @@
 
 ## 2. Full text in an open body
 
-- [x] 2.1 Remove the 4,000-character slice. Paint a tall open tool or reasoning body as the visible lines plus overscan, with the copy control still copying the full string. Verify scrolling reaches the first line and the last line of a long write.
+- [x] 2.1 Remove the 4,000-character slice. Keep the full text in a bounded native scroll body, with memoized completed Markdown blocks and copy using the full string. Do not assume fixed heights for Markdown or appearance-dependent text. Verify scrolling reaches the first line and the last line of a long write.
 - [x] 2.2 Skip layout for off-screen finished bubbles with `content-visibility: auto`, leaving the live bubble active. Verify a finished bubble still shows its text when scrolled into view.
 
 ## 3. Backend hot path
@@ -20,5 +20,7 @@
 
 ## 4. Check
 
+- [x] 4.0 Reproduce and repair snapshot/completion/compaction races, incomplete SSE cursor advancement, frame rescheduling, semantic Markdown fragmentation, stale same-length tool output, and competing transcript scroll owners with focused regressions. Preserve explicit user scrolling and provide a jump to latest control.
+
 - [x] 4.1 Run `pnpm run build` from `apps/desktop`, `uv run python -m tests.run` from `apps/backend`, and `openspec validate --all` from the repo root. Record any failure instead of weakening a check.
-- [ ] 4.2 On a live local model, in an isolated scratch project, stream a long reasoning trace and a long file write. Confirm the open panels show the newest lines while tokens are still arriving, scrolling up shows the earlier lines, and the speed readout keeps updating. Do not delete ScratchArea chats. Update `HANDOVER.md` with what is usable and the check results.
+- [x] 4.2 On a live local model, in an isolated scratch project, stream a long reasoning trace and a long file write. Confirm the open panels show the newest lines while tokens are still arriving, scrolling up shows the earlier lines, and the speed readout keeps updating. Do not delete ScratchArea chats. Update `HANDOVER.md` with what is usable and the check results.

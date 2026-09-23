@@ -156,6 +156,8 @@ Token injection SHALL require the exact backend destination and a verified trust
 
 ### Requirement: API-010 - Present durable Chat state without duplicating or inventing work
 
+Every displayed snapshot SHALL pair message text, run state and resume cursor from the same observation. Completion and token-log compaction MUST NOT remove a message while hydration or reconnect prepares it. A native finished message SHALL remain readable until its authoritative graph message arrives. The desktop MUST advance its resume cursor only after a complete event frame has arrived; disconnecting inside a frame MUST replay that frame.
+
 Existing Chat SHALL support new, rename, archive, retained-title/message search and reopen. Archive changes visibility, not memory/context. Incremental answers, separate returned reasoning, tool content and partial failures SHALL reconcile by run/thread/message/call identity into one final saved result. Internal summaries MUST NOT appear as answers. After the verified `migrate-local-agent-interaction` prerequisite, consume the supported `@langchain/react` interaction boundary for message/tool/state projections and scoped subscriptions; do not extend the superseded custom `snapshot` / `run_event` / `stream_end` contract. Application-owned durable history, run identity, reconnect/hydration and authorization remain authoritative; reconcile SDK updates into one saved result and avoid rewriting the entire growing run for every token.
 
 Expose effective setup, actual selected tools/results, observed planning, context capacity/usage/compaction, approvals and loading/empty/error/reconnect states. Provide safe Markdown/code/table rendering, copy and access-checked open/save actions, keyboard controls and scrolling that respects the user's position. Generated HTML/scripts MUST NOT execute in the trusted renderer; opening/saving is not execution authority.
@@ -224,6 +226,8 @@ Light and dark themes SHALL follow Windows by default with a user override. Sett
 
 ### Requirement: API-017 - Expose compact effective model controls and measurements
 
+Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. Changing to a setup whose access is unspecified SHALL use Ask unless a current explicit override applies; it MUST NOT inherit Full access from the previous setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask, Approve for me, or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
+
 The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment and permission controls beside the composer and focused popovers for details. The shield selects Ask, Approve for me, or Full access for later messages in that chat. It does not turn the agent's tool list on or off. Project, agent, and knowledge setup SHALL live on the Setup page of the conversation rail. The rail starts closed and MUST NOT take height from the transcript while it is closed. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
 
 Compact status elements SHALL expose current context fill and generation speed in tok/s, with capacity, counting/measurement basis and relevant interval available on expansion. Observed measurements, labelled estimates and unavailable values SHALL remain distinguishable. Stream chunks MUST NOT be counted as tokens; absent usage MUST NOT appear as zero. Context changes/compaction and current versus completed-turn measurements SHALL remain attributable rather than silently showing stale values as current.
@@ -249,7 +253,11 @@ Sending with a stopped installed managed model SHALL load the selected setup thr
 
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
-Answer text SHALL always appear incrementally. A compact reasoning button beside the model name SHALL default off and remember the user's preference across conversations/reopening. It uses an icon distinct from context and speed, and the accent colour when it is on. It is a pressed button, not a tick box. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
+Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact reasoning button beside the model name SHALL default off and remember the user's preference across conversations/reopening. It uses an icon distinct from context and speed, and the accent colour when it is on. It is a pressed button, not a tick box. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
+
+While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. One status announces that a reply is being written, has stopped, or is waiting.
+
+A speed or context measurement SHALL update its readout only. It MUST NOT rebuild the transcript, move the scroll position, delay the next tokens, or change execution.
 
 Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain on the Actions page of the conversation rail. That page MUST NOT cover the transcript. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
 
@@ -278,6 +286,29 @@ Each output section SHALL independently expand/collapse through a heading or che
 - **WHEN** detailed streams are off and the agent updates its todo list or edits a file
 - **THEN** the checklist and the one-line activity row stay visible
 - **AND** the raw tool arguments stay collapsed.
+
+#### Scenario: Follow the newest line while a reply is written
+
+- **WHEN** a long reply is streaming and the person is at the bottom of the transcript
+- **THEN** the newest text stays in view as it arrives
+- **AND** earlier finished messages stay where they were.
+
+#### Scenario: Scrolling away keeps the person's place
+
+- **WHEN** the person scrolls up during a reply, or selects text in the transcript
+- **THEN** the view stays where they left it until they return to the bottom
+- **AND** the selected text is not cleared by the next tokens.
+
+#### Scenario: Speed updates leave the text alone
+
+- **WHEN** generation speed or context usage updates during a long reply
+- **THEN** the readout changes and the transcript text, scroll position, and next tokens are undisturbed.
+
+#### Scenario: Open reasoning stays fully readable
+
+- **WHEN** reasoning is open during a long trace and the person then scrolls up inside that section
+- **THEN** the section was following the newest line until that scroll
+- **AND** the earlier reasoning remains reachable.
 
 ### Requirement: API-019 - Present queued work and scoped attention clearly
 
@@ -376,7 +407,9 @@ Each other filesystem, search, shell, MCP, and memory tool SHALL appear as one l
 - Creating or Created, Editing or Edited, Deleting or Deleted, Renaming or Renamed, using the recorded operation. A rename shows the source and destination.
 - Listing or Listed, Finding or Found files matching, Searching or Searched for, Running or Ran, Calling or Called, Proposing or Proposed a memory.
 
-The unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line; its full output stays on expand. The underlying tool name stays available on expand.
+An actively running unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. Retained incomplete arguments from a stopped or failed turn SHALL be labelled as partial input, never as ongoing work or a completed file. Starting a later turn MUST NOT reactivate that label. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line; its full output stays on expand. The underlying tool name stays available on expand.
+
+While a call is unfinished and its body is open, that body follows the newest line until the person scrolls inside it. The open body shows the full text produced so far. Every line stays reachable by scrolling, and copy copies that full text. The product MUST NOT drop earlier text to keep the view small. Completed file content SHALL remain readable with its original line breaks; raw arguments remain available separately.
 
 Choosing a file line opens the dock on that change, or on the file when no change record exists. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
 
@@ -408,6 +441,12 @@ Choosing a file line opens the dock on that change, or on the file when no chang
 
 - **WHEN** a todo update fails after a successful list
 - **THEN** the previous checklist remains and the failure is visible.
+
+#### Scenario: A long write stays fully readable
+
+- **WHEN** a file write is still streaming, the person has the row open, and they then scroll toward the start of that body
+- **THEN** the newest lines were in view while the body was following
+- **AND** scrolling reaches the earlier lines and copy copies the full text written so far.
 
 ### Requirement: API-027 - Keep every destination compact and readable
 

@@ -42,8 +42,27 @@ function tick() {
 }
 
 try {
-  const { AgentMessageFeed, resetPaintCounters, finishedBubbleRenders, markdownParseCount } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
-  const { splitStreamingMarkdown, visibleLineRange } = await vite.ssrLoadModule("/src/renderer/streamingMarkdown.ts");
+  const feedModule = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
+  const { AgentMessageFeed, resetPaintCounters } = feedModule;
+  const { splitStreamingMarkdown } = await vite.ssrLoadModule("/src/renderer/streamingMarkdown.ts");
+  const answerBody = (text, live) => renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+    messages: [new AIMessage({ id: "semantic-answer", content: text })],
+    incompleteMessageIds: new Set(live ? ["semantic-answer"] : []),
+  })).match(/<div class="message-body">([\s\S]*?)<\/div><\/article>/)?.[1].replace(/>\n</g, "><");
+  for (const text of [
+    "1. First item.\n\n   Another paragraph in the first item.\n\n2. Second item.\n",
+    "Read [the manual][guide].\n\n[guide]: https://example.com/manual\n\nMore text.",
+    "> First quote paragraph.\n>\n> Second quote paragraph.\n\nAfter the quote.",
+    "```text\nA literal ** marker\n```\n\nAfter code.",
+  ]) {
+    assert.equal(answerBody(text, true), answerBody(text, false), "streaming must preserve the settled Markdown meaning, including document and container context");
+  }
+  const manyThoughts = Array.from({ length: 30 }, (_, index) => `Thought ${index}: ${"long reasoning paragraph ".repeat(index + 1)}`).join("\n\n");
+  const longReasoning = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+    messages: [new AIMessage({ id: "long-reasoning", content: [{ type: "reasoning", reasoning: manyThoughts }] })], detailedStreams: true,
+  }));
+  assert.match(longReasoning, /Thought 0:/, "opening a long reasoning body keeps its beginning reachable in the same scroll container");
+  assert.match(longReasoning, /Thought 29:/, "opening a long reasoning body keeps its final paragraph");
   const fenced = splitStreamingMarkdown("Done paragraph.\n\n```ts\nconst value = 1;\n");
   assert.deepEqual(fenced.blocks, ["Done paragraph."]);
   assert.match(fenced.tail, /```ts/);
@@ -51,11 +70,6 @@ try {
   const continued = splitStreamingMarkdown("Done paragraph.\n\nStill writing");
   assert.deepEqual(continued.blocks, ["Done paragraph."]);
   assert.equal(continued.tail, "Still writing");
-  const top = visibleLineRange(200, 0, 400, 16, 8);
-  const bottom = visibleLineRange(200, Number.MAX_SAFE_INTEGER, 400, 16, 8);
-  assert.equal(top.start, 0, "scrolling to the start includes the first line");
-  assert.equal(bottom.end, 200, "the bottom window includes the last line");
-  assert.ok(bottom.start > 0, "the bottom window does not paint the start of a long body");
   const { sourceReference } = await vite.ssrLoadModule("/src/renderer/SourceReference.tsx");
   const sourceUrl = `workbench-source://asset_example/${"a".repeat(64)}?source=row+2&line=1&start=0&end=4`;
   assert.equal(sourceReference(sourceUrl).source, "row 2");
@@ -188,8 +202,45 @@ try {
   const preparingOpen = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true }));
   assert.doesNotMatch(preparingOpen, /Showing the latest 4,000 characters/);
   assert.match(preparingOpen, /bench-160 \{ color: #eee; \}/, "the open live write shows the newest lines");
-  assert.doesNotMatch(preparingOpen, /\.bench-1 \{ color: #111; \}/, "the open live write paints the visible tail until the reader scrolls up");
+  assert.match(preparingOpen, /\.bench-1 \{ color: #111; \}/, "the native scroll body retains its entire text without estimating each line height");
   assert.doesNotMatch(preparingOpen, /\\n\.bench-160/, "escaped newlines in a streamed file are shown as line breaks");
+  let finishedInput;
+  await act(async () => { finishedInput = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], live: true, detailedStreams: true })); });
+  const retainedInputScroller = finishedInput.root.findByProps({ className: "tool-input-text" });
+  const completeWrite = { ...preparingCall, input: { file_path: "stream-bench.html", content: fileBody }, args: { file_path: "stream-bench.html", content: fileBody }, status: "finished", output: "Created stream-bench.html" };
+  await act(async () => finishedInput.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [completeWrite], live: false, detailedStreams: true })));
+  assert.equal(finishedInput.root.findByProps({ "aria-label": "Tool input" }).findAllByType("code")[0].props.children, fileBody, "a completed file write keeps readable full file content rather than escaped JSON");
+  assert.equal(finishedInput.root.findByProps({ className: "tool-input-text" }), retainedInputScroller, "the same native scroll body survives file-write completion");
+  const rawArguments = finishedInput.root.findByProps({ className: "tool-raw-arguments" });
+  assert.notEqual(rawArguments.props.open, true, "raw arguments stay behind a collapsed disclosure");
+  assert.equal(rawArguments.findByType("code").props.children, JSON.stringify(completeWrite.input, null, 2), "raw tool arguments remain available without altering file contents");
+  await act(async () => finishedInput.unmount());
+  let stoppedInput;
+  await act(async () => { stoppedInput = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], live: true, detailedStreams: true })); });
+  await act(async () => stoppedInput.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], live: false, detailedStreams: true })));
+  const stoppedTree = JSON.stringify(stoppedInput.toJSON());
+  assert.match(stoppedTree, /Partial input/, "terminal runs retain unfinished tool input as partial output");
+  assert.match(stoppedTree, /Unfinished input for stream-bench.html/, "unfinished tool preparation must not claim the file was created");
+  assert.doesNotMatch(stoppedTree, /Creating stream-bench|Created stream-bench|Writing|characters written|KB written/, "a terminal tool cannot still claim active writing or successful execution");
+  assert.equal(stoppedInput.root.findByProps({ "aria-label": "Tool input" }).findByType("code").props.children, fileBody, "terminal presentation preserves the entire readable input");
+  await act(async () => stoppedInput.update(React.createElement(AgentMessageFeed, { messages: [new HumanMessage({ id: "new-after-stop", content: "A new request" })], toolCalls: [preparingCall], live: true, detailedStreams: true })));
+  assert.match(JSON.stringify(stoppedInput.toJSON()), /Partial input/, "a new turn cannot reactivate an unfinished tool from the previous turn");
+  await act(async () => stoppedInput.unmount());
+  const hydratedPartial = new AIMessage({ id: "hydrated-partial-tool", content: [
+    { type: "reasoning", reasoning: "The generation ended while preparing file input." },
+    { type: "tool_call_chunk", id: "partial-write", name: "write_file", args: rawWrite.slice(0, -2) },
+  ] });
+  assert.deepEqual(hydratedPartial.tool_calls, [], "retained unfinished arguments are inert display content, never executable tool calls");
+  let reopenedPartial;
+  await act(async () => { reopenedPartial = create(React.createElement(AgentMessageFeed, { messages: [hydratedPartial], incompleteMessageIds: new Set([hydratedPartial.id]), live: false, detailedStreams: true })); });
+  assert.match(JSON.stringify(reopenedPartial.toJSON()), /Unfinished input for stream-bench.html/, "a reopened failed run renders its saved unfinished tool input without replaying token events");
+  assert.equal(reopenedPartial.root.findByProps({ "aria-label": "Tool input" }).findByType("code").props.children, fileBody, "inert snapshot tool content preserves the entire readable partial input");
+  assert.doesNotMatch(JSON.stringify(reopenedPartial.toJSON()), /Creating stream-bench|Created stream-bench|Writing|KB written/);
+  const liveHydratedPartial = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [hydratedPartial], incompleteMessageIds: new Set([hydratedPartial.id]), live: true, detailedStreams: true }));
+  assert.match(liveHydratedPartial, /Creating stream-bench.html/, "hydrating an unfinished tool during an active run retains its live presentation");
+  await act(async () => reopenedPartial.unmount());
+  const escapedWrite = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...preparingCall, input: '{"file_path":"unicode.txt","content":"\\u0041\\uD83D\\uDE03\\n' }], detailedStreams: true }));
+  assert.match(escapedWrite, /A😃/, "partial JSON strings preserve escaped Unicode and surrogate pairs in the live tool preview");
   const liveError = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...liveCall, status: "error", error: "Access denied by the tool" }] }));
   assert.match(liveError, /<p class="tool-call-error" role="status">Access denied by the tool<\/p>/, "SDK errors must be visible without opening details");
   const successDiscussingErrors = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [new ToolMessage({ id: "logs", name: "grep", tool_call_id: "logs-call", status: "success", content: "Error count: 0. No failed checks." })] }));
@@ -214,6 +265,12 @@ try {
   await act(async () => { toolRenderer.update(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage], detailedStreams: true })); });
   assert.equal(detailsOpen(toolRenderer.root, "message-tools"), false, "explicit tool collapse survives completion, hydration and detailed-stream preference changes");
   await act(async () => toolRenderer.unmount());
+
+  let changedOutput;
+  await act(async () => { changedOutput = create(React.createElement(AgentMessageFeed, { messages: [callingMessage], toolCalls: [{ ...completedCall, output: "Alpha" }], detailedStreams: true })); });
+  await act(async () => changedOutput.update(React.createElement(AgentMessageFeed, { messages: [callingMessage], toolCalls: [{ ...completedCall, output: "Omega" }], detailedStreams: true })));
+  assert.equal(changedOutput.root.findByProps({ "aria-label": "Tool output" }).findByType("code").props.children, "Omega", "a revised result with the same length must replace the old displayed result");
+  await act(async () => changedOutput.unmount());
 
   const growingMessage = (reasoning) => [
     {
@@ -257,23 +314,40 @@ try {
   await act(async () => { renderer.unmount(); detailedRenderer.unmount(); });
 
   const settled = new AIMessage({ id: "settled", content: "Finished paragraph.\n\nStill here." });
+  const waitingTurn = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [settled, new HumanMessage({ id: "latest-human", content: "Another question" })], live: true }));
+  assert.doesNotMatch(waitingTurn, /Response in progress|Incomplete response/, "waiting for a new answer must not mark a previous answer as writing");
+  const nextTurn = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [settled, new HumanMessage({ id: "latest-human", content: "Another question" }), new AIMessage({ id: "next-answer", content: "New answer" })], live: true }));
+  assert.equal((nextTurn.match(/Response in progress/g) ?? []).length, 1, "only the latest answer after the most recent user turn is writing");
+  const continuation = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [callingMessage, resultMessage, finalMessage] }));
+  assert.equal((continuation.match(/bubble-continuation/g) ?? []).length, 1, "tool-separated assistant continuations share one assistant role heading");
   const growingLive = (extra) => new AIMessage({ id: "live-answer", content: `Partial ${extra}` });
   let bubbleRenderer;
   await act(async () => { bubbleRenderer = create(React.createElement(AgentMessageFeed, { messages: [settled, growingLive("one")], incompleteMessageIds: new Set(["live-answer"]) })); });
   resetPaintCounters();
-  const parsesBefore = markdownParseCount;
+  const parsesBefore = feedModule.markdownParseCount;
   await act(async () => { bubbleRenderer.update(React.createElement(AgentMessageFeed, { messages: [settled, growingLive("two")], incompleteMessageIds: new Set(["live-answer"]) })); });
-  assert.equal(finishedBubbleRenders, 0, "a parent render that does not change finished text does not rebuild that bubble");
-  assert.ok(markdownParseCount - parsesBefore <= 1, "growing the open tail does not parse the finished paragraph again");
+  assert.equal(feedModule.finishedBubbleRenders, 0, "a parent render that does not change finished text does not rebuild that bubble");
+  assert.equal(feedModule.markdownParseCount - parsesBefore, 1, "growing the open tail parses only the updated live paragraph");
   await act(async () => bubbleRenderer.unmount());
 
   let writeRenderer;
-  await act(async () => { writeRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true })); });
-  const scroller = writeRenderer.root.findByProps({ className: "virtual-text" });
-  await act(async () => {
-    scroller.props.onScroll({ currentTarget: { scrollTop: 0, scrollHeight: 8000, clientHeight: 400 } });
-  });
-  assert.match(JSON.stringify(writeRenderer.toJSON()), /bench-1/, "scrolling the open write reaches the first line");
+  const toolListeners = new Map();
+  const toolScroll = {
+    top: 0, scrollHeight: 8000, clientHeight: 400,
+    get scrollTop() { return this.top; },
+    set scrollTop(value) { this.top = Math.min(value, this.scrollHeight - this.clientHeight); },
+    addEventListener(name, handler) { toolListeners.set(name, handler); },
+    removeEventListener(name) { toolListeners.delete(name); },
+    contains() { return false; },
+  };
+  await act(async () => { writeRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true }), { createNodeMock: element => element.props.className === "tool-input-text" ? toolScroll : null }); });
+  const scroller = writeRenderer.root.findByProps({ className: "tool-input-text" });
+  assert.equal(scroller.findByType("code").props.children, fileBody, "the native scroll body retains the exact complete tool input");
+  assert.equal(toolScroll.scrollTop, 7600, "a live tool preview starts at its newest line using measured browser geometry");
+  toolScroll.scrollTop = 0;
+  toolListeners.get("scroll")();
+  await act(async () => writeRenderer.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...preparingCall, input: JSON.stringify({ file_path: "stream-bench.html", content: `${fileBody}\nMore content` }) }], detailedStreams: true })));
+  assert.equal(toolScroll.scrollTop, 0, "reading earlier tool input is preserved when more content arrives");
   const writeNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   const writeCopies = [];
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async value => { writeCopies.push(value); } } } });
@@ -287,8 +361,39 @@ try {
   }
   await act(async () => writeRenderer.unmount());
 
+  const frameCallbacks = new Map();
+  let frameRequests = 0;
+  const oldWindow = globalThis.window;
+  globalThis.window = {
+    requestAnimationFrame: callback => { frameCallbacks.set(++frameRequests, callback); return frameRequests; },
+    cancelAnimationFrame: id => frameCallbacks.delete(id),
+  };
+  let paced;
+  const pacedProps = text => ({ messages: [new AIMessage({ id: "paced", content: text })], incompleteMessageIds: new Set(["paced"]) });
+  try {
+    await act(async () => { paced = create(React.createElement(AgentMessageFeed, pacedProps("first"))); });
+    await act(async () => paced.update(React.createElement(AgentMessageFeed, pacedProps("first second"))));
+    await act(async () => paced.update(React.createElement(AgentMessageFeed, pacedProps("first second third"))));
+    assert.equal(frameRequests, 1, "arrivals before a paint share the original pending frame instead of postponing it");
+    await act(async () => frameCallbacks.values().next().value());
+    assert.match(JSON.stringify(paced.toJSON()), /first second third/, "the scheduled paint publishes every token received so far");
+    await act(async () => paced.update(React.createElement(AgentMessageFeed, { messages: [new AIMessage({ id: "paced", content: "Final complete answer" })] })));
+    assert.match(JSON.stringify(paced.toJSON()), /Final complete answer/, "completion flushes immediately even before another animation frame");
+  } finally {
+    if (paced) await act(async () => paced.unmount());
+    if (oldWindow === undefined) delete globalThis.window;
+    else globalThis.window = oldWindow;
+  }
+
   const scrolls = [];
   const listeners = new Map();
+  const resizeCallbacks = new Set();
+  const originalResizeObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(callback) { this.callback = callback; resizeCallbacks.add(callback); }
+    observe() {}
+    disconnect() { resizeCallbacks.delete(this.callback); }
+  };
   class Transcript {
     scrollHeight = 1000;
     scrollTop = 600;
@@ -297,7 +402,7 @@ try {
     contains(node) { return node === this; }
     addEventListener(name, handler) { listeners.set(name, handler); }
     removeEventListener(name) { listeners.delete(name); }
-    scrollTo(options) { scrolls.push(options); }
+    scrollTo(options) { scrolls.push(options); this.scrollTop = Math.max(0, this.scrollHeight - this.clientHeight); }
   }
   const transcript = new Transcript();
   let selected = false;
@@ -309,29 +414,45 @@ try {
   let length = 0;
   const growingAnswer = () => [new AIMessage({ id: "growing", content: "answer ".repeat(++length) })];
   let initiallyEmpty;
+  transcript.scrollTop = 0;
   await act(async () => { initiallyEmpty = create(React.createElement(AgentMessageFeed, { messages: [] }), { createNodeMock: () => transcript }); });
   await act(async () => initiallyEmpty.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
   assert.ok(listeners.has("scroll"), "a feed mounted empty must start tracking the reader when its first message arrives");
+  assert.equal(transcript.scrollTop, 600, "opening a saved conversation starts at its latest message even before a scroll position exists");
   await act(async () => initiallyEmpty.unmount());
   await act(async () => {
     following = create(React.createElement(AgentMessageFeed, { messages: growingAnswer() }), { createNodeMock: () => transcript });
   });
   assert.equal(scrolls.at(-1).behavior, "auto", "reduced motion disables animated following");
+  transcript.scrollHeight = 1400;
+  await act(async () => { for (const resize of resizeCallbacks) resize(); });
+  assert.equal(transcript.scrollTop, 1000, "late layout growth follows the end without waiting for another token");
+  transcript.scrollHeight = 1000;
+  transcript.scrollTop = 600;
+  await act(async () => { for (const resize of resizeCallbacks) resize(); });
   const beforeSelection = scrolls.length;
   selected = true;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
   assert.equal(scrolls.length, beforeSelection, "new output must not move a selected passage");
   selected = false;
   transcript.scrollTop = 0;
-  listeners.get("scroll")();
+  await act(async () => listeners.get("scroll")());
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
   assert.equal(scrolls.length, beforeSelection, "reading older output must not jump to the bottom");
+  const jumpButton = following.root.findByProps({ "aria-label": "Jump to latest message" });
+  selected = true;
+  await act(async () => jumpButton.props.onClick());
+  assert.equal(transcript.scrollTop, 600, "an explicit jump returns to the newest response even while old text remains selected");
+  selected = false;
   transcript.scrollTop = 600;
-  listeners.get("scroll")();
+  await act(async () => listeners.get("scroll")());
   reduced = false;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
   assert.equal(scrolls.at(-1).behavior, "auto", "following resumes at the newest line without a smooth chase");
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] })));
+  const beforeToolInput = scrolls.length;
+  await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...liveCall, input: { file_path: "new-longer-path.txt" } }] })));
+  assert.ok(scrolls.length > beforeToolInput, "following reacts to growing tool input before any output arrives");
   const beforeToolCompletion = scrolls.length;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [completedCall] })));
   assert.ok(scrolls.length > beforeToolCompletion, "following also responds to tool output when no answer text changes");
@@ -339,6 +460,8 @@ try {
   delete globalThis.HTMLElement;
   delete globalThis.window;
   delete globalThis.document;
+  if (originalResizeObserver === undefined) delete globalThis.ResizeObserver;
+  else globalThis.ResizeObserver = originalResizeObserver;
 } finally {
   await vite.close();
 }

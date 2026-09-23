@@ -70,9 +70,13 @@ Sending with a stopped installed managed model SHALL load the selected setup thr
 
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
-Answer text SHALL always appear incrementally. A compact detailed-stream toggle SHALL default off and remember the user's preference across conversations/reopening. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
+Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact reasoning button beside the model name SHALL default off and remember the user's preference across conversations/reopening. It uses an icon distinct from context and speed, and the accent colour when it is on. It is a pressed button, not a tick box. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
 
-Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain in the conversation menu. That menu SHALL be only as large as those actions and MUST NOT cover the dock. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
+While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. One status announces that a reply is being written, has stopped, or is waiting.
+
+A speed or context measurement SHALL update its readout only. It MUST NOT rebuild the transcript, move the scroll position, delay the next tokens, or change execution.
+
+Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain on the Actions page of the conversation rail. That page MUST NOT cover the transcript. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
 
 #### Scenario: Hide details while an answer streams
 
@@ -99,6 +103,29 @@ Each output section SHALL independently expand/collapse through a heading or che
 - **WHEN** detailed streams are off and the agent updates its todo list or edits a file
 - **THEN** the checklist and the one-line activity row stay visible
 - **AND** the raw tool arguments stay collapsed.
+
+#### Scenario: Follow the newest line while a reply is written
+
+- **WHEN** a long reply is streaming and the person is at the bottom of the transcript
+- **THEN** the newest text stays in view as it arrives
+- **AND** earlier finished messages stay where they were.
+
+#### Scenario: Scrolling away keeps the person's place
+
+- **WHEN** the person scrolls up during a reply, or selects text in the transcript
+- **THEN** the view stays where they left it until they return to the bottom
+- **AND** the selected text is not cleared by the next tokens.
+
+#### Scenario: Speed updates leave the text alone
+
+- **WHEN** generation speed or context usage updates during a long reply
+- **THEN** the readout changes and the transcript text, scroll position, and next tokens are undisturbed.
+
+#### Scenario: Open reasoning stays fully readable
+
+- **WHEN** reasoning is open during a long trace and the person then scrolls up inside that section
+- **THEN** the section was following the newest line until that scroll
+- **AND** the earlier reasoning remains reachable.
 
 ## ADDED Requirements
 

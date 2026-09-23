@@ -16,7 +16,7 @@ const css = readFileSync(path.join(desktopRoot, "src/renderer/surfacePolish.css"
 const dockSource = readFileSync(path.join(desktopRoot, "src/renderer/ChatDock.tsx"), "utf8");
 const monacoSource = readFileSync(path.join(desktopRoot, "src/renderer/monacoSetup.ts"), "utf8");
 
-assert.match(css, /grid-template-columns:\s*minmax\(var\(--layout-column\), 1fr\) minmax\(var\(--layout-column\), var\(--inspector-width/, "opening the dock keeps a readable conversation column");
+assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, min\(var\(--inspector-width, 380px\), 48%\)\)/, "the dock stays within half the available width so fixed column minimums cannot overflow a narrow conversation");
 assert.doesNotMatch(css, /files-expanded[\s\S]*display:\s*none/, "widening the dock does not hide the conversation");
 assert.match(css, /grid-area: 1 \/ 2 \/ 3 \/ 3/, "the rail stays a full-height column beside the transcript and composer");
 assert.doesNotMatch(css, /max-width: 1120px/, "a narrower window does not move the rail above the composer");

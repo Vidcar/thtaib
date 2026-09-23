@@ -83,21 +83,17 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
             cutover = interaction.binding(thread_id)["snapshot"].get("workbench", {}).get("display_cutover_seq", 0)
             if cursor < cutover - 1:
                 cursor = cutover - 1
-            page, _high_water, gap = interaction.store.interaction_page(thread_id, cursor)
+            previous_cursor = cursor
+            wires, cursor, gap = interaction.stream_page(thread_id, cursor, options, resume)
             if gap:
                 # Released SDKs do not interpret a special gap control frame.
                 # Resynchronize via ordinary upstream values/lifecycle events
                 # and an explicit application recovery notice. Never rerun.
                 cursor = interaction.resynchronize(thread_id)
                 continue
-            for item in page:
-                cursor = item["seq"]
-                if interaction.matches(item, options):
-                    if item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
-                        item["params"]["data"] = interaction.display_values(item["params"]["data"])
-                    for wire in resume.present(item):
-                        yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
-            if page:
+            for wire in wires:
+                yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
+            if cursor > previous_cursor:
                 idle = 0
                 continue
             # A subscriber that passes `since` continues after the snapshot it

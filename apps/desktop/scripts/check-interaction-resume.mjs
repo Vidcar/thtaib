@@ -40,7 +40,7 @@ const server = createServer((req, res) => {
           method: "values",
           seq: 6,
           params: { namespace: [], data: { messages: [{ id: "m1", type: "ai", content: "Hello" }] } },
-        })}\n\n`);
+        })}\n\nid: 7\ndata: {"type":"event",`);
         return;
       }
       res.write(": keepalive\n\n");
@@ -78,10 +78,12 @@ try {
   }
   assert.equal(streamBodies.length >= 2, true, `expected a reconnect, saw ${streamBodies.length} stream requests`);
   assert.equal(streamBodies[0].since, 4, "the first subscribe continues after the snapshot cursor");
-  assert.equal(streamBodies[1].since, 6, "a reconnect continues after the last event, not from the start");
+  assert.equal(streamBodies[1].since, 6, "a reconnect continues after the last complete event, never a partially received frame");
   stream.close();
   releaseSecond();
 } finally {
+  releaseSecond();
+  server.closeAllConnections();
   await vite.close();
   await new Promise((resolve) => server.close(resolve));
 }

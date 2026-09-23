@@ -176,6 +176,27 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIsNone(store.get(removed['id']))
         self.assertEqual(self.client.get(f'/v1/chat/conversations/{removed["id"]}').status_code, 404)
 
+    def test_startup_dispatch_skips_conversation_deleted_after_catalogue_snapshot(self) -> None:
+        removed = self._create(title="Deleted during startup")
+        retained = self._create(title="Queued work remains")
+        queued = self.client.post(
+            f"/v1/chat/conversations/{retained['id']}/queue",
+            json={"task": "Continue accepted work.", "input_message_id": "startup-survivor"},
+        )
+        self.assertEqual(queued.status_code, 200, queued.text)
+        store = self.app.state.chat.store
+        listed = [store.get(removed["id"]), store.get(retained["id"])]
+        response = self.client.request("DELETE", f"/v1/chat/conversations/{removed['id']}", json={"execute": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.scripted = ScriptedChatModel([AIMessage(content="Accepted queue continued")])
+        with patch.object(self.app.state.app_store, "list_conversations", return_value=listed):
+            dispatched = self.app.state.chat.dispatch_idle_queued()
+        self.assertEqual(dispatched, 1)
+        saved = wait_for_chat(self.client, retained["id"])
+        self.assertEqual(len(saved["run_ids"]), 1)
+        self.assertEqual(saved["transcript"][0]["id"], "startup-survivor")
+        self.assertIsNone(store.get(removed["id"]))
+
     def test_chat_calls_the_same_embedded_harness(self) -> None:
         conversation = self._create()
         self.assertEqual(conversation["harness"], "deepagents")
