@@ -1,7 +1,7 @@
 .composer-queue {
   display: grid;
   gap: var(--space-tight);
-  margin: 0 var(--space-hairline) var(--space-tight);
+  margin: 0 var(--space-tight) var(--space-tight);
 }
 
 .composer-queue-list {
@@ -15,9 +15,9 @@
 .composer-queue-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-hairline);
+  gap: var(--space-tight);
   min-height: var(--control-height);
-  padding: var(--pad-hairline) var(--pad-hairline) var(--pad-hairline) var(--pad-compact);
+  padding: var(--pad-tight) var(--pad-tight) var(--pad-tight) var(--pad-compact);
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--bg) var(--tint-half), transparent);
 }
@@ -34,7 +34,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
   line-height: var(--leading-body);
 }
 
@@ -78,7 +78,7 @@
   padding: var(--pad-tight) var(--pad-compact);
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--warn) var(--tint-quiet), transparent);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
 }
 
 .composer-queue-pause p {

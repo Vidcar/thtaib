@@ -12,9 +12,8 @@
 
 .conversation-rename-field span {
   color: var(--muted, #94a3b8);
-  font-size: var(--text-caption);
+  font-size: var(--text-small);
   font-weight: var(--weight-bold);
-  letter-spacing: var(--tracking-open);
   text-transform: uppercase;
 }
 

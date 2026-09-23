@@ -20,7 +20,7 @@
 
 .packet03-list {
   display: grid;
-  gap: var(--space-row);
+  gap: var(--space-compact);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -29,7 +29,7 @@
 .packet03-item {
   display: grid;
   gap: var(--space-compact);
-  padding: var(--pad-row) var(--pad-card);
+  padding: var(--pad-compact) var(--pad-card);
   border: var(--line-hairline) solid var(--border);
   background: var(--bg-raised);
 }
@@ -53,7 +53,7 @@
 .packet03-details summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
 }
 
 .packet03-attention-button {
@@ -70,11 +70,11 @@
   min-width: 14px;
   height: 14px;
   margin: 0;
-  padding: 0 var(--pad-hairline);
+  padding: 0 var(--pad-tight);
   border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--bg);
-  font-size: var(--text-micro);
+  font-size: var(--text-small);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
   text-align: center;
@@ -85,7 +85,7 @@
   max-height: 18rem;
   overflow: auto;
   white-space: pre-wrap;
-  padding: var(--pad-row);
+  padding: var(--pad-compact);
   border: var(--line-hairline) solid var(--border);
   background: var(--bg-input);
 }
@@ -97,13 +97,13 @@
 
 .packet03-attachments {
   display: grid;
-  gap: var(--space-row);
+  gap: var(--space-compact);
 }
 
 .packet03-dropzone {
   display: grid;
   gap: var(--space-tight);
-  padding: var(--pad-row) var(--pad-card);
+  padding: var(--pad-compact) var(--pad-card);
   border: var(--line-hairline) dashed var(--border);
   background: var(--bg-raised);
 }

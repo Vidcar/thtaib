@@ -1,17 +1,17 @@
 .image-preview-button {display: inline-flex; position: relative; width: fit-content; max-width: 100%; padding: 0; overflow: hidden; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); cursor: zoom-in;}
 .image-preview-button img {display: block; width: auto; height: auto; max-width: 240px; max-height: 150px; object-fit: contain;}
-.image-preview-button > span {position: absolute; right: 5px; bottom: 5px; display: flex; align-items: center; gap: var(--space-tight); padding: var(--pad-hairline) var(--pad-tight); border-radius: var(--radius-small); background: var(--hover); color: white; font-size: var(--text-caption);}
+.image-preview-button > span {position: absolute; right: 5px; bottom: 5px; display: flex; align-items: center; gap: var(--space-tight); padding: var(--pad-tight) var(--pad-tight); border-radius: var(--radius-control); background: var(--hover); color: white; font-size: var(--text-small);}
 .image-preview-button.is-small img {max-width: 72px; max-height: 48px;}
 .image-preview-button.is-small > span {display: none;}
 .retained-image {min-height: var(--control-height-lg); min-width: 64px;}
 .retained-image.is-small {display: flex; align-items: center; max-width: 76px;}
 dialog.image-viewer {width: min(var(--layout-page), 94vw); max-width: 94vw; max-height: 92vh; padding: 0; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow);}
 .image-viewer::backdrop {background: var(--palette-scrim);}
-.image-viewer > header {display: flex; align-items: center; gap: var(--space-row); padding: var(--pad-row) var(--pad-row); border-bottom: var(--line-hairline) solid var(--border);}
+.image-viewer > header {display: flex; align-items: center; gap: var(--space-compact); padding: var(--pad-compact) var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border);}
 .image-viewer > header strong {flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-body);}
-.image-viewer > header button {font-size: var(--text-compact);}
-.image-viewer > p {padding: 0 var(--pad-row); font-size: var(--text-compact);}
-.image-viewer-canvas {display: flex; justify-content: center; padding: var(--pad-row); overflow: auto; max-height: calc(90vh - 70px); background: var(--bg-panel);}
+.image-viewer > header button {font-size: var(--text-body);}
+.image-viewer > p {padding: 0 var(--pad-compact); font-size: var(--text-body);}
+.image-viewer-canvas {display: flex; justify-content: center; padding: var(--pad-compact); overflow: auto; max-height: calc(90vh - 70px); background: var(--bg-panel);}
 .image-viewer-canvas img {object-fit: contain; max-width: 100%; max-height: calc(88vh - 95px);}
 .image-viewer-canvas.is-zoomed {display: block;}
 .image-viewer-canvas.is-zoomed img {max-width: none; max-height: none;}

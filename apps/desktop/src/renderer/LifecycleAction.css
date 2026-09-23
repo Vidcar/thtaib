@@ -1,8 +1,8 @@
 .lifecycle-action {min-width: 0;}
 .actions > .lifecycle-action:has(.lifecycle-preview) {flex-basis: 100%;}
-.lifecycle-preview {display: grid; gap: var(--space-compact); padding: var(--pad-row); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel); overflow-wrap: anywhere;}
+.lifecycle-preview {display: grid; gap: var(--space-compact); padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel); overflow-wrap: anywhere;}
 .lifecycle-preview :is(p, ul) {margin: 0;}
 .lifecycle-preview > strong {font-size: var(--text-body);}
 .lifecycle-consumers {display: grid; gap: var(--space-compact); padding: 0; list-style: none; max-height: 240px; overflow-y: auto;}
-.lifecycle-consumers > li {display: grid; gap: var(--space-hairline); font-size: var(--text-compact);}
+.lifecycle-consumers > li {display: grid; gap: var(--space-tight); font-size: var(--text-body);}
 .lifecycle-consumers > li > span {color: var(--muted);}

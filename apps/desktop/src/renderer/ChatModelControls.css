@@ -12,7 +12,7 @@
   color: var(--text);
   cursor: pointer;
   display: inline-flex;
-  gap: var(--space-row);
+  gap: var(--space-compact);
   list-style: none;
   min-height: var(--control-height-lg);
   padding: var(--pad-tight) var(--pad-compact) var(--pad-tight) var(--pad-tight);
@@ -42,14 +42,14 @@
 
 .chat-model-controls-icon svg {
   fill: currentColor;
-  height: var(--icon-sm);
+  height: var(--icon-md);
   opacity: 0.92;
-  width: var(--icon-sm);
+  width: var(--icon-md);
 }
 
 .chat-model-controls-main {
   display: grid;
-  gap: var(--space-hairline);
+  gap: var(--space-tight);
   min-width: 10rem;
 }
 
@@ -61,7 +61,7 @@
 
 .chat-model-controls-subtitle {
   color: var(--muted);
-  font-size: var(--text-caption);
+  font-size: var(--text-small);
   line-height: var(--leading-tight);
 }
 
@@ -74,10 +74,10 @@
   box-shadow: 0 24px 60px color-mix(in srgb, var(--bg) var(--tint-strong), transparent);
   color: var(--text);
   display: grid;
-  gap: var(--space-row);
+  gap: var(--space-compact);
   left: 0;
   max-width: calc(100vw - 2rem);
-  padding: var(--pad-row);
+  padding: var(--pad-compact);
   position: absolute;
   width: min(var(--layout-dialog), calc(100vw - var(--layout-narrow)));
   z-index: 20;
@@ -101,9 +101,9 @@
   margin: 0;
 }
 
-.chat-model-controls-grid > label > span, .chat-model-control-label {display: inline-flex; align-items: center; gap: var(--space-hairline);}
+.chat-model-controls-grid > label > span, .chat-model-control-label {display: inline-flex; align-items: center; gap: var(--space-tight);}
 .chat-model-controls .chat-model-control-label label {display: inline; margin: 0; font-size: inherit; font-weight: inherit;}
-.chat-model-controls .chat-model-controls-panel select {min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small); font-weight: var(--weight-regular); border-radius: var(--radius-small);}
+.chat-model-controls .chat-model-controls-panel select {min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small); font-weight: var(--weight-regular); border-radius: var(--radius-control);}
 
 .chat-model-controls-grid select {
   min-width: 0;
@@ -113,7 +113,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-tight) var(--space-row);
+  gap: var(--space-tight) var(--space-compact);
   margin: 0;
 }
 
@@ -129,7 +129,7 @@
 
 .chat-model-controls .chat-model-controls-facts dt {
   color: var(--muted);
-  font-size: var(--text-caption);
+  font-size: var(--text-small);
   font-weight: var(--weight-regular);
   margin: 0;
   text-transform: none;
@@ -137,7 +137,7 @@
 
 .chat-model-controls .chat-model-controls-facts dd {
   color: var(--text);
-  font-size: var(--text-caption);
+  font-size: var(--text-small);
   margin: 0;
   word-break: normal;
   overflow-wrap: anywhere;
@@ -160,9 +160,9 @@
   gap: var(--space-compact);
 }
 
-.chat-model-controls-thinking-head > select {width: auto; max-width: var(--tint-half);}
-.chat-model-controls-effort-value {display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--text-caption);}
-.chat-model-controls-effort-value strong {color: var(--text); font-size: var(--text-caption); font-weight: var(--weight-medium);}
+.chat-model-controls-thinking-head > select {width: auto; max-width: 50%;}
+.chat-model-controls-effort-value {display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: var(--text-small);}
+.chat-model-controls-effort-value strong {color: var(--text); font-size: var(--text-small); font-weight: var(--weight-medium);}
 
 .chat-model-controls .chat-model-controls-thinking-head > span {
   display: inline-flex;
@@ -191,7 +191,7 @@
 .chat-model-controls .chat-model-controls-efforts {
   color: var(--muted);
   display: flex;
-  font-size: var(--text-micro);
+  font-size: var(--text-small);
   justify-content: space-between;
   text-transform: capitalize;
 }

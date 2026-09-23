@@ -31,7 +31,7 @@
 .surface .card,
 .surface .compact-form {
   display: grid;
-  gap: var(--space-row);
+  gap: var(--space-compact);
 }
 
 .surface .card > :is(h3, h4, p, label),
@@ -99,10 +99,10 @@ summary > svg {
 .check-row input[type="checkbox"],
 .check-row input[type="radio"] {
   flex: 0 0 14px;
-  width: var(--icon-sm);
-  height: var(--icon-sm);
+  width: var(--icon-md);
+  height: var(--icon-md);
   min-height: 0;
-  margin: var(--space-hairline) 0 0;
+  margin: var(--space-tight) 0 0;
   accent-color: var(--accent);
 }
 
@@ -128,15 +128,15 @@ summary > svg {
   border-color: color-mix(in srgb, var(--warn) var(--tint-half), var(--border));
   background: color-mix(in srgb, var(--warn) var(--tint-quiet), var(--bg-panel));
   color: var(--text);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
   overflow-wrap: anywhere;
 }
 
 .approval-card h3 {margin: 0 0 var(--space-compact);}
 .approval-card p {line-height: var(--leading-body);}
 .approval-card .notice {margin: var(--space-compact) 0;}
-.approval-action {padding: var(--pad-row) 0;}
-.approval-card .choice-set {min-width: 0; padding: var(--pad-compact) var(--pad-row); border-radius: var(--radius-control);}
+.approval-action {padding: var(--pad-compact) 0;}
+.approval-card .choice-set {min-width: 0; padding: var(--pad-compact) var(--pad-compact); border-radius: var(--radius-control);}
 .approval-card .choice-set legend {padding: 0 var(--pad-tight); color: var(--muted); font-size: var(--text-small);}
 .approval-card .check-row:last-child {margin-bottom: 0;}
 .approval-card .command {max-width: 100%; font-size: var(--text-small);}
@@ -144,30 +144,30 @@ summary > svg {
 .chat-queue-panel {
   min-width: 0;
   border-radius: var(--radius-control);
-  padding: var(--pad-compact) var(--pad-row);
+  padding: var(--pad-compact) var(--pad-compact);
   background: var(--bg-panel);
-  font-size: var(--text-compact);
+  font-size: var(--text-body);
 }
 
 .chat-queue-item {
   min-width: 0;
   border-radius: var(--radius-control);
-  padding: var(--pad-compact) var(--pad-row);
+  padding: var(--pad-compact) var(--pad-compact);
   gap: var(--space-compact);
 }
 
 .chat-queue-item.is-locked {background: var(--bg-raised);}
 .chat-queue-item-head > div:first-child {flex: 1 1 150px; min-width: 0;}
-.chat-queue-preview {max-width: 100%; font-size: var(--text-compact);}
+.chat-queue-preview {max-width: 100%; font-size: var(--text-body);}
 .chat-queue-frozen-config,
 .chat-queue-attachment-summary {font-size: var(--text-small); overflow-wrap: anywhere;}
 .chat-queue-panel button {font-size: var(--text-small);}
 .chat-queue-panel .notice {margin: var(--space-compact) 0;}
 
-.chat-retained-files {min-width: 0; border-radius: var(--radius-control); padding: var(--pad-row); gap: var(--space-compact);}
+.chat-retained-files {min-width: 0; border-radius: var(--radius-control); padding: var(--pad-compact); gap: var(--space-compact);}
 .chat-retained-files-head > div {min-width: 0;}
-.chat-retained-file-card {min-width: 0; border-radius: var(--radius-control); padding: var(--pad-compact) var(--pad-row);}
-.chat-retained-files h3 {font-size: var(--text-compact);}
+.chat-retained-file-card {min-width: 0; border-radius: var(--radius-control); padding: var(--pad-compact) var(--pad-compact);}
+.chat-retained-files h3 {font-size: var(--text-body);}
 .chat-retained-files h4 {font-size: var(--text-small); color: var(--muted);}
 .chat-retained-files .check-row strong {overflow-wrap: anywhere;}
 .chat-retained-files-actions {gap: var(--space-tight);}
@@ -182,7 +182,7 @@ summary > svg {
 .run-progress-head h3 {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact); margin: 0;}
 .run-progress .timeline {max-height: 320px; overflow: auto; padding-right: var(--pad-tight);}
 .run-progress .timeline-detail {font-size: var(--text-small); color: var(--muted);}
-.run-progress .timeline li {margin-bottom: var(--space-row);}
+.run-progress .timeline li {margin-bottom: var(--space-compact);}
 .run-progress .timeline li:last-child {margin-bottom: 0;}
 .tool-call-state:is([data-state="finished"], [data-state="success"]) {color: var(--ok);}
 .tool-call-details section {display: grid; gap: var(--space-tight); min-width: 0; margin: var(--space-compact) 0;}
@@ -190,8 +190,8 @@ summary > svg {
 .live-tool-code {max-height: none; overflow: visible;}
 .virtual-text, .virtual-markdown {max-height: min(360px, 42vh); overflow: auto; overflow-anchor: none;}
 .tool-detail-label {display: block;}
-.message-reasoning > :not(summary) {font-size: var(--text-compact); line-height: var(--leading-relaxed);}
-.message-reasoning[open] > .reasoning-content {max-height: min(var(--layout-menu), 45vh); overflow: auto; padding-left: var(--pad-row); border-left: var(--line-strong) solid var(--border);}
+.message-reasoning > :not(summary) {font-size: var(--text-body); line-height: var(--leading-body);}
+.message-reasoning[open] > .reasoning-content {max-height: min(var(--layout-menu), 45vh); overflow: auto; padding-left: var(--pad-compact); border-left: var(--line-strong) solid var(--border);}
 .message-body {gap: var(--space-tight);}
 .message-body > .message-reasoning,
 .message-body > .tool-call-list,
@@ -213,7 +213,7 @@ summary > svg {
 }
 
 @media (max-width: 600px) {
-  .approval-card {padding: var(--pad-row);}
+  .approval-card {padding: var(--pad-compact);}
   .packet03-toolbar {align-items: stretch;}
   .packet03-actions > button {max-width: 100%; white-space: normal;}
 }
@@ -265,14 +265,14 @@ summary > svg {
   background: var(--bg-nav);
 }
 .chat-conversation > .notice {margin: var(--space-tight) var(--space-section); flex-shrink: 0;}
-.chat-conversation > .chat-queue-panel {max-height: 30vh; overflow: auto; flex-shrink: 0; margin: var(--space-hairline) var(--space-section);}
+.chat-conversation > .chat-queue-panel {max-height: 30vh; overflow: auto; flex-shrink: 0; margin: var(--space-tight) var(--space-section);}
 .chat-rail[hidden] {display: none !important;}
-.chat-rail-tabs {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-hairline); margin: 0 0 var(--space-row);}
-.chat-rail-tabs button[role="tab"] {border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-compact);}
+.chat-rail-tabs {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-tight); margin: 0 0 var(--space-compact);}
+.chat-rail-tabs button[role="tab"] {border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-body);}
 .chat-rail-tabs button[aria-selected="true"] {background: var(--bg-raised); color: var(--text);}
 .chat-rail-close {margin-left: auto;}
 .chat-rail-body {min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-compact);}
-.chat-rail .setup-panel {display: grid; gap: var(--space-row);}
+.chat-rail .setup-panel {display: grid; gap: var(--space-compact);}
 .chat-rail .chat-history-actions {position: static;}
 .chat-header {flex-wrap: wrap; align-items: flex-start;}
 .chat-header .history-menu[open] {flex: 1 0 100%;}
