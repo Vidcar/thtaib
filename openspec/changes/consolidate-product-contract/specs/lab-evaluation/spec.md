@@ -62,8 +62,6 @@ Engine measurements SHALL use llama-bench from the managed runtime when availabl
 - THEN measurements MUST include the configured and observed context details and resource use
 - AND a smoke-only run MUST NOT be labelled as performance evidence for that context.
 
-## ADDED Requirements
-
 ### Requirement: LAB-014 - Hold the machine visibly while Lab runs
 
 An active Lab run SHALL hold a backend-owned exclusive reservation. Work already running must finish or be explicitly stopped before Lab starts. The confirmation names that work. While Lab holds the machine, Chat, Workflows, and media SHALL show a calm banner naming the Lab run and offering a way back to it. New work from those surfaces waits or explains the reservation. It MUST NOT start on the same model in secret. Lab's own trials remain allowed. Stopping Lab releases the reservation and says so.
