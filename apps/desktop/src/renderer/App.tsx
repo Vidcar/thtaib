@@ -67,6 +67,43 @@ export function App() {
   const [chatLaunch, setChatLaunch] = useState<ChatLaunch | null>(null);
   const [historyNotice, setHistoryNotice] = useState<HistoryNotice | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const selectionStorageKey = `workbench.chat.selection:${window.workbench?.backendUrl ?? "http://127.0.0.1:8000"}`;
+  const [rememberedConversationId] = useState(() => {
+    try { return window.localStorage?.getItem(selectionStorageKey) || null; } catch { return null; }
+  });
+  const [restoringConversation, setRestoringConversation] = useState(Boolean(rememberedConversationId));
+  const pendingRestoration = useRef(rememberedConversationId ? { id: rememberedConversationId } : null);
+  const rememberConversation = useCallback((id: string | null) => {
+    setActiveConversationId(id);
+    // The Chat component starts empty while its saved selection is resolving.
+    // That initial report is not an explicit request for a new conversation.
+    if (!id && pendingRestoration.current) return;
+    pendingRestoration.current = null;
+    setRestoringConversation(false);
+    try { window.localStorage?.setItem(selectionStorageKey, id ?? ""); } catch { /* Selection still works without storage. */ }
+  }, [selectionStorageKey]);
+  useEffect(() => {
+    const pending = pendingRestoration.current;
+    if (!pending || !listsReady || backendOk !== true) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    async function restore() {
+      if (cancelled || pendingRestoration.current !== pending) return;
+      try {
+        const conversations = await api.chatConversations(true);
+        if (cancelled || pendingRestoration.current !== pending) return;
+        pendingRestoration.current = null;
+        const conversation = conversations.find(item => item.id === pending!.id);
+        if (conversation) setChatLaunch({ id: crypto.randomUUID(), kind: "open", conversationId: conversation.id, conversation });
+        else rememberConversation(null);
+      } catch {
+        // A service restart cannot turn a remembered chat into New chat.
+        if (!cancelled && pendingRestoration.current === pending) retry = setTimeout(() => void restore(), 1000);
+      }
+    }
+    void restore();
+    return () => { cancelled = true; clearTimeout(retry); };
+  }, [backendOk, listsReady, rememberConversation]);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -133,6 +170,8 @@ export function App() {
     const originTab = activeTab.current;
     if (prepareChatNavigation.current && !await prepareChatNavigation.current()) return false;
     if (attentionRequest.current !== request || activeTab.current !== originTab) return false;
+    pendingRestoration.current = null;
+    setRestoringConversation(false);
     if (conversationId) {
       setAttentionConversationId(conversationId);
       setTab("chat");
@@ -167,6 +206,7 @@ export function App() {
       case "chat":
         return (
           <ChatPanel
+            restoringSelection={restoringConversation}
             workspaceLaunch={workspaceLaunch}
             onWorkspaceLaunchHandled={() => setWorkspaceLaunch(null)}
             chatLaunch={chatLaunch}
@@ -174,7 +214,7 @@ export function App() {
             historyNotice={historyNotice}
             conversationListRef={conversationListRef}
             onHistoryChanged={() => setHistoryRevision(value => value + 1)}
-            onActiveConversationId={setActiveConversationId}
+            onActiveConversationId={rememberConversation}
             onCreateProject={() => setCreateProjectOpen(true)}
             projectRevision={projectRevision}
             activeTab={tab}
@@ -194,9 +234,9 @@ export function App() {
           />
         );
       case "projects":
-        return <ProjectsPanel contextual projectRevision={projectRevision} onProjectChanged={() => setProjectRevision(value => value + 1)} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
+        return <ProjectsPanel contextual projectRevision={projectRevision} onProjectChanged={() => setProjectRevision(value => value + 1)} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
       case "agents":
-        return <AgentSetupsPanel onUse={setup => { setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
+        return <AgentSetupsPanel onUse={setup => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
         return <ModelsPanel />;
       case "knowledge":
@@ -223,6 +263,9 @@ export function App() {
   }
 
   function openChatLaunch(launch: ChatLaunch) {
+    pendingRestoration.current = null;
+    setRestoringConversation(false);
+    if (launch.kind === "fresh" && !activeConversationId) rememberConversation(null);
     setChatLaunch(launch);
     setTab("chat");
   }
@@ -256,6 +299,9 @@ export function App() {
         onNewChatInProject={project => {
           void (async () => {
             if (activeTab.current === "chat" && prepareChatNavigation.current && !await prepareChatNavigation.current()) return;
+            pendingRestoration.current = null;
+            setRestoringConversation(false);
+            if (!activeConversationId) rememberConversation(null);
             setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id });
             setTab("chat");
           })();

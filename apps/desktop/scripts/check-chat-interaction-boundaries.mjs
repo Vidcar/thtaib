@@ -944,6 +944,21 @@ async function testDeletedHistorySelectionRecoversToNewChat(vite) {
   } finally { await closeHarness(renderer, harness); }
 }
 
+async function testStartupRestorationBlocksComposer(vite) {
+  const harness = makeHarness();
+  const renderer = await renderChat(vite, harness, { restoringSelection: true });
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "normal catalogue loaded while restore remains pending");
+    assert.equal(textarea(renderer).props.disabled, true);
+    assert.equal(buttonByAriaLabel(renderer, "Opening conversation…").props.disabled, true);
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Cannot submit into an unresolved selection" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    assert.equal(harness.state.requests.commands.length, 0);
+    assert.equal(harness.state.requests.registers.length, 0);
+    assert.equal(harness.state.outgoingRequests.some(item => item.path === "/v1/chat/conversations" && item.method === "POST"), false, "restoration cannot create or submit a new chat");
+  } finally { await closeHarness(renderer, harness); }
+}
+
 async function testHeldRegistrationDoesNotBindOldThread(vite) {
   const heldRegister = deferred();
   const harness = makeHarness();
@@ -969,6 +984,8 @@ async function testHeldRegistrationDoesNotBindOldThread(vite) {
     await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_b"), "B held registration started");
     assert.match(activeConversationTitle(renderer), /Conversation B/, "held B registration should mark B as the pending selection");
     assert.match(allText(renderer), /Loading conversation/, "held B registration should show a safe loading state");
+    assert.equal(buttonByAriaLabel(renderer, "Opening conversation…").props.disabled, true, "opening an existing chat cannot claim a message is being sent");
+    assert.equal(harness.state.requests.commands.length, 0, "opening a conversation submits no message");
     assert.equal(harness.state.openStreams.has("thread_a"), false, "A stream must not remain attached while B registration is held");
     // Keep the originating server response even after the client detaches.
     // The producer attempts a real late write; looking it up after removal
@@ -2708,6 +2725,7 @@ try {
     console.log("Projection ownership leak reproduction exposed the broken state.");
   } else {
     const cases = [
+    ["startup restoration blocks composer", testStartupRestorationBlocksComposer],
     ["execution preferences durable draft and submission", testExecutionPreferencesSurviveDraftAndFreezeAtSubmission],
     ["reopened draft agent access", testDraftAgentChangeDoesNotRestorePreviousAccess],
     ["reopened access inherits serialized null", testReopenedAccessUsesCurrentInheritanceWithSerializedNullOverrides],

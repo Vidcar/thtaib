@@ -574,6 +574,7 @@ interface ChatPanelProps {
   conversationListRef?: RefObject<ConversationListActions | null>;
   onHistoryChanged?: () => void;
   onActiveConversationId?: (id: string | null) => void;
+  restoringSelection?: boolean;
   onCreateProject?: () => void;
   projectRevision?: number;
   onModelPhase?: (phase: "starting" | "ready" | "none" | "failed") => void;
@@ -1042,7 +1043,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setMessage("");
   }
 
-  const selectionBusy = Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
+  const selectionBusy = Boolean(props.restoringSelection) || Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
   const hasPendingCancelInput = Boolean(conversation?.pending_cancel_input_ids?.length);
   const runBusy = (conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false) || Boolean(pendingSubmit) || hasPendingCancelInput;
   const pendingSubmissionActive = Boolean(
@@ -1545,7 +1546,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <header className="chat-header">
           <div>
             {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
-            <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : "New conversation"}</h2>
+            <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : props.restoringSelection ? "Opening conversation…" : "New conversation"}</h2>
           </div>
           <div className="chat-header-actions"><MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show the model's reasoning and detailed tool activity. This does not change how the model thinks." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
           <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, changes, files, and actions"} onClick={() => {
@@ -1558,7 +1559,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript">
-          {deploymentsLoaded && deployments.length === 0 && !conversation ? (
+          {props.restoringSelection ? <EmptyState title="Opening conversation">Restoring your last conversation.</EmptyState> : deploymentsLoaded && deployments.length === 0 && !conversation ? (
             <EmptyState title="Your workspace for local AI">
               <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>
@@ -1777,7 +1778,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button>
             </MenuPopover>
             <MenuPopover label="Work mode" trigger={<><Icon name={workMode === "plan" ? "knowledge" : "agent-run"} size={16} /><span>{workMode === "plan" ? "Plan" : "Work"}</span></>} disabled={selectionBusy || sending}>{close => <div className="chat-mode-options" role="radiogroup" aria-label="Work mode">{(["work", "plan"] as const).map(mode => <button type="button" className="menu-action" role="radio" aria-checked={workMode === mode} key={mode} onClick={() => { markSetupEdited("work_mode"); setWorkMode(mode); close(); }}><Icon name={mode === "plan" ? "knowledge" : "agent-run"} /><span>{mode === "plan" ? "Plan" : "Work"}<small>{mode === "plan" ? "Read-only investigation and planning" : "Use tools with the selected access"}</small></span></button>)}</div>}</MenuPopover>
-            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
+            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
               await chooseSetup(projectId, agentSetupVersionId, configuration, true);
               await refresh();
             }} />
@@ -1796,12 +1797,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </button>
             <button
               type="submit"
-              aria-label={runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}
+              aria-label={props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}
               className="send-button"
               title={runBusy ? "Queue this message" : "Send message"}
               disabled={!hasModelChoice || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
             >
-              <Icon name="send" /><span className="sr-only">{runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}</span>
+              <Icon name="send" /><span className="sr-only">{props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}</span>
             </button>
           </div>
         </form>
