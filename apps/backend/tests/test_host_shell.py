@@ -302,14 +302,14 @@ class HostShellPolicyTests(unittest.TestCase):
         self.assertTrue(pauses("ask", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
         self.assertTrue(pauses("ask", "delete_file", {"file_path": "a.txt"}))
         self.assertTrue(pauses("ask", "execute", {"command": "rm -rf x"}))
-        self.assertFalse(pauses("ask", "execute", {"command": "echo ok"}))
+        self.assertTrue(pauses("ask", "execute", {"command": "echo ok"}))
         self.assertTrue(pauses("ask", "docs_search", {"query": "notes"}))
         asked = interrupt_on_for_run(run)
         assert asked is not None
         self.assertNotIn("ask_user", asked)
         self.assertNotIn("propose_memory", asked)
-        self.assertFalse(pauses("approve_for_me", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
-        self.assertFalse(pauses("approve_for_me", "delete_file", {"file_path": "a.txt"}))
+        self.assertTrue(pauses("approve_for_me", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}), "without a captured project preimage reversibility is unproven")
+        self.assertTrue(pauses("approve_for_me", "delete_file", {"file_path": "a.txt"}))
         self.assertTrue(pauses("approve_for_me", "execute", {"command": "rm -rf x"}))
         self.assertTrue(pauses("approve_for_me", "docs_search", {"query": "notes"}))
         self.assertFalse(pauses("full_access", "execute", {"command": "rm -rf x"}))
@@ -336,6 +336,14 @@ class HostShellPolicyTests(unittest.TestCase):
         rejects = reject_decisions_for(pending)
         self.assertEqual(len(rejects), 1)
         self.assertEqual(rejects[0]["type"], "reject")
+        file_action = pending_interrupt_from_raw({
+            "action_requests": [{"name": "write_file", "args": {"file_path": "notes.txt", "content": "proposed"}}],
+            "review_configs": [{"action_name": "write_file", "allowed_decisions": ["approve", "reject"]}],
+        })
+        assert file_action is not None
+        file_rejection = validated_decision_payloads(file_action, [InterruptDecision(type="reject")])[0]
+        self.assertNotIn("host-shell", file_rejection["message"])
+        self.assertIn("not executed", file_rejection["message"])
 
 
 class HostShellHarnessTests(unittest.TestCase):
@@ -496,9 +504,9 @@ class HostShellHarnessTests(unittest.TestCase):
         content = str(results[0]["detail"].get("content") or "").lower()
         self.assertTrue("not presented" in content or "not executed" in content or "error" in content)
 
-    def test_safe_execute_does_not_interrupt(self) -> None:
+    def test_full_access_selected_execute_does_not_interrupt(self) -> None:
         self._install(execute_then_reply("echo host-shell-ok"))
-        started = self._start()
+        started = self._start(approval_mode="full_access")
         self.assertTrue(started["host_shell"]["available"])
         self.assertEqual(started["host_shell"]["cwd"], str(self.project.resolve()))
         body = wait_for_run(self.client, started["id"])

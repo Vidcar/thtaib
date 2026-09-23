@@ -306,6 +306,25 @@ class EffectiveSetupResolverTests(unittest.TestCase):
         self.assertEqual(mismatch.loaded, 65536)
         self.assertIn("no retrieval", " ".join(setup.gaps))
 
+        # A local context increase already applied to the runtime must be
+        # recorded as the actual turn recipe rather than the saved context.
+        local = resolve_effective_setup(
+            deployment=deployment, profile=profile, knowledge_refs=KnowledgeRefs(),
+            knowledge_versions=[], surface_system_prompt=None,
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+            startup_overrides={"ctx_size": 65536},
+        )
+        self.assertEqual(local.bags.startup.applied["ctx_size"], 65536)
+        self.assertEqual(local.startup_mismatches, [])
+        self.assertEqual(profile.bags.startup.requested["ctx_size"], 8192)
+        reset = resolve_effective_setup(
+            deployment=deployment, profile=profile, knowledge_refs=KnowledgeRefs(),
+            knowledge_versions=[], surface_system_prompt=None,
+            default_system_prompt=DEFAULT_SYSTEM_PROMPT,
+            startup_overrides={"ctx_size": None},
+        )
+        self.assertNotIn("ctx_size", reset.bags.startup.requested)
+
     def test_pre_correction_profile_reports_retired_startup_keys(self) -> None:
         now = utc_now()
         deployment = Deployment(
@@ -376,7 +395,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
     def _profile(self, **extra: Any) -> str:
         payload = {
             "display_name": "effective-profile",
-            "startup": {"ctx_size": 8192},
+            "startup": {},
             "per_request": {"temperature": DISTINCT_TEMPERATURE, "not_a_real_key": 1},
             "agent": {},
             **extra,
@@ -417,12 +436,23 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertEqual(setup["selected_profile_id"], profile_id)
         self.assertEqual(setup["bags"]["per_request"]["applied"]["temperature"], DISTINCT_TEMPERATURE)
         self.assertIn("not_a_real_key", setup["unsupported"]["per_request"])
-        self.assertTrue(setup["startup_mismatches"])
+        self.assertFalse(setup["startup_mismatches"])
         capture = body["model_requests"][0]
         self.assertEqual(capture["applied_per_request"]["temperature"], DISTINCT_TEMPERATURE)
         self.assertIsNotNone(capture["http_payload"])
         self.assertEqual(capture["http_payload"]["body"]["temperature"], DISTINCT_TEMPERATURE)
         self.assertNotIn("http payload not observed", " ".join(capture["capture_gaps"]))
+
+    def test_changed_startup_is_rejected_before_outbound_request(self) -> None:
+        profile_id = self._profile(startup={"ctx_size": 8192})
+        started = self.client.post("/v1/agent-runs", json={
+            "deployment_id": self.deployment_id, "profile_id": profile_id,
+            "task": "Do not silently send with different loading settings.",
+            "presented_tools": [],
+        })
+        self.assertEqual(started.status_code, 409, started.text)
+        self.assertEqual(started.json()["code"], "model_reload_required")
+        self.assertEqual(_RecordingHandler.requests, [])
 
     def test_profile_agent_stale_keys_are_requested_but_not_applied_after_read(self) -> None:
         created = self.client.post(

@@ -42,6 +42,8 @@
 .workspace-remove {justify-self: start;}
 .knowledge-search {display: flex; align-items: center; gap: var(--space-compact); color: var(--muted); font-size: var(--text-body);}
 .knowledge-search input {flex: 1;}
+.knowledge-surface > :is(.card, .knowledge-search) {width: 100%; max-width: 760px;}
+.workflow-surface > form.card {width: 100%; max-width: 760px;}
 .knowledge-surface .workspace-records-layout > .card > label > textarea {min-height: 180px; resize: vertical;}
 .knowledge-surface .workspace-records-layout > .card {align-content: start;}
 .knowledge-surface .workspace-records-layout > .card > details {min-width: 0;}

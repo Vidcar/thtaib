@@ -1,6 +1,6 @@
 # Spec Delta
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: ENV-020 - Offer built-in file tools and only two custom file mutations
 

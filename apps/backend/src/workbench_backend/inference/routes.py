@@ -15,6 +15,9 @@ from workbench_backend.inference.schemas import (
     ManagedDeploymentRequest,
     PinRuntimeRequest,
     ProfileWriteRequest,
+    ModelConfigurationWriteRequest,
+    DefaultConfigurationRequest,
+    ReconfigureDeploymentRequest,
     SettingsPreviewRequest,
     RenameProfileRequest,
     DeletePreview,
@@ -177,6 +180,21 @@ def list_profiles(request: Request) -> object:
     return get_manager(request).list_profiles()
 
 
+@router.get("/bundles/{bundle_id}/configurations", response_model=list[RunProfile])
+def model_configurations(request: Request, bundle_id: str):
+    return get_manager(request).list_model_configurations(bundle_id)
+
+
+@router.post("/bundles/{bundle_id}/configurations", response_model=RunProfile)
+def save_model_configuration(request: Request, bundle_id: str, body: ModelConfigurationWriteRequest):
+    return get_manager(request).save_model_configuration(bundle_id, body)
+
+
+@router.put("/bundles/{bundle_id}/default-configuration", response_model=ModelBundle)
+def set_default_configuration(request: Request, bundle_id: str, body: DefaultConfigurationRequest):
+    return get_manager(request).set_default_configuration(bundle_id, body.configuration_id)
+
+
 @router.post("/profiles", response_model=RunProfile)
 def create_profile(request: Request, body: ProfileWriteRequest) -> object:
     return get_manager(request).create_profile(body)
@@ -276,9 +294,19 @@ def reload_deployment(request: Request, deployment_id: str) -> object:
     return get_manager(request).reload_deployment(deployment_id)
 
 
+@router.post("/deployments/{deployment_id}/reconfigure", response_model=Deployment)
+def reconfigure_deployment(request: Request, deployment_id: str, body: ReconfigureDeploymentRequest):
+    return get_manager(request).reconfigure_deployment(deployment_id, body)
+
+
 @router.get("/deployments/{deployment_id}/profile-changes", response_model=DeploymentProfileChanges)
 def deployment_profile_changes(request: Request, deployment_id: str) -> DeploymentProfileChanges:
     return get_manager(request).deployment_profile_changes(deployment_id)
+
+
+@router.get("/deployments/{deployment_id}/configuration-options", response_model=BundleConfigurationOptions)
+def deployment_configuration_options(request: Request, deployment_id: str):
+    return get_manager(request).get_deployment_configuration_options(deployment_id)
 
 
 @router.get("/deployments/{deployment_id}/logs", response_model=DeploymentLogResponse)

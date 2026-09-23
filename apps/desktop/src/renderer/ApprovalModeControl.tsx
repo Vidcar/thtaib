@@ -1,3 +1,5 @@
+import { Icon } from "./Icon";
+
 export const APPROVAL_MODES = [
   { id: "ask", label: "Ask", summary: "Ask", hint: "Ask before renaming, deleting, or using tools that need approval. Read-only commands and saved permissions can proceed." },
   { id: "approve_for_me", label: "Approve for me", summary: "Approve for me", hint: "Allow selected file changes, including rename and delete. Shell and external tools still follow saved permissions and approval rules." },
@@ -19,7 +21,6 @@ export function ApprovalModeControl(props: {
   disabled?: boolean;
   onChange: (mode: ApprovalMode) => void;
 }) {
-  const selected = APPROVAL_MODES.find(item => item.id === props.value) ?? APPROVAL_MODES[0];
   return (
     <div className="approval-mode-field">
       <div className="approval-mode" role="radiogroup" aria-label="Approval mode">
@@ -34,11 +35,12 @@ export function ApprovalModeControl(props: {
             disabled={props.disabled}
             onClick={() => props.onChange(mode.id)}
           >
-            {mode.label}
+            <Icon name={mode.id === "full_access" ? "shield" : mode.id === "approve_for_me" ? "sparkles" : "attention"} size={16} />
+            <span><strong>{mode.label}</strong><small>{mode.hint}</small></span>
+            <Icon name={props.value === mode.id ? "check" : "minus"} size={14} />
           </button>
         ))}
       </div>
-      <p className="hint">{selected.hint}</p>
     </div>
   );
 }

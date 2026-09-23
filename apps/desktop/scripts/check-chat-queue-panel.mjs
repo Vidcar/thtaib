@@ -40,7 +40,7 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
     }
     if (parsed.pathname.endsWith("/queue/q1") && init.method === "PATCH") {
       const body = requests.at(-1).body;
-      return jsonResponse({ ...conversation, queue: [{ ...conversation.queue[0], task: body.task, attachment_ids: body.attachment_ids, intended_config: body.intended_config }] });
+      return jsonResponse({ ...conversation, queue: [{ ...conversation.queue[0], task: body.task, attachment_ids: body.attachment_ids }] });
     }
     if (parsed.pathname.endsWith("/queue/q1") && init.method === "DELETE") {
       return jsonResponse({ ...conversation, queue: conversation.queue.slice(1) });
@@ -82,16 +82,8 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
   });
 
   const selects = renderer.root.findAllByType("select");
-  assert.ok(selects.length >= 2, "queued item should expose model and preset controls");
-  await act(async () => {
-    selects[0].props.onChange({ target: { value: "dep_b" } });
-    selects[1].props.onChange({ target: { value: "!none" } });
-  });
-  const thinkingRange = renderer.root.findAll((node) => node.type === "input" && node.props.type === "range")[0];
-  assert.ok(thinkingRange, "queued item should expose supported thinking control");
-  await act(async () => {
-    thinkingRange.props.onChange({ target: { value: "2" } });
-  });
+  assert.equal(selects.length, 0, "editing queued text cannot replace the captured model or trigger a reload");
+  assert.match(textOf(renderer.root), /Profile A/, "the captured model configuration remains named beside queued text");
 
   await act(async () => {
     button(renderer, "Save queued turn").props.onClick();
@@ -101,13 +93,8 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
   assert.deepEqual(patch.body, {
     task: "",
     attachment_ids: ["asset_old"],
-    intended_config: {
-      deployment_id: "dep_b",
-      profile_id: null,
-      inherit_deployment_settings: false,
-      per_request_overrides: { reasoning_effort: "high" },
-    },
   });
+  assert.deepEqual(updated[0].queue[0].intended_config, conversation.queue[0].intended_config, "the saved text edit preserves the exact queued setup");
 
   await act(async () => {
     button(renderer, "Remove queued turn").props.onClick();

@@ -12,6 +12,7 @@ from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import BundleService
 from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
+from workbench_backend.inference.configurations import ensure_model_configurations, requested_identity
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
 from workbench_backend.inference.ids import new_id, utc_now
@@ -42,6 +43,8 @@ from workbench_backend.inference.schemas import (
     BundleProjectors,
     PinRuntimeRequest,
     ProfileWriteRequest,
+    ModelConfigurationWriteRequest,
+    ReconfigureDeploymentRequest,
     RenameProfileRequest,
     RunProfile,
     RuntimeManifest,
@@ -117,6 +120,7 @@ class ModelManager:
         return job
 
     def list_bundles(self) -> list[ModelBundle]:
+        ensure_model_configurations(self.store)
         return [self.bundles.verify_bundle(bundle, use_cache=True) for bundle in self.store.list_bundles()]
 
     def get_bundle(self, bundle_id: str) -> ModelBundle:
@@ -200,8 +204,85 @@ class ModelManager:
                     metadata.has_mtp_tensors = True
         return metadata
 
+    def get_deployment_configuration_options(self, deployment_id: str) -> BundleConfigurationOptions:
+        deployment = self.get_deployment(deployment_id)
+        if deployment.bundle_id:
+            return self.get_bundle_configuration_options(deployment.bundle_id, deployment_id=deployment.id)
+        return bundle_configuration_options(None, GgufRuntimeMetadata(), deployment=deployment)
+
     def list_profiles(self) -> list[RunProfile]:
-        return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
+        ensure_model_configurations(self.store)
+        defaults = {bundle.default_configuration_id for bundle in self.store.list_bundles()}
+        profiles = [self._resolved_profile(profile) for profile in self.store.list_profiles()]
+        profiles.sort(key=lambda profile: (profile.id in defaults, profile.updated_at, profile.id), reverse=True)
+        canonical = [profile for profile in profiles if profile.merged_into_configuration_id is None]
+        indexed = {profile.id: profile for profile in profiles}
+        for profile in profiles:
+            owner = profile
+            seen = {profile.id}
+            while owner.merged_into_configuration_id in indexed and owner.merged_into_configuration_id not in seen:
+                seen.add(owner.merged_into_configuration_id)
+                owner = indexed[owner.merged_into_configuration_id]
+            if owner.id != profile.id and owner in canonical:
+                owner.equivalent_configuration_ids.append(profile.id)
+        return canonical
+
+    def list_model_configurations(self, bundle_id: str) -> list[RunProfile]:
+        self._require_profile_bundle(bundle_id)
+        return [profile for profile in self.list_profiles() if profile.bundle_id == bundle_id]
+
+    def canonical_configuration(self, configuration_id: str) -> RunProfile:
+        profile = self.get_profile(configuration_id)
+        if profile.bundle_id:
+            canonical = next((item for item in self.list_model_configurations(profile.bundle_id)
+                if item.id == profile.id or profile.id in item.equivalent_configuration_ids), None)
+            if canonical is not None:
+                return canonical
+            if profile.merged_into_configuration_id:
+                raise ManagerError("This configuration was merged into one that was removed. Choose another configuration.", code="profile_missing", status_code=404)
+        return profile
+
+    def save_model_configuration(self, bundle_id: str, request: ModelConfigurationWriteRequest) -> RunProfile:
+        with self.store.configuration_lock():
+            self.list_model_configurations(bundle_id)
+            name = request.display_name.strip()
+            if not name:
+                raise ManagerError("Name this configuration.", code="configuration_name_required", status_code=400)
+            existing = self.canonical_configuration(request.configuration_id) if request.configuration_id else None
+            if existing is not None:
+                self._validate_profile_bundle(existing, bundle_id)
+            if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None) and not profile.merged_into_configuration_id
+                    and profile.display_name.strip().casefold() == name.casefold() for profile in self.store.list_profiles()):
+                raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
+            legacy_agent = existing.bags.agent.requested if existing else {}
+            if request.agent and request.agent != legacy_agent:
+                raise ManagerError("Put instructions in an Agent setup. Model configurations save loading and response settings.", code="configuration_agent_instructions", status_code=400)
+            body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default"}),
+                "display_name": name, "bundle_id": bundle_id, "agent": legacy_agent})
+            if request.configuration_id:
+                profile = self.update_profile(existing.id, body)
+            else:
+                profile = self.create_profile(body)
+            if request.make_default:
+                self.set_default_configuration(bundle_id, profile.id)
+            return profile
+
+    def set_default_configuration(self, bundle_id: str, configuration_id: str) -> ModelBundle:
+        with self.store.configuration_lock():
+            bundle = self.store.get_bundle(bundle_id)
+            if bundle is None:
+                raise ManagerError("Unknown model", code="bundle_missing", status_code=404)
+            profile = self.canonical_configuration(configuration_id)
+            if profile.bundle_id != bundle_id:
+                raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+            return self.store.put_bundle(bundle.model_copy(update={"default_configuration_id": profile.id}))
+
+    def configuration_deployment(self, configuration_id: str) -> Deployment | None:
+        profile = self.get_profile(configuration_id)
+        matches = [d for d in self.store.list_deployments() if d.bundle_id == profile.bundle_id
+            and (d.profile_id == profile.id or requested_identity(d.settings) == requested_identity(profile.bags))]
+        return max(matches, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy and d.process_identity),
+            d.status != DeploymentStatus.failed, d.updated_at), default=None)
 
     def get_profile(self, profile_id: str) -> RunProfile:
         profile = self.store.get_profile(profile_id)
@@ -211,9 +292,11 @@ class ModelManager:
 
     def _resolved_profile(self, profile: RunProfile) -> RunProfile:
         """Re-resolve requested keys so pre-correction profiles show retired notes."""
-
+        bundle = self.store.get_bundle(profile.bundle_id) if profile.bundle_id else None
         return profile.model_copy(
             update={
+                "bundle_name": bundle.display_name if bundle else None,
+                "equivalent_configuration_ids": [],
                 "bags": resolve_bags(
                     startup=profile.bags.startup.requested,
                     per_request=profile.bags.per_request.requested,
@@ -228,6 +311,7 @@ class ModelManager:
         profile = RunProfile(
             id=new_id("profile"),
             display_name=request.display_name,
+            configuration_origin="named",
             bundle_id=request.bundle_id,
             bags=resolve_bags(
                 startup=request.startup,
@@ -240,8 +324,14 @@ class ModelManager:
         return self.store.put_profile(profile)
 
     def update_profile(self, profile_id: str, request: ProfileWriteRequest) -> RunProfile:
+        with self.store.configuration_lock():
+            return self._update_profile_locked(profile_id, request)
+
+    def _update_profile_locked(self, profile_id: str, request: ProfileWriteRequest) -> RunProfile:
         self._require_profile_bundle(request.bundle_id)
         existing = self.get_profile(profile_id)
+        if request.expected_revision is not None and request.expected_revision != existing.revision:
+            raise ManagerError("This configuration changed elsewhere. Refresh before saving.", code="configuration_revision_conflict", status_code=409)
         updated = existing.model_copy(
             update={
                 "display_name": request.display_name,
@@ -252,6 +342,8 @@ class ModelManager:
                     agent=request.agent,
                 ),
                 "updated_at": utc_now(),
+                "revision": existing.revision + 1,
+                "configuration_origin": "named",
             }
         )
         return self.store.put_profile(updated)
@@ -260,7 +352,8 @@ class ModelManager:
         display_name = request if isinstance(request, str) else request.display_name
         existing = self.get_profile(profile_id)
         return self.store.put_profile(
-            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now()})
+            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1,
+                "configuration_origin": "named"})
         )
 
     def duplicate_profile(
@@ -277,6 +370,9 @@ class ModelManager:
                 "display_name": display_name,
                 "created_at": now,
                 "updated_at": now,
+                "revision": 1,
+                "configuration_origin": "named",
+                "merged_into_configuration_id": None,
             },
             deep=True,
         )
@@ -301,6 +397,8 @@ class ModelManager:
             preview = self.profile_delete_preview(profile_id)
             if preview.blockers:
                 raise self._blocked_error("profile_delete_blocked", preview.blockers)
+            if any(bundle.default_configuration_id == profile_id for bundle in self.store.list_bundles()):
+                raise ManagerError("Choose another default before deleting this configuration.", code="default_configuration_required", status_code=409)
             self.store.delete_profile(profile_id)
             return preview
 
@@ -348,6 +446,21 @@ class ModelManager:
             profile_ids={request.profile_id} if request.profile_id else set(),
             bundle_ids={request.bundle_id},
         ):
+            profile = self.get_profile(request.profile_id) if request.profile_id else None
+            startup = dict(profile.bags.startup.requested) if profile else {}
+            for key, value in request.startup.items():
+                if value is None:
+                    startup.pop(key, None)
+                else:
+                    startup[key] = value
+            wanted = resolve_bags(startup=startup, per_request=profile.bags.per_request.requested if profile else {},
+                agent=profile.bags.agent.requested if profile else {})
+            candidates = [d for d in self.store.list_deployments() if d.bundle_id == request.bundle_id
+                and d.scope == ManagementScope.managed and d.profile_id == request.profile_id
+                and requested_identity(d.settings) == requested_identity(wanted)]
+            if candidates:
+                existing = max(candidates, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy), d.updated_at))
+                return self.deployments.start(existing.id) if request.auto_start else existing
             return self.deployments.create_managed(request)
 
     def attach_connected(self, request: ConnectedDeploymentRequest) -> Deployment:
@@ -396,6 +509,8 @@ class ModelManager:
 
     def ensure_deployment_ready(self, deployment_id: str) -> Deployment:
         deployment = self.get_deployment(deployment_id)
+        if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
+            raise ManagerError("Reload this model to restore its previous configuration.", code="reconfigure_recovery_required", status_code=409)
         if deployment.scope == ManagementScope.connected:
             if not deployment.endpoint:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
@@ -451,7 +566,102 @@ class ModelManager:
             # before stopping an otherwise usable owned process.
             self._require_deployable_bundle(deployment.bundle_id or "")
             self.deployments.stop(deployment.id)
+            if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
+                prior = deployment.reconfiguration.get("previous")
+                if isinstance(prior, dict):
+                    restored = Deployment.model_validate(prior).model_copy(update={"pid": None, "process_identity": None,
+                        "health": None, "server_props": None, "status": DeploymentStatus.stopped,
+                        "reconfiguration": None, "updated_at": utc_now()})
+                    self.store.put_deployment(restored)
             return self.deployments.start(deployment.id)
+
+    def reconfigure_deployment(self, deployment_id: str, request: ReconfigureDeploymentRequest) -> Deployment:
+        """Change an idle owned process, committing only after verified readiness."""
+        from workbench_backend.inference.deployments import _require_valid_managed_startup, managed_argv
+
+        deployment = self.get_deployment(deployment_id)
+        with self.lifecycle.mutate("reconfigure_deployment", deployment_ids={deployment.id},
+            bundle_ids={deployment.bundle_id} if deployment.bundle_id else set()):
+            deployment = self.get_deployment(deployment_id)
+            if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
+                raise ManagerError("Reload this model to restore its previous configuration first.", code="reconfigure_recovery_required", status_code=409)
+            self._require_no_live_deployment_dependencies(deployment, "deployment_active")
+            if request.expected_updated_at is not None and request.expected_updated_at != deployment.updated_at:
+                raise ManagerError("Model state changed. Refresh before applying.", code="deployment_revision_conflict", status_code=409)
+            if deployment.scope != ManagementScope.managed:
+                raise ManagerError("This model is controlled by an external server.", code="connected_no_lifecycle", status_code=409)
+            bundle = self._require_deployable_bundle(deployment.bundle_id or "")
+            profile = self.canonical_configuration(request.model_configuration_id) if request.model_configuration_id else None
+            if profile is not None:
+                if profile.bundle_id != deployment.bundle_id:
+                    raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+                if request.expected_configuration_revision is not None and request.expected_configuration_revision != profile.revision:
+                    raise ManagerError("The selected configuration changed. Refresh before applying.", code="configuration_revision_conflict", status_code=409)
+            requested = {} if request.replace_startup else dict(deployment.requested_startup)
+            for key, value in request.startup.items():
+                if value is None:
+                    requested.pop(key, None)
+                else:
+                    requested[key] = value
+            bags = resolve_bags(startup=requested, per_request=profile.bags.per_request.requested if profile else deployment.settings.per_request.requested,
+                agent=profile.bags.agent.requested if profile else deployment.settings.agent.requested)
+            _require_valid_managed_startup(bags.startup)
+            executable = self.runtime.require_executable()
+            managed_argv(executable, bundle, bags.startup.applied)
+            old_context = deployment.server_props.n_ctx if deployment.server_props else deployment.applied_startup.get("ctx_size")
+            new_context = bags.startup.applied.get("ctx_size")
+            if request.conversation_id and (new_context is None or not old_context or new_context < old_context):
+                with open_application_store(self.paths) as app_store:
+                    conversation = app_store.get_conversation(request.conversation_id)
+                if conversation is None or conversation.deployment_id != deployment.id:
+                    raise ManagerError("This conversation does not use the selected model.", code="context_conversation_mismatch", status_code=409)
+                if conversation.run_ids or conversation.transcript:
+                    raise ManagerError("Start a new chat to reduce context. This session keeps its retained model history.", code="context_history_requires_new_chat", status_code=409,
+                        details={"deployment_id": deployment.id, "applied_context": old_context, "requested_context": new_context})
+            # Preflight changed fixed ports while the old process remains usable.
+            if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):
+                self.deployments._allocate_listen(bags.startup.applied, fixed=True)
+            prior = deployment.model_dump(mode="json", exclude={"reconfiguration", "capability_evidence", "inference_identity"})
+            journal = {"phase": "applying", "previous": prior, "requested_startup": requested, "started_at": utc_now()}
+            self.store.put_deployment(deployment.model_copy(update={"reconfiguration": journal}))
+            stopped = self.deployments.stop(deployment.id)
+            pending = stopped.model_copy(update={"requested_startup": requested, "applied_startup": bags.startup.applied,
+                "startup_overrides": dict(request.startup) if request.replace_startup else {**deployment.startup_overrides, **request.startup}, "settings": bags,
+                "profile_id": profile.id if profile else deployment.profile_id,
+                "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
+                "configuration_revision": profile.revision if profile else deployment.configuration_revision,
+                "server_props": None, "reconfiguration": journal, "updated_at": utc_now()})
+            self.store.put_deployment(pending)
+            failure = None
+            try:
+                result = self.deployments.start(deployment.id)
+                if result.status == DeploymentStatus.running and result.health and result.health.healthy:
+                    return self.store.put_deployment(result.model_copy(update={"reconfiguration": None}))
+                failure = result.error or "The changed model did not become ready."
+            except Exception as exc:
+                failure = str(exc)
+            current = self.get_deployment(deployment.id)
+            if current.process_identity is not None:
+                try:
+                    self.deployments.stop(current.id)
+                except Exception as exc:
+                    journal.update(phase="recovery_required", error=failure, recovery_error=str(exc))
+                    self.store.put_deployment(current.model_copy(update={"reconfiguration": journal}))
+                    raise ManagerError("The changed model failed and needs recovery before another load.", code="reconfigure_recovery_required", status_code=409, details={"deployment_id": current.id}) from exc
+            restored = Deployment.model_validate(prior).model_copy(update={"pid": None, "process_identity": None,
+                "health": None, "server_props": None, "status": DeploymentStatus.stopped, "reconfiguration": journal})
+            self.store.put_deployment(restored)
+            try:
+                if deployment.status == DeploymentStatus.running:
+                    restored = self.deployments.start(restored.id)
+                recovered = restored.status == deployment.status or restored.status == DeploymentStatus.running
+            except Exception as exc:
+                recovered = False
+                journal["recovery_error"] = str(exc)
+            journal.update(phase="rolled_back" if recovered else "recovery_required", error=failure)
+            self.store.put_deployment(self.get_deployment(deployment.id).model_copy(update={"reconfiguration": journal}))
+            raise ManagerError("Could not apply model settings. " + ("The previous configuration was restored." if recovered else "The previous configuration is saved; recovery is needed."),
+                code="reconfigure_failed", status_code=409, details={"deployment_id": deployment.id, "recovered": recovered, "cause": failure})
 
     def deployment_health(self, deployment_id: str) -> Deployment:
         return self.deployments.health(deployment_id)
@@ -721,7 +931,9 @@ class ModelManager:
             raise ManagerError("Could not check active model work. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
         consumers: list[LifecycleConsumer] = []
         for run in runs:
-            if run.deployment_id not in deployment_ids and run.embedding_deployment_id not in deployment_ids and (run.profile_id or "") not in profile_ids:
+            helper_uses_model = any(helper.configuration.deployment_id in deployment_ids
+                or helper.configuration.profile_id in profile_ids for helper in getattr(run, "helper_snapshots", []) or [])
+            if run.deployment_id not in deployment_ids and run.embedding_deployment_id not in deployment_ids and (run.profile_id or "") not in profile_ids and not helper_uses_model:
                 continue
             consumers.append(
                 LifecycleConsumer(
@@ -738,10 +950,10 @@ class ModelManager:
         deployments = deployment_ids or set()
         try:
             with open_application_store(self.paths) as app_store:
-                conversations = app_store.list_conversations()
+                conversations = app_store.list_conversations(include_archived=True)
         except Exception as exc:
             raise ManagerError("Could not check saved conversations. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
-        return [
+        consumers = [
             LifecycleConsumer(
                 kind="chat",
                 id=conversation.id,
@@ -751,6 +963,17 @@ class ModelManager:
             for conversation in conversations
             if conversation.profile_id in profiles or conversation.deployment_id in deployments or conversation.embedding_deployment_id in deployments
         ]
+        for conversation in conversations:
+            for item in conversation.queue:
+                frozen = item.frozen_config or item.intended_config or {}
+                if (frozen.get("deployment_id", conversation.deployment_id) in deployments
+                    or frozen.get("embedding_deployment_id", conversation.embedding_deployment_id) in deployments
+                    or frozen.get("profile_id", conversation.profile_id) in profiles
+                    or frozen.get("model_configuration_id") in profiles
+                    or any(helper.configuration.deployment_id in deployments or helper.configuration.profile_id in profiles
+                        for helper in item.helper_snapshots or [])):
+                    consumers.append(LifecycleConsumer(kind="chat_queue", id=item.id, label=conversation.title or conversation.id, live=True))
+        return consumers
 
     def _lab_consumers(self, *, profile_id: str | None = None, profile_ids: set[str] | None = None, deployment_ids: set[str] | None = None) -> list[LifecycleConsumer]:
         profiles = set(profile_ids or ()) | ({profile_id} if profile_id else set())
@@ -782,10 +1005,10 @@ class ModelManager:
                     profile_ids.add(deployment.profile_id)
         blockers = [
             consumer
-            for consumer in self._run_consumers(
+            for consumer in [*self._run_consumers(
                 deployment_ids=deployment_ids,
                 profile_ids=profile_ids,
-            )
+            ), *self._chat_consumers(deployment_ids=deployment_ids, profile_ids=profile_ids)]
             if consumer.live
         ]
         if blockers:

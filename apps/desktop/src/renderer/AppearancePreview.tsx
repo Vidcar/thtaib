@@ -27,7 +27,7 @@ export function AppearancePreviewApp() {
 }
 
 export function AppearancePreview({ active }: { active: { id: string; name: string; detail: string } | null }) {
-  const [guides, setGuides] = useState(true);
+  const [guides, setGuides] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
   const aimed = active?.id ?? "";
 
@@ -73,14 +73,14 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
             </Hit>
           </Hit>
           <Hit active={aimed} guide tokens={["palette-bg", "pad-page", "layout-inset", "space-section", "layout-page", "font-ui"]} className="appearance-stage-main">
-            <Hit active={aimed} tokens={["text-heading", "weight-semibold"]} className="appearance-stage-title">Page title</Hit>
-            <Hit active={aimed} tokens={["text-title", "weight-medium"]} className="appearance-stage-hero">What are we working on?</Hit>
+            <Hit active={aimed} tokens={["text-heading", "weight-semibold"]} className="appearance-stage-title">A conversation</Hit>
+            <Hit active={aimed} tokens={["text-title", "weight-medium"]} className="appearance-stage-hero">Project notes</Hit>
             <Hit active={aimed} tokens={["layout-reading", "space-stack"]} className="appearance-stage-column">
               <Hit active={aimed} guide tokens={["palette-bg-raised", "radius-composer", "pad-card", "layout-message", "shadow-soft", "text-ui"]} className="appearance-stage-bubble">Your message</Hit>
               <Hit active={aimed} tokens={["text-ui", "leading-body", "palette-text"]} className="appearance-stage-answer">
                 Answer text stays readable on its own. <Hit active={aimed} tokens={["tint-soft"]} className="appearance-stage-selection">Selected</Hit> words use the soft tint.
               </Hit>
-              <Hit active={aimed} tokens={["text-small", "palette-muted", "line-strong", "palette-border"]} className="appearance-stage-reasoning">Reasoning stays quieter than the answer.</Hit>
+              <Hit active={aimed} tokens={["text-small", "palette-muted", "line-strong", "palette-border"]} className="appearance-stage-reasoning"><Icon name="files" size={14} /> Read notes.md</Hit>
               <Hit active={aimed} tokens={["text-small", "fade-quiet", "palette-muted"]} className="appearance-stage-hint">Hint</Hit>
               <Hit active={aimed} tokens={["font-mono", "font-code", "text-small"]} className="appearance-stage-code">const notes = true</Hit>
               <Hit active={aimed} tokens={["font-editor", "font-mono", "palette-bg-input"]} className="appearance-stage-editor">editor.ts</Hit>

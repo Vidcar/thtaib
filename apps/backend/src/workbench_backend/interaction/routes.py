@@ -71,13 +71,16 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
     options = interaction.subscription(thread_id, body)
     cursor = options.get("since", 0)
     resume = interaction.resume_view(thread_id, cursor)
+    stopping = request.app.state.shutdown_requested
 
     async def produce():
         nonlocal cursor
+        if stopping.is_set():
+            return
         idle = 0
         for wire in resume.opening(options):
             yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
-        while not await request.is_disconnected():
+        while not stopping.is_set() and not await request.is_disconnected():
             # Display-only edits hide prior display events, never graph state.
             # Their first values record is the new authoritative display.
             cutover = interaction.binding(thread_id)["snapshot"].get("workbench", {}).get("display_cutover_seq", 0)

@@ -15,6 +15,16 @@ import "./ChatDock.css";
 export type DockPage = "changes" | "files" | "library";
 type FileChange = SchemaProjectFileChangeView;
 
+export function groupConsecutiveChanges<T extends { change: { path: string; id: string } }>(changes: T[]): Array<{ path: string; items: T[] }> {
+  const groups: Array<{ path: string; items: T[] }> = [];
+  for (const item of changes) {
+    const last = groups.at(-1);
+    if (last?.path === item.change.path) last.items.push(item);
+    else groups.push({ path: item.change.path, items: [item] });
+  }
+  return groups;
+}
+
 interface FileNode {
   id: string;
   name: string;
@@ -103,7 +113,7 @@ function ChangesPage(props: {
   return <>
     {ids.length ? <label>Turn<select aria-label="File changes turn" value={runId} onChange={event => setRunId(event.target.value)}>{ids.map(id => <option key={id} value={id}>{id === props.currentRunId ? "Latest turn" : id}</option>)}</select></label> : null}
     {error ? <Notice tone="error">{error}</Notice> : null}
-    {!changes.length ? <p className="hint">No recorded project file changes for this turn.</p> : <ul className="plain-list file-change-list">{changes.map(item => <li key={item.change.id}><button type="button" aria-pressed={item.change.id === selected?.change.id} onClick={() => { props.onSelectChange(item.change.id); setConfirm(false); }}>{item.change.destination ? `${item.change.path} → ${item.change.destination}` : item.change.path}</button></li>)}</ul>}
+    {!changes.length ? <p className="hint">No recorded project file changes for this turn.</p> : <ul className="plain-list file-change-list">{groupConsecutiveChanges(changes).map(group => <li key={group.items[0].change.id}>{group.items.length > 1 ? <details open={group.items.some(item => item.change.id === selected?.change.id)}><summary>{group.path}<span className="hint">{group.items.length} edits</span></summary><div className="file-change-edits">{group.items.map((item, index) => <button type="button" key={item.change.id} aria-pressed={item.change.id === selected?.change.id} onClick={() => { props.onSelectChange(item.change.id); setConfirm(false); }}>Edit {index + 1}</button>)}</div></details> : group.items.map(item => <button key={item.change.id} type="button" aria-pressed={item.change.id === selected?.change.id} onClick={() => { props.onSelectChange(item.change.id); setConfirm(false); }}>{item.change.destination ? `${item.change.path} → ${item.change.destination}` : item.change.path}</button>)}</li>)}</ul>}
     {selected && textReady ? <div className="chat-dock-editor" aria-label="File difference"><MonacoDiff original={before} modified={after} sideBySide={props.width >= 640} /></div> : selected ? <p className="hint">{selected.diff_unavailable_reason || "The difference is unavailable."}</p> : null}
     {selected?.reversal_available ? confirm ? <ConfirmNote className="notice" disabled={busy} confirmLabel="Reverse change" cancelLabel="Keep change" onConfirm={() => void reverse()} onCancel={() => setConfirm(false)}>Reverse this file change? The current file must still match the recorded result.</ConfirmNote> : <button type="button" disabled={busy} onClick={() => setConfirm(true)}>Reverse this file change</button> : selected ? <p className="hint">{selected.reversal_unavailable_reason || selected.note}</p> : null}
     {props.currentRunId && props.currentRunStatus && props.onOpenKnowledge ? <RunMemoryProposals runId={props.currentRunId} status={props.currentRunStatus} onOpenKnowledge={props.onOpenKnowledge} /> : null}
@@ -213,8 +223,9 @@ function replaceChildren(nodes: FileNode[], path: string, children: FileNode[]):
   return nodes.map(node => node.path === path ? { ...node, children } : node.children ? { ...node, children: replaceChildren(node.children, path, children) } : node);
 }
 
-function MonacoDiff({ original, modified, sideBySide }: { original: string; modified: string; sideBySide: boolean }) {
-  const Diff = useMonacoDiff();
+export function MonacoDiff({ original, modified, sideBySide, load = ensureMonaco }: { original: string; modified: string; sideBySide: boolean; load?: () => Promise<void> }) {
+  const { Diff, error, retry } = useMonacoDiff(load);
+  if (error) return <Notice tone="error" action={<button type="button" onClick={retry}>Retry</button>}>The difference is unavailable. {error}</Notice>;
   if (!Diff) return <p className="hint">Opening the difference…</p>;
   return <Diff original={original} modified={modified} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, renderSideBySide: sideBySide, originalEditable: false, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
 }
@@ -225,21 +236,24 @@ function MonacoFile({ text }: { text: string }) {
   return <Editor value={text} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
 }
 
-function useMonacoDiff() {
+function useMonacoDiff(load: () => Promise<void>) {
   const [Diff, setDiff] = useState<typeof import("@monaco-editor/react").DiffEditor | null>(null);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    void ensureMonaco().then(() => import("@monaco-editor/react")).then(mod => { if (!cancelled) setDiff(() => mod.DiffEditor); });
+    setError("");
+    void load().then(() => import("@monaco-editor/react")).then(mod => { if (!cancelled) setDiff(() => mod.DiffEditor); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
-  }, []);
-  return Diff;
+  }, [load, attempt]);
+  return { Diff, error, retry: () => setAttempt(value => value + 1) };
 }
 
 function useMonacoFile() {
   const [Editor, setEditor] = useState<typeof import("@monaco-editor/react").Editor | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void ensureMonaco().then(() => import("@monaco-editor/react")).then(mod => { if (!cancelled) setEditor(() => mod.Editor); });
+    void ensureMonaco().then(() => import("@monaco-editor/react")).then(mod => { if (!cancelled) setEditor(() => mod.Editor); }).catch(() => { /* The retained plain-text view remains available. */ });
     return () => { cancelled = true; };
   }, []);
   return Editor;

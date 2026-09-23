@@ -1,6 +1,6 @@
 # Spec Delta
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: ARCH-011 - Leave a door for a later feature
 

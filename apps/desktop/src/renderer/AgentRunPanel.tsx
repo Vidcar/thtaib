@@ -2,6 +2,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
 import { AgentMessageFeed } from "./AgentMessageFeed";
+import { ChatModelControls } from "./ChatModelControls";
+import { ApprovalModeControl, approvalModeLabel, type ApprovalMode } from "./ApprovalModeControl";
+import { MenuPopover } from "./MenuPopover";
+import { workspaceApi, type SetupConfiguration } from "./workspaceApi";
+import { RunActivitySummary, helperApprovalOwner } from "./RunActivitySummary";
 import { deploymentOptionLabel } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
@@ -16,6 +21,7 @@ import {
   isDeclaredEmbedder,
   type AgentRun,
   type Deployment,
+  type RunProfile,
 } from "./types";
 
 interface PendingAgentSubmit {
@@ -27,6 +33,8 @@ interface PendingAgentSubmit {
   deploymentId: string;
   projectPath: string;
   embeddingDeploymentId: string;
+  configuration: SetupConfiguration;
+  approvalMode: ApprovalMode;
 }
 
 function AgentRunStream(props: {
@@ -122,6 +130,8 @@ function AgentRunStreamContent(props: {
           multitaskStrategy: "reject",
           metadata: {
             workbench: {
+              ...pendingSubmit.configuration,
+              approval_mode: pendingSubmit.approvalMode,
               deployment_id: pendingSubmit.deploymentId,
               presented_tools: undefined,
               workspace_id: undefined,
@@ -149,6 +159,7 @@ function AgentRunStreamContent(props: {
     <>
       {visibleInterrupt && displayRun ? (
         <InterruptApproval
+          ownerLabel={helperApprovalOwner(displayRun, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
           onRespond={(payload) => {
             void stream
@@ -167,7 +178,8 @@ function AgentRunStreamContent(props: {
 
       {displayRun ? (
         <div className="card">
-          <AgentMessageFeed live={isAgentRunLive(displayRun.status)} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
+          <AgentMessageFeed waiting={Boolean(visibleInterrupt)} toolAuthorizations={displayRun.tool_authorizations} toolAuthorizationGrants={displayRun.tool_authorization_grants} live={isAgentRunLive(displayRun.status)} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} />
+          <RunActivitySummary run={displayRun} />
           <RunProgress
             run={displayRun}
             title={displayRun.task}
@@ -199,6 +211,9 @@ interface AgentRunPanelProps {
 
 export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPanelProps = {}) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  const [profiles, setProfiles] = useState<RunProfile[]>([]);
+  const [configuration, setConfiguration] = useState<SetupConfiguration>({});
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
@@ -211,12 +226,15 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [attentionAttempt, setAttentionAttempt] = useState(0);
+  const [attentionFailed, setAttentionFailed] = useState(false);
   const draftRevision = useRef(0);
   const ownerGeneration = useRef(0);
 
   async function refresh(): Promise<void> {
-    const [nextDeployments, tools] = await Promise.all([api.deployments(), api.agentTools()]);
+    const [nextDeployments, tools, nextProfiles] = await Promise.all([api.deployments(), api.agentTools(), api.profiles()]);
     setDeployments(nextDeployments);
+    setProfiles(nextProfiles);
     setEnabledTools(tools.enabled);
     setDeploymentId((current) => current || nextDeployments[0]?.id || "");
     setLoadError("");
@@ -237,6 +255,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
     setRun(null);
     setPendingSubmit(null);
     setStarting(true);
+    setAttentionFailed(false);
     setMessage("");
     void Promise.all([
       api.agentRun(attentionRunId),
@@ -245,16 +264,16 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
       if (cancelled || ownerGeneration.current !== generation) return;
       setRun(currentRun);
       setThreadId(registered.thread_id);
+      onAttentionHandled?.(attentionRunId);
     }).catch((error: unknown) => {
-      if (!cancelled && ownerGeneration.current === generation) setMessage(errorMessage(error));
+      if (!cancelled && ownerGeneration.current === generation) { setMessage(errorMessage(error)); setAttentionFailed(true); }
     }).finally(() => {
       if (!cancelled && ownerGeneration.current === generation) {
         setStarting(false);
-        onAttentionHandled?.(attentionRunId);
       }
     });
     return () => { cancelled = true; };
-  }, [attentionRunId, onAttentionHandled]);
+  }, [attentionRunId, onAttentionHandled, attentionAttempt]);
 
   const liveRunId = run && isAgentRunLive(run.status) ? run.id : null;
 
@@ -302,7 +321,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
   }
 
   return (
-    <section className="surface">
+    <section className="surface workflow-surface">
       <header className="surface-head">
         <div className="entity-head"><h2>Workflows</h2><HoverHelp title="About task runs">Run a task with tools, approvals and progress in one place. Use Chat for an ongoing conversation.</HoverHelp></div>
       </header>
@@ -311,7 +330,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
         className="card"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!deploymentId || !task.trim() || liveRunId || pendingSubmit || starting) {
+          if ((!deploymentId && !configuration.model_configuration_id) || !task.trim() || liveRunId || pendingSubmit || starting) {
             return;
           }
           const capturedDraftRevision = draftRevision.current;
@@ -322,6 +341,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
           setRun(null);
           setPendingSubmit(null);
           setStarting(true);
+          setAttentionFailed(false);
           void (async () => {
             const registered = await api.registerAgentInteractionThread({ source_surface: "agent" });
             if (ownerGeneration.current !== generation) {
@@ -338,6 +358,8 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
               deploymentId,
               projectPath,
               embeddingDeploymentId,
+              configuration,
+              approvalMode,
             });
           })()
             .catch((error: unknown) => {
@@ -354,17 +376,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
       >
         <h3>Run a task</h3>
         <div className="setup-grid">
-        <label>
-          Model
-          <select value={deploymentId} onChange={(event) => setDeploymentId(event.target.value)}>
-            {deployments.length === 0 ? <option value="">No model available</option> : null}
-            {deployments.map((deployment) => (
-              <option key={deployment.id} value={deployment.id}>
-                {deploymentOptionLabel(deployment)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="run-configuration-controls"><ChatModelControls deployments={deployments} profiles={profiles} selectedDeploymentId={deploymentId} configuration={configuration} disabled={starting || Boolean(pendingSubmit)} runtimeBusy={Boolean(liveRunId)} onReloaded={refresh} onApply={async next => { const resolved = await workspaceApi.resolveSetup(null, null, next); setConfiguration(next); setDeploymentId(resolved.configuration.deployment_id ?? next.deployment_id ?? (next.model_configuration_id ? "" : deploymentId)); }} /><MenuPopover label="Workflow access" trigger={<><Icon name="shield" size={16} />{approvalModeLabel(approvalMode)}</>}><ApprovalModeControl value={approvalMode} onChange={setApprovalMode} disabled={starting || Boolean(pendingSubmit)} /></MenuPopover></div>
         <label>
           Retrieval model (optional)
           <select
@@ -389,13 +401,13 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
           />
         </label>
         </div>
-        {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer and require approval.</p> : null}
+        {projectPath.trim() ? <p className="hint"><Icon name="terminal" size={14} /> Shell commands can access this computer. {approvalMode === "full_access" ? "Enabled shell tools run without approval pauses." : "Shell tools follow approval rules and saved permissions."}</p> : null}
         <label>
           Task
           <textarea value={task} onChange={(event) => updateTask(event.target.value)} placeholder="What would you like to get done?" />
         </label>
         <div className="actions">
-          <button type="submit" disabled={!deploymentId || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
+          <button type="submit" disabled={(!deploymentId && !configuration.model_configuration_id) || !task.trim() || Boolean(liveRunId) || Boolean(pendingSubmit) || starting}>
             <Icon name="send" size={15} /> Run task
           </button>
           <HoverHelp title="Available tools">{enabledTools.length ? enabledTools.join(", ") : "No tools available."} File and shell tools need a project folder.</HoverHelp>
@@ -418,7 +430,7 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
       ) : (
         <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
-      {message ? <Notice tone="error">{message}</Notice> : null}
+      {message ? <Notice tone="error" action={attentionFailed && attentionRunId ? <button type="button" disabled={starting} onClick={() => setAttentionAttempt(current => current + 1)}>Retry</button> : undefined}>{message}</Notice> : null}
     </section>
   );
 }

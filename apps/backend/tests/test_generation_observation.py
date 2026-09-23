@@ -4,13 +4,17 @@ from types import SimpleNamespace
 import unittest
 
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+from workbench_backend.agents.schemas import AgentRun
 
 
 class GenerationObservationTests(unittest.TestCase):
     def observe(self, usage, *, unverified=False):
         startup = SimpleNamespace(applied={"ctx_size": 8192}, unverified=["ctx_size"] if unverified else [])
-        run = SimpleNamespace(effective_setup=SimpleNamespace(bags=SimpleNamespace(startup=startup)),
-                              context_observation=SimpleNamespace(capacity_tokens=None if unverified else 8192))
+        run = AgentRun(id="generation_fixture", status="running", deployment_id="fixture",
+            task="measure", enabled_tools=[], presented_tools=[], created_at="now", updated_at="now").model_copy(update={
+                "effective_setup": SimpleNamespace(bags=SimpleNamespace(startup=startup)),
+                "context_observation": SimpleNamespace(capacity_tokens=None if unverified else 8192),
+            })
         middleware = WorkbenchHarnessMiddleware(run)
         response = SimpleNamespace(result=[SimpleNamespace(usage_metadata=usage)])
         middleware._observe_generation(response, 2.0)

@@ -2,7 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { activityLine, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
+import { activityLine, groupActivity, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,6 +11,7 @@ import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
 import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdown";
+import type { MatchedPermissionGrant } from "./packet03Api";
 
 export let markdownParseCount = 0;
 export let finishedBubbleRenders = 0;
@@ -38,6 +39,8 @@ interface ToolBlock {
   status?: string;
   result?: unknown;
   error?: string;
+  authorizationSource?: string;
+  authorizationGrant?: MatchedPermissionGrant;
 }
 
 interface DetailSectionProps {
@@ -172,7 +175,47 @@ function parseContent(content: unknown): MessageParts {
 function toolResultMessage(message: BaseMessage): ToolBlock | undefined {
   if (messageType(message) !== "tool") return undefined;
   const fields = message as BaseMessage & { tool_call_id?: string; status?: string };
-  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content };
+  return { id: fields.tool_call_id, name: message.name ?? "Tool", status: fields.status, result: message.contentBlocks ?? message.content, authorizationSource: typeof message.additional_kwargs.authorization_source === "string" ? message.additional_kwargs.authorization_source : undefined, authorizationGrant: matchedPermissionGrant(message.additional_kwargs.authorization_grant) };
+}
+
+function matchedPermissionGrant(value: unknown): MatchedPermissionGrant | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const grant = value as Record<string, unknown>;
+  if (typeof grant.id !== "string" || !grant.id || typeof grant.display_name !== "string" || !grant.display_name.trim()
+    || (grant.scope !== "session" && grant.scope !== "always") || typeof grant.action !== "string"
+    || !grant.arguments || typeof grant.arguments !== "object" || Array.isArray(grant.arguments)
+    || typeof grant.created_at !== "string" || typeof grant.source_run_id !== "string"
+    || (grant.thread_id !== null && typeof grant.thread_id !== "string")
+    || (grant.project_path !== null && typeof grant.project_path !== "string")) return undefined;
+  return {
+    id: grant.id,
+    display_name: grant.display_name,
+    scope: grant.scope,
+    action: grant.action,
+    arguments: grant.arguments as Record<string, unknown>,
+    created_at: grant.created_at,
+    source_run_id: grant.source_run_id,
+    thread_id: grant.thread_id,
+    project_path: grant.project_path,
+  };
+}
+
+function SavedPermissionDetails({ grant }: { grant: MatchedPermissionGrant }) {
+  return <section aria-label="Matched saved permission">
+    <strong>{grant.display_name}</strong>
+    <dl className="meta compact">
+      <div><dt>Permission</dt><dd>{grant.id}</dd></div>
+      <div><dt>Scope</dt><dd>{grant.scope === "always" ? "Always allow" : "This session"}</dd></div>
+      <div><dt>Action</dt><dd>{grant.action}</dd></div>
+      <div><dt>Project</dt><dd>{grant.project_path ?? "No project"}</dd></div>
+      <div><dt>Session</dt><dd>{grant.thread_id ?? (grant.scope === "always" ? "Any session" : "Not recorded")}</dd></div>
+      <div><dt>Saved</dt><dd>{grant.created_at}</dd></div>
+      <div><dt>Originating run</dt><dd>{grant.source_run_id}</dd></div>
+    </dl>
+    <span className="tool-detail-label">Matching arguments</span>
+    <CodeBlock text={stringifyValue(grant.arguments)} label="Copy permission arguments"><code>{stringifyValue(grant.arguments)}</code></CodeBlock>
+    <p className="hint">Recorded when this call was allowed. Review or revoke current grants in Settings → Permissions.</p>
+  </section>;
 }
 
 function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: AssembledToolCall | undefined): ToolBlock {
@@ -183,6 +226,8 @@ function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: Asse
     status: retained ? retained.status ?? (toolError(retained) ? "error" : "success") : live?.status ?? block.status,
     result: retained ? retained.result : live?.status === "finished" ? live.output : block.result,
     error: retained?.status === "success" ? undefined : live?.error ?? block.error,
+    authorizationSource: retained?.authorizationSource ?? block.authorizationSource,
+    authorizationGrant: retained?.authorizationGrant ?? block.authorizationGrant,
   };
 }
 
@@ -272,10 +317,10 @@ function writtenFileContent(args: unknown): string | null {
   return null;
 }
 
-function writtenAmount(count: number): string {
-  if (count < 1024) return `${count.toLocaleString()} characters written`;
+function proposedAmount(count: number): string {
+  if (count < 1024) return `${count.toLocaleString()} characters proposed`;
   const kilobytes = count / 1024;
-  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes).toLocaleString()} KB written`;
+  return `${kilobytes < 10 ? kilobytes.toFixed(1) : Math.round(kilobytes).toLocaleString()} KB proposed`;
 }
 
 function toolIsStreaming(tool: ToolBlock): boolean {
@@ -511,7 +556,7 @@ function TodoChecklist({ defaultOpen, failure, id, items, onToggle, openStates, 
   raw: unknown;
 }) {
   return <div className="todo-checklist">
-    {items.length ? <ol aria-label="Todo list">{items.map((item, index) => <li key={`${item.status}-${index}`} data-status={item.status}><span className="todo-status">{todoLabel(item.status)}</span> {item.content}</li>)}</ol> : failure ? null : <p className="activity-line">Updating the list</p>}
+    {items.length ? <ol aria-label="Todo list">{items.map((item, index) => <li key={`${item.status}-${index}`} data-status={item.status}><span className="todo-status" aria-label={todoLabel(item.status)} title={todoLabel(item.status)}>{item.status === "completed" ? "✓" : item.status === "in_progress" ? "◉" : "○"}</span> {item.content}</li>)}</ol> : failure ? null : <p className="activity-line">Updating the list</p>}
     {failure ? <p className="tool-call-error" role="status">{failure}</p> : null}
     <DetailSection className="todo-arguments" defaultOpen={defaultOpen} id={id} onToggle={onToggle} openStates={openStates} summary={<span>List arguments</span>}>
       <CodeBlock text={stringifyValue(raw)} label="Copy tool input"><code>{stringifyValue(raw)}</code></CodeBlock>
@@ -548,6 +593,7 @@ function todoState(toolBlocks: ToolBlock[]): { items: TodoItem[]; failure: strin
 function ToolBlockList({
   defaultOpen,
   live,
+  waiting,
   messageKey,
   onToggle,
   openStates,
@@ -555,6 +601,7 @@ function ToolBlockList({
 }: {
   defaultOpen: boolean;
   live?: boolean;
+  waiting?: boolean;
   messageKey: string;
   onToggle: (id: string, open: boolean) => void;
   openStates: ReadonlyMap<string, boolean>;
@@ -566,9 +613,8 @@ function ToolBlockList({
   }
   const todos = todoState(toolBlocks);
   const rows = toolBlocks.filter(tool => tool.name !== "write_todos");
-  return <div className="tool-call-list">
-    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
-    {rows.map((tool, index) => {
+  const groups = groupActivity(rows, tool => { const error = toolError(tool); const finished = !toolIsStreaming(tool); return { label: activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) }), finished, failed: Boolean(error) }; });
+  function renderTool(tool: ToolBlock, index: number) {
     const id = tool.id ? `tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
     const incomplete = toolIsStreaming(tool);
@@ -580,13 +626,16 @@ function ToolBlockList({
     const finished = !incomplete && !error;
     const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
     const path = toolFilePath(tool.args);
-    const label = stopped
+    const label = waiting && incomplete
+      ? path ? `Proposed change to ${path}` : `Waiting: ${tool.name}`
+      : stopped
       ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
       : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
     const counts = !error && finished ? lineCounts(change) : "";
     const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || (Boolean(path) && !stopped));
     const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
+    const grant = tool.authorizationSource === "saved_permission" ? tool.authorizationGrant : undefined;
     return <div className={`tool-call-row${error ? " tool-call-failed" : ""}`} key={id}>
       <DetailSection
         className="message-tools"
@@ -602,26 +651,30 @@ function ToolBlockList({
             if (change) dock?.openChange(change.id);
             else if (path) dock?.openFile(path);
           }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
-          {streaming && writing ? <span className="tool-call-progress">{writtenAmount(writing.length)}</span> : null}
+          {streaming && writing ? <span className="tool-call-progress">{proposedAmount(writing.length)}</span> : null}
+          {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission{grant ? `: ${grant.display_name}` : ""}</span> : null}
         </>}
       >
         {incomplete && !open ? null : <div className="tool-call-details">
-          <p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>
+          {path ? <p className="hint tool-identity">{path}</p> : tool.name === "execute" ? <p className="hint tool-identity">{readableToolText(tool.args)}</p> : null}
           {readableInput !== null ? <section aria-label="Tool input">
-            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Writing" : "File content"}</span>
+            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Proposed content" : "File content"}</span>
             <div className="code-block-wrap"><CopyIconButton text={readableInput} label="Copy tool input" /><ToolInputText text={readableInput} /></div>
-            {!incomplete ? <details className="tool-raw-arguments"><summary>Raw tool arguments</summary><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></details> : null}
           </section> : null}
-          {!incomplete && fileContent === null && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
           {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
+          {!incomplete || grant ? <details className="tool-raw-arguments"><summary>Tool details</summary><p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>{grant ? <SavedPermissionDetails grant={grant} /> : null}{tool.args !== undefined ? <section aria-label="Raw tool arguments"><span className="tool-detail-label">Raw arguments</span><CodeBlock text={stringifyValue(tool.args)} label="Copy raw tool arguments"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}</details> : null}
         </div>}
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
       {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
       {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
     </div>;
-  })}</div>;
+  }
+  return <div className="tool-call-list">
+    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
+    {groups.map((group, index) => group.label ? <DetailSection key={group.items[0]?.id ?? index} className="activity-group" defaultOpen={defaultOpen} id={`${messageKey}:group:${group.items[0]?.id ?? index}`} onToggle={onToggle} openStates={openStates} summary={<><Icon name="files" size={14} /><span>{group.label}</span></>}>{group.items.map(tool => renderTool(tool, rows.indexOf(tool)))}</DetailSection> : group.items.map(tool => renderTool(tool, rows.indexOf(tool))))}
+  </div>;
 }
 
 function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: ReadonlySet<string>, toolCalls: AssembledToolCall[]) {
@@ -686,12 +739,23 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     // without delivering another token. Observe those changes in the same
     // scroll owner rather than adding a second competing smooth scroll.
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => follow());
-    observer?.observe(transcript);
-    if (rootRef.current) observer?.observe(rootRef.current);
-    follow();
+    const observed = new Set<Element>();
+    const observeContent = () => {
+      // Approval cards and run summaries are siblings of the message feed.
+      // The feed uses display:contents, so its own box never reports growth.
+      // Observe its real message boxes, including late saved-answer actions.
+      const targets = new Set<Element>([transcript, ...Array.from(transcript.children ?? []), ...Array.from(rootRef.current?.children ?? [])]);
+      for (const element of observed) if (!targets.has(element)) { observer?.unobserve?.(element); observed.delete(element); }
+      for (const element of targets) if (!observed.has(element)) { observer?.observe(element); observed.add(element); }
+      follow();
+    };
+    const contentObserver = typeof MutationObserver === "undefined" ? null : new MutationObserver(observeContent);
+    contentObserver?.observe(transcript, { childList: true, subtree: true });
+    observeContent();
     return () => {
       transcript.removeEventListener("scroll", onScroll);
       observer?.disconnect();
+      contentObserver?.disconnect();
     };
   }, [follow, hasContent, transcriptElement]);
 
@@ -763,6 +827,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   toolsLive?: boolean;
   type: string;
   writing: boolean;
+  waiting: boolean;
 }) {
   if (!props.incomplete) {
     finishedBubbleRenders += 1;
@@ -772,7 +837,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
-        {props.incomplete ? <span className="message-state" aria-label={props.writing ? "Response in progress" : "Incomplete response"}>{props.writing ? "Writing" : "Partial"}</span> : null}
+        {props.incomplete ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? "Writing" : "Partial"}</span> : null}
       </header>
       <div className="message-body">
         <ReasoningDetails
@@ -784,7 +849,7 @@ const MessageBubble = memo(function MessageBubble(props: {
         />
         {props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
         <AttachmentList attachments={props.attachments} />
-        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
+        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
       </div>
       {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
       {props.renderMessageFooter?.(props.message)}
@@ -798,6 +863,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.continuation === next.continuation
     && previous.toolsKey === next.toolsKey
     && previous.toolsLive === next.toolsLive
+    && previous.waiting === next.waiting
     && previous.detailedStreams === next.detailedStreams
     && previous.openStates === next.openStates
     && previous.onToggle === next.onToggle
@@ -808,9 +874,12 @@ const MessageBubble = memo(function MessageBubble(props: {
 
 export function AgentMessageFeed(props: {
   messages: BaseMessage[];
+  toolAuthorizations?: Record<string, string>;
+  toolAuthorizationGrants?: Record<string, MatchedPermissionGrant>;
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
   live?: boolean;
+  waiting?: boolean;
   fallback?: React.ReactNode;
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
@@ -828,9 +897,11 @@ export function AgentMessageFeed(props: {
       }
     }
   }
-  const retainStoppedTool = (tool: ToolBlock): ToolBlock => tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool)
-    ? { ...tool, status: "unfinished" }
-    : tool;
+  const retainStoppedTool = (tool: ToolBlock): ToolBlock => ({ ...tool,
+    status: tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool) ? "unfinished" : tool.status,
+    authorizationSource: tool.authorizationSource ?? (tool.id ? props.toolAuthorizations?.[tool.id] : undefined),
+    authorizationGrant: tool.authorizationGrant ?? (tool.id ? matchedPermissionGrant(props.toolAuthorizationGrants?.[tool.id]) : undefined),
+  });
   const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
     const status = call.status as string;
     return status === "preparing" || status === "running";
@@ -884,7 +955,7 @@ export function AgentMessageFeed(props: {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id ? liveById.get(result.id) : undefined))]} /></div>;
         }
         const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined)));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
@@ -909,10 +980,11 @@ export function AgentMessageFeed(props: {
             toolsLive={live}
             type={type}
             writing={Boolean(props.live && message.id === lastAiId)}
+            waiting={Boolean(props.waiting && message.id === lastAiId)}
           />
         );
       })}
-      <ToolBlockList defaultOpen={detailedStreams} live={props.live} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} />
+      <ToolBlockList defaultOpen={detailedStreams} live={props.live} waiting={props.waiting} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} />
       {showJump ? <button type="button" className="chat-jump-latest" aria-label="Jump to latest message" onClick={jumpToLatest}>↓ Latest</button> : null}
     </div></SourceScope.Provider>
   );

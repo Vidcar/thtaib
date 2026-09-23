@@ -1,6 +1,6 @@
 # Spec Delta
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: STATE-017 - Render file changes from the stored images
 

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, type ComponentProps, type CSS
 import { PanelResize, usePanelWidth } from "./PanelResize";
 import { AnswerActions } from "./AnswerActions";
 import { areaLabel, newestConversationFirst } from "./conversationAreas";
-import { useDismissibleDetails } from "./useDismissibleDetails";
+import { MenuPopover } from "./MenuPopover";
+import { CompactSwitch } from "./CompactControls";
+import { HoverHelp } from "./HoverHelp";
 
 import { api, ApiError, request } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
@@ -35,6 +37,7 @@ import { notifyAttentionChanged } from "./AttentionPanel";
 import { ChatHistoryActions } from "./ChatHistoryActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import { AgentMessageFeed } from "./AgentMessageFeed";
+import { RunActivitySummary, helperApprovalOwner } from "./RunActivitySummary";
 import { conversationTitle, displayedTranscript, formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
@@ -74,6 +77,8 @@ interface PendingChatSubmit {
   presented_tools?: string[];
   per_request_overrides?: Record<string, unknown>;
   deployment_id?: string;
+  model_configuration_id?: string | null;
+  startup_overrides?: Record<string, unknown>;
   profile_id?: string | null;
   inherit_deployment_settings?: boolean;
   project_path?: string | null;
@@ -86,7 +91,12 @@ interface PendingChatSubmit {
   knowledge_version_refs?: string[];
   embedding_deployment_id?: string | null;
   retrieval_project_paths?: string[];
+  work_mode?: "work" | "plan";
+  helper_agent_ids?: string[];
+  review?: { enabled: boolean; criteria: string; max_revisions: 2 };
 }
+
+type ExecutionPreferences = { work_mode?: "work" | "plan"; helper_agent_ids?: string[]; review?: { enabled?: boolean; criteria?: string; max_revisions?: number } };
 
 function ChatInteractionStream(props: {
   detailedStreams?: boolean;
@@ -253,7 +263,7 @@ function ChatInteractionStreamContent(props: {
   const reverseInputIndex = [...projection.messages].reverse().findIndex(message => inputId ? message.id === inputId : message.getType() === "human");
   const inputIndex = reverseInputIndex < 0 ? -1 : projection.messages.length - reverseInputIndex - 1;
   const hasTurnOutput = inputIndex >= 0 && projection.messages.slice(inputIndex + 1).some(message =>
-    message.getType() !== "human" && message.content.length > 0,
+    message.getType() !== "human" && (message.content.length > 0 || Boolean((message as { tool_calls?: unknown[] }).tool_calls?.length)),
   ) || projection.toolCalls.some(call => (call.status as string) === "preparing" || call.status === "running");
   const waitingForOutput = projectionRunOwned && !visibleInterrupt && !hasTurnOutput &&
     Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
@@ -401,14 +411,16 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
+        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
           return retained?.content;
         }} />
       ) : null}
+      {projectionRunOwned ? <RunActivitySummary run={run} /> : null}
       {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
       {projectionRunOwned && visibleInterrupt ? (
         <InterruptApproval
+          ownerLabel={helperApprovalOwner(run, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
           busy={stream.isLoading}
           onRespond={(payload) => {
@@ -562,13 +574,13 @@ interface ChatPanelProps {
   conversationListRef?: RefObject<ConversationListActions | null>;
   onHistoryChanged?: () => void;
   onActiveConversationId?: (id: string | null) => void;
+  restoringSelection?: boolean;
   onCreateProject?: () => void;
   projectRevision?: number;
   onModelPhase?: (phase: "starting" | "ready" | "none" | "failed") => void;
 }
 
 export function ChatPanel(props: ChatPanelProps = {}) {
-  const toolsMenuRef = useDismissibleDetails();
   const {
     attentionConversationId = null,
     onAttentionHandled,
@@ -592,6 +604,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [startupOverrides, setStartupOverrides] = useState<Record<string, unknown>>({});
   const [projectPath, setProjectPath] = useState("");
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [agentSetups, setAgentSetups] = useState<AgentSetup[]>([]);
@@ -609,7 +622,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const historyNoticeClaim = useRef<string | null>(null);
   const [task, setTask] = useState("");
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
-  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const filePicker = useRef<HTMLInputElement>(null);
+  const [workMode, setWorkMode] = useState<"work" | "plan">("work");
+  const [helperAgentIds, setHelperAgentIds] = useState<string[]>([]);
+  const [review, setReview] = useState({ enabled: false, criteria: "", max_revisions: 2 as const });
   const [incomingDrop, setIncomingDrop] = useState<{ id: string; sessionId: string; files: File[] } | null>(null);
   const [fileDragActive, setFileDragActive] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
@@ -770,7 +786,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     draftRevision.current += 1;
     setTask("");
     setAttachmentIds([]);
-    setAttachmentsOpen(false);
   }, [isCurrentOwner]);
 
   async function refresh(): Promise<void> {
@@ -789,7 +804,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setDeploymentsLoaded(true);
     if (nextProfiles.status === "fulfilled") {
       setProfiles(nextProfiles.value);
-      setProfileId((current) => (current === "!none" || nextProfiles.value.some((profile) => profile.id === current) ? current : ""));
+      setProfileId((current) => (nextProfiles.value.some((profile) => profile.id === current) ? current : ""));
     }
     if (tools.status === "fulfilled") setEnabledTools(tools.value.enabled);
     if (nextConversations.status === "fulfilled") setConversations(newestConversationFirst(reconcileHistory(nextConversations.value)));
@@ -799,11 +814,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   useEffect(() => {
     let cancelled = false;
+    if (props.activeTab && props.activeTab !== "chat") return;
     void Promise.all([workspaceApi.projects(), workspaceApi.agentSetups()]).then(([nextProjects, nextAgents]) => {
       if (!cancelled) { setProjects(nextProjects); setAgentSetups(nextAgents); }
     }).catch(error => { if (!cancelled) setSetupError(errorMessage(error)); });
     return () => { cancelled = true; };
-  }, [props.projectRevision]);
+  }, [props.projectRevision, props.activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -824,15 +840,15 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     const layered = Boolean(hasApplicationDefaults || projectId || agentSetupVersionId || conversation?.agent_setup_version_id || conversation?.project_id);
     const values = sparseChatSetup({
       deployment_id: deploymentId,
-      profile_id: profileId && profileId !== "!none" ? profileId : null,
-      inherit_deployment_settings: profileId !== "!none",
+      model_configuration_id: profileId || null,
+      startup_overrides: startupOverrides,
       embedding_deployment_id: embeddingDeploymentId || null,
       ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: conversation?.draft?.intended_config?.presented_tools ?? conversation?.setup_overrides?.presented_tools ?? null } : {}),
       ...(setupEditedFields.current.has("approval_mode") ? { approval_mode: approvalMode } : {}),
       per_request_overrides: perRequestOverrides,
       ...knowledgePayload(knowledgeEntries, selectedKnowledgeIds),
     }, setupEditedFields.current, layered);
-    return { ...values, ...(projectId ? { project_id: projectId } : {}),
+    return { ...values, work_mode: workMode, helper_agent_ids: helperAgentIds, review, ...(projectId ? { project_id: projectId } : {}),
       ...(agentSetupVersionId || conversation?.agent_setup_version_id ? { agent_setup_version_id: agentSetupVersionId } : {}),
       ...(!projectId ? { project_path: projectPath.trim() || null } : {}),
       ...(!projectId || conversation?.workspace_id ? { workspace_id: conversation?.workspace_id ?? null } : {}) };
@@ -841,16 +857,25 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   function applyResolvedSetup(selection: ResolvedSetupSelection) {
     const config = selection.configuration;
     if (config.deployment_id) setDeploymentId(config.deployment_id);
-    else markSetupEdited("deployment_id"); // Use the visibly selected model when the setup inherits it.
-    setProfileId(config.profile_id ?? (config.inherit_deployment_settings === false ? "!none" : ""));
+    else if (config.model_configuration_id) setDeploymentId("");
+    else { const loaded = preferredChatDeploymentId(deployments, ""); setDeploymentId(loaded); }
+    setProfileId(config.model_configuration_id ?? config.profile_id ?? "");
+    setStartupOverrides(config.startup_overrides ?? {});
     setEmbeddingDeploymentId(config.embedding_deployment_id ?? "");
     if (!setupEditedFields.current.has("approval_mode")) setApprovalMode(approvalModeOf(config.approval_mode));
     setPerRequestOverrides(config.per_request_overrides ?? {});
     setSelectedKnowledgeIds([...(config.memory_version_refs ?? []), ...(config.skill_version_refs ?? []), ...(config.protected_instruction_version_refs ?? [])]);
     setInstructionLayers(selection.instruction_layers ?? []);
+    applyExecutionPreferences(config as ExecutionPreferences);
   }
 
-  async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}) {
+  function applyExecutionPreferences(config: ExecutionPreferences) {
+    setWorkMode(config.work_mode === "plan" ? "plan" : "work");
+    setHelperAgentIds(config.helper_agent_ids ?? []);
+    setReview({ enabled: config.review?.enabled === true, criteria: config.review?.criteria ?? "", max_revisions: 2 });
+  }
+
+  async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}, preserveWorkspace = false) {
     const request = ++setupRequest.current;
     const generation = selectionRequest.current;
     setSetupResolving(true); setSetupError("");
@@ -860,7 +885,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setupEditedFields.current = new Set(Object.keys(overrides));
       if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
       setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
-      setProjectPath(projects.find(project => project.id === nextProjectId)?.canonical_path ?? "");
+      if (!preserveWorkspace) setProjectPath(projects.find(project => project.id === nextProjectId)?.canonical_path ?? "");
       applyResolvedSetup(resolved);
     } catch (error) {
       if (request === setupRequest.current && generation === selectionRequest.current) setSetupError(errorMessage(error));
@@ -870,11 +895,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   useEffect(() => {
+    if (props.activeTab && props.activeTab !== "chat") return;
     void refresh().catch((error: unknown) => {
       setLoadError(errorMessage(error));
       setDeploymentsLoaded(true);
     });
-  }, []);
+  }, [props.activeTab]);
 
   useEffect(() => {
     if (!deploymentsLoaded || modelWarm.current) return;
@@ -972,12 +998,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     embeddingDeploymentId,
     pendingSubmit,
     profileId,
+    startupOverrides,
     projectPath,
     selectionLoading,
     sending,
     task,
     attachmentIds,
     approvalMode,
+    workMode, helperAgentIds, review,
     perRequestOverrides,
     selectedKnowledgeIds,
     knowledgeEntries,
@@ -1011,11 +1039,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
-    setAttachmentsOpen(false);
+    applyExecutionPreferences({});
     setMessage("");
   }
 
-  const selectionBusy = Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
+  const selectionBusy = Boolean(props.restoringSelection) || Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
   const hasPendingCancelInput = Boolean(conversation?.pending_cancel_input_ids?.length);
   const runBusy = (conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false) || Boolean(pendingSubmit) || hasPendingCancelInput;
   const pendingSubmissionActive = Boolean(
@@ -1035,6 +1063,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   );
   const pendingStopActive = localPendingStopActive || hasPendingCancelInput;
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
+  const hasModelChoice = Boolean(selectedProfile || deployments.some(item => item.id === deploymentId));
   const pendingInterrupt = visiblePendingInterrupt(conversation?.current_run);
   const embedderDeployments = deployments.filter((item) => isDeclaredEmbedder(item));
   const chatDeployments = deployments.filter((item) => !isDeclaredEmbedder(item));
@@ -1098,9 +1127,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setSelectionLoading(null);
         setDeploymentId(typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : next.deployment_id);
         setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
-        setProfileId(typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : draftConfig.inherit_deployment_settings === false ? "!none" : next.profile_id ?? (next.inherit_deployment_settings === false ? "!none" : ""));
+        setProfileId(typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "");
+        setStartupOverrides(overrides.startup_overrides ?? {});
         setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
+        applyExecutionPreferences({ ...(next as ExecutionPreferences), ...draftConfig } as ExecutionPreferences);
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
           ...(next.memory_version_refs ?? []),
@@ -1113,7 +1144,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         draftRevision.current += 1;
         setTask(next.draft?.content ?? "");
         setAttachmentIds(next.draft?.attachment_ids ?? []);
-        setAttachmentsOpen(Boolean(next.draft?.attachment_ids?.length));
         setMessage("");
       })
       .catch((error: unknown) => {
@@ -1136,19 +1166,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (historyMutations.current.get(next.id) === "deleted") return;
     cacheConversation(next);
     setConversation(current => current?.id === next.id ? next : current);
-  }
-
-  function chooseDeployment(nextId: string): void {
-    if (nextId === deploymentId) return;
-    markSetupEdited("deployment_id", "per_request_overrides");
-    setDeploymentId(nextId);
-    setPerRequestOverrides(current => {
-      const next = { ...current };
-      delete next.reasoning;
-      delete next.reasoning_effort;
-      delete next.reasoning_format;
-      return next;
-    });
   }
 
   function reconcileHistory(items: ChatConversation[]): ChatConversation[] {
@@ -1218,7 +1235,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   async function sendTurn(): Promise<void> {
     const text = task.trim();
-    if ((!text && !attachmentIds.length) || !selectedDeployment || selectionBusy || sending || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
+    if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
       return;
     }
     const requestId = selectionRequest.current;
@@ -1247,7 +1264,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           draftRevision.current += 1;
           setTask("");
           setAttachmentIds([]);
-          setAttachmentsOpen(false);
         }
         return;
       }
@@ -1313,7 +1329,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   async function persistBeforeLeaving(): Promise<ChatConversation | null> {
     if (selectionLoading || setupResolving || sending || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) return null;
-    if (!conversation && (!task.trim() && !attachmentIds.length || !selectedDeployment)) return null;
+    if (!conversation && (!task.trim() && !attachmentIds.length || !hasModelChoice)) return null;
     const target = conversation ?? await createDraftConversation();
     const payload = {
       content: task,
@@ -1328,6 +1344,19 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function navigateAway(tab: WorkbenchTab): void {
     void persistBeforeLeaving().then(() => onNavigate?.(tab)).catch(fail);
+  }
+
+  function openPermissions(): void {
+    try { sessionStorage.setItem("workbench.settings.category", "Permissions"); } catch { /* Navigation still works without storage. */ }
+    navigateAway("settings");
+  }
+
+  function helperModelLabel(agent: AgentSetup): string {
+    const configuration = (agent.configuration ?? {}) as Record<string, unknown>;
+    const selectedProfile = profiles.find(profile => profile.id === (configuration.model_configuration_id || configuration.profile_id));
+    if (selectedProfile) return selectedProfile.display_name;
+    const model = deployments.find(deployment => deployment.id === configuration.deployment_id);
+    return model?.display_name ?? "Uses this chat's model";
   }
 
   useEffect(() => {
@@ -1367,7 +1396,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.navigationPreparationRef]);
 
   useEffect(() => {
-    if (conversation || !task.trim() || !selectedDeployment || sending || selectionBusy) return;
+    if (conversation || !task.trim() || !hasModelChoice || sending || selectionBusy) return;
     const generation = selectionRequest.current;
     const timer = setTimeout(() => {
       void createDraftConversation().then(async created => {
@@ -1382,15 +1411,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       }).catch(error => { if (selectionRequest.current === generation) fail(error); });
     }, 450);
     return () => clearTimeout(timer);
-  }, [conversation?.id, task, selectedDeployment?.id, sending, selectionBusy]);
+  }, [conversation?.id, task, selectedDeployment?.id, profileId, sending, selectionBusy]);
 
   async function openAttachments(files?: File[]): Promise<void> {
     if (conversation) {
-      setAttachmentsOpen(value => files ? true : !value);
       if (files) setIncomingDrop({ id: crypto.randomUUID(), sessionId: conversation.id, files });
       return;
     }
-    if (!selectedDeployment || sending || selectionBusy) return;
+    if (!hasModelChoice || sending || selectionBusy) return;
     const generation = selectionRequest.current;
     setSending(true);
     try {
@@ -1403,7 +1431,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       setBoundGeneration(generation);
       setInteractionThreadId(registered.thread_id);
       setConversation(created);
-      setAttachmentsOpen(true);
       if (files) setIncomingDrop({ id: crypto.randomUUID(), sessionId: created.id, files });
     } catch (error) {
       if (generation === selectionRequest.current) fail(error);
@@ -1481,7 +1508,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       if (activeOwner.current.conversationId !== owner.conversationId || activeOwner.current.generation !== owner.generation) return;
       draftRevision.current += 1;
       setAttachmentIds(current => [...new Set([...current, ...assetIds])]);
-      setAttachmentsOpen(true);
     }).catch(fail).finally(() => props.onReuseAssetHandled?.());
   }, [props.reuseAssetId, props.reuseAssetIds, conversation?.id, selectedDeployment?.id, sending, selectionBusy]);
 
@@ -1508,7 +1534,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           if (event.defaultPrevented) return;
           event.preventDefault();
           event.stopPropagation();
-          if (!selectedDeployment || selectionBusy || sending) {
+          if (!hasModelChoice || selectionBusy || sending) {
             setMessage(!selectedDeployment ? "Choose a model before attaching files." : "Wait for the conversation to finish opening or sending, then drop the files again.");
             return;
           }
@@ -1520,19 +1546,20 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <header className="chat-header">
           <div>
             {conversation?.project_path ? <p className="eyebrow">{currentArea}</p> : null}
-            <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : "New conversation"}</h2>
+            <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : props.restoringSelection ? "Opening conversation…" : "New conversation"}</h2>
           </div>
+          <div className="chat-header-actions"><MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show the model's reasoning and detailed tool activity. This does not change how the model thinks." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
           <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, changes, files, and actions"} onClick={() => {
             const next = !railOpen;
             setRailOpen(next);
             try { sessionStorage.setItem("workbench.chat.rail", next ? "open" : "closed"); } catch { /* The toggle still applies. */ }
-          }}><Icon name="panelRight" /></button>
+          }}><Icon name="panelRight" /></button></div>
         </header>
         <div className={`chat-workspace${railOpen ? " files-open" : ""}`}>
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript">
-          {deploymentsLoaded && deployments.length === 0 && !conversation ? (
+          {props.restoringSelection ? <EmptyState title="Opening conversation">Restoring your last conversation.</EmptyState> : deploymentsLoaded && deployments.length === 0 && !conversation ? (
             <EmptyState title="Your workspace for local AI">
               <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>
@@ -1560,7 +1587,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 return <ChatRetainedFiles compact records={records} conversationId={conversation.id} currentRunId={item.run_id} currentRunStatus={conversation.current_run?.status} onReuse={ids => {
                   draftRevision.current += 1;
                   setAttachmentIds(current => [...new Set([...current, ...ids])]);
-                  setAttachmentsOpen(true);
                 }} />;
               }}
               key={`${conversation.id}:${interactionThreadId}`}
@@ -1634,9 +1660,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               agentSetupVersionId={agentSetupVersionId}
               agentSetups={agentSetups}
               onProject={value => void chooseSetup(value, agentSetupVersionId)}
-              onAgent={value => void chooseSetup(projectId, value)}
+              onAgent={value => void chooseSetup(projectId, value, {}, Boolean(conversation))}
               setupResolving={setupResolving}
-              onManageProjects={() => navigateAway("projects")}
               onManageAgents={() => navigateAway("agents")}
               instructionLayers={instructionLayers}
               missingDeployment={missingDeployment}
@@ -1685,7 +1710,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               onReuseAssets={assets => {
                 draftRevision.current += 1;
                 setAttachmentIds(current => [...new Set([...current, ...assets.map(asset => asset.id)])]);
-                setAttachmentsOpen(true);
               }}
             /> : null}
           </div>
@@ -1708,7 +1732,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             onUpdated={applyConversationUpdate}
             onError={setMessage}
           /> : null}
-          {conversation ? <div hidden={!attachmentsOpen}><ComposerAttachments
+          <input ref={filePicker} className="sr-only" type="file" multiple aria-label="Choose files to attach" disabled={!hasModelChoice || sending || selectionBusy} onChange={event => { const files = Array.from(event.target.files ?? []); event.currentTarget.value = ""; if (files.length) void openAttachments(files); }} />
+          {conversation ? <div><ComposerAttachments
+            compact
             key={conversation.id}
             sessionId={conversation.id}
             attachmentIds={attachmentIds}
@@ -1740,37 +1766,43 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             />
           </label>
           <div className="actions">
-            <button type="button" className="icon-button" aria-label="Attach files" title="Attach files" aria-expanded={attachmentsOpen} disabled={!selectedDeployment || sending || selectionBusy} onClick={() => void openAttachments()}><Icon name="plus" /></button>
-            <details ref={toolsMenuRef} name="chat-composer-controls" className="composer-menu">
-              <summary title="Access for your next message" aria-label="Approval mode"><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></summary>
-              <div className="composer-popover chat-tools-popover" role="group" aria-label="Approval mode choices">
+            <MenuPopover label="Add to message" trigger={<Icon name="plus" />} disabled={!hasModelChoice || sending || selectionBusy}>{close => <>
+              <button type="button" className="menu-action" onClick={() => { close(); filePicker.current?.click(); }}><Icon name="files" />Attach files or images</button>
+              <button type="button" className="menu-action" onClick={() => { close(); openRail("library"); }}><Icon name="library" />Choose from Library</button>
+              <button type="button" className="menu-action" onClick={() => { close(); openRail("setup"); }}><Icon name="knowledge" />Skills and context</button>
+              <div className="menu-section"><CompactSwitch label="Review before finishing" checked={review.enabled} onChange={enabled => { markSetupEdited("review"); setReview(current => ({ ...current, enabled })); }} description="Checks the result against your criteria and revises it up to twice." />{review.enabled ? <><label>Review criteria<textarea rows={2} value={review.criteria} placeholder="What should a good result satisfy?" onChange={event => { markSetupEdited("review"); setReview(current => ({ ...current, criteria: event.target.value })); }} /></label><small className="hint">Up to 2 revisions</small></> : null}</div>
+            </>}</MenuPopover>
+            <MenuPopover label="Approval mode" trigger={<><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></>}>
                 <ApprovalModeControl value={approvalMode} disabled={selectionBusy || sending} onChange={mode => { markSetupEdited("approval_mode"); setApprovalMode(mode); }} />
-                <p className="hint">Applies to your next message. Running and queued messages keep their chosen access. Tools that are off stay off.</p>
-                <button type="button" className="chat-tools-permissions" onClick={() => navigateAway("settings")}><Icon name="settings" size={14} /> Saved permissions</button>
-              </div>
-            </details>
-            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedProfileId={profileId} inheritDeploymentSettings={profileId !== "!none"} onDeploymentChange={chooseDeployment} onProfileChange={value => { markSetupEdited("profile_id", "inherit_deployment_settings"); setProfileId(value); }} perRequestOverrides={perRequestOverrides} onPerRequestOverridesChange={value => { markSetupEdited("per_request_overrides"); setPerRequestOverrides(value); }} onInheritDeploymentSettingsChange={inherit => { markSetupEdited("profile_id", "inherit_deployment_settings"); if (!inherit) setProfileId("!none"); else if (profileId === "!none") setProfileId(""); }} disabled={selectionBusy || sending} />
-            <button type="button" className={`icon-button${presentation.detailed_streams ? " is-on" : ""}`} aria-pressed={presentation.detailed_streams} aria-label={presentation.detailed_streams ? "Hide reasoning and tool detail" : "Show reasoning and tool detail"} title={presentation.detailed_streams ? "Reasoning and tool detail on" : "Reasoning and tool detail off"} disabled={selectionBusy} onClick={() => { const next = { detailed_streams: !presentation.detailed_streams }; void api.updatePresentationSettings(next).then(saved => props.onPresentationChange?.(saved)).catch(fail); }}><Icon name="reasoning" size={16} /></button>
+                <div className="menu-section"><HoverHelp title="When access changes">Applies to your next message. Running and queued messages keep their chosen access. Tools that are off stay off. Plan mode stays read-only at every access level.</HoverHelp></div>
+                <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button>
+            </MenuPopover>
+            <MenuPopover label="Work mode" trigger={<><Icon name={workMode === "plan" ? "knowledge" : "agent-run"} size={16} /><span>{workMode === "plan" ? "Plan" : "Work"}</span></>} disabled={selectionBusy || sending}>{close => <div className="chat-mode-options" role="radiogroup" aria-label="Work mode">{(["work", "plan"] as const).map(mode => <button type="button" className="menu-action" role="radio" aria-checked={workMode === mode} key={mode} onClick={() => { markSetupEdited("work_mode"); setWorkMode(mode); close(); }}><Icon name={mode === "plan" ? "knowledge" : "agent-run"} /><span>{mode === "plan" ? "Plan" : "Work"}<small>{mode === "plan" ? "Read-only investigation and planning" : "Use tools with the selected access"}</small></span></button>)}</div>}</MenuPopover>
+            <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
+              await chooseSetup(projectId, agentSetupVersionId, configuration, true);
+              await refresh();
+            }} />
+            <MenuPopover label="Named helpers" align="end" trigger={<><Icon name="sparkles" size={16} />{helperAgentIds.length ? <span>{helperAgentIds.length}</span> : null}</>} disabled={selectionBusy || sending}><h3>Helpers</h3>{agentSetups.length ? agentSetups.map(agent => <label className="helper-choice" key={agent.id}><input type="checkbox" checked={helperAgentIds.includes(agent.id)} disabled={Boolean(agent.missing_dependencies?.length)} title={agent.missing_dependencies?.map(issue => issue.reason).join(", ")} onChange={event => { markSetupEdited("helper_agent_ids"); setHelperAgentIds(current => event.target.checked ? [...current, agent.id] : current.filter(id => id !== agent.id)); }} /><span>{agent.name}<small>{helperModelLabel(agent)}</small></span></label>) : <p className="hint">Create an agent to choose a helper.</p>}<div className="menu-section"><small className="hint">Only selected helpers can run. Helpers cannot delegate again.</small><button type="button" className="menu-action" onClick={() => navigateAway("agents")}>Manage agents</button></div></MenuPopover>
             <span className="composer-spacer" />
             <ChatMeasurements run={conversation?.current_run} />
-            <button
-              type="submit"
-              aria-label={runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}
-              className="send-button"
-              title={runBusy ? "Queue this message" : "Send message"}
-              disabled={!selectedDeployment || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
-            >
-              <Icon name="send" /><span className="sr-only">{runBusy ? "Queue message" : selectionBusy || sending ? "Sending…" : "Send"}</span>
-            </button>
-
             <button
               type="button"
               aria-label={pendingStopActive ? "Stopping…" : "Stop"}
               className="stop-button"
+              data-idle={!runBusy && !pendingStopActive}
               disabled={!conversation || !runBusy || pendingStopActive}
               onClick={stopCurrentWork}
             >
               <Icon name="stop" size={16} /><span className="sr-only">{pendingStopActive ? "Stopping…" : "Stop"}</span>
+            </button>
+            <button
+              type="submit"
+              aria-label={props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}
+              className="send-button"
+              title={runBusy ? "Queue this message" : "Send message"}
+              disabled={!hasModelChoice || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
+            >
+              <Icon name="send" /><span className="sr-only">{props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}</span>
             </button>
           </div>
         </form>

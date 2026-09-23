@@ -81,7 +81,7 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: 
     )
     if run.tool_mode is ToolMode.recorded_tool and not knowledge_routes:
         return None
-    scratch = harness_scratch_root(paths, run.thread_id or run.id)
+    scratch = harness_scratch_root(paths, run.id if run.parent_run_id else run.thread_id or run.id)
     large = scratch / "large_tool_results"
     history = scratch / "conversation_history"
     retrieved = scratch / "retrieved"

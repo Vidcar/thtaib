@@ -1,6 +1,6 @@
 # Spec Delta
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: STATE-018 - Archive immediately and delete a chat without its project files
 

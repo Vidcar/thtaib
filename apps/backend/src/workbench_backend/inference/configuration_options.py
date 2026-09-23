@@ -8,6 +8,7 @@ rewrite profiles or infer capabilities.
 from __future__ import annotations
 
 import re
+import json
 
 from typing import Any
 
@@ -30,7 +31,7 @@ CONTEXT_FRACTIONS = (1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2, 5 / 8, 3 / 4, 1)
 
 
 def bundle_configuration_options(
-    bundle_id: str,
+    bundle_id: str | None,
     metadata: GgufRuntimeMetadata,
     *,
     deployment: Deployment | None = None,
@@ -79,7 +80,11 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
     elif template and not re.search(r"\breasoning_(?:effort|strength)\b", template):
         known_unsupported = True
     thinking_toggle = "enable_thinking" in template
-    return {
+    effort_default = _literal_template_default(template, "reasoning_effort")
+    thinking_default = _literal_template_default(template, "enable_thinking")
+    if thinking_default is None and re.search(r"\benable_thinking\s+is\s+undefined\s+or\s+enable_thinking\s+is\s+true\b", template):
+        thinking_default = True
+    defaults = {
         "reasoning_effort": RuntimeControlDescriptor(
             key="reasoning_effort",
             label="Thinking effort",
@@ -91,6 +96,8 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
             supported=True if efforts else False if known_unsupported else None,
             accepted_values=[] if known_unsupported else sorted(accepted) if closed else None,
             applied="default",
+            default_value=effort_default if not known_unsupported else None,
+            default_source=source if effort_default is not None and not known_unsupported else None,
             options=[
                 RuntimeControlOption(
                     value=value,
@@ -107,10 +114,48 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
         "reasoning": RuntimeControlDescriptor(
             key="reasoning", label="Thinking", description="Enable or disable thinking for this model's template.",
             source=source if thinking_toggle else "unavailable", supported=thinking_toggle if template else None, applied="auto",
+            default_value=("on" if thinking_default else "off") if isinstance(thinking_default, bool) else None,
+            default_source=source if isinstance(thinking_default, bool) else None,
             options=[RuntimeControlOption(value=value, label=label) for value, label in
                      ([('auto', 'Model default'), ('on', 'On'), ('off', 'Off')] if thinking_toggle else [])],
         ),
     }
+    if props is not None:
+        params = props.default_generation_settings.get("params", {})
+        if isinstance(params, dict):
+            for key in ("temperature", "top_k", "top_p", "min_p", "repeat_penalty", "presence_penalty", "frequency_penalty"):
+                value = params.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    defaults[key] = RuntimeControlDescriptor(key=key, label=key.replace("_", " ").title(),
+                        description="Default reported by the loaded model server.", source="server_properties",
+                        observed=value, default_value=value, default_source="server_properties")
+    if deployment is not None:
+        kwargs = deployment.applied_startup.get("chat_template_kwargs")
+        if isinstance(kwargs, str):
+            try:
+                kwargs = json.loads(kwargs)
+            except ValueError:
+                kwargs = None
+        if isinstance(kwargs, dict):
+            if isinstance(kwargs.get("enable_thinking"), bool):
+                defaults["reasoning"].default_value = "on" if kwargs["enable_thinking"] else "off"
+                defaults["reasoning"].default_source = "loaded_template_settings"
+            if isinstance(kwargs.get("reasoning_effort"), str):
+                defaults["reasoning_effort"].default_value = kwargs["reasoning_effort"]
+                defaults["reasoning_effort"].default_source = "loaded_template_settings"
+        for key in ("reasoning", "reasoning_effort"):
+            value = deployment.applied_startup.get(key)
+            if value is not None and value not in ("default", "auto"):
+                defaults[key].default_value = value
+                defaults[key].default_source = "loaded_startup"
+    return defaults
+
+
+def _literal_template_default(template: str, variable: str):
+    """Read explicit literal defaults only; never evaluate untrusted templates."""
+    matches = re.findall(r"\b" + re.escape(variable) + r"\s*\|\s*default\s*\(\s*(['\"][a-z]+['\"]|true|false)\s*\)", template)
+    values = {True if value == "true" else False if value == "false" else value[1:-1] for value in matches}
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:

@@ -35,6 +35,8 @@ from workbench_backend.agents.tools import (
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
+from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, CURRENT_TOOL_CALL
+from workbench_backend.state.preferences import tool_authorization_metadata
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -52,6 +54,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         *,
         fixture_bank: FixtureBank | None = None,
         file_changes: FileChangeRecorder | None = None,
+        execution_control: ExecutionControl | None = None,
     ) -> None:
         super().__init__()
         self.run = run
@@ -59,6 +62,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._settings_provider = settings_provider
         self.fixture_bank = fixture_bank
         self.file_changes = file_changes
+        self.execution_control = execution_control or ExecutionControl(run)
 
     def wrap_model_call(
         self,
@@ -96,6 +100,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
+        async with self.execution_control.model_lock(self.run.deployment_id):
+            return await self._awrap_model_call(request, handler)
+
+    async def _awrap_model_call(self, request, handler):
         self._require_dispatch_allowed()
         filtered = request.override(tools=self._presented(request.tools))
         self._observe_context(filtered)
@@ -148,12 +156,33 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
+        with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
+            return self._authorization_result(self._wrap_tool_call(request, handler))
+
+    def _authorization_result(self, result):
+        if isinstance(result, ToolMessage):
+            # Tools cannot supply their own authority evidence. Only the grant
+            # captured by the permission gate may name a saved exception.
+            additional = {key: value for key, value in result.additional_kwargs.items()
+                if key not in {"authorization_source", "authorization_grant"}}
+            return result.model_copy(update={"additional_kwargs": {**additional,
+                **tool_authorization_metadata(self.run, result.tool_call_id)}})
+        return result
+
+    def _wrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
             name, args, call_id = _tool_call_parts(request)
+            if name == "task":
+                token = CURRENT_TOOL_CALL.set(call_id)
+                try:
+                    return handler(request)
+                finally:
+                    CURRENT_TOOL_CALL.reset(token)
             if self.file_changes is None or name not in MUTATION_TOOLS:
                 return handler(request)
             with self.file_changes.lock:
                 self._require_dispatch_allowed()
+                self._require_recoverable_edit(name, args, call_id)
                 change = self.file_changes.prepare(name, args, call_id)
                 try:
                     result = handler(request)
@@ -173,15 +202,26 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
             return blocked
+        with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
+            return self._authorization_result(await self._awrap_tool_call(request, handler))
+
+    async def _awrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
             name, args, call_id = _tool_call_parts(request)
             async def invoke() -> Any:
+                if name == "task":
+                    token = CURRENT_TOOL_CALL.set(call_id)
+                    try:
+                        return await handler(request)
+                    finally:
+                        CURRENT_TOOL_CALL.reset(token)
                 recorder = self.file_changes if name in MUTATION_TOOLS else None
                 if recorder is None:
                     return await handler(request)
                 await asyncio.to_thread(recorder.lock.acquire)
                 try:
                     self._require_dispatch_allowed()
+                    self._require_recoverable_edit(name, args, call_id)
                     change = await asyncio.to_thread(recorder.prepare, name, args, call_id)
                     try:
                         result = await handler(request)
@@ -207,7 +247,16 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return await invoke()
         return self._replay_tool_call(request)
 
+    def _require_recoverable_edit(self, name, args, call_id):
+        if self.run.tool_authorizations.get(call_id) != "recoverable_edit":
+            return
+        from workbench_backend.agents.host_shell import reversible_file_request
+        if not reversible_file_request(self.run, name, args):
+            from workbench_backend.errors import HarnessError
+            raise HarnessError("The file changed before execution and cannot be safely recovered. Request this action again for approval.", code="file_recovery_changed", status_code=409)
+
     def _require_dispatch_allowed(self) -> None:
+        self.execution_control.require_dispatch(self.run)
         if self.run.status in {"cancel_requested", "cancelled"}:
             from workbench_backend.errors import HarnessError
             raise HarnessError("This run is stopping; no further model or tool call was dispatched.", code="run_cancelling", status_code=409)
@@ -221,6 +270,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         """
 
         name, args, call_id = _tool_call_parts(request)
+        if self.run.work_mode == "plan" and name not in PLAN_TOOLS:
+            return ToolMessage(content="Plan mode is read-only. This action was not executed. Switch to Work before requesting changes.", name=name, tool_call_id=call_id, status="error")
         if self.run.structured_output is not None and self.run.structured_output.repair_attempts:
             from workbench_backend.errors import HarnessError
             raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
@@ -293,6 +344,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _presented(self, tools: list[Any] | None) -> list[Any]:
         allowed = set(self.run.presented_tools)
+        if self.run.work_mode == "plan":
+            allowed.intersection_update(PLAN_TOOLS)
         if self.run.framework_read_paths:
             allowed.add("read_file")
         selected: list[Any] = []

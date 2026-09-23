@@ -70,7 +70,8 @@ function frame(runValue) {
       namespace: [],
       data: {
         messages: [{ id: `${runValue.id}_message`, type: "ai", content: runValue.task }],
-        workbench: { run: runValue },
+        workbench: { run: runValue, interrupt_run_id: runValue.pending_interrupt ? runValue.id : undefined },
+        __interrupt__: runValue.pending_interrupt ? [{ id: runValue.pending_interrupt.interrupt_id, namespace: runValue.pending_interrupt.namespace, value: runValue.pending_interrupt }] : [],
       },
     },
   };
@@ -83,6 +84,7 @@ function makeHarness() {
     registeredThreads: [],
     registrationPayloads: [],
     registrationBarriers: new Map(),
+    rejectRegistration: false,
     savedRuns: new Map([
       ["saved_a", run("saved_a", "completed", "Previously saved task A")],
       ["saved_b", run("saved_b", "completed", "Previously saved task B")],
@@ -99,6 +101,9 @@ function makeHarness() {
     });
     req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/v1/profiles") { json(res, 200, [{ id: "configuration-one", bundle_id: "bundle-one", display_name: "Configured model", revision: 1, bags: { startup: { requested: {} }, per_request: { requested: {} }, agent: { requested: {} } } }]); return; }
+      if (req.method === "POST" && url.pathname === "/v1/setup-resolution") { const config = JSON.parse(body).overrides; json(res, 200, { configuration: { ...config, deployment_id: config.model_configuration_id ? "dep_1" : config.deployment_id ?? "dep_1" }, instruction_layers: [], effective_values: {} }); return; }
+      if (req.method === "GET" && url.pathname.endsWith("/configuration-options")) { json(res, 200, { context_size: { maximum: 32768, options: [] }, per_request_defaults: {} }); return; }
       if (req.method === "GET" && url.pathname === "/v1/deployments") {
         json(res, 200, [{
           id: "dep_1",
@@ -121,6 +126,7 @@ function makeHarness() {
       if (req.method === "POST" && url.pathname === "/v1/agent-interaction/threads") {
         const payload = body ? JSON.parse(body) : {};
         state.registrationPayloads.push(payload);
+        if (state.rejectRegistration) { json(res, 503, { error: "Registration temporarily unavailable" }); return; }
         const threadId = payload.run_id ? `thread_${payload.run_id}` : `thread_${state.nextThread++}`;
         if (payload.run_id) {
           await state.registrationBarriers.get(payload.run_id)?.promise;
@@ -139,7 +145,8 @@ function makeHarness() {
       const stateMatch = url.pathname.match(/^\/v1\/agent-interaction\/threads\/([^/]+)\/state$/);
       if (req.method === "GET" && stateMatch) {
         const runValue = state.streamRuns.get(stateMatch[1]) ?? null;
-        json(res, 200, { values: { messages: [], workbench: { run: runValue } }, next: [], tasks: [] });
+        const interrupts = runValue?.pending_interrupt ? [{ id: runValue.pending_interrupt.interrupt_id, namespace: runValue.pending_interrupt.namespace, value: runValue.pending_interrupt }] : [];
+        json(res, 200, { values: { messages: [], workbench: { run: runValue, interrupt_run_id: interrupts.length ? runValue.id : undefined }, __interrupt__: interrupts }, next: interrupts.length ? ["input.respond"] : [], tasks: interrupts.length ? [{ interrupts }] : [] });
         return;
       }
       const streamMatch = url.pathname.match(/^\/v1\/agent-interaction\/threads\/([^/]+)\/stream\/events$/);
@@ -152,6 +159,7 @@ function makeHarness() {
         res.writeHead(200, { "content-type": "text/event-stream" });
         if (runValue) {
           res.write(`data: ${JSON.stringify(frame(runValue))}\n\n`);
+          if (runValue.pending_interrupt) res.write(`data: ${JSON.stringify({ type: "event", method: "input.requested", params: { namespace: runValue.pending_interrupt.namespace, data: { interrupt_id: runValue.pending_interrupt.interrupt_id, payload: runValue.pending_interrupt } } })}\n\n`);
         }
         res.end();
         return;
@@ -249,6 +257,17 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.match(allText(renderer), /Workflows/), "initial task surface render");
+  await act(async () => renderer.root.findByProps({ "aria-label": "Model" }).props.onChange({ target: { value: "configuration:configuration-one" } }));
+  const applyModel = () => renderer.root.findAllByType("button").find(item => textOf(item) === "Apply");
+  await waitFor(() => assert.equal(applyModel().props.disabled, false), "staged workflow model preview");
+  await act(async () => applyModel().props.onClick());
+  await waitFor(() => assert.ok(renderer.root.findAllByType("button").some(item => String(item.props["aria-label"]).includes("Configured model"))), "workflow model applied");
+  const folder = () => renderer.root.findAllByType("input").find(node => node.props.placeholder === "Optional project path");
+  await act(async () => folder().props.onChange({ target: { value: "D:/isolated-workflow" } }));
+  assert.match(allText(renderer), /Shell tools follow approval rules and saved permissions/);
+  await act(async () => renderer.root.findByProps({ role: "radio", "aria-label": "Full access" }).props.onClick());
+  assert.match(allText(renderer), /Enabled shell tools run without approval pauses/);
+  assert.doesNotMatch(allText(renderer), /Shell commands can access this computer and require approval/);
   await act(async () => {
     textarea(renderer).props.onChange({ target: { value: "first task" } });
     await Promise.resolve();
@@ -259,6 +278,8 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.match(allText(renderer), /first task/), "first run projection");
+  assert.equal(harness.state.commands[0].payload.params.metadata.workbench.approval_mode, "full_access", "the displayed access reaches the workflow submission");
+  assert.equal(harness.state.commands[0].payload.params.metadata.workbench.model_configuration_id, "configuration-one", "applied canonical model reaches the workflow submission");
   await act(async () => {
     cancelButton(renderer).props.onClick();
     await Promise.resolve();
@@ -280,6 +301,22 @@ try {
   assert.doesNotMatch(allText(renderer), /Stopping|cancel_requested/, "stale first cancel status must not appear on the second run");
   await act(async () => renderer.unmount());
 
+  harness.state.rejectRegistration = true;
+  const beforeFailedRegistration = harness.state.commands.length;
+  await act(async () => { renderer = create(React.createElement(AgentRunPanel)); });
+  await waitFor(() => assert.ok(textarea(renderer)), "fresh workflow editor");
+  await act(async () => textarea(renderer).props.onChange({ target: { value: "Retry this exact draft" } }));
+  await waitFor(() => assert.equal(startForm(renderer).findAllByType("button").find(item => textOf(item).includes("Run task")).props.disabled, false), "model loaded for retry case");
+  await act(async () => startForm(renderer).props.onSubmit({ preventDefault() {} }));
+  await waitFor(() => assert.match(allText(renderer), /Registration temporarily unavailable/), "registration failure shown");
+  assert.equal(textarea(renderer).props.value, "Retry this exact draft");
+  assert.equal(harness.state.commands.length, beforeFailedRegistration, "failed registration dispatches no task");
+  harness.state.rejectRegistration = false;
+  await act(async () => startForm(renderer).props.onSubmit({ preventDefault() {} }));
+  await waitFor(() => assert.equal(harness.state.commands.length, beforeFailedRegistration + 1), "retry dispatches once");
+  assert.equal(harness.state.commands.at(-1).payload.params.input.messages[0].content, "Retry this exact draft");
+  await act(async () => renderer.unmount());
+
   const commandsBeforeReopen = harness.state.commands.length;
   const handled = [];
   const onAttentionHandled = id => handled.push(id);
@@ -292,7 +329,30 @@ try {
   assert.equal(harness.state.commands.length, commandsBeforeReopen, "notification activation cannot replay a saved task");
   await act(async () => renderer.unmount());
 
+  harness.state.rejectRegistration = true;
+  const handledBeforeFailure = handled.length;
+  await act(async () => { renderer = create(React.createElement(AgentRunPanel, { attentionRunId: "saved_a", onAttentionHandled })); });
+  await waitFor(() => assert.match(allText(renderer), /Registration temporarily unavailable/), "saved workflow registration failure");
+  assert.equal(handled.length, handledBeforeFailure, "failed saved-run opening must remain unresolved");
+  harness.state.rejectRegistration = false;
+  await act(async () => renderer.root.findAllByType("button").find(item => textOf(item) === "Retry").props.onClick());
+  await waitFor(() => assert.match(allText(renderer), /Previously saved task A/), "saved workflow retry reopens original task");
+  assert.equal(harness.state.commands.length, commandsBeforeReopen, "retrying navigation does not submit work");
+  await act(async () => renderer.unmount());
+
+  const paused = { ...run("saved_approval", "running", "Waiting write"), pending_interrupt: { kind: "deepagents_interrupt_on", interrupt_id: "workflow-approval", namespace: ["named-helper"], environment: "workspace", isolation: "workspace", action_requests: [{ name: "write_file", args: { path: "notes.txt", content: "proposed" }, allowed_decisions: ["approve", "reject"] }] } };
+  harness.state.savedRuns.set("saved_approval", paused);
+  await act(async () => { renderer = create(React.createElement(AgentRunPanel, { attentionRunId: "saved_approval", onAttentionHandled })); });
+  await waitFor(() => assert.match(allText(renderer), /Send decisions/), "workflow approval shown");
+  await act(async () => renderer.root.findAllByType("label").find(item => textOf(item).trim() === "Reject").findByType("input").props.onChange());
+  await act(async () => renderer.root.findAllByType("button").find(item => textOf(item) === "Send decisions").props.onClick());
+  await waitFor(() => assert.equal(harness.state.commands.at(-1).payload.method, "input.respond"), "workflow decision reaches receiver");
+  assert.deepEqual(harness.state.commands.at(-1).payload.params, { interrupt_id: "workflow-approval", namespace: ["named-helper"], response: { decisions: [{ type: "reject", scope: "once" }] } });
+  await act(async () => renderer.unmount());
+
   const staleRegistration = deferred();
+  const handledBeforeStale = [...handled];
+  const commandsBeforeStale = harness.state.commands.length;
   harness.state.registrationBarriers.set("saved_a", staleRegistration);
   const priorRegistrations = harness.state.registrationPayloads.length;
   await act(async () => {
@@ -307,8 +367,8 @@ try {
   await waitFor(() => assert.ok(harness.state.registeredThreads.filter(id => id === "thread_saved_a").length >= 2), "old registration response delivered");
   await flush();
   assert.match(allText(renderer), /Previously saved task B/, "late registration cannot replace the activated task");
-  assert.deepEqual(handled, ["saved_a", "saved_b"], "obsolete notification is never acknowledged as the newer selection");
-  assert.equal(harness.state.commands.length, commandsBeforeReopen, "reopening and switching saved tasks issues no work commands");
+  assert.deepEqual(handled, [...handledBeforeStale, "saved_b"], "obsolete notification is never acknowledged as the newer selection");
+  assert.equal(harness.state.commands.length, commandsBeforeStale, "reopening and switching saved tasks issues no work commands");
   await act(async () => renderer.unmount());
 } finally {
   for (const barrier of harness.state.registrationBarriers.values()) barrier.resolve();

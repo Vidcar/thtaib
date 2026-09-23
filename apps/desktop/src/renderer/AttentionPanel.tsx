@@ -8,7 +8,7 @@ import { packet03Api, type AttentionItem } from "./packet03Api";
 import "./packet03Panels.css";
 
 interface AttentionPanelProps {
-  onOpenItem?: (item: AttentionItem) => void;
+  onOpenItem?: (item: AttentionItem) => boolean | void | Promise<boolean | void>;
 }
 
 function attentionKindLabel(kind: AttentionItem["kind"]): string {
@@ -34,7 +34,7 @@ export function notifyAttentionChanged(): void {
 
 export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
   const [items, setItems] = useState<AttentionItem[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("");
 
   async function refresh(): Promise<void> {
@@ -67,9 +67,10 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
     setBusy(true);
     setMessage("");
     try {
+      if (!onOpenItem || await onOpenItem(item) === false) return;
       await packet03Api.dismissAttention(item.identity);
       notifyAttentionChanged();
-      onOpenItem?.(item);
+      setItems(current => current.filter(currentItem => currentItem.identity !== item.identity));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -91,7 +92,7 @@ export function AttentionPanel({ onOpenItem }: AttentionPanelProps) {
       </div>
 
       {message ? <Notice role="status">{message}</Notice> : null}
-      {items.length === 0 ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
+      {items.length === 0 && !message ? busy ? <p className="hint">Loading…</p> : <EmptyState title="You're all caught up." /> : null}
 
       <ul className="packet03-list">
         {items.map((item) => (

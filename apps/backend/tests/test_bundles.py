@@ -242,7 +242,10 @@ class BundleTests(unittest.TestCase):
             patch.object(hashes, "sha256_file", wraps=hashes.sha256_file) as wrapped_hash,
             patch.object(self.manager.store, "put_bundle", wraps=self.manager.store.put_bundle) as wrapped_put,
         ):
-            self.manager.list_bundles()
+            listed = self.manager.list_bundles()
+            self.assertIsNotNone(listed[0].default_configuration_id)
+            self.assertEqual(wrapped_put.call_count, 1)  # one-time configuration migration
+            wrapped_put.reset_mock()
             self.manager.list_bundles()
 
         self.assertEqual(wrapped_hash.call_count, len(bundle.files))

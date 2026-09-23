@@ -1,6 +1,6 @@
 # Spec Delta
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: API-027 - Keep every destination compact and readable
 
@@ -14,7 +14,7 @@ Every destination SHALL use the same compact type, spacing, and icon actions as 
 
 ### Requirement: API-028 - Confirm before swapping the loaded model
 
-Changing or unloading a model SHALL open a confirmation. The confirmation names the conversation that will be kept and any work that must finish or be stopped. It MUST NOT unload a model as a side effect of choosing a different row. After confirmation, the conversation, its draft, and its history remain. The screen shows waiting, loading, or the failure, and the draft is still there if loading fails.
+Changing or unloading a model SHALL require explicit reviewed confirmation. An explicit Apply & reload or Unload action on that reviewed state SHALL count as confirmation. The confirmation names the conversation that will be kept and any work that must finish or be stopped. It MUST NOT unload a model as a side effect of choosing a different row. After confirmation, the conversation, its draft, and its history remain. The screen shows waiting, loading, or the failure, and the draft is still there if loading fails.
 
 #### Scenario: Swap during a quiet chat
 

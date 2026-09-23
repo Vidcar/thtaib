@@ -85,6 +85,7 @@ class ModelBundle(BaseModel):
     created_at: str
     status: ImportStatus = ImportStatus.complete
     disk_matches: bool = True
+    default_configuration_id: str | None = None
 
 
 class ProjectorSelectionRequest(BaseModel):
@@ -239,6 +240,7 @@ class ProfileWriteRequest(BaseModel):
     startup: dict[str, Any] = Field(default_factory=dict)
     per_request: dict[str, Any] = Field(default_factory=dict)
     agent: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int | None = None
 
 
 class SettingsPreviewRequest(BaseModel):
@@ -251,9 +253,32 @@ class RunProfile(BaseModel):
     id: str
     display_name: str
     bundle_id: str | None = None
+    bundle_name: str | None = Field(default=None, json_schema_extra={"readOnly": True})
+    equivalent_configuration_ids: list[str] = Field(default_factory=list, json_schema_extra={"readOnly": True})
+    merged_into_configuration_id: str | None = Field(default=None, json_schema_extra={"readOnly": True})
+    configuration_origin: Literal["legacy", "recovered", "named"] = Field(default="legacy", json_schema_extra={"readOnly": True})
     bags: SettingsBags
     created_at: str
     updated_at: str
+    revision: int = 1
+
+
+class DefaultConfigurationRequest(BaseModel):
+    configuration_id: str
+
+
+class ModelConfigurationWriteRequest(ProfileWriteRequest):
+    configuration_id: str | None = None
+    make_default: bool = False
+
+
+class ReconfigureDeploymentRequest(BaseModel):
+    startup: dict[str, Any]
+    replace_startup: bool = False
+    model_configuration_id: str | None = None
+    expected_configuration_revision: int | None = None
+    expected_updated_at: str | None = None
+    conversation_id: str | None = None
 
 
 class RenameProfileRequest(BaseModel):
@@ -404,6 +429,8 @@ class RuntimeControlDescriptor(BaseModel):
     applied: Any = None
     recommended: Any = None
     observed: Any = None
+    default_value: Any = None
+    default_source: str | None = None
     maximum: int | None = None
     supported: bool | None = None
     accepted_values: list[str] | None = None
@@ -421,7 +448,7 @@ class GgufRuntimeMetadata(BaseModel):
 
 
 class BundleConfigurationOptions(BaseModel):
-    bundle_id: str
+    bundle_id: str | None
     deployment_id: str | None = None
     context_size: RuntimeControlDescriptor
     gpu_layers: RuntimeControlDescriptor
@@ -456,6 +483,8 @@ class Deployment(BaseModel):
     server_props: ServerProperties | None = None
     capability_evidence: list[dict[str, Any]] = Field(default_factory=list)
     inference_identity: dict[str, Any] = Field(default_factory=dict)
+    configuration_revision: int | None = None
+    reconfiguration: dict[str, Any] | None = None
     error: str | None = None
     created_at: str
     updated_at: str

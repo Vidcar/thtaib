@@ -135,6 +135,9 @@ class ChatHarnessTests(unittest.TestCase):
             "deployment_id": self.deployment_id,
             "profile_id": self.profile_id,
             "project_path": str(self.project),
+            # This fixture exercises automatic project edits; Ask is covered by
+            # the explicit approval journey and dedicated permission tests.
+            "approval_mode": "approve_for_me",
             **extra,
         }
         response = self.client.post("/v1/chat/conversations", json=payload)
@@ -175,6 +178,37 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual([item['id'] for item in response.json()], [retained['id']])
         self.assertIsNone(store.get(removed['id']))
         self.assertEqual(self.client.get(f'/v1/chat/conversations/{removed["id"]}').status_code, 404)
+
+    def test_untitled_history_has_one_server_title_in_catalogue_and_full_view(self) -> None:
+        created = self._create()
+        store = self.app.state.chat.store
+        saved = store.get(created["id"])
+        prompt = "  this is a stream test,\n please write out 150 lines with interesting facts about trees  "
+        saved.title = None
+        saved.transcript = [
+            ChatMessage(role="assistant", content="Earlier assistant-only note", at=saved.created_at),
+            ChatMessage(role="user", content="  ", at=saved.created_at),
+            ChatMessage(role="user", content=prompt, at=saved.created_at),
+        ]
+        store.put(saved)
+        before = store.get(saved.id).model_dump()
+        expected = " ".join(prompt.split())[:51] + "…"
+
+        catalogue = self.client.get("/v1/chat/conversations").json()
+        summary = next(item for item in catalogue if item["id"] == saved.id)
+        full = self.client.get(f"/v1/chat/conversations/{saved.id}").json()
+        self.assertEqual(summary["transcript"], [], "The sidebar must remain a lightweight response.")
+        self.assertEqual(summary["display_title"], expected)
+        self.assertEqual(full["display_title"], expected)
+        self.assertIsNone(summary["title"])
+        self.assertIsNone(full["title"])
+        self.assertEqual(store.get(saved.id).model_dump(), before, "Reading a derived title must not mutate legacy history.")
+
+        renamed = self.client.patch(f"/v1/chat/conversations/{saved.id}", json={"title": "My trees"}).json()
+        self.assertEqual(renamed["display_title"], "My trees")
+        summary = next(item for item in self.client.get("/v1/chat/conversations").json() if item["id"] == saved.id)
+        self.assertEqual(summary["display_title"], "My trees")
+        self.assertEqual(store.get(saved.id).title, "My trees")
 
     def test_startup_dispatch_skips_conversation_deleted_after_catalogue_snapshot(self) -> None:
         removed = self._create(title="Deleted during startup")
@@ -1032,7 +1066,7 @@ class ChatHarnessTests(unittest.TestCase):
             knowledge_provider=lambda: self.app.state.knowledge,
             app_store=self.app.state.app_store,
         )
-        conversation = self._create()
+        conversation = self._create(approval_mode="full_access")
         self._start(conversation["id"], task="Write hello.txt and an offload file.")
         body = wait_for_chat(self.client, conversation["id"])
         self.assertEqual(body["current_run"]["status"], "completed", body["current_run"].get("error"))
@@ -1904,7 +1938,7 @@ class ChatHarnessTests(unittest.TestCase):
                 AIMessage(content="queued after approval"),
             ]
         )
-        conversation = self._create()
+        conversation = self._create(approval_mode="ask")
         started = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/start",
             json={"task": "Wait for approval.", "presented_tools": ["execute"]},
@@ -2762,6 +2796,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Write direct.md",
+                "approval_mode": "approve_for_me",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file"],
             },

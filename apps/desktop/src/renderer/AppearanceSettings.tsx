@@ -16,6 +16,8 @@ import {
 } from "./appearanceStore";
 import { shippedValue, type AppearanceGroup, type AppearanceToken } from "./appearanceValue";
 import type { PresentationTheme } from "./types";
+import { HoverHelp } from "./HoverHelp";
+import { CompactSlider } from "./CompactControls";
 import "./appearancePanel.css";
 
 const groups: Array<AppearanceGroup | "All"> = ["All", "Colours", "Text", "Corners", "Spacing", "Layout", "Lines", "Effects"];
@@ -26,6 +28,7 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
   const [group, setGroup] = useState<(typeof groups)[number]>("All");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [customize, setCustomize] = useState(false);
   const active = appearanceActiveTheme();
   const dirty = appearanceDirty();
   const visible = useMemo(() => {
@@ -38,12 +41,6 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
   }, [group, query]);
 
   useEffect(() => { setAppearanceTheme(theme); }, [theme]);
-  useEffect(() => {
-    const open = window.workbench?.openAppearancePreview;
-    if (!open || appearancePreviewOpened) return;
-    appearancePreviewOpened = true;
-    void open().then(() => syncAppearancePreview());
-  }, []);
 
   async function onApply(): Promise<void> {
     setSaving(true);
@@ -63,11 +60,14 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
       <div className="appearance-bar">
         <p className="hint">{dirty ? "Unsaved changes" : "No unsaved changes"} · editing {active} colours</p>
         <button type="button" onClick={() => void window.workbench?.openAppearancePreview?.().then(() => syncAppearancePreview())}>Pop out preview</button>
-        <button type="button" disabled={!dirty || saving} onClick={() => { cancelAppearance(); setMessage(""); }}>Cancel</button>
-        <button type="button" className="primary-button" disabled={!dirty || saving} onClick={() => void onApply()}>Apply</button>
+        <button type="button" disabled={!dirty || saving} title="Restore the last saved appearance" onClick={() => { cancelAppearance(); setMessage(""); }}>Cancel</button>
+        <button type="button" className="primary-button" disabled={!dirty || saving} title="Save appearance on this computer" onClick={() => void onApply()}>Apply</button>
+        <HoverHelp title="Appearance changes">Changes preview immediately. Apply saves them on this computer; Cancel restores the last saved values. Reset returns an individual control to its shipped value. Open Preview to see a sample conversation.</HoverHelp>
       </div>
       {message ? <p className="hint" role="status">{message}</p> : null}
-      <p className="appearance-note hint">Each row is one shared look, used everywhere it appears, including this page. Pop out preview opens a sample window you can move beside this one. Point at a control, or move it, and that window marks what changes. Apply saves it in appearance.json on this computer. Cancel puts the last saved values back. Reset on a row returns that shipped value.</p>
+      <AppearanceBasics />
+      <button type="button" className="appearance-customize" aria-expanded={customize} onClick={() => setCustomize(value => !value)}>{customize ? "Hide advanced controls" : "Customize appearance"}</button>
+      {customize ? <div className="appearance-advanced">
       <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
       <div className="appearance-groups" role="group" aria-label="Appearance groups">
         {groups.map(item => (
@@ -76,19 +76,27 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
       </div>
       <p className="hint" data-appearance-version={version}>{visible.length} shown</p>
       {visible.map(token => <AppearanceRow key={token.id} token={token} value={currentAppearanceValue(token)} />)}
+      </div> : null}
     </div>
   );
 }
 
-let appearancePreviewOpened = false;
+function AppearanceBasics() {
+  const token = (id: string) => appearanceTokens.find(item => item.id === id)!;
+  const current = (id: string) => currentAppearanceValue(token(id));
+  const font = current("font-ui");
+  const fonts = [{ label: "System", value: token("font-ui").shipped }, { label: "Arial", value: "Arial, sans-serif" }, { label: "Verdana", value: "Verdana, sans-serif" }];
+  const densities: Record<string, Record<string, string>> = { Compact: { "pad-compact": "8px", "space-compact": "8px", "control-height": "30px" }, Comfortable: { "pad-compact": "12px", "space-compact": "12px", "control-height": "36px" } };
+  const density = Object.entries(densities).find(([, values]) => Object.entries(values).every(([id, value]) => current(id) === value))?.[0] ?? "Custom";
+  return <div className="appearance-basics"><label>Font<select aria-label="Interface font choice" value={font} onChange={event => updateAppearanceValue("font-ui", event.target.value)}>{!fonts.some(item => item.value === font) ? <option value={font}>Custom</option> : null}{fonts.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><CompactSlider label="Interface size" value={parseFloat(current("text-body"))} values={[11, 12, 13, 14, 15, 16, 18]} formatValue={value => `${value}px`} onChange={value => updateAppearanceValue("text-body", `${value}px`)} /><label>Density<select aria-label="Density" value={density} onChange={event => Object.entries(densities[event.target.value] ?? {}).forEach(([id, value]) => updateAppearanceValue(id, value))}>{density === "Custom" ? <option>Custom</option> : null}{Object.keys(densities).map(value => <option key={value}>{value}</option>)}</select></label></div>;
+}
 
 const AppearanceRow = memo(function AppearanceRow({ token, value }: { token: AppearanceToken; value: string }) {
   const shipped = shippedValue(token, token.theme === "split" ? appearanceActiveTheme() : "dark");
   return (
     <div className="appearance-row" onFocusCapture={() => setAppearancePreviewAim(token)} onPointerEnter={() => setAppearancePreviewAim(token)}>
       <div className="appearance-row-name">
-        <strong>{token.name}</strong>
-        <span className="hint">{token.group}. Shipped {shipped}. {token.detail}</span>
+        <strong>{token.name}<HoverHelp title={`About ${token.name.toLowerCase()}`}>{token.group}. Shipped {shipped}. {token.detail}</HoverHelp></strong>
         <button type="button" className="appearance-reset" hidden={value === shipped} onClick={() => resetAppearanceValue(token.id)}>Reset</button>
       </div>
       <div className="appearance-controls">

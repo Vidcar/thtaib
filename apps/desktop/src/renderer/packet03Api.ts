@@ -45,6 +45,10 @@ export interface PermissionGrant {
   source_run_id: string;
 }
 
+export interface MatchedPermissionGrant extends PermissionGrant {
+  display_name: string;
+}
+
 export interface BackupExternalReference {
   kind: "project" | "model" | "runtime" | "credential";
   path: string | null;

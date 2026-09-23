@@ -183,7 +183,7 @@ class AsyncLifecycleTests(unittest.TestCase):
             finally:
                 settled.set()
         with patch.object(LocalShellBackend, 'execute', execute):
-            started = self._start(project_path=str(project), presented_tools=['execute'])
+            started = self._start(project_path=str(project), presented_tools=['execute'], approval_mode='full_access')
             try:
                 self.assertTrue(entered.wait(5))
                 self.app.state.harness.cancel(started['id'])

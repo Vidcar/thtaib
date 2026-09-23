@@ -55,6 +55,7 @@ function NativePathSelector(props: {
 
 export function InterruptApproval(props: {
   pending: PendingInterrupt;
+  ownerLabel?: string;
   busy?: boolean;
   onRespond: (payload: InterruptResponsePayload) => void;
 }) {
@@ -77,7 +78,7 @@ export function InterruptApproval(props: {
   if (question) {
     return (
       <div className="approval-card" role="alertdialog" aria-labelledby="approval-title">
-        <h3 id="approval-title">{answerTypeLabel(question)}</h3>
+        <h3 id="approval-title">{answerTypeLabel(question)}{props.ownerLabel ? ` · ${props.ownerLabel}` : ""}</h3>
         <p>{question.prompt}</p>
         <p className="hint">This answers the assistant's question. It is not a permission grant and does not add file or folder authority.</p>
         {question.answer_type === "choice" ? (
@@ -113,7 +114,7 @@ export function InterruptApproval(props: {
 
   return (
     <div className="approval-card" role="alertdialog" aria-labelledby="approval-title">
-      <h3 id="approval-title">Review requested actions</h3>
+      <h3 id="approval-title">Review requested actions{props.ownerLabel ? ` · ${props.ownerLabel}` : ""}</h3>
       <p className="notice notice-warn">
         Choose a decision for each action. Session and always grants apply only to matching future actions with the same recorded scope.
       </p>

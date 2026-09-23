@@ -75,6 +75,13 @@ async function checkPreferencesWaitForHydrationAndSave(RecoverySettingsPanel) {
 
   assert.equal(themeSelect(renderer).props.value, "light", "hydrated preferences should replace fallback");
   assert.equal(themeSelect(renderer).props.disabled, false, "theme select should enable after successful hydration");
+  const advancedRows = () => renderer.root.findAll(node => node.type === "div" && node.props.className === "appearance-row");
+  assert.equal(advancedRows().length, 0, "advanced token editors stay closed during ordinary Settings use");
+  assert.ok(renderer.root.findByProps({ "aria-label": "Density" }), "basic density choice remains directly available");
+  await act(async () => button(renderer, "Customize appearance").props.onClick());
+  assert.equal(advancedRows().length, 74, "explicit customization retains the complete appearance catalogue");
+  await act(async () => button(renderer, "Hide advanced controls").props.onClick());
+  assert.equal(advancedRows().length, 0);
 
   const refreshCountBefore = requests.filter((request) => request.method === "GET" && request.path === "/v1/settings/presentation").length;
   await act(async () => {
@@ -283,11 +290,13 @@ function inputByPlaceholder(renderer, placeholder) {
 }
 
 function themeSelect(renderer) {
-  return renderer.root.findByType("select");
+  return renderer.root.findByProps({ "aria-label": "Theme" });
 }
 
 function preferenceCheckboxes(renderer) {
-  return renderer.root.findAll((node) => node.type === "input" && node.props.type === "checkbox" && node.props["data-appearance-guide"] == null);
+  const controls = renderer.root.findAll((node) => node.type === "button" && node.props.role === "switch");
+  assert.equal(controls.length, 3, "all three boolean preferences use independent switches");
+  return controls;
 }
 
 function button(renderer, text) {

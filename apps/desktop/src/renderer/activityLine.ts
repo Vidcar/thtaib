@@ -14,6 +14,21 @@ export interface ObservedFileChange {
   removedLines?: number | null;
 }
 
+export interface ActivityGroup<T> { label: string | null; items: T[]; }
+
+/** Group only neighbouring successes; a running or failed call is always a boundary. */
+export function groupActivity<T>(items: T[], describe: (item: T) => { label: string; finished: boolean; failed: boolean }): ActivityGroup<T>[] {
+  const groups: Array<ActivityGroup<T> & { verb: string | null }> = [];
+  for (const item of items) {
+    const state = describe(item);
+    const verb = state.finished && !state.failed ? state.label.split(" ")[0] : null;
+    const last = groups.at(-1);
+    if (verb && last?.verb === verb) last.items.push(item);
+    else groups.push({ label: null, items: [item], verb });
+  }
+  return groups.map(({ items: grouped, verb }) => ({ items: grouped, label: grouped.length < 2 ? null : `${verb} ${grouped.length} ${verb === "Read" ? "files" : verb === "Edited" || verb === "Created" || verb === "Deleted" || verb === "Renamed" ? "changes" : "items"}` }));
+}
+
 const TODO_STATUSES = new Set(["pending", "in_progress", "completed"]);
 
 export function parseTodoList(args: unknown): TodoItem[] | null {

@@ -8,6 +8,7 @@ import {
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
 import { AppearanceSettings } from "./AppearanceSettings";
+import { CompactSwitch } from "./CompactControls";
 import { HoverHelp } from "./HoverHelp";
 import { pickWorkbenchPath } from "./PathField";
 import { Icon } from "./Icon";
@@ -16,6 +17,8 @@ import "./RecoverySettingsPanel.css";
 
 interface RecoverySettingsPanelProps {
   children?: ReactNode;
+  defaultsPanel?: ReactNode;
+  connectionsPanel?: ReactNode;
   onPreferencesChanged?: (preferences: PresentationSettings) => void;
   onRestoreCompleted?: (result: BackupRestoreResult) => void;
 }
@@ -46,7 +49,15 @@ function argumentSummary(value: Record<string, unknown>): string {
   return entries.slice(0, 4).map(([key, item]) => `${key}: ${String(item)}`).join(", ");
 }
 
-export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted, children }: RecoverySettingsPanelProps) {
+export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted, children, defaultsPanel, connectionsPanel }: RecoverySettingsPanelProps) {
+  const [category, setCategory] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("workbench.settings.category");
+      if (saved && ["Appearance", "Notifications", "Defaults", "Connections", "Permissions", "Backup"].includes(saved)) return saved;
+    } catch { /* Use the first category when storage is unavailable. */ }
+    return "Appearance";
+  });
+  useEffect(() => { try { sessionStorage.setItem("workbench.settings.category", category); } catch { /* Optional preference. */ } }, [category]);
   const [preferences, setPreferences] = useState<PresentationSettings>(fallbackPresentation);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [preferencesBusy, setPreferencesBusy] = useState(false);
@@ -227,34 +238,21 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
       {message ? <p role="status" className="notice">{message}</p> : null}
 
+      <nav className="settings-categories" aria-label="Settings categories">{["Appearance", "Notifications", "Defaults", "Connections", "Permissions", "Backup"].map(item => <button type="button" key={item} aria-current={category === item ? "page" : undefined} onClick={() => setCategory(item)}>{item}</button>)}</nav>
+
       <div className="settings-preferences">
-        <section className="packet03-item">
+        <section className="packet03-item" hidden={category !== "Notifications"}>
           <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={preferences.attention_notifications}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
-            />
-            Notify when work needs attention
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={preferences.success_notifications}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
-            />
-            Notify when work finishes
-          </label>
+          <CompactSwitch label="Notify when work needs attention" checked={preferences.attention_notifications} disabled={preferenceControlsDisabled} onChange={attention_notifications => void savePreferences({ attention_notifications })} />
+          <CompactSwitch label="Notify when work finishes" checked={preferences.success_notifications} disabled={preferenceControlsDisabled} onChange={success_notifications => void savePreferences({ success_notifications })} />
           <p className="hint">Attention includes approvals, questions and failures.</p>
         </section>
-        <section className="packet03-item settings-appearance">
+        <section className="packet03-item settings-appearance" hidden={category !== "Appearance"}>
           <h3>Appearance</h3>
           <label className="settings-theme">
             Theme
             <select
+              aria-label="Theme"
               value={preferences.theme}
               disabled={preferenceControlsDisabled}
               onChange={(event) => void savePreferences({ theme: event.target.value as PresentationTheme })}
@@ -264,22 +262,15 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
               <option value="dark">Dark</option>
             </select>
           </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={preferences.detailed_streams}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ detailed_streams: event.target.checked })}
-            />
-            Show reasoning and tool details by default
-          </label>
+          <CompactSwitch label="Show reasoning and tool details by default" checked={preferences.detailed_streams} disabled={preferenceControlsDisabled} onChange={detailed_streams => void savePreferences({ detailed_streams })} />
           <AppearanceSettings theme={preferences.theme} />
         </section>
       </div>
 
-      {children}
+      <div hidden={category !== "Defaults"} className="settings-category-content">{defaultsPanel ?? children}</div>
+      <div hidden={category !== "Connections"} className="settings-category-content">{connectionsPanel}</div>
 
-        <details className="packet03-item settings-permissions">
+        <details className="packet03-item settings-permissions" open hidden={category !== "Permissions"}>
           <summary>Saved permissions <span className="hint">{grants.length || "None"}</span></summary>
           <div className="entity-head"><h3>Permissions</h3><HoverHelp title="About saved permissions">Saved approvals are limited to their recorded action, arguments and project. Revoke one to require approval again.</HoverHelp></div>
           {grants.length === 0 ? (
@@ -300,7 +291,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
           )}
         </details>
 
-      <details className="packet03-item">
+      <details className="packet03-item" open hidden={category !== "Backup"}>
         <summary><Icon name="download" size={15} /> Backup</summary>
         <div className="entity-head"><h3>Create a backup</h3><HoverHelp title="What a backup includes">Includes app records, compatible checkpoints and retained files. Models, runtimes, project files and credentials stay in their existing locations.</HoverHelp></div>
         <label>
@@ -320,7 +311,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
         ) : null}
       </details>
 
-      <details className="packet03-item">
+      <details className="packet03-item" open hidden={category !== "Backup"}>
         <summary><Icon name="restore" size={15} /> Restore</summary>
         <div className="entity-head"><h3>Restore a backup</h3><HoverHelp title="Restore dependencies">Missing models, runtimes and external files are reported before activation.</HoverHelp></div>
         <p className="hint">Restores to an empty folder. Activation restarts the app; previous actions are never replayed.</p>

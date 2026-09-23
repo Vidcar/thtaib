@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 from tests import test_harness as harness_tests
 from tests.scripted_model import ScriptedChatModel
 from tests.support import wait_for_run
+from workbench_backend.inference.ids import new_id
 
 
 class ContentLineCountTests(unittest.TestCase):
@@ -56,8 +57,10 @@ class ProjectFileChangesTests(unittest.TestCase):
     def _project_run(self, name, args, *, project=None, thread_id=None):
         project = project or self.root / 'project'
         project.mkdir(exist_ok=True)
-        self.scripted = ScriptedChatModel([AIMessage(content='', tool_calls=[{'name': name, 'args': args, 'id': 'observed-file-call'}]), AIMessage(content='finished')])
-        return self._start(project_path=str(project), thread_id=thread_id, presented_tools=[name]), project
+        self.observed_call_id = new_id('filecall')
+        self.scripted = ScriptedChatModel([AIMessage(content='', tool_calls=[{'name': name, 'args': args, 'id': self.observed_call_id}]), AIMessage(content='finished')])
+        return self._start(project_path=str(project), thread_id=thread_id, presented_tools=[name],
+            approval_mode='approve_for_me' if name in {'write_file', 'edit_file'} else 'ask'), project
 
     def _settled(self, run_id):
         final = wait_for_run(self.client, run_id)
@@ -91,7 +94,7 @@ class ProjectFileChangesTests(unittest.TestCase):
         self.assertTrue(view['reversal_available'], view)
         self.assertEqual(view['change']['before']['text'], 'before\n')
         self.assertEqual(view['change']['after']['text'], 'after\n')
-        self.assertEqual(view['change']['tool_call_id'], 'observed-file-call')
+        self.assertEqual(view['change']['tool_call_id'], self.observed_call_id)
         self.assertIn('-before', view['diff'])
         self.assertIn('+after', view['diff'])
         path.write_text('later editor\n')
@@ -129,12 +132,25 @@ class ProjectFileChangesTests(unittest.TestCase):
         url = f"/v1/agent-runs/{approved['id']}/file-changes/{changed[0]['change']['id']}/reverse"
         self.assertEqual(self.client.post(url).status_code, 200)
         again, _ = self._project_run('rename_file', args, project=project, thread_id='rename-grant')
-        self.assertEqual(self._settled(again['id'])['status'], 'completed')
+        repeated = self._settled(again['id'])
+        self.assertEqual(repeated['status'], 'completed')
+        result = next(event for event in repeated['events'] if event['kind'] == 'tool_result')
+        self.assertEqual(result['detail'].get('authorization_source'), 'saved_permission')
+        grant, = self.app.state.preferences.grants()
+        matched = result['detail'].get('authorization_grant')
+        self.assertIsNotNone(matched, 'The actual matching saved permission must reach durable tool results')
+        self.assertEqual({key: matched[key] for key in type(grant).model_fields}, grant.model_dump(mode='json'))
+        self.assertEqual(matched['display_name'], 'Rename /original.txt → /renamed.txt · This session')
+        self.assertEqual(repeated['tool_authorization_grants'][self.observed_call_id], matched)
+        authorized_call_id = self.observed_call_id
         # A changed destination does not inherit the exact-action grant.
         changed_args, _ = self._project_run('rename_file', {'file_path': '/renamed.txt', 'destination': '/other.txt'}, project=project, thread_id='rename-grant')
         self._decide(changed_args['id'], 'reject')
         self._settled(changed_args['id'])
         self.assertFalse((project / 'other.txt').exists())
+        self.app.state.preferences.revoke(grant.id)
+        restored = self.app.state.harness.store.get_run(again['id'])
+        self.assertEqual(restored.tool_authorization_grants[authorized_call_id].model_dump(mode='json'), matched)
 
     def test_delete_restores_captured_text_and_rejects_folders_or_escape(self):
         project = self.root / 'project'

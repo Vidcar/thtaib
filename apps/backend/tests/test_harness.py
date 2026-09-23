@@ -517,9 +517,10 @@ class HarnessApiTests(unittest.TestCase):
         self.assertTrue(evidence["executable_checks"][0]["passed"])
         self.assertTrue(evidence["executable_checks"][1]["passed"])
         self.assertTrue(evidence["expected_artifacts"][0]["present"])
-        self.assertIn("echo", judgement["model_review"].lower())
+        self.assertIsNone(judgement["model_review"])
+        self.assertEqual(judgement["source"], "not_requested")
         self.assertNotEqual(evidence, judgement)
-        self.assertIn("not an executable check", judgement["note"].lower())
+        self.assertIn("no independent review", judgement["note"].lower())
 
     def test_second_run_starts_while_another_uses_the_same_project(self) -> None:
         hold = threading.Event()

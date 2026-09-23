@@ -8,6 +8,7 @@ import "./chatPolish.css";
 import "./workbenchTheme.css";
 import "./surfacePolish.css";
 import "./appearanceDefaults.css";
+import "./workbenchCohesion.css";
 
 const root = document.getElementById("root");
 if (!root) {

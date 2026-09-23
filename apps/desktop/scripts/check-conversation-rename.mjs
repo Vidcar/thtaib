@@ -134,6 +134,12 @@ const conversation = {
 };
 
 try {
+  const { conversationTitle } = await vite.ssrLoadModule("/src/renderer/display.ts");
+  const derived = "this is a stream test, please write out 150 lines wit…";
+  const legacySummary = { ...conversation, title: null, display_title: derived, transcript: [] };
+  const legacyFull = { ...legacySummary, transcript: [{ role: "user", content: "A competing transcript-derived title" }] };
+  assert.equal(conversationTitle(legacySummary), derived, "The sidebar uses the server's title even without its transcript.");
+  assert.equal(conversationTitle(legacyFull), derived, "The header uses the same authoritative title as the sidebar.");
   const { ConversationRename } = await vite.ssrLoadModule("/src/renderer/ConversationRename.tsx");
   await checkSaveAndKeyboard(ConversationRename);
   await checkValidationAndErrorState(ConversationRename);

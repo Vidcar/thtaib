@@ -99,6 +99,11 @@ Before Chat, Lab restore or rerun, Agent-run, or workflow execution starts, the 
 - THEN the backend MUST resolve and validate them immediately before execution
 - AND the run record, inspector, and captured request MUST agree on selected, loaded, applied, unsupported, overridden, and unverified facts.
 
+#### Scenario: Same setting displayed and dispatched
+- **WHEN** Models, Agents, project/application defaults, Chat, Lab or Workflows display a setting
+- **THEN** its effective value, named source, known default, support and reload state come from the shared backend resolution used at dispatch
+- **AND** presentation does not implement another inheritance authority.
+
 ### Requirement: ARCH-009 - Preserve local persistence boundaries
 
 Product data SHALL live under the configured product data root, with files for weights, runtimes, project workspaces, knowledge bodies, snapshots, artifacts, and logs. New mutable application records SHALL use `application.sqlite`; LangGraph checkpoints SHALL remain in `checkpoints.sqlite`; the application SHALL store checkpoint identifiers and MUST NOT read or write checkpointer tables directly.

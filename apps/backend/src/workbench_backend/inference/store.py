@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from threading import RLock
 from typing import Any, TypeVar
@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS capability_evidence (
 
 
 class RecordStore:
+    @contextmanager
+    def configuration_lock(self):
+        """Serialize model configuration revisions and their bundle pointer."""
+        with _STORE_LOCK:
+            yield
+
     def __init__(self, paths: WorkbenchPaths) -> None:
         self.paths = paths.ensure()
         self.bundles_path = self.paths.state / "bundles.json"
@@ -274,7 +280,7 @@ class RecordStore:
             return TypeAdapter(list[model]).validate_python(raw)
 
     def _write_list(self, path: Path, items: list[BaseModel]) -> None:
-        self._write_json(path, [item.model_dump(mode="json") for item in items])
+        self._write_json(path, [item.model_dump(mode="json", exclude={"bundle_name", "equivalent_configuration_ids"} if isinstance(item, RunProfile) else None) for item in items])
 
     def _upsert(self, path: Path, model: type[T], item: T) -> T:
         with _STORE_LOCK:

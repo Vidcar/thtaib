@@ -404,6 +404,7 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Edit memory.",
+                "approval_mode": "full_access",
                 "project_path": str(project),
                 "presented_tools": ["edit_file"],
                 "memory_version_refs": [memory["current_version_id"]],

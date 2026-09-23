@@ -30,7 +30,10 @@ from langgraph.types import Command
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.file_changes import FileChangeRecorder, ProjectFileChangeView, change_view, reverse_change
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
-from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer
+from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
+from workbench_backend.inference.schemas import SettingsBags
+from workbench_backend.agents.helpers import freeze_helpers
+from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root
@@ -75,6 +78,7 @@ from workbench_backend.agents.schemas import (
     UserAnswerRequest,
     PendingInterrupt,
     TaskCriteria,
+    ReviewObservation,
     ToolMode,
     label_for_tool_mode,
 )
@@ -91,6 +95,7 @@ from workbench_backend.state.checkpointer import (
     submit_checkpoint_task,
 )
 from workbench_backend.state.schemas import RelatedFile
+from workbench_backend.state.preferences import tool_authorization_metadata
 from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
     KNOWLEDGE_ROUTE_READ_TOOLS,
@@ -285,22 +290,30 @@ class HarnessService:
         with self._lock:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
-    def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None) -> AgentRun:
+    def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self._reconcile_startup_once()
         selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.connections.available, connection_tools=lambda ident: [tool.name for tool in self.connections.get(ident).tools])
         if request.project_path and not request.project_id and not request.workspace_id:
             project = selection_service.create_project(ProjectCreateRequest(path=request.project_path))
             request = request.model_copy(update={"project_id": project.id})
-        selection = selection_service.resolve(
+        selection = execution_snapshot.selection if execution_snapshot is not None else selection_service.resolve(
             project_id=request.project_id,
             agent_setup_version_id=request.agent_setup_version_id,
             overrides=configuration_from_request(request),
             override_cleared_fields=cleared_configuration_fields(request),
             validate=bool(request.project_id or request.agent_setup_version_id),
+            prepare_model=True,
         )
+        if execution_snapshot is not None:
+            issues = selection_service.dependencies(selection.configuration)
+            if issues:
+                raise HarnessError("The queued setup has unavailable dependencies. Edit its selections before running.", code="setup_dependencies_missing", status_code=409,
+                    details={"missing_dependencies": [item.model_dump() for item in issues]})
         if instruction_snapshot is not None:
             selection = selection.model_copy(update={"instruction_layers": instruction_snapshot})
         selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id"})
+        if selection.configuration.review is not None:
+            selected["review"] = selection.configuration.review
         if request.project_id:
             project = selection_service.get_project(request.project_id, require_active=True)
             workspace = LabStore(self.manager.paths).get_workspace(request.workspace_id) if request.workspace_id else None
@@ -311,12 +324,16 @@ class HarnessService:
                 raise HarnessError("The folder does not match the selected project.", code="project_mismatch", status_code=409)
             selected["project_path"] = execution_path
         request = request.model_copy(update=selected)
+        if request.criteria and request.criteria.review_prompt and not request.review.enabled:
+            request = request.model_copy(update={"review": ReviewConfiguration(enabled=True, criteria=request.criteria.review_prompt)})
+        helpers = helper_snapshot if helper_snapshot is not None else freeze_helpers(selection_service,
+            request.helper_agent_ids, project_id=request.project_id, parent_configuration=selection.configuration)
+        if helper_snapshot is not None and set(request.helper_agent_ids) != {item.agent_id for item in helper_snapshot}:
+            raise HarnessError("The frozen helper selection does not match this queued turn.", code="helper_snapshot_mismatch", status_code=409)
         if not request.deployment_id:
             raise HarnessError("Choose a model or an agent setup with a model.", code="setup_deployment_required", status_code=400)
-        if selection.configuration.requires_project and not (request.project_path or request.workspace_id):
-            raise HarnessError("This agent setup requires a project folder.", code="setup_project_required", status_code=409)
-        if selection.configuration.requires_host_shell and (not (request.project_path or request.workspace_id) or request.presented_tools is not None and "execute" not in request.presented_tools):
-            raise HarnessError("This agent setup requires the host-shell tool in a project. Select it explicitly before running.", code="setup_shell_required", status_code=409)
+        require_setup_capabilities(selection.configuration,
+            project_bound=bool(request.project_path or request.workspace_id), presented_tools=request.presented_tools)
         admission = self.manager.reserve_deployment(
             request.deployment_id,
             profile_id=request.profile_id,
@@ -343,7 +360,7 @@ class HarnessService:
                 self._knowledge_display_names(versions),
                 self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
             )
-            profile = self.manager.get_profile(request.profile_id) if request.profile_id else None
+            profile = self.manager.get_profile(request.profile_id) if request.profile_id and execution_snapshot is None else None
             project_path = _resolved_project_path(request.project_path)
             if project_path is None and request.workspace_id:
                 stored = LabStore(self.manager.paths).get_workspace(request.workspace_id)
@@ -425,6 +442,12 @@ class HarnessService:
                     code="retrieval_tools_off",
                     status_code=400,
                 )
+            if helpers and request.presented_tools != []:
+                presented = [*presented, "task"]
+            if request.work_mode == "plan":
+                presented = [name for name in presented if name in PLAN_TOOLS]
+            require_setup_capabilities(selection.configuration,
+                project_bound=project_path is not None, presented_tools=presented)
             if request.resume_checkpoint_id:
                 if request.source_surface != "chat" or not request.thread_id:
                     raise HarnessError(
@@ -451,14 +474,17 @@ class HarnessService:
                 attachment_available=bool(request.retained_asset_ids),
             )
             enabled = [*enabled, *external_names]
+            if helpers and request.presented_tools != []:
+                enabled.append("task")
             if framework_read_paths and "read_file" not in enabled:
                 enabled.append("read_file")
             if retrieval_presented and SEARCH_KNOWLEDGE_TOOL_NAME not in enabled:
                 enabled = [*enabled, SEARCH_KNOWLEDGE_TOOL_NAME]
             setup = resolve_effective_setup(
-                deployment=deployment,
+                deployment=deployment.model_copy(update={"settings": SettingsBags.model_validate(execution_snapshot.settings)}) if execution_snapshot is not None else deployment,
                 profile=profile,
                 per_request_overrides=request.per_request_overrides,
+                startup_overrides=None if execution_snapshot is not None else request.startup_overrides,
                 knowledge_refs=refs,
                 knowledge_versions=versions,
                 surface_system_prompt=request.system_prompt,
@@ -470,14 +496,22 @@ class HarnessService:
                 retrieval_corpus_documents=len(retrieval_documents),
                 retrieval_instructions=RETRIEVAL_INSTRUCTIONS if retrieval_presented else None,
                 materialized_knowledge=knowledge_plan.facts,
-                inherit_deployment_settings=request.inherit_deployment_settings,
+                inherit_deployment_settings=True if execution_snapshot is not None else request.inherit_deployment_settings,
                 instruction_layers=selection.instruction_layers,
                 selected_project_id=selection.project_id,
                 selected_agent_setup_id=selection.agent_setup_id,
                 selected_agent_setup_version_id=selection.agent_setup_version_id,
                 selected_connection_ids=request.connection_ids,
             )
+            if execution_snapshot is not None:
+                setup.selected_profile_id = request.profile_id
+                if setup.startup_mismatches:
+                    raise HarnessError("This queued turn needs different loaded model settings. Reload the model or edit this turn before retrying.", code="model_reload_required", status_code=409)
             setup.system_prompt = "\n\n".join((setup.system_prompt, approval_mode_instructions(request.approval_mode)))
+            if request.work_mode == "plan":
+                setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
+            if execution_snapshot is not None and execution_snapshot.system_prompt is not None:
+                setup.system_prompt = execution_snapshot.system_prompt
             _, structured_output = response_format_for_run(
                 output_schema=request.output_schema,
                 deployment=deployment,
@@ -586,6 +620,14 @@ class HarnessService:
                 enabled_tools=enabled,
                 presented_tools=presented,
                 approval_mode=request.approval_mode,
+                requires_project=bool(selection.configuration.requires_project),
+                requires_host_shell=bool(selection.configuration.requires_host_shell),
+                work_mode=request.work_mode,
+                helper_agent_ids=list(request.helper_agent_ids),
+                helper_snapshots=helpers,
+                review=request.review,
+                review_observation=ReviewObservation(enabled=request.review.enabled,
+                    status="review_pending" if request.review.enabled else "not_requested"),
                 framework_read_paths=framework_read_paths,
                 denied_tools=[],
                 system_prompt=setup.system_prompt,
@@ -682,6 +724,10 @@ class HarnessService:
         reject_after_restart: tuple[PendingInterrupt, threading.Event] | None = None
         with self._lock:
             run = self._require_run(run_id)
+            if run.parent_run_id:
+                parent = self._runs.get(run.parent_run_id) or self.store.get_run(run.parent_run_id)
+                if parent is not None and any(item.run_id == run.id for item in parent.child_runs) and is_run_lifecycle_live(parent.status):
+                    return self.cancel(parent.id)
             cancel = self._cancels.get(run_id)
             if cancel is not None:
                 cancel.set()
@@ -744,6 +790,11 @@ class HarnessService:
         with self._lock:
             run = self._require_run(run_id)
             pending = run.pending_interrupt
+            if run.parent_run_id:
+                parent = self._runs.get(run.parent_run_id) or self.store.get_run(run.parent_run_id)
+                if parent is not None and any(item.run_id == run.id for item in parent.child_runs):
+                    raise HarnessError("Respond to this helper's approval in its parent conversation.", code="child_approval_owned_by_parent", status_code=409,
+                        details={"parent_run_id": parent.id})
             if pending is None:
                 raise HarnessError(
                     "This run has no pending host-shell interrupt.",
@@ -881,6 +932,7 @@ class HarnessService:
                 if input_message_id:
                     user_message["id"] = input_message_id
                 payload = {"messages": [user_message],
+                    "rubric": (run.review.criteria.strip() or run.task) if run.review.enabled else "",
                     **({"structured_response": None} if run.output_schema is not None else {})}
             run_checkpoint_task(self.manager.paths.checkpoints_db,
                 self._run_owned_graph(run, http_sink, fixture_bank, cancel, payload))
@@ -1020,7 +1072,10 @@ class HarnessService:
         *,
         inspection_only: bool = False,
         external_tools: list[Any] | None = None,
+        execution_control: ExecutionControl | None = None,
+        is_child: bool = False,
     ) -> Any:
+        execution_control = execution_control or ExecutionControl(run, lambda: self._publish_control_update(run))
         model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
         agent_kwargs: dict[str, Any] = {}
         backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only)
@@ -1028,7 +1083,7 @@ class HarnessService:
         if backend is not None:
             agent_kwargs["backend"] = backend
             if not inspection_only:
-                clear_derived_knowledge(harness_scratch_root(self.manager.paths, run.thread_id or run.id))
+                clear_derived_knowledge(harness_scratch_root(self.manager.paths, run.id if run.parent_run_id else run.thread_id or run.id))
                 materialize_onto_backend(backend, knowledge_plan)
         observation = run.context_observation
         usable = observation.usable_input_tokens if observation is not None else None
@@ -1109,6 +1164,11 @@ class HarnessService:
                 )
             )
         ensure_ordinary_chat_profile(model)
+        from workbench_backend.agents.review import review_middleware
+        from workbench_backend.agents.helper_execution import compiled_helpers
+        if run.helper_snapshots and "task" in run.presented_tools and not is_child:
+            agent_kwargs["subagents"] = compiled_helpers(self, run, execution_control,
+                inspection_only=inspection_only)
         return create_deep_agent(
             model=model,
             tools=tools,
@@ -1121,17 +1181,20 @@ class HarnessService:
                     AgentEvent(at=utc_now(), kind=kind, detail=detail)
                 ))] if run.structured_output is not None else []),
                 *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
+                *([review_middleware(run, model, http_sink, execution_control, self._capture_settings,
+                    lambda mutation=None: self._publish_control_update(run, mutation))] if run.review.enabled and not is_child else []),
                 WorkbenchHarnessMiddleware(
                     run,
                     http_sink,
                     settings_provider=self._capture_settings,
                     fixture_bank=fixture_bank,
                     file_changes=FileChangeRecorder(run, lambda mutation: self._record_file_change(run, mutation)),
+                    execution_control=execution_control,
                 )
             ],
             name="workbench-embedded-harness",
             response_format=response_format,
-            checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
+            checkpointer=True if is_child else open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
             **agent_kwargs,
         )
 
@@ -1166,6 +1229,10 @@ class HarnessService:
                     await asyncio.to_thread(self._finish, run, AgentRunStatus.failed, "structured_output_invalid")
                     return
                 run.completion = build_completion(run)
+                if run.review.enabled and run.review_observation.status != "satisfied":
+                    run.error = "Review limit reached; results are retained." if run.review_observation.status == "max_iterations_reached" else "Review did not confirm the requested result; inspect the retained findings."
+                    await asyncio.to_thread(self._finish, run, AgentRunStatus.failed, "review_" + run.review_observation.status)
+                    return
                 await asyncio.to_thread(self._finish, run, AgentRunStatus.completed, "completed")
                 return
             await self._alink_run(run, agent)
@@ -1188,6 +1255,7 @@ class HarnessService:
         message_nodes: dict[str, str],
     ) -> Any:
         stream = None
+        pending = None
         try:
             stream = await agent.astream_events(payload, config=config, version="v3")
             self._native_streams[run.id] = stream
@@ -1196,8 +1264,8 @@ class HarnessService:
             async for event in stream:
                 await asyncio.to_thread(self._observe_interaction, run, event)
                 found = _pending_from_native_event(event)
-                if found is not None:
-                    return found
+                if found is not None and (pending is None or len(found.namespace) > len(pending.namespace)):
+                    pending = found
                 if cancel.is_set():
                     return None
                 await asyncio.to_thread(self._ingest_native_event, run, event, seen_messages, message_nodes)
@@ -1212,6 +1280,8 @@ class HarnessService:
         finally:
             self._native_streams.pop(run.id, None)
             await self._close_native_stream(stream)
+        if pending is not None:
+            return pending
         try:
             state = await agent.aget_state(config)
         except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
@@ -1305,8 +1375,16 @@ class HarnessService:
         await self._alink_run(run, agent)
         await asyncio.to_thread(self._finish, run, AgentRunStatus.cancelled, "cancelled")
 
+    def _publish_control_update(self, run: AgentRun, mutation=None) -> None:
+        with self._lock:
+            if mutation is not None:
+                mutation()
+            self._persist_and_notify(run)
+
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
+            if run.stop_reason == "tool_budget_exhausted" and status == AgentRunStatus.failed:
+                stop_reason = run.stop_reason
             if run.status in TERMINAL_RUN_LIFECYCLE_STATUSES:
                 if run.status is AgentRunStatus.cancelled and status is not AgentRunStatus.cancelled:
                     run.stop_reason = "cancelled"
@@ -1326,6 +1404,16 @@ class HarnessService:
             run.stop_reason = stop_reason
             run.finished_at = utc_now()
             run.updated_at = run.finished_at
+            # Inline children have no detached worker once their owning graph ends.
+            for activity in run.child_runs:
+                child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+                if child is not None and is_run_lifecycle_live(child.status):
+                    child.status = AgentRunStatus.cancelled if status == AgentRunStatus.cancelled else AgentRunStatus.failed
+                    child.stop_reason = "parent_" + str(status.value)
+                    child.finished_at = run.finished_at
+                    child.updated_at = run.finished_at
+                    activity.status = child.status.value
+                    self._persist(child)
             if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
                 run.generation_observation = run.generation_observation.model_copy(update={
                     "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
@@ -1420,7 +1508,7 @@ class HarnessService:
 
     def _is_internal_summary_message(self, message: Any) -> bool:
         additional = getattr(message, "additional_kwargs", None)
-        return isinstance(additional, dict) and additional.get("lc_source") == "summarization"
+        return isinstance(additional, dict) and additional.get("lc_source") in {"summarization", "rubric_grader"}
 
     def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         if self._interaction_observer is None:
@@ -1486,6 +1574,7 @@ class HarnessService:
                         "name": message.name,
                         "content": message.content,
                         "tool_call_id": message.tool_call_id,
+                        **tool_authorization_metadata(run, message.tool_call_id),
                         **({"node": node} if node else {}),
                     },
                 )

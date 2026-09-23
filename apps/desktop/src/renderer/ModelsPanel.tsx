@@ -6,7 +6,6 @@ import { formatBytes } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
-import { ProfilesPanel } from "./ProfilesPanel";
 import { ImportJobsPanel } from "./ImportJobsPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
@@ -20,7 +19,7 @@ import "./ModelsPanel.css";
 
 export function ModelsPanel() {
   const [libraryWidth, setLibraryWidth] = usePanelWidth("models-library", 220, 180, 400);
-  const [view, setView] = useState<"library" | "add" | "presets">("library");
+  const [view, setView] = useState<"library" | "add">("library");
   const [localBusy, setLocalBusy] = useState(false);
   const [paths, setPaths] = useState<PathsInfo | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
@@ -51,6 +50,7 @@ export function ModelsPanel() {
       ]);
       setPaths(nextPaths);
       setProfiles(nextProfiles);
+      setBundles(await api.bundles());
       setLoadError("");
     } finally {
       if (!bundlesLoaded) setLoading(false);
@@ -87,7 +87,6 @@ export function ModelsPanel() {
       </header>
       <nav className="model-tabs" aria-label="Model sections">
         <button type="button" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}>My models <span>{bundles.length}</span></button>
-        <button type="button" aria-current={view === "presets" ? "page" : undefined} onClick={() => { setView("presets"); void refresh().catch(fail); }}>Saved presets <span>{profiles.length}</span></button>
       </nav>
       {message ? <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
       {view === "add" ? <>
@@ -248,7 +247,6 @@ export function ModelsPanel() {
           </details>
         ) : null}
       </div></div> : null}
-      {view === "presets" ? <ProfilesPanel profiles={profiles} bundles={bundles} refresh={refresh} /> : null}
       <ImportJobsPanel revision={importRevision} onCompleted={refresh} />
       <ModelStoragePanel />
     </section>

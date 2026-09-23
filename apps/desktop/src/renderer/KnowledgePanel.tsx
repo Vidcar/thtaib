@@ -120,6 +120,8 @@ export function KnowledgePanel() {
     );
   }
 
+  if (!config) return <section className="surface"><h2>Knowledge</h2><p className="hint" role="status">Loading knowledge…</p></section>;
+
   return (
     <section className="surface workspace-records-surface knowledge-surface">
       <header className="surface-head">
@@ -196,8 +198,8 @@ export function KnowledgePanel() {
       <div className="workspace-records-layout">
         <aside className="workspace-record-list">
           {visibleEntries.length === 0 ? (
-            <EmptyState title="No entries yet">
-              Add a memory, skill or instruction.
+            <EmptyState title={query.trim() ? "No matching entries" : "No entries yet"}>
+              {query.trim() ? "Try another search." : "Add a memory, skill or instruction."}
             </EmptyState>
           ) : (
             <ul className="nav-list">

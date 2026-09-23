@@ -61,6 +61,78 @@ try {
   assert.match(html, /Replace/);
   assert.doesNotMatch(html, />Start</, "a later successful list replaces the previous one");
   assert.match(html, /List arguments/, "raw todo arguments stay behind expand");
+  assert.match(html, /aria-label="Completed"/, "completed todos expose an accessible status mark");
+  assert.doesNotMatch(html, /Allowed by saved permission/, "successful tools do not imply a saved grant");
+
+  const authorised = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [
+    new AIMessage({ id: "authorised", content: "", tool_calls: [readCall] }),
+    new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success", additional_kwargs: { authorization_source: "saved_permission" } }),
+  ] }));
+  assert.match(authorised, /Allowed by saved permission/, "the backend grant fact is visible on the exact tool");
+  const durableAuthorisation = renderToStaticMarkup(React.createElement(AgentMessageFeed, { toolAuthorizations: { "read-1": "saved_permission" }, messages: [new AIMessage({ id: "restored", content: "", tool_calls: [readCall] })] }));
+  assert.match(durableAuthorisation, /Allowed by saved permission/, "retained run authorization can restore the exact call fact");
+  const matchedGrant = { id: "grant_exact_read", scope: "session", thread_id: "chat-thread-7", project_path: "D:/Project/Scope", action: "read_file", arguments: { file_path: "SKILL.md", offset: 0, limit: 20 }, created_at: "2026-09-24T01:15:00Z", source_run_id: "original-grant-run", display_name: "Read SKILL.md · This session" };
+  const namedGrant = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [
+    new AIMessage({ id: "matched-grant", content: "", tool_calls: [readCall] }),
+    new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success", additional_kwargs: { authorization_source: "saved_permission", authorization_grant: matchedGrant } }),
+  ] }));
+  assert.match(namedGrant, /Allowed by saved permission: Read SKILL\.md · This session/, "the activity names the actual matched grant");
+  assert.match(namedGrant, /grant_exact_read/); assert.match(namedGrant, /chat-thread-7/); assert.match(namedGrant, /D:\/Project\/Scope/); assert.match(namedGrant, /original-grant-run/); assert.match(namedGrant, /2026-09-24T01:15:00Z/); assert.match(namedGrant, /&quot;limit&quot;: 20/);
+  assert.ok(namedGrant.indexOf('class="tool-raw-arguments"') < namedGrant.indexOf('aria-label="Matched saved permission"'), "full grant stays in the existing further disclosure");
+  const restoredGrant = renderToStaticMarkup(React.createElement(AgentMessageFeed, { toolAuthorizations: { "read-1": "saved_permission" }, toolAuthorizationGrants: { "read-1": matchedGrant, "unrelated-call": { ...matchedGrant, id: "wrong-grant", display_name: "Wrong permission" } }, messages: [new AIMessage({ id: "restored-grant", content: "", tool_calls: [readCall] }), new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success" })] }));
+  assert.match(restoredGrant, /Read SKILL\.md · This session/); assert.match(restoredGrant, /grant_exact_read/); assert.match(restoredGrant, /&quot;limit&quot;: 20/); assert.doesNotMatch(restoredGrant, /Wrong permission|wrong-grant/, "grant identity belongs to the exact call");
+  const unprovenGrant = renderToStaticMarkup(React.createElement(AgentMessageFeed, { toolAuthorizationGrants: { "read-1": matchedGrant }, messages: [new AIMessage({ id: "unproven", content: "", tool_calls: [readCall] }), new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "success", status: "success", additional_kwargs: { authorization_grant: matchedGrant } })] }));
+  assert.doesNotMatch(unprovenGrant, /Allowed by saved permission|grant_exact_read/, "grant-shaped metadata without actual authorization attribution cannot imply grant use");
+  for (const scope of ["session", "always"]) {
+    const noProjectGrant = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [new AIMessage({ id: `no-project-${scope}`, content: "", tool_calls: [readCall] }), new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success", additional_kwargs: { authorization_source: "saved_permission", authorization_grant: { ...matchedGrant, scope, project_path: null, thread_id: null } } })] }));
+    assert.match(noProjectGrant, /<dt>Project<\/dt><dd>No project<\/dd>/, "a projectless grant does not authorize other projects");
+    assert.match(noProjectGrant, scope === "always" ? /<dt>Session<\/dt><dd>Any session<\/dd>/ : /<dt>Session<\/dt><dd>Not recorded<\/dd>/, "only an always grant can apply across sessions");
+    assert.doesNotMatch(noProjectGrant, /Not restricted/, "unknown scope is never presented as unrestricted");
+  }
+  const incompleteGrant = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [new AIMessage({ id: "incomplete-grant", content: "", tool_calls: [readCall] }), new ToolMessage({ tool_call_id: "read-1", name: "read_file", content: "skill", status: "success", additional_kwargs: { authorization_source: "saved_permission", authorization_grant: { id: "incomplete", display_name: "Unverified name" } } })] }));
+  assert.match(incompleteGrant, /Allowed by saved permission/); assert.doesNotMatch(incompleteGrant, /Unverified name|Matched saved permission/, "incomplete identity retains only the proven generic attribution");
+  const { RunActivitySummary, helperApprovalOwner } = await vite.ssrLoadModule("/src/renderer/RunActivitySummary.tsx");
+  const reviewedRun = { child_runs: [{ run_id: "child-1", name: "Research helper", namespace: ["tools:parent", "helper:one"], status: "waiting for approval or answer" }], review_observation: { enabled: true, status: "max_iterations_reached", max_revisions: 2, evidence_scope: "Model review; no executable checks.", evaluations: [{ explanation: "One issue remains", criteria: [{ name: "Citations", passed: false, gap: "Missing source for the last claim" }] }] } };
+  assert.equal(helperApprovalOwner(reviewedRun, ["tools:parent", "helper:one", "tools:child"]), "Research helper");
+  assert.equal(helperApprovalOwner(reviewedRun, ["tools:other"]), undefined, "an unrelated approval cannot be attributed to a helper");
+  const reviewHtml = renderToStaticMarkup(React.createElement(RunActivitySummary, { run: reviewedRun }));
+  assert.match(reviewHtml, /Research helper/);
+  assert.match(reviewHtml, /Review limit reached/);
+  assert.match(reviewHtml, /Missing source for the last claim/);
+  assert.doesNotMatch(reviewHtml, /Review passed/, "exhausted revisions never imply a passing review");
+
+  const { groupActivity } = await vite.ssrLoadModule("/src/renderer/activityLine.ts");
+  const activity = [
+    { id: 1, label: "Read one", finished: true, failed: false },
+    { id: 2, label: "Read two", finished: true, failed: false },
+    { id: 3, label: "Read failed", finished: true, failed: true },
+    { id: 4, label: "Read four", finished: true, failed: false },
+    { id: 5, label: "Reading five", finished: false, failed: false },
+  ];
+  const groups = groupActivity(activity, item => item);
+  assert.deepEqual(groups.map(group => group.items.map(item => item.id)), [[1, 2], [3], [4], [5]], "failed and running calls remain visible chronological boundaries");
+  assert.equal(groups[0].label, "Read 2 files");
+  assert.deepEqual(groups.flatMap(group => group.items), activity, "grouping retains every original tool record");
+
+  const { groupConsecutiveChanges, MonacoDiff } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
+  const changes = [
+    { change: { id: "first", path: "one.md" }, before: "A", after: "B" },
+    { change: { id: "second", path: "one.md" }, before: "B", after: "C" },
+    { change: { id: "third", path: "two.md" }, before: "X", after: "Y" },
+    { change: { id: "fourth", path: "one.md" }, before: "C", after: "D" },
+  ];
+  const changeGroups = groupConsecutiveChanges(changes);
+  assert.deepEqual(changeGroups.map(group => group.items.map(item => item.change.id)), [["first", "second"], ["third"], ["fourth"]]);
+  assert.equal(changeGroups[0].items[1], changes[1], "a grouped edit keeps its own before/after evidence and reversal identity");
+  let loadAttempts = 0;
+  const rejectEditor = async () => { loadAttempts += 1; throw new Error("Editor resource unavailable"); };
+  let unavailable;
+  await act(async () => { unavailable = create(React.createElement(MonacoDiff, { original: "A", modified: "B", sideBySide: true, load: rejectEditor })); });
+  assert.match(JSON.stringify(unavailable.toJSON()), /The difference is unavailable/);
+  assert.doesNotMatch(JSON.stringify(unavailable.toJSON()), /Opening the difference/, "failed loading cannot leave an indefinite progress label");
+  await act(async () => unavailable.root.findByType("button").props.onClick());
+  assert.equal(loadAttempts, 2, "retry reattempts the failed editor resource");
+  await act(async () => unavailable.unmount());
 
   let renderer;
   await act(async () => {

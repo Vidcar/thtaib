@@ -1,9 +1,11 @@
 # Tasks
 
+The accepted [polish-workbench-surfaces delivery](../archive/2026-09-24-polish-workbench-surfaces/tasks.md) completes the overlapping compact destinations, conversation lifecycle, named helpers and explicit model-change actions below. Its recorded native, rendered and receiver-side checks cover those completed tasks. The remaining tasks and this change's overall acceptance gates stay open; the new Lab suite, visual workflow canvas and media integrations remain outside that delivery.
+
 ## 1. Everyday workspace
 
-- [ ] 1.1 Build the compact destination treatment from API-027 and verify Chat, Lab, Workflows, and Settings share type, focus, and help on hover without horizontal scrolling.
-- [ ] 1.2 Archive a conversation so it leaves the active list immediately, and delete a chat so project files remain. Verify both with a focused state test and the sidebar.
+- [x] 1.1 Build the compact destination treatment from API-027 and verify Chat, Lab, Workflows, and Settings share type, focus, and help on hover without horizontal scrolling.
+- [x] 1.2 Archive a conversation so it leaves the active list immediately, and delete a chat so project files remain. Verify both with a focused state test and the sidebar.
 - [ ] 1.3 Import a skill package without executing its script, and extract a text PDF while reporting an encrypted PDF as unread. Verify the import and extraction tests.
 - [ ] 1.4 Add the Settings connection list, public web search, and backend-only secrets from ENV-025 and ENV-026. Verify a secret is not rendered after save and Chat still sends with no web connection.
 
@@ -16,8 +18,8 @@
 
 ## 3. Helpers, models, and workflows
 
-- [ ] 3.1 Add the Helpers section and offer only named agents, with the general-purpose helper still disabled. Verify an empty list offers no helper tool and a named helper cannot exceed the conversation's permissions.
-- [ ] 3.2 Confirm before a model swap, keep the conversation, and show helper or workflow activity by name. Verify unload does not happen before confirmation and an approval card stays the approval control.
+- [x] 3.1 Add the Helpers section and offer only named agents, with the general-purpose helper still disabled. Verify an empty list offers no helper tool and a named helper cannot exceed the conversation's permissions.
+- [x] 3.2 Confirm before a model swap, keep the conversation, and show helper or workflow activity by name. Verify unload does not happen before confirmation and an approval card stays the approval control.
 - [ ] 3.3 Build the Workflows canvas on React Flow with the named steps, inspector, visible invalid steps, and refusal of imported arbitrary code. Verify a grader step runs only when placed.
 
 ## 4. Media plugs

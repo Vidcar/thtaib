@@ -15,6 +15,7 @@ from pathlib import Path
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
+from workbench_backend.agents.setup_schemas import FrozenHelperSelection, SetupConfiguration
 from workbench_backend.inference.deployments import managed_argv
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.process import HttpProbe, ProcessIdentity, ProcessSupervisor
@@ -30,6 +31,7 @@ from workbench_backend.inference.schemas import (
     ManagementScope,
     PinRuntimeRequest,
     ProfileWriteRequest,
+    ReconfigureDeploymentRequest,
     ServerProperties,
     SettingsBags,
 )
@@ -234,6 +236,131 @@ class DeploymentTests(unittest.TestCase):
                 for key in keys:
                     self.assertIn(key, caught.exception.message)
                 self.assertEqual(self.supervisor.launched, [])
+
+    def test_reconfigure_commits_new_loaded_snapshot_after_owned_health(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port": 18130, "ctx_size":1024}))
+        changed = self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":2048}))
+        self.assertEqual(changed.status, DeploymentStatus.running)
+        self.assertNotEqual(changed.pid, deployment.pid)
+        self.assertEqual(changed.requested_startup["ctx_size"], 2048)
+        self.assertIsNone(changed.reconfiguration)
+        argv = self.supervisor.launched[-1]
+        self.assertEqual(argv[argv.index("--ctx-size") + 1], "2048")
+
+    def test_reconfigure_failed_launch_restores_previous_process_and_config(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port":18131,"ctx_size":1024}))
+        start = self.supervisor.start
+        def fail_changed(argv, **kwargs):
+            if "--ctx-size" in argv and argv[argv.index("--ctx-size") + 1] == "2048":
+                raise OSError("simulated launch failure")
+            return start(argv, **kwargs)
+        with patch.object(self.supervisor, "start", side_effect=fail_changed):
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":2048}))
+        self.assertEqual(caught.exception.code, "reconfigure_failed")
+        restored = self.manager.get_deployment(deployment.id)
+        self.assertEqual(restored.status, DeploymentStatus.running)
+        self.assertEqual(restored.requested_startup["ctx_size"], 1024)
+        self.assertEqual(restored.reconfiguration["phase"], "rolled_back")
+        self.assertTrue(restored.health.healthy)
+
+    def test_reconfigure_complete_recipe_removes_omitted_startup_and_records_configuration(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id, startup={"port":18132,"ctx_size":1024,"threads":2}))
+        profile = self.manager.create_profile(ProfileWriteRequest(display_name="Automatic context", bundle_id=self.bundle_id,
+            startup={"threads":4}, per_request={"temperature":0.2}))
+        changed = self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"threads":4},
+            replace_startup=True, model_configuration_id=profile.id))
+        self.assertEqual(changed.status, DeploymentStatus.running)
+        self.assertNotIn("ctx_size", changed.requested_startup)
+        self.assertNotIn("port", changed.requested_startup)
+        self.assertEqual(changed.requested_startup["threads"], 4)
+        self.assertEqual(changed.profile_id, profile.id)
+        self.assertEqual(changed.settings.per_request.applied["temperature"], 0.2)
+        self.assertNotIn("--ctx-size", self.supervisor.launched[-1])
+
+    def test_stale_reconfigure_revisions_leave_the_owned_process_unchanged(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, startup={"ctx_size": 1024}))
+        profile = self.manager.create_profile(ProfileWriteRequest(display_name="Long", bundle_id=self.bundle_id,
+            startup={"ctx_size": 2048}))
+        edited = self.manager.update_profile(profile.id, ProfileWriteRequest(display_name="Long", bundle_id=self.bundle_id,
+            startup={"ctx_size": 4096}))
+        self.assertGreater(edited.revision, profile.revision)
+        for request, code in (
+            (ReconfigureDeploymentRequest(startup={"ctx_size": 2048}, expected_updated_at="stale"), "deployment_revision_conflict"),
+            (ReconfigureDeploymentRequest(startup={"ctx_size": 2048}, model_configuration_id=profile.id,
+                expected_configuration_revision=profile.revision), "configuration_revision_conflict"),
+        ):
+            with self.subTest(code=code), patch.object(self.manager.deployments, "stop", wraps=self.manager.deployments.stop) as stop:
+                with self.assertRaises(ManagerError) as error:
+                    self.manager.reconfigure_deployment(deployment.id, request)
+                self.assertEqual(error.exception.code, code)
+                stop.assert_not_called()
+                current = self.manager.get_deployment(deployment.id)
+                self.assertEqual(current.process_identity, deployment.process_identity)
+                self.assertEqual(current.requested_startup, deployment.requested_startup)
+                self.assertTrue(self.manager.deployment_health(deployment.id).health.healthy)
+
+    def test_interrupted_reconfigure_is_gated_after_restart_and_reload_restores_previous_recipe(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, startup={"ctx_size": 1024}))
+        actual_start = self.manager.deployments.start
+
+        class SimulatedApplicationExit(BaseException):
+            pass
+
+        def exit_after_new_process_is_ready(deployment_id):
+            result = actual_start(deployment_id)
+            self.assertTrue(result.health.healthy)
+            raise SimulatedApplicationExit()
+
+        with patch.object(self.manager.deployments, "start", side_effect=exit_after_new_process_is_ready):
+            with self.assertRaises(SimulatedApplicationExit):
+                self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size": 2048}))
+        interrupted = self.manager.get_deployment(deployment.id)
+        self.assertEqual(interrupted.reconfiguration["phase"], "applying")
+        self.assertEqual(interrupted.requested_startup["ctx_size"], 2048)
+        previous_manager = self.manager
+        self.supervisor = RecordingSupervisor()
+        self.manager = ModelManager(self.paths, processes=self.supervisor)
+        recovered = self.manager.get_deployment(deployment.id)
+        self.assertEqual(recovered.process_identity, interrupted.process_identity)
+        self.assertEqual(recovered.reconfiguration["phase"], "recovery_required")
+        with self.assertRaises(ManagerError) as error:
+            self.manager.ensure_deployment_ready(deployment.id)
+        self.assertEqual(error.exception.code, "reconfigure_recovery_required")
+        restored = self.manager.reload_deployment(deployment.id)
+        self.assertEqual(restored.requested_startup["ctx_size"], 1024)
+        self.assertIsNone(restored.reconfiguration)
+        self.assertNotEqual(restored.process_identity, interrupted.process_identity)
+        self.assertTrue(restored.health.healthy)
+        self.assertEqual(len(self.supervisor.launched), 1)
+        previous_manager.imports.close()
+
+    def test_waiting_lab_and_frozen_helper_consumers_block_reconfigure_before_stop(self) -> None:
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, startup={"ctx_size": 1024}))
+        from workbench_backend.agents.schemas import PendingInterrupt
+        now = utc_now()
+        for source, helper in (("lab", False), ("chat", True)):
+            run = AgentRun(id="durable_consumer", task="waiting", status=AgentRunStatus.running,
+                source_surface=source, deployment_id="parent_uses_another_model" if helper else deployment.id,
+                enabled_tools=[], presented_tools=[], created_at=now, updated_at=now,
+                pending_interrupt=PendingInterrupt(environment="tool_actions"),
+                helper_snapshots=[FrozenHelperSelection(agent_id="helper", version_id="version", name="Reader",
+                    configuration=SetupConfiguration(deployment_id=deployment.id))] if helper else [])
+            with open_application_store(self.paths) as store:
+                store.put_run(run)
+            try:
+                with self.subTest(source=source), patch.object(self.manager.deployments, "stop") as stop:
+                    with self.assertRaises(ManagerError) as error:
+                        self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size": 2048}))
+                    self.assertEqual(error.exception.code, "deployment_active")
+                    stop.assert_not_called()
+                    self.assertEqual(self.manager.get_deployment(deployment.id).process_identity, deployment.process_identity)
+            finally:
+                with open_application_store(self.paths) as store:
+                    store.put_run(run.model_copy(update={"status": AgentRunStatus.completed, "pending_interrupt": None}))
 
     def test_valid_load_mode_replaces_retired_flags(self) -> None:
         deployment = self.manager.create_managed(

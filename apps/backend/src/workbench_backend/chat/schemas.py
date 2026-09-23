@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.agents.structured import OutputSchemaRequest
-from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer
+from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 
@@ -28,6 +28,11 @@ class ChatMessage(BaseModel):
 
 
 class ChatConversationCreateRequest(BaseModel):
+    model_configuration_id: str | None = None
+    startup_overrides: dict[str, Any] | None = None
+    work_mode: Literal["work", "plan"] | None = None
+    helper_agent_ids: list[str] | None = None
+    review: ReviewConfiguration | None = None
     deployment_id: str | None = None
     project_id: str | None = None
     agent_setup_version_id: str | None = None
@@ -51,6 +56,11 @@ class ChatConversationCreateRequest(BaseModel):
 
 class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    model_configuration_id: str | None = None
+    startup_overrides: dict[str, Any] | None = None
+    work_mode: Literal["work", "plan"] | None = None
+    helper_agent_ids: list[str] | None = None
+    review: ReviewConfiguration | None = None
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     draft_revision: int | None = Field(default=None, ge=0)
@@ -108,6 +118,8 @@ class ChatDraftUpdateRequest(BaseModel):
 
 
 class ChatQueueItem(BaseModel):
+    execution_snapshot: FrozenExecutionSelection | None = None
+    helper_snapshots: list[FrozenHelperSelection] | None = None
     instruction_layers: list[InstructionLayer] | None = None
     id: str
     task: str
@@ -209,6 +221,11 @@ class ChatConversation(BaseModel):
     setup_cleared_fields: list[str] = Field(default_factory=list)
     presented_tools: list[str] | None = None
     approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    model_configuration_id: str | None = None
+    startup_overrides: dict[str, Any] | None = None
+    work_mode: Literal["work", "plan"] = "work"
+    helper_agent_ids: list[str] = Field(default_factory=list)
+    review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
     connection_ids: list[str] | None = None
     per_request_overrides: dict[str, Any] | None = None
     profile_id: str | None = None
@@ -235,6 +252,10 @@ class ChatConversation(BaseModel):
 
 
 class ChatConversationView(ChatConversation):
+    display_title: str = Field(
+        default="New conversation",
+        description="Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.",
+    )
     current_run: AgentRun | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     pending_cancel_input_ids: list[str] = Field(default_factory=list)

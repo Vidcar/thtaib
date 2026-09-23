@@ -111,6 +111,34 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         self.assertEqual([o.value for o in report.per_request_defaults["reasoning_effort"].options], ["default", "low", "medium", "xhigh"])
         self.assertEqual(report.per_request_defaults["reasoning_effort"].accepted_values, ["high", "low", "medium", "xhigh"])
         self.assertTrue(report.per_request_defaults["reasoning"].supported)
+        self.assertEqual(report.per_request_defaults["reasoning_effort"].default_value, "xhigh")
+        self.assertEqual(report.per_request_defaults["reasoning_effort"].default_source, "gguf_template")
+
+    def test_unknown_or_conflicting_template_default_stays_unknown(self) -> None:
+        for template in ("{{ reasoning_effort }}", "{{ reasoning_effort|default('low') }} {{ reasoning_effort|default('high') }}"):
+            report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=template))
+            self.assertIsNone(report.per_request_defaults["reasoning_effort"].default_value)
+
+    def test_template_default_thinking_is_proven_only_by_explicit_undefined_branch(self) -> None:
+        report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}"))
+        self.assertEqual(report.per_request_defaults["reasoning"].default_value, "on")
+
+    def test_connected_configuration_options_uses_server_template_without_bundle(self) -> None:
+        from workbench_backend.inference.schemas import Deployment, DeploymentStatus, ManagementScope
+        deployment = Deployment(id="connected-template", display_name="Connected", scope=ManagementScope.connected,
+            status=DeploymentStatus.running, created_at="now", updated_at="now", endpoint="http://127.0.0.1:9/v1",
+            server_props=ServerProperties(fetched="now", source_url="fixture", n_ctx=98304,
+                chat_template="{% set effort = reasoning_effort|default('xhigh') %}{% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}",
+                default_generation_settings={"params":{"temperature":0.6}}))
+        self.manager.store.put_deployment(deployment)
+        response = self.client.get(f"/v1/deployments/{deployment.id}/configuration-options")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertIsNone(body["bundle_id"])
+        self.assertEqual(body["context_size"]["observed"], 98304)
+        self.assertEqual(body["per_request_defaults"]["reasoning_effort"]["default_value"], "xhigh")
+        self.assertEqual(body["per_request_defaults"]["reasoning"]["default_value"], "on")
+        self.assertEqual(body["per_request_defaults"]["temperature"]["default_value"], 0.6)
 
     def test_missing_template_is_unverified_and_only_closed_constraints_define_accepted_values(self) -> None:
         unknown = bundle_configuration_options("bundle", GgufRuntimeMetadata())

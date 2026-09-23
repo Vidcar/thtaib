@@ -2,7 +2,7 @@ import type { SetupConfiguration } from "./workspaceApi";
 
 export interface ChatWorkspaceLaunch { id: string; projectId?: string | null; agentSetupVersionId?: string | null }
 
-export const chatSetupFields = ["deployment_id", "profile_id", "inherit_deployment_settings", "embedding_deployment_id", "presented_tools", "approval_mode", "per_request_overrides", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs", "connection_ids", "instructions"] as const;
+export const chatSetupFields = ["deployment_id", "model_configuration_id", "profile_id", "inherit_deployment_settings", "startup_overrides", "embedding_deployment_id", "presented_tools", "approval_mode", "per_request_overrides", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs", "connection_ids", "instructions", "work_mode", "helper_agent_ids", "review"] as const;
 
 // The backend resolves omitted fields from the immutable selected setup. Empty
 // lists are deliberate overrides; serializing every control's default would

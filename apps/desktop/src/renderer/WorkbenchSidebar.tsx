@@ -140,8 +140,12 @@ export function WorkbenchSidebar(props: {
     if (!query) { setSearchResults(null); return; }
     let cancelled = false;
     const timer = setTimeout(() => {
-      void api.searchChatConversations(query, includeArchived).then(results => {
-        if (!cancelled) setSearchResults(newestConversationFirst(results.map(item => item.conversation as ChatConversation)));
+      void api.searchChatConversations(query, includeArchived).then(async results => {
+        // Search returns summaries. Reuse the loaded history where possible and
+        // hydrate any result that arrived after the last history refresh.
+        const known = new Map(conversations.map(item => [item.id, item]));
+        const matches = await Promise.all(results.map(item => known.get(item.conversation.id) ?? api.chatConversation(item.conversation.id)));
+        if (!cancelled) setSearchResults(newestConversationFirst(matches));
       }).catch((error: unknown) => { if (!cancelled) setListError(errorMessage(error)); });
     }, 250);
     return () => { cancelled = true; clearTimeout(timer); };

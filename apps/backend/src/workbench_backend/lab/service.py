@@ -10,6 +10,7 @@ from typing import Any
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.replay import is_replay_failure
+from workbench_backend.agents.setup_schemas import FrozenExecutionSelection, ResolvedSetupSelection, SetupConfiguration
 from workbench_backend.agents.schemas import (
     AgentRun,
     AgentRunStatus,
@@ -185,7 +186,7 @@ class LabService:
             exclusions = manifest.exclusions
         snapshot_id = manifest.id
 
-        profile_id = request.profile_id
+        profile_id = run.profile_id if run else request.profile_id
         if profile_id is None and deployment_id:
             deployment = self.manager.store.get_deployment(deployment_id)
             if deployment is not None:
@@ -204,8 +205,10 @@ class LabService:
             task=task,
             profile_id=profile_id,
             deployment_id=deployment_id,
-            presented_tools=request.presented_tools or (run.presented_tools if run else []),
+            presented_tools=request.presented_tools if request.presented_tools is not None else (run.presented_tools if run else []),
             system_prompt=run.system_prompt if run else None,
+            execution_snapshot=_execution_snapshot(run) if run else None,
+            helper_snapshots=list(run.helper_snapshots) if run else [],
             criteria=criteria,
             budgets=run.budgets if run else None,
             tool_fixtures=fixtures,
@@ -338,12 +341,21 @@ class LabService:
         parent = self.get_workspace(case.source_workspace_id)
         parent_before = project_fingerprints(Path(parent.path))
         criteria = request.criteria or case.criteria
-        presented = request.presented_tools or case.presented_tools
+        presented = request.presented_tools if request.presented_tools is not None else case.presented_tools
+        execution_snapshot = case.execution_snapshot.model_copy(deep=True) if case.execution_snapshot else None
+        if execution_snapshot is not None:
+            execution_snapshot.selection.configuration = execution_snapshot.selection.configuration.model_copy(update={
+                "presented_tools": presented,
+                "memory_version_refs": case.memory_version_refs,
+                "skill_version_refs": case.skill_version_refs,
+                "protected_instruction_version_refs": case.protected_instruction_version_refs,
+            })
         started = self.harness.start(
             AgentStartRequest(
                 deployment_id=case.deployment_id or "",
+                profile_id=case.profile_id,
                 task=case.task,
-                presented_tools=presented or None,
+                presented_tools=presented,
                 system_prompt=case.system_prompt,
                 criteria=criteria,
                 budgets=case.budgets,
@@ -358,7 +370,9 @@ class LabService:
                 protected_instruction_version_refs=case.protected_instruction_version_refs,
                 embedding_deployment_id=case.embedding_deployment_id,
                 retrieval_project_paths=list(case.retrieval_project_paths),
-            )
+            ),
+            execution_snapshot=execution_snapshot,
+            helper_snapshot=case.helper_snapshots if execution_snapshot else None,
         )
         parent_after = project_fingerprints(Path(parent.path))
         deviations = [
@@ -387,7 +401,9 @@ class LabService:
             recorded_is_not_live_proof=request.tool_mode is ToolMode.recorded_tool,
             applied_config=AppliedConfig(
                 deployment_id=case.deployment_id,
-                profile_id=case.profile_id,
+                profile_id=started.profile_id,
+                approval_mode=started.approval_mode,
+                work_mode=started.work_mode,
                 presented_tools=presented,
                 tool_mode=request.tool_mode,
                 system_prompt=case.system_prompt,
@@ -520,6 +536,24 @@ class LabService:
             protected_instruction_version_refs=protected,
             knowledge_version_refs=generic,
         )
+
+
+def _execution_snapshot(run: AgentRun) -> FrozenExecutionSelection | None:
+    """Capture actual executed settings, not mutable profile/default selectors."""
+    if run.effective_setup is None:
+        return None
+    configuration = SetupConfiguration.model_validate(run.model_dump(include=set(SetupConfiguration.model_fields)))
+    return FrozenExecutionSelection(
+        selection=ResolvedSetupSelection(
+            project_id=run.project_id,
+            agent_setup_id=run.agent_setup_id,
+            agent_setup_version_id=run.agent_setup_version_id,
+            configuration=configuration,
+            instruction_layers=list(run.effective_setup.instruction_layers),
+        ),
+        settings=run.effective_setup.bags.model_dump(mode="json"),
+        system_prompt=run.system_prompt,
+    )
 
 
 def fixtures_from_run(run: AgentRun | None) -> list[dict[str, Any]]:

@@ -1,0 +1,116 @@
+/* Shared compact controls and layouts. Overlay menus never resize their anchor. */
+.app-main {position: relative;}
+.persistent-chat {height: 100%; min-height: 0;}
+.persistent-chat[data-active="false"] {position: absolute; inset: 0; visibility: hidden; opacity: 0; pointer-events: none;}
+.menu-popover-anchor {display: inline-flex; position: relative; min-width: 0; flex-shrink: 0;}
+.menu-popover-trigger {display: inline-flex; align-items: center; justify-content: center; gap: var(--space-tight); min-height: var(--control-height); padding: var(--pad-tight); border: 0; background: transparent; color: var(--muted); border-radius: var(--radius-control); font-size: var(--text-body);}
+.menu-popover-trigger:hover, .menu-popover-trigger[aria-expanded="true"] {background: var(--hover); color: var(--text);}
+.menu-popover-panel {position: fixed; z-index: 1200; width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; overscroll-behavior: contain; background: var(--bg-panel); color: var(--text); padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow); font-size: var(--text-body);}
+.menu-popover-panel[hidden] {display: none !important;}
+.menu-popover-panel > h3 {font-size: var(--text-body); margin: 0 0 var(--space-compact);}
+.menu-action {width: 100%; display: flex; align-items: center; gap: var(--space-compact); text-align: left; border: 0; background: transparent; padding: var(--pad-compact); border-radius: var(--radius-control);}
+.menu-action:hover {background: var(--hover);}
+.menu-action small {color: var(--muted); margin-left: auto;}
+.menu-section {padding: var(--pad-compact) 0; border-top: var(--line-hairline) solid var(--border); margin-top: var(--space-tight); display: grid; gap: var(--space-compact);}
+.compact-switch-row {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); min-height: var(--control-height);}
+.compact-switch-row > span {display: flex; align-items: center; gap: var(--space-tight);}
+.compact-switch {width: 30px; min-width: 30px; height: 18px; min-height: 18px; padding: 2px; border: 0; border-radius: var(--radius-pill); background: var(--border);}
+.compact-switch > span {display: block; width: 14px; height: 14px; border-radius: var(--radius-circle); background: var(--text);}
+.compact-switch[aria-checked="true"] {background: var(--accent);}
+.compact-switch[aria-checked="true"] > span {transform: translateX(12px); background: var(--bg);}
+.compact-slider {display: grid; gap: var(--space-tight); min-width: 0;}
+.compact-slider-heading {display: flex; align-items: center; gap: var(--space-tight);}
+.compact-slider-heading label {margin: 0; font-size: var(--text-body);}
+.compact-slider-heading output {margin-left: auto; font-variant-numeric: tabular-nums;}
+.compact-slider input[type="range"] {min-height: 16px; height: 16px; width: 100%; padding: 0; accent-color: var(--accent);}
+.compact-slider-limits {display: flex; justify-content: space-between; color: var(--muted); font-size: var(--text-small);}
+.compose details[open] > summary {margin-bottom: 0;}
+.chat-measurements {width: 120px; justify-content: flex-end;}
+.chat-measurements .chat-usage-trigger {position: relative; width: 120px; justify-content: flex-end; padding-right: 9px;}
+.chat-measurements .chat-usage-trigger > span:first-of-type {width: 9ch; text-align: right;}
+.chat-measurements .usage-live-dot {position: absolute; right: 1px;}
+.approval-mode {display: grid; gap: var(--space-tight); background: transparent; padding: 0;}
+.approval-mode button {display: flex; align-items: flex-start; gap: var(--space-compact); text-align: left; padding: var(--pad-compact);}
+.approval-mode button > span {flex: 1; min-width: 0;}
+.approval-mode strong {display: block; font-weight: var(--weight-medium);}
+.approval-mode small {display: block; font-size: var(--text-small); line-height: var(--leading-tight); color: var(--muted); margin-top: var(--space-tight);}
+.approval-mode button > svg {flex-shrink: 0; margin-top: 2px;}
+.approval-mode button[aria-checked="false"] > svg:last-child {visibility: hidden;}
+.approval-mode button[aria-checked="true"] {background: var(--bg-raised);}
+.compact-attachments:empty {display: none;}
+.compact-attachments .packet03-list {display: flex; flex-wrap: wrap; gap: var(--space-tight); margin: 0 0 var(--space-compact); padding: 0;}
+.compact-attachments .packet03-item {padding: var(--pad-tight) var(--pad-compact); max-width: 260px; background: var(--bg-panel); border-radius: var(--radius-control);}
+.compact-attachments .packet03-row {gap: var(--space-tight); flex-wrap: nowrap;}
+.compact-attachments .packet03-row > strong {max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-small);}
+.compact-attachments .packet03-row > .hint {display: none;}
+.compact-attachments .packet03-row > .icon-button {height: 22px; width: 22px; min-width: 22px; min-height: 22px;}
+.chat-header-actions {display: flex; align-items: center; gap: var(--space-tight);}
+.chat-header > div:first-child {min-width: 0; margin-right: auto;}
+.chat-mode-options {display: grid; gap: var(--space-tight);}
+.chat-mode-options button[aria-checked="true"] {background: var(--bg-raised);}
+.chat-mode-options .menu-action > span {display: grid; gap: 2px;}
+.chat-mode-options .menu-action small {margin: 0;}
+.helper-choice {display: flex; align-items: center; gap: var(--space-compact); margin: 0; padding: var(--pad-tight);}
+.helper-choice > input {width: 14px; height: 14px; min-height: 0;}
+.helper-choice > span {display: grid; gap: 2px;}
+.helper-choice small {color: var(--muted); font-size: var(--text-small);}
+.surface, .packet03-panel {max-width: min(var(--layout-page), 1240px);}
+.workspace-record-detail, .workspace-records-layout > .workspace-editor {max-width: 760px; width: 100%;}
+.surface .compact-form, .surface > .workspace-editor {max-width: 760px;}
+.project-context .workspace-records-layout {grid-template-columns: minmax(0, 760px);}
+.project-context .workspace-record-list {display: none;}
+.project-context .surface-head {max-width: 760px;}
+.project-context .project-files {max-height: 360px; overflow: auto;}
+.settings-categories {display: flex; flex-wrap: wrap; gap: var(--space-tight); border-bottom: var(--line-hairline) solid var(--border); padding-bottom: var(--pad-compact);}
+.settings-categories button {border: 0; background: transparent; font-size: var(--text-body);}
+.settings-categories button[aria-current="page"] {background: var(--bg-raised); color: var(--text);}
+.settings-surface [hidden] {display: none !important;}
+.settings-surface .settings-preferences {display: block;}
+.settings-surface .settings-appearance {width: 100%;}
+.settings-category-content > details.card {display: block;}
+.settings-category-content > details.card > summary {font-weight: var(--weight-medium);}
+.settings-surface > details:not([hidden]), .settings-category-content {max-width: 780px; width: 100%;}
+.settings-category-content[hidden] {display: none;}
+.file-change-edits {display: flex; flex-wrap: wrap; gap: var(--space-tight); padding-left: var(--pad-card);}
+.activity-group {border: 0; margin: 0;}
+.activity-group > .tool-call-row {margin-left: var(--space-stack);}
+.tool-identity {overflow-wrap: anywhere;}
+.tool-call-permission {font-size: var(--text-small); color: var(--muted);}
+.todo-checklist .todo-status {display: inline-flex; align-items: center; justify-content: center; width: 18px; font-size: var(--text-ui); color: var(--muted);}
+.todo-checklist li[data-status="completed"] .todo-status {color: var(--ok);}
+.todo-checklist li[data-status="in_progress"] .todo-status {color: var(--accent);}
+.menu-popover-panel.chat-model-controls-panel {position: fixed; display: grid; gap: var(--space-compact); width: min(390px, calc(100vw - 16px)); bottom: auto; right: auto; z-index: 1200;}
+.chat-model-controls > .menu-popover-trigger {min-width: 0; max-width: min(360px, 36vw);}
+.chat-model-controls-model {overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.chat-model-controls-panel .chat-model-controls-grid > label {display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: var(--space-compact); align-items: center; margin: 0; font-size: var(--text-small);}
+.chat-context-control {display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: var(--space-compact); align-items: center; border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.chat-context-control .setting-title, .chat-context-control > .hint {grid-column: 1 / -1;}
+.setting-title {display: flex; align-items: center; gap: var(--space-tight);}
+.chat-context-control > input {min-width: 0; width: 100%; font-size: var(--text-small); padding: var(--pad-tight);}
+.response-settings-editor {display: grid; gap: var(--space-compact);}
+.response-settings-editor .setting-row {display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-tight); border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.response-settings-editor .setting-row > .compact-switch-row, .response-settings-editor .setting-row > label, .response-settings-editor .setting-row > .compact-slider {grid-column: 1 / -1;}
+.response-settings-editor .setting-row > label {margin: 0; display: flex; gap: var(--space-tight); align-items: center;}
+.response-settings-editor .setting-row > label strong {margin-left: auto;}
+.response-settings-editor .quiet-button {padding: var(--pad-tight); min-height: 24px; font-size: var(--text-small);}
+.response-settings-editor .setting-reset-actions {grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-tight);}
+.response-settings-editor .setting-reset-actions > .hint {margin-right: auto;}
+.response-settings-editor .thinking-explicit-choice {grid-column: 1 / -1;}
+.compact-slider-heading.visually-hidden {position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}
+.chat-model-controls-panel .actions {display: flex; justify-content: flex-end; gap: var(--space-compact); border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.run-activity-summary {display: grid; gap: var(--space-compact); margin: var(--space-compact) 0; font-size: var(--text-small);}
+.helper-activity {list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-tight);}
+.helper-activity li {display: flex; gap: var(--space-compact); align-items: center; flex-wrap: wrap;}
+.helper-activity li > span {color: var(--muted);}
+.review-result {border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact);}
+.review-result > summary {display: flex; gap: var(--space-tight); align-items: center;}
+.settings-surface {max-width: 780px; width: 100%;}
+.settings-surface .settings-preferences {max-width: 780px;}
+.appearance-basics {display: grid; grid-template-columns: minmax(100px, 1fr) minmax(140px, 1.4fr) minmax(100px, 1fr); gap: var(--space-stack); align-items: start;}
+.appearance-basics label {display: grid; gap: var(--space-tight); margin: 0;}
+.appearance-customize {justify-self: start;}
+.appearance-advanced {display: grid; gap: var(--space-compact);}
+.settings-surface .appearance-row {grid-template-columns: minmax(140px, 1fr) minmax(170px, 1.2fr) 100px; gap: var(--space-compact);}
+.settings-surface .appearance-row-name > strong {display: flex; align-items: center; gap: var(--space-tight);}
+@media (max-width: 760px) {.appearance-basics {grid-template-columns: minmax(0, 1fr);} .settings-surface .appearance-row {grid-template-columns: minmax(0, 1fr);} .settings-surface .appearance-sample {display: none;}}
+.run-configuration-controls {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact); grid-column: 1 / -1;}

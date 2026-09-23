@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { createServer } from "vite";
+import { checkAgentSavedActions, checkKnowledgeSavedActions } from "./fixtures/knowledge-action-journeys.mjs";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.window = { setTimeout, clearTimeout, setInterval, clearInterval, workbench: { backendUrl: "http://127.0.0.1:8000" } };
@@ -13,13 +14,43 @@ try {
   const { KnowledgePanel } = await vite.ssrLoadModule("/src/renderer/KnowledgePanel.tsx");
   await checkSelectedEntryOwnsVersionHistory(KnowledgePanel);
   await checkKnowledgeOwnershipAndReview(KnowledgePanel);
+  await checkSkillResourceNavigation((await vite.ssrLoadModule("/src/renderer/SkillPackageControls.tsx")).SkillResources);
   await checkAgentDraftConflict((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
+  await checkAgentSavedActions((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
+  await checkKnowledgeSavedActions(KnowledgePanel);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
   await checkFileReversalConflict((await vite.ssrLoadModule("/src/renderer/FileChangesPanel.tsx")).FileChangesPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
   await checkLifecyclePreview((await vite.ssrLoadModule("/src/renderer/LifecycleAction.tsx")).LifecycleAction);
 } finally { await vite.close(); }
 console.log("Knowledge workspace checks passed.");
+
+async function checkSkillResourceNavigation(Component) {
+  const pending = [];
+  globalThis.fetch = url => { const result = deferred(); pending.push({ url: new URL(String(url)), ...result }); return result.promise; };
+  const resource = path => ({ path, size_bytes: 40 });
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Component, { versionId: "version-a", resources: [resource("guide.md")] })); });
+    await act(async () => renderer.root.findByType("button").props.onClick());
+    assert.match(text(renderer.root), /Loading file/);
+    await act(async () => renderer.update(React.createElement(Component, { versionId: "version-b", resources: [resource("new.md"), resource("other.md")] })));
+    assert.equal(pending.length, 1, "changing version cannot request the previous version's selected path");
+    assert.doesNotMatch(text(renderer.root), /Loading file/, "an unselected version has no pending preview");
+    await act(async () => { pending[0].resolve(json({ path: "guide.md", content: "OLD VERSION CONTENT", binary: false })); await tick(); });
+    assert.doesNotMatch(text(renderer.root), /OLD VERSION CONTENT|Loading file/);
+    await act(async () => renderer.root.findAllByType("button")[0].props.onClick());
+    await act(async () => renderer.root.findAllByType("button")[1].props.onClick());
+    assert.equal(pending[1].url.pathname, "/v1/knowledge/versions/version-b/resource");
+    assert.equal(pending[1].url.searchParams.get("path"), "new.md");
+    await act(async () => { pending[2].resolve(json({ path: "other.md", content: "CURRENT RESOURCE", binary: false })); await tick(); });
+    await act(async () => { pending[1].resolve({ ok: false, status: 500, json: async () => ({ error: "STALE RESOURCE ERROR" }) }); await tick(); });
+    assert.match(text(renderer.root), /CURRENT RESOURCE/);
+    assert.doesNotMatch(text(renderer.root), /STALE RESOURCE ERROR|Loading file/);
+    await act(async () => renderer.update(React.createElement(Component, { versionId: "version-c", resources: [] })));
+    assert.doesNotMatch(text(renderer.root), /CURRENT RESOURCE|Loading file/);
+  } finally { for (const item of pending) item.resolve(json({})); if (renderer) await act(async () => renderer.unmount()); }
+}
 
 async function checkSelectedEntryOwnsVersionHistory(KnowledgePanel) {
   const first = deferred();
