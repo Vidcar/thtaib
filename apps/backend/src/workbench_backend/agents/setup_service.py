@@ -375,7 +375,8 @@ class SetupService:
             elif deployment and deployment.profile_id:
                 bound = self.manager.store.get_profile(deployment.profile_id)
                 if bound and bound.bundle_id == bundle.id:
-                    target = self.manager.canonical_configuration(bound.id)
+                    target = next((item for item in configurations
+                        if item.id == bound.id or bound.id in item.equivalent_configuration_ids), None)
             if target is None and deployment:
                 loaded_bags = resolve_bags(startup=deployment.requested_startup,
                     per_request=deployment.settings.per_request.requested, agent=deployment.settings.agent.requested)

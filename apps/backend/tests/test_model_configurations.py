@@ -250,6 +250,14 @@ class ModelConfigurationTests(unittest.TestCase):
             self.assertEqual(preview.effective_values["startup.ctx_size"].value, 8192)
             self.assertFalse(preview.effective_values["startup.ctx_size"].requires_reload)
             self.assertEqual(self.manager.get_deployment(deployment.id).requested_startup, deployment.requested_startup)
+            # A removed historical save destination cannot make an otherwise
+            # usable loaded snapshot unavailable merely for display metadata.
+            historical = self.manager.store.put_profile(default.model_copy(update={
+                "id": "historical_profile", "merged_into_configuration_id": "removed_configuration"}))
+            self.manager.store.put_deployment(deployment.model_copy(update={"profile_id": historical.id}))
+            preview = service.resolve(overrides=SetupConfiguration(deployment_id=deployment.id))
+            self.assertEqual(preview.effective_values["model_configuration_target"].value, other.id)
+            self.assertEqual(preview.effective_values["startup.ctx_size"].value, 8192)
 
     def test_connected_choice_has_truthful_source_but_no_owned_save_target(self):
         from workbench_backend.inference.schemas import ConnectedDeploymentRequest
