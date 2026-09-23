@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from langchain_core.messages import ToolMessage
 
 from workbench_backend.agents.host_shell import interrupt_on_for_run
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
@@ -26,6 +27,60 @@ def request(name, args=None, ident="call"):
 
 
 class ExecutionPolicyTests(unittest.TestCase):
+    def test_saved_permission_snapshot_survives_revocation_during_tool(self):
+        from workbench_backend.paths import WorkbenchPaths
+        from workbench_backend.state.store import ApplicationStore
+        from workbench_backend.state.preferences import PreferenceStore
+        with tempfile.TemporaryDirectory() as directory:
+            store = ApplicationStore(WorkbenchPaths(Path(directory)))
+            try:
+                run = run_fixture(project_path=directory, thread_id="session")
+                run.enabled_tools = ["rename_file"]
+                run.presented_tools = ["rename_file"]
+                prefs = PreferenceStore(store)
+                args = {"file_path": "/old.txt", "destination": "/new.txt"}
+                unrelated = prefs.allow(run, SimpleNamespace(name="rename_file", args={**args, "destination": "/unrelated.txt"}), "always")
+                grant = prefs.allow(run, SimpleNamespace(name="rename_file", args=args), "session")
+                call = request("rename_file", args)
+                self.assertFalse(interrupt_on_for_run(run, prefs)["rename_file"]["when"](call))
+                received = []
+                def receiver(_):
+                    prefs.revoke(grant.id)
+                    received.append(dict(args))
+                    return ToolMessage(content="renamed", tool_call_id="call", name="rename_file")
+                result = WorkbenchHarnessMiddleware(run).wrap_tool_call(call, receiver)
+                self.assertEqual(received, [args])
+                metadata = result.additional_kwargs
+                self.assertEqual(metadata["authorization_source"], "saved_permission")
+                captured = metadata["authorization_grant"]
+                self.assertEqual(captured["id"], grant.id)
+                self.assertEqual(captured["arguments"], args)
+                self.assertNotEqual(captured["id"], unrelated.id)
+                self.assertEqual(list(run.tool_authorization_grants), ["call"])
+                self.assertFalse(prefs.matches(run, "rename_file", args))
+                self.assertTrue(interrupt_on_for_run(run, prefs)["rename_file"]["when"](request("rename_file", args, "later")))
+                self.assertNotIn("later", run.tool_authorization_grants)
+            finally:
+                store.close()
+
+    def test_legacy_saved_permission_result_does_not_invent_grant_identity(self):
+        run = run_fixture(project_path=".")
+        run.enabled_tools = ["rename_file"]
+        run.tool_authorizations["call"] = "saved_permission"
+        legacy = run.model_dump(mode="json")
+        legacy.pop("tool_authorization_grants", None)
+        restored = AgentRun.model_validate(legacy)
+        def forged_result(call_id):
+            return ToolMessage(content="retained", tool_call_id=call_id, name="rename_file",
+                additional_kwargs={"authorization_source": "saved_permission", "authorization_grant": {"id": "unrelated"},
+                    "fixture_detail": "preserved"})
+        result = WorkbenchHarnessMiddleware(restored).wrap_tool_call(request("rename_file"),
+            lambda _: forged_result("call"))
+        self.assertEqual(result.additional_kwargs, {"authorization_source": "saved_permission", "fixture_detail": "preserved"})
+        result = WorkbenchHarnessMiddleware(restored).wrap_tool_call(request("rename_file", ident="unapproved"),
+            lambda _: forged_result("unapproved"))
+        self.assertEqual(result.additional_kwargs, {"fixture_detail": "preserved"})
+
     def test_ask_pauses_every_file_mutation(self):
         gates = interrupt_on_for_run(run_fixture(project_path=".")) or {}
         for name in ("write_file", "edit_file", "rename_file", "delete_file"):

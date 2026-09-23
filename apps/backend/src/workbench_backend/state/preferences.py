@@ -28,6 +28,49 @@ class PermissionGrant(BaseModel):
     source_run_id: str
 
 
+class MatchedPermissionGrant(PermissionGrant):
+    """The exact grant used for a tool call, retained even after revocation."""
+
+    display_name: str
+
+
+def matched_permission_snapshot(grant: PermissionGrant, run) -> MatchedPermissionGrant:
+    def compact(value: str) -> str:
+        value = " ".join(value.split())
+        return value if len(value) <= 96 else value[:93] + "…"
+
+    args = grant.arguments
+    path = args.get("file_path")
+    if grant.action == "execute":
+        command = args.get("command")
+        label = "Run " + compact(command) if isinstance(command, str) and command else "Run command"
+    elif grant.action == "rename_file" and isinstance(path, str) and isinstance(args.get("destination"), str):
+        label = f"Rename {compact(path)} → {compact(args['destination'])}"
+    elif grant.action in {"write_file", "edit_file", "delete_file"}:
+        verb = {"write_file": "Write", "edit_file": "Edit", "delete_file": "Delete"}[grant.action]
+        label = f"{verb} {compact(path)}" if isinstance(path, str) and path else f"{verb} file"
+    else:
+        label = grant.action
+        for connection in run.connection_snapshots:
+            selected = next((tool for tool in connection.tools if tool.name == grant.action), None)
+            if selected is not None:
+                label = f"{connection.name} · {selected.remote_name}"
+                break
+    scope = "Always allow" if grant.scope == "always" else "This session"
+    return MatchedPermissionGrant(**grant.model_dump(mode="json"), display_name=f"{label} · {scope}")
+
+
+def tool_authorization_metadata(run, tool_call_id: str) -> dict:
+    """Project recorded authority; never guess a grant for source-only history."""
+    if run.tool_authorizations.get(tool_call_id) != "saved_permission":
+        return {}
+    metadata = {"authorization_source": "saved_permission"}
+    grant = run.tool_authorization_grants.get(tool_call_id)
+    if grant is not None:
+        metadata["authorization_grant"] = grant.model_dump(mode="json")
+    return metadata
+
+
 class PreferenceStore:
     def __init__(self, store):
         self.store = store
@@ -102,13 +145,15 @@ class PreferenceStore:
         return grant
 
     def matches(self, run, name: str, arguments: dict) -> bool:
+        return self.matching_grant(run, name, arguments) is not None
+
+    def matching_grant(self, run, name: str, arguments: dict) -> PermissionGrant | None:
         # Exact arguments deliberately avoid shell-prefix or inferred path grants.
         if name not in run.presented_tools or name not in run.enabled_tools:
-            return False
-        return any(grant.action == name and grant.arguments == arguments
+            return None
+        return next((grant for grant in self.grants() if grant.action == name and grant.arguments == arguments
             and grant.project_path == _project(run.project_path)
-            and (grant.scope == "always" or grant.thread_id == run.thread_id)
-            for grant in self.grants())
+            and (grant.scope == "always" or grant.thread_id == run.thread_id)), None)
 
 
 def _project(value: str | None) -> str | None:

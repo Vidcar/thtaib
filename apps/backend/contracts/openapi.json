@@ -597,6 +597,13 @@
             ],
             "title": "Thread Id"
           },
+          "tool_authorization_grants": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MatchedPermissionGrant"
+            },
+            "title": "Tool Authorization Grants",
+            "type": "object"
+          },
           "tool_authorizations": {
             "additionalProperties": {
               "type": "string"
@@ -7550,6 +7557,77 @@
         ],
         "title": "ManagementScope",
         "type": "string"
+      },
+      "MatchedPermissionGrant": {
+        "description": "The exact grant used for a tool call, retained even after revocation.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "scope": {
+            "enum": [
+              "session",
+              "always"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "source_run_id": {
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "action",
+          "arguments",
+          "created_at",
+          "source_run_id",
+          "display_name"
+        ],
+        "title": "MatchedPermissionGrant",
+        "type": "object"
       },
       "MaterializedKnowledgeFact": {
         "properties": {

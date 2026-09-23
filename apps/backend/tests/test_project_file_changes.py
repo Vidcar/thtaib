@@ -136,11 +136,21 @@ class ProjectFileChangesTests(unittest.TestCase):
         self.assertEqual(repeated['status'], 'completed')
         result = next(event for event in repeated['events'] if event['kind'] == 'tool_result')
         self.assertEqual(result['detail'].get('authorization_source'), 'saved_permission')
+        grant, = self.app.state.preferences.grants()
+        matched = result['detail'].get('authorization_grant')
+        self.assertIsNotNone(matched, 'The actual matching saved permission must reach durable tool results')
+        self.assertEqual({key: matched[key] for key in type(grant).model_fields}, grant.model_dump(mode='json'))
+        self.assertEqual(matched['display_name'], 'Rename /original.txt → /renamed.txt · This session')
+        self.assertEqual(repeated['tool_authorization_grants'][self.observed_call_id], matched)
+        authorized_call_id = self.observed_call_id
         # A changed destination does not inherit the exact-action grant.
         changed_args, _ = self._project_run('rename_file', {'file_path': '/renamed.txt', 'destination': '/other.txt'}, project=project, thread_id='rename-grant')
         self._decide(changed_args['id'], 'reject')
         self._settled(changed_args['id'])
         self.assertFalse((project / 'other.txt').exists())
+        self.app.state.preferences.revoke(grant.id)
+        restored = self.app.state.harness.store.get_run(again['id'])
+        self.assertEqual(restored.tool_authorization_grants[authorized_call_id].model_dump(mode='json'), matched)
 
     def test_delete_restores_captured_text_and_rejects_folders_or_escape(self):
         project = self.root / 'project'

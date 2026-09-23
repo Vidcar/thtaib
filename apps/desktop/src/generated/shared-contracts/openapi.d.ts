@@ -2268,6 +2268,10 @@ export interface components {
             task: string;
             /** Thread Id */
             thread_id?: string | null;
+            /** Tool Authorization Grants */
+            tool_authorization_grants?: {
+                [key: string]: components["schemas"]["MatchedPermissionGrant"];
+            };
             /** Tool Authorizations */
             tool_authorizations?: {
                 [key: string]: string;
@@ -4620,6 +4624,35 @@ export interface components {
          * @enum {string}
          */
         ManagementScope: "managed" | "connected";
+        /**
+         * MatchedPermissionGrant
+         * @description The exact grant used for a tool call, retained even after revocation.
+         */
+        MatchedPermissionGrant: {
+            /** Action */
+            action: string;
+            /** Arguments */
+            arguments: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string;
+            /** Display Name */
+            display_name: string;
+            /** Id */
+            id: string;
+            /** Project Path */
+            project_path?: string | null;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "session" | "always";
+            /** Source Run Id */
+            source_run_id: string;
+            /** Thread Id */
+            thread_id?: string | null;
+        };
         /** MaterializedKnowledgeFact */
         MaterializedKnowledgeFact: {
             /**
@@ -6256,6 +6289,7 @@ export type SchemaLocalImportRequest = components['schemas']['LocalImportRequest
 export type SchemaLocalSessionTrustContract = components['schemas']['LocalSessionTrustContract'];
 export type SchemaManagedDeploymentRequest = components['schemas']['ManagedDeploymentRequest'];
 export type SchemaManagementScope = components['schemas']['ManagementScope'];
+export type SchemaMatchedPermissionGrant = components['schemas']['MatchedPermissionGrant'];
 export type SchemaMaterializedKnowledgeFact = components['schemas']['MaterializedKnowledgeFact'];
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
 export type SchemaModelConfigurationWriteRequest = components['schemas']['ModelConfigurationWriteRequest'];

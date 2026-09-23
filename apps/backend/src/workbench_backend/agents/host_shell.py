@@ -30,6 +30,7 @@ from langchain.agents.middleware import ToolCallRequest
 
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
+from workbench_backend.state.preferences import matched_permission_snapshot
 from workbench_backend.agents.schemas import (
     AgentRun,
     InterruptDecision,
@@ -317,12 +318,14 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     auto_external = mode == "full_access"
 
     def saved_permission(name, args, request):
-        if grants is None or not grants.matches(run, name, args):
+        matched = grants.matching_grant(run, name, args) if grants is not None else None
+        if matched is None:
             return False
         call = request.tool_call
         ident = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
         if ident:
             run.tool_authorizations[ident] = "saved_permission"
+            run.tool_authorization_grants[ident] = matched_permission_snapshot(matched, run)
         return True
 
     def requires_approval(request: ToolCallRequest) -> bool:

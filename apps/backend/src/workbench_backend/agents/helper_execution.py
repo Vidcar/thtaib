@@ -82,7 +82,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         events=[], model_requests=[], tool_invocations=[], file_changes=[], related_files=[],
         completion=None, output_schema=None, structured_output=None, context_observation=observation,
         generation_observation=None, starting_snapshot_id=None, final_snapshot_id=None,
-        checkpoint_ids=[], resume_checkpoint_id=None, dispatched_tool_calls=0, dispatched_tool_ids=[], completed_tool_ids=[], tool_authorizations={},
+        checkpoint_ids=[], resume_checkpoint_id=None, dispatched_tool_calls=0, dispatched_tool_ids=[], completed_tool_ids=[], tool_authorizations={}, tool_authorization_grants={},
         status=AgentRunStatus.running, created_at=now, updated_at=now, finished_at=None,
         pending_interrupt=None, error=None, stop_reason=None))
     return child

@@ -17,6 +17,7 @@ from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.knowledge.schemas import KnowledgeBinding, RedactionMode
 from workbench_backend.state.schemas import RelatedFile
+from workbench_backend.state.preferences import MatchedPermissionGrant
 
 # Harness run records use the shared #41 lifecycle vocabulary. Do not keep a
 # second enum of queued/running/cancel_requested/cancelled/completed/failed.
@@ -287,6 +288,7 @@ class AgentRun(BaseModel):
     dispatched_tool_ids: list[str] = Field(default_factory=list)
     completed_tool_ids: list[str] = Field(default_factory=list)
     tool_authorizations: dict[str, str] = Field(default_factory=dict)
+    tool_authorization_grants: dict[str, MatchedPermissionGrant] = Field(default_factory=dict)
     framework_read_paths: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
     system_prompt: str | None = None

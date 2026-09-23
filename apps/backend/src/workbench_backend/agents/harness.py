@@ -95,6 +95,7 @@ from workbench_backend.state.checkpointer import (
     submit_checkpoint_task,
 )
 from workbench_backend.state.schemas import RelatedFile
+from workbench_backend.state.preferences import tool_authorization_metadata
 from workbench_backend.state.store import ApplicationStore
 from workbench_backend.agents.tools import (
     KNOWLEDGE_ROUTE_READ_TOOLS,
@@ -1573,7 +1574,7 @@ class HarnessService:
                         "name": message.name,
                         "content": message.content,
                         "tool_call_id": message.tool_call_id,
-                        **({"authorization_source": "saved_permission"} if run.tool_authorizations.get(message.tool_call_id) == "saved_permission" else {}),
+                        **tool_authorization_metadata(run, message.tool_call_id),
                         **({"node": node} if node else {}),
                     },
                 )

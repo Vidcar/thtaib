@@ -36,6 +36,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, CURRENT_TOOL_CALL
+from workbench_backend.state.preferences import tool_authorization_metadata
 
 
 class WorkbenchHarnessMiddleware(AgentMiddleware):
@@ -159,8 +160,13 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return self._authorization_result(self._wrap_tool_call(request, handler))
 
     def _authorization_result(self, result):
-        if isinstance(result, ToolMessage) and self.run.tool_authorizations.get(result.tool_call_id) == "saved_permission":
-            return result.model_copy(update={"additional_kwargs": {**result.additional_kwargs, "authorization_source": "saved_permission"}})
+        if isinstance(result, ToolMessage):
+            # Tools cannot supply their own authority evidence. Only the grant
+            # captured by the permission gate may name a saved exception.
+            additional = {key: value for key, value in result.additional_kwargs.items()
+                if key not in {"authorization_source", "authorization_grant"}}
+            return result.model_copy(update={"additional_kwargs": {**additional,
+                **tool_authorization_metadata(self.run, result.tool_call_id)}})
         return result
 
     def _wrap_tool_call(self, request, handler):
