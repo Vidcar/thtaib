@@ -9,7 +9,7 @@ import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ChatRetainedFiles } from "./ChatRetainedFiles";
 import { LibraryPanel } from "./LibraryPanel";
 import { RunMemoryProposals } from "./RunMemoryProposals";
-import { editorTheme, ensureMonaco } from "./monacoSetup";
+import { editorFontSize, editorTheme, ensureMonaco } from "./monacoSetup";
 import "./ChatDock.css";
 
 export type DockPage = "changes" | "files" | "library";
@@ -216,13 +216,13 @@ function replaceChildren(nodes: FileNode[], path: string, children: FileNode[]):
 function MonacoDiff({ original, modified, sideBySide }: { original: string; modified: string; sideBySide: boolean }) {
   const Diff = useMonacoDiff();
   if (!Diff) return <p className="hint">Opening the difference…</p>;
-  return <Diff original={original} modified={modified} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, renderSideBySide: sideBySide, originalEditable: false, scrollBeyondLastLine: false }} />;
+  return <Diff original={original} modified={modified} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, renderSideBySide: sideBySide, originalEditable: false, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
 }
 
 function MonacoFile({ text }: { text: string }) {
   const Editor = useMonacoFile();
   if (!Editor) return <pre className="file-change-diff">{text}</pre>;
-  return <Editor value={text} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, scrollBeyondLastLine: false }} />;
+  return <Editor value={text} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
 }
 
 function useMonacoDiff() {

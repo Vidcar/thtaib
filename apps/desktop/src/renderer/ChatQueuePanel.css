@@ -1,12 +1,12 @@
 .composer-queue {
   display: grid;
-  gap: 4px;
-  margin: 0 2px 6px;
+  gap: var(--composer-queue-gap);
+  margin: 0 var(--composer-queue-margin-vertical) var(--composer-queue-margin-horizontal);
 }
 
 .composer-queue-list {
   display: grid;
-  gap: 4px;
+  gap: var(--composer-queue-list-gap);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -15,27 +15,27 @@
 .composer-queue-row {
   display: flex;
   align-items: flex-start;
-  gap: 2px;
-  min-height: 28px;
-  padding: 2px 2px 2px 8px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  gap: var(--composer-queue-row-gap);
+  min-height: var(--composer-queue-row-minimum-height);
+  padding: var(--composer-queue-row-padding-top) var(--composer-queue-row-padding-right) var(--composer-queue-row-padding-bottom) var(--composer-queue-row-padding-left);
+  border-radius: var(--composer-queue-row-corner);
+  background: color-mix(in srgb, var(--bg) var(--composer-queue-row-background), transparent);
 }
 
 .composer-queue-row.is-locked {
-  opacity: 0.72;
+  opacity: var(--composer-queue-row-is-locked-fade);
 }
 
 .composer-queue-text {
   flex: 1;
   min-width: 0;
-  margin: 5px 0;
+  margin: var(--composer-queue-text-margin) 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--composer-queue-text-text-size);
+  line-height: var(--composer-queue-text-line-spacing);
 }
 
 .composer-queue-actions {
@@ -45,10 +45,10 @@
 }
 
 .composer-queue-actions .icon-button {
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
-  min-height: 26px;
+  width: var(--composer-queue-actions-icon-button-width);
+  height: var(--composer-queue-actions-icon-button-height);
+  min-width: var(--composer-queue-actions-icon-button-minimum-width);
+  min-height: var(--composer-queue-actions-icon-button-minimum-height);
   color: var(--muted);
 }
 
@@ -59,26 +59,26 @@
 .composer-queue-editor {
   display: grid;
   flex: 1;
-  gap: 6px;
+  gap: var(--composer-queue-editor-gap);
   min-width: 0;
-  padding: 4px 0;
+  padding: var(--composer-queue-editor-padding) 0;
 }
 
 .composer-queue-editor textarea {
-  min-height: 52px;
+  min-height: var(--composer-queue-editor-textarea-minimum-height);
   resize: vertical;
-  font-size: 13px;
+  font-size: var(--composer-queue-editor-textarea-text-size);
 }
 
 .composer-queue-pause {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  font-size: 12px;
+  gap: var(--composer-queue-pause-gap);
+  padding: var(--composer-queue-pause-padding-vertical) var(--composer-queue-pause-padding-horizontal);
+  border-radius: var(--composer-queue-pause-corner);
+  background: color-mix(in srgb, var(--warn) var(--composer-queue-pause-background), transparent);
+  font-size: var(--composer-queue-pause-text-size);
 }
 
 .composer-queue-pause p {

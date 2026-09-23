@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, Tray } from "electron";
-import { writeFile } from "node:fs/promises";
+import { mkdirSync, renameSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { ensureSharedSecret, resolveProductDataRoot, WORKBENCH_BACKEND_ORIGIN, WORKBENCH_LOCAL_TOKEN_HEADER } from "./localTrust";
@@ -59,6 +60,24 @@ export async function installBackground(openWindow: () => void): Promise<void> {
   ]));
   tray.on("double-click", openWindow);
   app.on("before-quit", (event) => { if (!quitting) { event.preventDefault(); void requestQuit(); } });
+  ipcMain.handle("workbench:appearance-read", async (event) => {
+    requireTrustedIpc(event);
+    try {
+      return JSON.parse(await readFile(appearanceFilePath(), "utf8")) as unknown;
+    } catch {
+      return null;
+    }
+  });
+  ipcMain.handle("workbench:appearance-write", async (event, payload: unknown) => {
+    requireTrustedIpc(event);
+    const safe = sanitizeAppearance(payload);
+    const file = appearanceFilePath();
+    mkdirSync(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(safe));
+    renameSync(temporary, file);
+    return safe;
+  });
   ipcMain.handle("workbench:select-path", async (event, kind: unknown) => {
     requireTrustedIpc(event);
     if (kind !== "file" && kind !== "folder") throw new Error("Unsupported selection");
@@ -148,4 +167,29 @@ async function pollAttention(openWindow: () => void): Promise<void> {
     for (const id of notified) if (!active.has(id)) notified.delete(id);
   } catch { /* In-app attention remains authoritative when notifications cannot be delivered. */ }
   finally { polling = false; }
+}
+
+function appearanceFilePath(): string {
+  return path.join(resolveProductDataRoot(), "appearance.json");
+}
+
+function sanitizeAppearance(payload: unknown): { version: 1; values: Record<string, string>; light: Record<string, string> } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Appearance settings are invalid");
+  const record = payload as Record<string, unknown>;
+  if (record.version !== 1) throw new Error("Appearance settings are invalid");
+  return { version: 1, values: sanitizeAppearanceMap(record.values), light: sanitizeAppearanceMap(record.light) };
+}
+
+function sanitizeAppearanceMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Appearance settings are invalid");
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 4000) throw new Error("Appearance settings are invalid");
+  const safe: Record<string, string> = {};
+  for (const [key, item] of entries) {
+    if (!/^[a-z0-9-]{1,80}$/.test(key) || typeof item !== "string" || item.length > 400 || /[;{}<>\\]/.test(item)) {
+      throw new Error("Appearance settings are invalid");
+    }
+    safe[key] = item;
+  }
+  return safe;
 }

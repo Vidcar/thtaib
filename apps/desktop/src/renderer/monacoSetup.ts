@@ -1,6 +1,7 @@
 /** Load Monaco from this desktop package. Never from a CDN. */
 
 let configured = false;
+let monacoApi: typeof import("monaco-editor/editor/editor.api") | null = null;
 
 export async function ensureMonaco(): Promise<void> {
   if (configured || typeof window === "undefined") return;
@@ -16,12 +17,43 @@ export async function ensureMonaco(): Promise<void> {
     },
   };
   loader.config({ monaco });
+  monacoApi = monaco;
+  syncMonacoFromDocument();
 }
 
-export function editorTheme(): "vs" | "vs-dark" {
-  if (typeof document === "undefined") return "vs-dark";
+export function editorTheme(): string {
+  return "workbench";
+}
+
+export function editorFontSize(): number {
+  if (typeof document === "undefined") return 14;
+  const parsed = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--font-editor"));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 14;
+}
+
+export function syncMonacoFromDocument(): void {
+  if (!monacoApi || typeof document === "undefined") return;
+  const style = getComputedStyle(document.documentElement);
+  const read = (name: string) => style.getPropertyValue(name).trim();
   const explicit = document.documentElement.dataset.theme;
-  if (explicit === "light") return "vs";
-  if (explicit === "dark") return "vs-dark";
-  return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "vs" : "vs-dark";
+  const light = explicit === "light" || (explicit !== "dark" && window.matchMedia?.("(prefers-color-scheme: light)").matches);
+  try {
+    monacoApi.editor.defineTheme("workbench", {
+      base: light ? "vs" : "vs-dark",
+      inherit: true,
+      rules: [],
+      colors: {
+        "editor.background": read("--bg-panel") || (light ? "#fafafa" : "#252525"),
+        "editor.foreground": read("--text") || (light ? "#222222" : "#ececec"),
+        "editorLineNumber.foreground": read("--muted") || (light ? "#6b6b6b" : "#a4a4a4"),
+        "editor.selectionBackground": read("--accent") || (light ? "#7250b8" : "#b5a2ed"),
+        "editorCursor.foreground": read("--text") || (light ? "#222222" : "#ececec"),
+      },
+    });
+    monacoApi.editor.setTheme("workbench");
+    const fontSize = editorFontSize();
+    for (const editor of monacoApi.editor.getEditors()) editor.updateOptions({ fontSize });
+  } catch {
+    // The editor keeps the previous theme when a colour value is not ready.
+  }
 }

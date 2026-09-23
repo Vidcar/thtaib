@@ -15,5 +15,5 @@ const icons = {
 export type IconName = keyof typeof icons;
 export function Icon({ name, size = 20, style }: { name: IconName; size?: number; style?: CSSProperties }) {
   const Component = icons[name];
-  return <Component size={size} strokeWidth={1.7} aria-hidden="true" focusable="false" style={style} />;
+  return <Component size={size} strokeWidth={1.7} aria-hidden="true" focusable="false" style={{ width: `var(--icon-${size}, ${size}px)`, height: `var(--icon-${size}, ${size}px)`, strokeWidth: "var(--icon-stroke, 1.7)", ...style }} />;
 }
