@@ -552,6 +552,7 @@ class AssetLifecycleHarnessIntegrationTests(unittest.TestCase):
             json={
                 "deployment_id": deployment_id,
                 "task": "Write one file then attempt a bad edit.",
+                "approval_mode": "full_access",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file", "edit_file"],
             },

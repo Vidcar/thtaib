@@ -441,7 +441,7 @@ class GgufRuntimeMetadata(BaseModel):
 
 
 class BundleConfigurationOptions(BaseModel):
-    bundle_id: str
+    bundle_id: str | None
     deployment_id: str | None = None
     context_size: RuntimeControlDescriptor
     gpu_layers: RuntimeControlDescriptor

@@ -304,6 +304,11 @@ def deployment_profile_changes(request: Request, deployment_id: str) -> Deployme
     return get_manager(request).deployment_profile_changes(deployment_id)
 
 
+@router.get("/deployments/{deployment_id}/configuration-options", response_model=BundleConfigurationOptions)
+def deployment_configuration_options(request: Request, deployment_id: str):
+    return get_manager(request).get_deployment_configuration_options(deployment_id)
+
+
 @router.get("/deployments/{deployment_id}/logs", response_model=DeploymentLogResponse)
 def deployment_logs(request: Request, deployment_id: str) -> DeploymentLogResponse:
     manager = get_manager(request)

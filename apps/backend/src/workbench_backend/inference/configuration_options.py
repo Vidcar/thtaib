@@ -31,7 +31,7 @@ CONTEXT_FRACTIONS = (1 / 8, 3 / 16, 1 / 4, 3 / 8, 1 / 2, 5 / 8, 3 / 4, 1)
 
 
 def bundle_configuration_options(
-    bundle_id: str,
+    bundle_id: str | None,
     metadata: GgufRuntimeMetadata,
     *,
     deployment: Deployment | None = None,

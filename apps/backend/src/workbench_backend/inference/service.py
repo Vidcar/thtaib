@@ -204,6 +204,12 @@ class ModelManager:
                     metadata.has_mtp_tensors = True
         return metadata
 
+    def get_deployment_configuration_options(self, deployment_id: str) -> BundleConfigurationOptions:
+        deployment = self.get_deployment(deployment_id)
+        if deployment.bundle_id:
+            return self.get_bundle_configuration_options(deployment.bundle_id, deployment_id=deployment.id)
+        return bundle_configuration_options(None, GgufRuntimeMetadata(), deployment=deployment)
+
     def list_profiles(self) -> list[RunProfile]:
         ensure_model_configurations(self.store)
         return [self._resolved_profile(profile) for profile in self.store.list_profiles()]
