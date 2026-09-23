@@ -69,6 +69,16 @@ CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT = (
 )
 
 
+def _display_title(conversation: ChatConversation) -> str:
+    if conversation.title and conversation.title.strip():
+        return conversation.title.strip()
+    for message in conversation.transcript:
+        if message.role == "user" and message.content.strip():
+            text = " ".join(message.content.split())
+            return f"{text[:51]}…" if len(text) > 52 else text
+    return "New conversation"
+
+
 class ChatService:
     def __init__(
         self,
@@ -1520,6 +1530,7 @@ class ChatService:
             )
         return ChatConversationView(
             **shown.model_dump(),
+            display_title=_display_title(conversation),
             current_run=None,
             events=[],
             pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),
@@ -1578,6 +1589,7 @@ class ChatService:
             )
         return ChatConversationView(
             **conversation.model_dump(),
+            display_title=_display_title(conversation),
             current_run=current,
             events=events,
             pending_cancel_input_ids=self.app_store.pending_chat_submission_cancels(conversation.id),

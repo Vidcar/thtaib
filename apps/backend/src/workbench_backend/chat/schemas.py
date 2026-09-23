@@ -252,6 +252,10 @@ class ChatConversation(BaseModel):
 
 
 class ChatConversationView(ChatConversation):
+    display_title: str = Field(
+        default="New conversation",
+        description="Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.",
+    )
     current_run: AgentRun | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     pending_cancel_input_ids: list[str] = Field(default_factory=list)

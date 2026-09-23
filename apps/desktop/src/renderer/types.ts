@@ -493,6 +493,7 @@ export interface ChatConversation {
   setup_overrides?: import("./workspaceApi").SetupConfiguration;
   id: string;
   title?: string | null;
+  display_title?: string;
   archived?: boolean;
   archived_at?: string | null;
   area_kind?: "general" | "project";

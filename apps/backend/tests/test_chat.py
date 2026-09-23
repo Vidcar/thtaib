@@ -179,6 +179,37 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIsNone(store.get(removed['id']))
         self.assertEqual(self.client.get(f'/v1/chat/conversations/{removed["id"]}').status_code, 404)
 
+    def test_untitled_history_has_one_server_title_in_catalogue_and_full_view(self) -> None:
+        created = self._create()
+        store = self.app.state.chat.store
+        saved = store.get(created["id"])
+        prompt = "  this is a stream test,\n please write out 150 lines with interesting facts about trees  "
+        saved.title = None
+        saved.transcript = [
+            ChatMessage(role="assistant", content="Earlier assistant-only note", at=saved.created_at),
+            ChatMessage(role="user", content="  ", at=saved.created_at),
+            ChatMessage(role="user", content=prompt, at=saved.created_at),
+        ]
+        store.put(saved)
+        before = store.get(saved.id).model_dump()
+        expected = " ".join(prompt.split())[:51] + "…"
+
+        catalogue = self.client.get("/v1/chat/conversations").json()
+        summary = next(item for item in catalogue if item["id"] == saved.id)
+        full = self.client.get(f"/v1/chat/conversations/{saved.id}").json()
+        self.assertEqual(summary["transcript"], [], "The sidebar must remain a lightweight response.")
+        self.assertEqual(summary["display_title"], expected)
+        self.assertEqual(full["display_title"], expected)
+        self.assertIsNone(summary["title"])
+        self.assertIsNone(full["title"])
+        self.assertEqual(store.get(saved.id).model_dump(), before, "Reading a derived title must not mutate legacy history.")
+
+        renamed = self.client.patch(f"/v1/chat/conversations/{saved.id}", json={"title": "My trees"}).json()
+        self.assertEqual(renamed["display_title"], "My trees")
+        summary = next(item for item in self.client.get("/v1/chat/conversations").json() if item["id"] == saved.id)
+        self.assertEqual(summary["display_title"], "My trees")
+        self.assertEqual(store.get(saved.id).title, "My trees")
+
     def test_startup_dispatch_skips_conversation_deleted_after_catalogue_snapshot(self) -> None:
         removed = self._create(title="Deleted during startup")
         retained = self._create(title="Queued work remains")
