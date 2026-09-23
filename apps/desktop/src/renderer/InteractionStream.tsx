@@ -111,12 +111,17 @@ export function useWorkbenchProjection(stream: WorkbenchStream): {
 } {
   const messages = useMessages(stream);
   const toolCalls = useToolCalls(stream);
+  const incompleteKey = (stream.values.workbench?.incomplete_message_ids ?? []).join("\0");
+  const incompleteMessageIds = useMemo(
+    () => new Set(stream.values.workbench?.incomplete_message_ids ?? []),
+    [incompleteKey],
+  );
   return {
     run: stream.values.workbench?.run ?? null,
     workbench: stream.values.workbench,
     messages,
     toolCalls,
-    incompleteMessageIds: new Set(stream.values.workbench?.incomplete_message_ids ?? []),
+    incompleteMessageIds,
   };
 }
 

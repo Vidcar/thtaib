@@ -13,6 +13,7 @@ from unittest.mock import patch
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
 from workbench_backend.interaction.projection import event, partial_archive
+from workbench_backend.interaction.resume import ResumeProjection
 from workbench_backend.interaction.service import InteractionService
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.paths import WorkbenchPaths
@@ -134,6 +135,37 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertNotIn("after_seq", json.dumps(page))
         self.assertNotIn("replaceable_measurement", json.dumps(page))
 
+    def test_speed_sample_does_not_rewrite_messages(self) -> None:
+        self.service.observe(self.run, event("messages", {"event": "message-start", "id": "reply"}))
+        self.service.observe(self.run, event("messages", {"event": "content-block-delta", "index": 0,
+            "delta": {"type": "text-delta", "text": "Hello"}}))
+        before = self.store.get_interaction("display")["snapshot"]["messages"]
+        self.measure(4)
+        after = self.store.get_interaction("display")
+        self.assertEqual(after["snapshot"]["messages"], before)
+        latest = self.store.interaction_events_after("display", after["seq"] - 1)[0]
+        self.assertTrue(latest["params"].get("measurement"))
+        self.assertNotIn("messages", latest["params"]["data"])
+        self.assertEqual(latest["params"]["data"]["workbench"]["run"]["generation_observation"]["output_tokens"], 4)
+        self.assertEqual(ResumeProjection(self.service, "display", 1).present(latest), [latest])
+
+    def test_token_commits_batch_until_a_read(self) -> None:
+        calls = []
+        original = self.store.append_interaction
+
+        def wrapped(*args, **kwargs):
+            calls.append(len(args[1]) if len(args) > 1 else 0)
+            return original(*args, **kwargs)
+
+        self.store.append_interaction = wrapped
+        for _index in range(40):
+            self.service.observe(self.run, event("messages", {"event": "content-block-delta", "index": 0,
+                "delta": {"type": "text-delta", "text": "x"}}))
+        self.assertLess(len(calls), 40)
+        stored = [item for item in self.store.interaction_events_after("display", 0) if item["method"] == "messages"]
+        self.assertEqual(len(stored), 40)
+        self.assertEqual("".join(item["params"]["data"]["delta"]["text"] for item in stored), "x" * 40)
+
     def test_token_events_do_not_copy_the_run_or_rewrite_the_snapshot(self):
         harness = HarnessService(lambda: None, app_store=self.store, interaction_observer=self.service.observe)
         before = self.store.get_interaction("display")
@@ -173,7 +205,7 @@ class MeasurementReplayTests(unittest.TestCase):
         while page := self.store.interaction_events_after("display", cursor):
             methods.extend(item["method"] for item in page)
             cursor = page[-1]["seq"]
-        self.assertEqual(methods.count("messages"), 200)
+        self.assertEqual(methods.count("messages"), 0)
         self.assertIn("lifecycle", methods)
         self.assertEqual(self.store.get_run(self.run.id).status, AgentRunStatus.completed)
         harness._startup_reconciled = True

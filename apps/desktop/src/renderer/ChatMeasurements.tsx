@@ -1,11 +1,37 @@
+import { useSyncExternalStore } from "react";
+
 import type { AgentRun } from "./types";
 import { Icon } from "./Icon";
 import { HoverHelp } from "./HoverHelp";
 import "./ChatMeasurements.css";
 
+type LiveMeasurement = {
+  runId: string;
+  generation: AgentRun["generation_observation"];
+  context: AgentRun["context_observation"];
+};
+
+let liveMeasurement: LiveMeasurement | null = null;
+const measurementListeners = new Set<() => void>();
+
+export function publishLiveMeasurement(next: LiveMeasurement | null): void {
+  if (liveMeasurement?.runId === next?.runId && liveMeasurement?.generation === next?.generation && liveMeasurement?.context === next?.context) {
+    return;
+  }
+  liveMeasurement = next;
+  measurementListeners.forEach((listener) => listener());
+}
+
+function subscribeLiveMeasurement(listener: () => void): () => void {
+  measurementListeners.add(listener);
+  return () => measurementListeners.delete(listener);
+}
+
 export function ChatMeasurements({ run }: { run?: AgentRun | null }) {
-  const generation = run?.generation_observation;
-  const context = run?.context_observation;
+  const published = useSyncExternalStore(subscribeLiveMeasurement, () => liveMeasurement, () => liveMeasurement);
+  const measurement = published?.runId === run?.id ? published : null;
+  const generation = measurement?.generation ?? run?.generation_observation;
+  const context = measurement?.context ?? run?.context_observation;
   const input = count(generation?.input_tokens);
   const output = count(generation?.output_tokens);
   const reported = count(generation?.context_used_tokens) ?? (input != null && output != null ? input + output : null);
@@ -19,8 +45,10 @@ export function ChatMeasurements({ run }: { run?: AgentRun | null }) {
   const percent = used != null && capacity ? used / capacity * 100 : null;
   const status = live ? "Live" : preparing ? "Preparing" : stopped ? "Stopped" : generation ? "Last request" : estimated ? "Estimated" : "Context";
   const nativeTiming = generation?.basis === "llama_cpp_timings";
+  const announcement = run?.pending_interrupt ? "Waiting" : live ? "Writing" : preparing ? "Preparing" : stopped ? "Stopped" : "";
 
-  return <span className="chat-measurements">
+  return <span className="chat-measurements" data-estimated-input={context?.estimated_input_tokens ?? ""} data-tokens-per-second={speed ?? ""}>
+    {announcement ? <span className="sr-only" role="status">{announcement}</span> : null}
     <HoverHelp title="Context and speed" placement="above" triggerClassName="chat-usage-trigger" bubbleClassName="chat-usage-bubble"
       triggerContent={<><Icon name="activity" size={16} /><span>{speed != null ? `${speed.toFixed(1)} tok/s` : preparing ? "Preparing" : "Context"}</span>{live ? <span className="usage-live-dot" aria-hidden="true" /> : null}</>}>
       <div className="usage-heading"><strong>Context</strong><span className={live ? "usage-state is-live" : "usage-state"}>{status}</span></div>

@@ -42,7 +42,20 @@ function tick() {
 }
 
 try {
-  const { AgentMessageFeed } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
+  const { AgentMessageFeed, resetPaintCounters, finishedBubbleRenders, markdownParseCount } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
+  const { splitStreamingMarkdown, visibleLineRange } = await vite.ssrLoadModule("/src/renderer/streamingMarkdown.ts");
+  const fenced = splitStreamingMarkdown("Done paragraph.\n\n```ts\nconst value = 1;\n");
+  assert.deepEqual(fenced.blocks, ["Done paragraph."]);
+  assert.match(fenced.tail, /```ts/);
+  assert.doesNotMatch(fenced.tail, /Done paragraph/);
+  const continued = splitStreamingMarkdown("Done paragraph.\n\nStill writing");
+  assert.deepEqual(continued.blocks, ["Done paragraph."]);
+  assert.equal(continued.tail, "Still writing");
+  const top = visibleLineRange(200, 0, 400, 16, 8);
+  const bottom = visibleLineRange(200, Number.MAX_SAFE_INTEGER, 400, 16, 8);
+  assert.equal(top.start, 0, "scrolling to the start includes the first line");
+  assert.equal(bottom.end, 200, "the bottom window includes the last line");
+  assert.ok(bottom.start > 0, "the bottom window does not paint the start of a long body");
   const { sourceReference } = await vite.ssrLoadModule("/src/renderer/SourceReference.tsx");
   const sourceUrl = `workbench-source://asset_example/${"a".repeat(64)}?source=row+2&line=1&start=0&end=4`;
   assert.equal(sourceReference(sourceUrl).source, "row 2");
@@ -90,6 +103,7 @@ try {
   );
 
   assert.match(html, /aria-label="Incomplete response"[^>]*>Partial</);
+  assert.doesNotMatch(html, /bubble-settled/, "the live answer stays active while it is still streaming");
   assert.match(html, /<details class="message-reasoning"><summary aria-expanded="false">/);
   assert.ok(html.indexOf('class="message-reasoning"') < html.indexOf("Answer with"), "reasoning must precede its corresponding answer");
   assert.ok(html.includes("Provider supplied reasoning only."), "reasoning text should be preserved");
@@ -110,6 +124,7 @@ try {
     new AIMessage({id: "saved-call", content: "", tool_calls: [{id: "call-old", name: "lookup", args: {q: "retained"}}]}),
     new ToolMessage({id: "saved-result", tool_call_id: "call-old", name: "lookup", content: "Saved lookup result"}),
   ]}));
+  assert.match(historical, /bubble-settled/, "a finished answer stays in the page and can skip off-screen layout");
   assert.ok(historical.includes("lookup") && historical.includes("retained"), "public contentBlocks must preserve hydrated tool calls without live tool events");
   assert.equal((historical.match(/class="message-tools"/g) ?? []).length, 1, "retained call and result must render one compact named activity");
   assert.match(historical, /Called lookup/, "a finished call leads with the action");
@@ -163,17 +178,17 @@ try {
   assert.doesNotMatch(rawHtml, /<script>|<img|href="javascript:/);
   const fileStart = ".bench-1 { color: #111; }";
   const fileEnd = ".bench-160 { color: #eee; }";
-  const fileBody = `${fileStart}\n${"x".repeat(5000)}\n${fileEnd}`;
+  const fileBody = `${fileStart}\n${Array.from({ length: 400 }, (_, index) => `rule ${index}`).join("\n")}\n${fileEnd}`;
   const rawWrite = JSON.stringify({ file_path: "stream-bench.html", content: fileBody });
   const preparingCall = { callId: "write-live", id: "write-live", name: "write_file", namespace: [], input: rawWrite, args: rawWrite, output: null, status: "preparing", error: undefined };
   const preparingClosed = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall] }));
   assert.match(preparingClosed, /stream-bench\.html/, "a live write names the file on the row");
   assert.match(preparingClosed, /KB written/, "a live write shows how much has been written");
-  assert.doesNotMatch(preparingClosed, /x{200}|bench-160/, "a collapsed live write does not paint the file");
+  assert.doesNotMatch(preparingClosed, /rule 10|bench-160/, "a collapsed live write does not paint the file");
   const preparingOpen = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true }));
-  assert.match(preparingOpen, /Showing the latest 4,000 characters/);
+  assert.doesNotMatch(preparingOpen, /Showing the latest 4,000 characters/);
   assert.match(preparingOpen, /bench-160 \{ color: #eee; \}/, "the open live write shows the newest lines");
-  assert.doesNotMatch(preparingOpen, /\.bench-1 \{ color: #111; \}/, "the open live write paints only the tail of a huge file");
+  assert.doesNotMatch(preparingOpen, /\.bench-1 \{ color: #111; \}/, "the open live write paints the visible tail until the reader scrolls up");
   assert.doesNotMatch(preparingOpen, /\\n\.bench-160/, "escaped newlines in a streamed file are shown as line breaks");
   const liveError = renderToStaticMarkup(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [{ ...liveCall, status: "error", error: "Access denied by the tool" }] }));
   assert.match(liveError, /<p class="tool-call-error" role="status">Access denied by the tool<\/p>/, "SDK errors must be visible without opening details");
@@ -241,6 +256,37 @@ try {
   assert.equal(detailsOpen(detailedRenderer.root, "message-reasoning"), false, "user close wins over detailedStreams preference while the section identity is stable");
   await act(async () => { renderer.unmount(); detailedRenderer.unmount(); });
 
+  const settled = new AIMessage({ id: "settled", content: "Finished paragraph.\n\nStill here." });
+  const growingLive = (extra) => new AIMessage({ id: "live-answer", content: `Partial ${extra}` });
+  let bubbleRenderer;
+  await act(async () => { bubbleRenderer = create(React.createElement(AgentMessageFeed, { messages: [settled, growingLive("one")], incompleteMessageIds: new Set(["live-answer"]) })); });
+  resetPaintCounters();
+  const parsesBefore = markdownParseCount;
+  await act(async () => { bubbleRenderer.update(React.createElement(AgentMessageFeed, { messages: [settled, growingLive("two")], incompleteMessageIds: new Set(["live-answer"]) })); });
+  assert.equal(finishedBubbleRenders, 0, "a parent render that does not change finished text does not rebuild that bubble");
+  assert.ok(markdownParseCount - parsesBefore <= 1, "growing the open tail does not parse the finished paragraph again");
+  await act(async () => bubbleRenderer.unmount());
+
+  let writeRenderer;
+  await act(async () => { writeRenderer = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], detailedStreams: true })); });
+  const scroller = writeRenderer.root.findByProps({ className: "virtual-text" });
+  await act(async () => {
+    scroller.props.onScroll({ currentTarget: { scrollTop: 0, scrollHeight: 8000, clientHeight: 400 } });
+  });
+  assert.match(JSON.stringify(writeRenderer.toJSON()), /bench-1/, "scrolling the open write reaches the first line");
+  const writeNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const writeCopies = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async value => { writeCopies.push(value); } } } });
+  try {
+    await act(async () => { writeRenderer.root.findByProps({ "aria-label": "Copy tool input" }).props.onClick(); await tick(); });
+    assert.match(writeCopies.at(-1), /bench-1/);
+    assert.match(writeCopies.at(-1), /bench-160/);
+  } finally {
+    if (writeNavigator) Object.defineProperty(globalThis, "navigator", writeNavigator);
+    else delete globalThis.navigator;
+  }
+  await act(async () => writeRenderer.unmount());
+
   const scrolls = [];
   const listeners = new Map();
   class Transcript {
@@ -284,7 +330,7 @@ try {
   listeners.get("scroll")();
   reduced = false;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: growingAnswer() })));
-  assert.equal(scrolls.at(-1).behavior, "smooth", "following resumes when the reader returns to the bottom");
+  assert.equal(scrolls.at(-1).behavior, "auto", "following resumes at the newest line without a smooth chase");
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [liveCall] })));
   const beforeToolCompletion = scrolls.length;
   await act(async () => following.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [completedCall] })));

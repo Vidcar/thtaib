@@ -41,6 +41,8 @@ class ResumeProjection:
             return [item]
         method = item.get("method")
         params = item.get("params") or {}
+        if params.get("measurement"):
+            return [item]
         if method == "values" and not params.get("namespace"):
             return [self._values_with_partial(item)]
         if method != "messages":

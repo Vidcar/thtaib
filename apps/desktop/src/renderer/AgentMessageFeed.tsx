@@ -1,7 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activityLine, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -10,6 +10,15 @@ import { CopyIconButton } from "./CopyIconButton";
 import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
+import { closeUnfinishedMarks, splitStreamingMarkdown, VIRTUAL_LINE_HEIGHT, visibleLineRange } from "./streamingMarkdown";
+
+export let markdownParseCount = 0;
+export let finishedBubbleRenders = 0;
+
+export function resetPaintCounters(): void {
+  markdownParseCount = 0;
+  finishedBubbleRenders = 0;
+}
 
 // Markdown presentation follows the safe ReactMarkdown + remark-gfm pattern from
 // langchain-ai/agent-chat-ui at revision 41926d89c9798cebe45a26886d6e437acc5201c1.
@@ -177,7 +186,6 @@ function mergeTool(block: ToolBlock, retained: ToolBlock | undefined, live: Asse
   };
 }
 
-const LIVE_TOOL_TAIL = 4000;
 const TOOL_PATH_KEYS = ["file_path", "path"];
 const TOOL_BODY_KEYS = ["content", "text", "file_text", "new_string", "command"];
 
@@ -287,30 +295,6 @@ function textFromNode(node: React.ReactNode): string {
   return "";
 }
 
-export function LiveToolCode({ text, copyText }: { text: string; copyText: string }) {
-  const ref = useRef<HTMLPreElement>(null);
-  useLayoutEffect(() => {
-    const elementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
-    const pre = ref.current;
-    if (!elementCtor || !(pre instanceof elementCtor)) return undefined;
-    const pin = () => {
-      pre.scrollTop = pre.scrollHeight;
-      const box = pre.closest(".tool-call-details");
-      if (box instanceof elementCtor) box.scrollTop = box.scrollHeight;
-    };
-    pin();
-    if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") return undefined;
-    const frame = window.requestAnimationFrame(pin);
-    return () => window.cancelAnimationFrame(frame);
-  }, [text]);
-  return (
-    <div className="code-block-wrap">
-      <CopyIconButton text={copyText} label="Copy tool input" />
-      <pre ref={ref} className="code-block live-tool-code"><code>{text}</code></pre>
-    </div>
-  );
-}
-
 export function CodeBlock({ children, text, label = "Copy code block", preClassName = "code-block", ariaLabel }: {
   children?: React.ReactNode;
   text?: string;
@@ -327,7 +311,8 @@ export function CodeBlock({ children, text, label = "Copy code block", preClassN
   );
 }
 
-function MarkdownMessage({ text }: { text: string }) {
+const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
+  markdownParseCount += 1;
   if (!text.trim()) {
     return null;
   }
@@ -368,6 +353,146 @@ function MarkdownMessage({ text }: { text: string }) {
       {text}
     </ReactMarkdown>
   );
+});
+
+function StreamingMarkdown({ text }: { text: string }) {
+  const parts = useMemo(() => splitStreamingMarkdown(text), [text]);
+  const tail = parts.tail ? closeUnfinishedMarks(parts.tail) : "";
+  return (
+    <>
+      {parts.blocks.map((block, index) => (
+        <MarkdownMessage key={`${index}:${block.length}:${block.slice(0, 24)}`} text={block} />
+      ))}
+      {tail ? <MarkdownMessage text={tail} /> : null}
+    </>
+  );
+}
+
+const REASONING_ROW = 48;
+
+function VirtualMarkdown({ text }: { text: string }) {
+  const parts = useMemo(() => splitStreamingMarkdown(text), [text]);
+  const rows = useMemo(() => {
+    const next = [...parts.blocks];
+    if (parts.tail.trim()) {
+      next.push(closeUnfinishedMarks(parts.tail));
+    }
+    return next;
+  }, [parts]);
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const [scrollTop, setScrollTop] = useState(Number.MAX_SAFE_INTEGER);
+  const [viewport, setViewport] = useState(420);
+  const range = visibleLineRange(rows.length, scrollTop, viewport, REASONING_ROW, 2);
+  const visible = rows.slice(range.start, range.end);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || !stick.current || selectionInside(element)) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+    setScrollTop(element.scrollTop);
+    if (element.clientHeight > 0) {
+      setViewport(element.clientHeight);
+    }
+  }, [text]);
+
+  if (rows.length <= 12) {
+    return <StreamingMarkdown text={text} />;
+  }
+  return (
+    <div
+      ref={ref}
+      className="virtual-markdown"
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        const nextTop = element.scrollTop;
+        const nextView = element.clientHeight || 420;
+        stick.current = element.scrollHeight - nextTop - nextView < 96;
+        setScrollTop(nextTop);
+        setViewport(nextView);
+      }}
+    >
+      <div style={{ height: range.start * REASONING_ROW }} />
+      {visible.map((row, index) => (
+        <MarkdownMessage key={`${range.start + index}:${row.length}:${row.slice(0, 24)}`} text={row} />
+      ))}
+      <div style={{ height: Math.max(0, (rows.length - range.end) * REASONING_ROW) }} />
+    </div>
+  );
+}
+
+function useStickToBottom(signature: string) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return undefined;
+    }
+    const onScroll = () => {
+      stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
+    return () => element.removeEventListener("scroll", onScroll);
+  }, []);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || !stick.current || selectionInside(element)) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+  }, [signature]);
+  return ref;
+}
+
+function selectionInside(element: HTMLElement): boolean {
+  const selection = typeof document === "undefined" ? null : document.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && element.contains(selection.anchorNode));
+}
+
+export function VirtualPlainText({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const lines = useMemo(() => text.split("\n"), [text]);
+  const [scrollTop, setScrollTop] = useState(Number.MAX_SAFE_INTEGER);
+  const [viewport, setViewport] = useState(400);
+  const range = visibleLineRange(lines.length, scrollTop, viewport);
+  const visible = lines.slice(range.start, range.end);
+  const top = range.start * VIRTUAL_LINE_HEIGHT;
+  const bottom = Math.max(0, (lines.length - range.end) * VIRTUAL_LINE_HEIGHT);
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || !stick.current || selectionInside(element)) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+    setScrollTop(element.scrollTop);
+    if (element.clientHeight > 0) {
+      setViewport(element.clientHeight);
+    }
+  }, [text]);
+
+  return (
+    <div
+      ref={ref}
+      className="virtual-text"
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        const nextTop = element.scrollTop;
+        const nextView = element.clientHeight || 400;
+        stick.current = element.scrollHeight - nextTop - nextView < 96;
+        setScrollTop(nextTop);
+        setViewport(nextView);
+      }}
+    >
+      <div style={{ height: top }} />
+      <pre className="code-block live-tool-code"><code>{visible.join("\n")}</code></pre>
+      <div style={{ height: bottom }} />
+    </div>
+  );
 }
 
 function DetailSection({ children, className, defaultOpen, id, onToggle, openStates, summary }: DetailSectionProps) {
@@ -405,6 +530,7 @@ function ReasoningDetails({
   openStates: ReadonlyMap<string, boolean>;
   reasoning: string[];
 }) {
+  const followRef = useStickToBottom(reasoning.join("\n").length.toString());
   if (reasoning.length === 0) {
     return null;
   }
@@ -417,8 +543,8 @@ function ReasoningDetails({
       openStates={openStates}
       summary={<><Icon name="activity" size={14} /><span className="activity-name">Reasoning</span></>}
     >
-      <div className="reasoning-content">{reasoning.map((item, index) => (
-        <MarkdownMessage key={index} text={item} />
+      <div className="reasoning-content" ref={followRef}>{reasoning.map((item, index) => (
+        <VirtualMarkdown key={index} text={item} />
       ))}</div>
     </DetailSection>
   );
@@ -515,7 +641,6 @@ function ToolBlockList({
     const error = toolError(tool);
     const streaming = toolIsStreaming(tool);
     const writing = streaming ? readableToolText(tool.args) : "";
-    const tail = streaming ? writing.slice(Math.max(0, writing.length - LIVE_TOOL_TAIL)) : "";
     const finished = !streaming;
     const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
     const label = activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
@@ -544,7 +669,7 @@ function ToolBlockList({
       >
         {streaming && !open ? null : <div className="tool-call-details">
           <p className="hint">Tool <span className="tool-call-name">{tool.name}</span></p>
-          {streaming ? <section aria-label="Tool input"><span className="tool-detail-label">Writing</span>{writing.length > LIVE_TOOL_TAIL ? <p className="hint">Showing the latest 4,000 characters.</p> : null}<LiveToolCode text={tail} copyText={writing} /></section> : null}
+          {streaming ? <section aria-label="Tool input"><span className="tool-detail-label">Writing</span><div className="code-block-wrap"><CopyIconButton text={writing} label="Copy tool input" /><VirtualPlainText text={writing} /></div></section> : null}
           {!streaming && tool.args !== undefined ? <section aria-label="Tool input"><span className="tool-detail-label">Input</span><CodeBlock text={stringifyValue(tool.args)} label="Copy tool input"><code>{stringifyValue(tool.args)}</code></CodeBlock></section> : null}
           {!streaming && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
           {tool.error ? <section aria-label="Tool error"><span className="tool-detail-label">Error</span><pre className="code-block"><code>{tool.error}</code></pre></section> : null}
@@ -597,9 +722,8 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     if (selection && !selection.isCollapsed && transcript.contains(selection.anchorNode)) {
       return;
     }
-    const reduceMotion = typeof window === "undefined" ? false : window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     if (typeof transcript.scrollTo === "function") {
-      transcript.scrollTo({ top: transcript.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior: "auto" });
     } else {
       transcript.scrollTop = transcript.scrollHeight;
     }
@@ -608,10 +732,88 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
   return rootRef;
 }
 
+const EMPTY_INCOMPLETE: ReadonlySet<string> = new Set();
+
+function useFrameSample<T>(value: T, enabled: boolean): T {
+  const [shown, setShown] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  const frame = typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+  useEffect(() => {
+    if (!enabled || !frame) {
+      setShown(latest.current);
+      return undefined;
+    }
+    const handle = window.requestAnimationFrame(() => setShown(latest.current));
+    return () => window.cancelAnimationFrame(handle);
+  }, [enabled, frame, value]);
+  if (!enabled || !frame) {
+    return value;
+  }
+  return shown;
+}
+
+const MessageBubble = memo(function MessageBubble(props: {
+  answer: string;
+  attachments: MessageParts["attachments"];
+  detailedStreams: boolean;
+  incomplete: boolean;
+  message: BaseMessage;
+  messageKey: string;
+  messageTools: ToolBlock[];
+  onToggle: (id: string, open: boolean) => void;
+  openStates: ReadonlyMap<string, boolean>;
+  reasoning: string[];
+  renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
+  renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
+  toolsKey: string;
+  type: string;
+}) {
+  if (!props.incomplete) {
+    finishedBubbleRenders += 1;
+  }
+  const settled = !props.incomplete;
+  return (
+    <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}`}>
+      <header>
+        <strong>{roleLabel(props.type)}</strong>
+        {props.incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
+      </header>
+      <div className="message-body">
+        <ReasoningDetails
+          defaultOpen={props.detailedStreams}
+          messageKey={props.messageKey}
+          onToggle={props.onToggle}
+          openStates={props.openStates}
+          reasoning={props.reasoning}
+        />
+        {props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
+        <AttachmentList attachments={props.attachments} />
+        <ToolBlockList defaultOpen={props.detailedStreams} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} />
+      </div>
+      {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
+      {props.renderMessageFooter?.(props.message)}
+    </article>
+  );
+}, (previous, next) => {
+  if (previous.incomplete || next.incomplete) {
+    return false;
+  }
+  return previous.message === next.message
+    && previous.toolsKey === next.toolsKey
+    && previous.detailedStreams === next.detailedStreams
+    && previous.openStates === next.openStates
+    && previous.onToggle === next.onToggle
+    && previous.renderAnswerActions === next.renderAnswerActions
+    && previous.renderMessageFooter === next.renderMessageFooter
+    && previous.answer === next.answer;
+});
+
 export function AgentMessageFeed(props: {
   messages: BaseMessage[];
   toolCalls?: AssembledToolCall[];
   incompleteMessageIds?: ReadonlySet<string>;
+  live?: boolean;
   fallback?: React.ReactNode;
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
@@ -619,10 +821,16 @@ export function AgentMessageFeed(props: {
   userMessageText?: (message: BaseMessage) => string | undefined;
   sourceScope?: { sessionId?: string; projectPath?: string };
 }) {
-  const { messages, toolCalls = [], incompleteMessageIds = new Set(), fallback, detailedStreams = false } = props;
+  const { toolCalls = [], fallback, detailedStreams = false } = props;
+  const incompleteMessageIds = props.incompleteMessageIds ?? EMPTY_INCOMPLETE;
+  const streaming = Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
+    const status = call.status as string;
+    return status === "preparing" || status === "running";
+  });
+  const messages = useFrameSample(props.messages, streaming);
   const rootRef = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
   const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
-  const handleDetailToggle = (id: string, open: boolean) => {
+  const handleDetailToggle = useCallback((id: string, open: boolean) => {
     setOpenStates((current) => {
       if (current.get(id) === open) {
         return current;
@@ -631,10 +839,11 @@ export function AgentMessageFeed(props: {
       next.set(id, open);
       return next;
     });
-  };
+  }, []);
   if (messages.length === 0 && toolCalls.length === 0) {
     return fallback;
   }
+  const lastAiId = [...messages].reverse().find((message) => messageType(message) === "ai")?.id;
   const prepared = messages.map((message, index) => {
     const type = messageType(message);
     const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
@@ -649,44 +858,41 @@ export function AgentMessageFeed(props: {
   }
   const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
   const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
-  const renderTools = (tools: ToolBlock[], key: string) => <ToolBlockList defaultOpen={detailedStreams} messageKey={key} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={tools} />;
   return (
     <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
       {prepared.map(({ message, type, key: messageKey, parts }) => {
-        const incomplete = Boolean(message.id && incompleteMessageIds.has(message.id));
+        const incomplete = Boolean((message.id && incompleteMessageIds.has(message.id)) || (props.live && message.id && message.id === lastAiId));
         const result = toolResultMessage(message);
         if (result) {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;
-          return <div className="tool-message" key={messageKey}>{renderTools([mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)], messageKey)}</div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[mergeTool(result, result, result.id ? liveById.get(result.id) : undefined)]} /></div>;
         }
         const messageTools = parts.toolBlocks.map(block => mergeTool(block, block.id ? resultById.get(block.id) : undefined, block.id ? liveById.get(block.id) : undefined));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
+        const toolsKey = messageTools.map((tool) => `${tool.id ?? ""}:${tool.status ?? ""}:${tool.error ?? ""}:${typeof tool.result === "string" ? tool.result.length : 0}`).join("|");
         return (
-          <article key={messageKey} className={`bubble bubble-${type === "human" ? "user" : type === "ai" ? "assistant" : "system"}`}>
-            <header>
-              <strong>{roleLabel(type)}</strong>
-              {incomplete ? <span className="message-state" aria-label="Incomplete response">Partial</span> : null}
-            </header>
-            <div className="message-body">
-              <ReasoningDetails
-                defaultOpen={detailedStreams}
-                messageKey={messageKey}
-                onToggle={handleDetailToggle}
-                openStates={openStates}
-                reasoning={parts.reasoning}
-              />
-              <MarkdownMessage text={parts.answer} />
-              <AttachmentList attachments={parts.attachments} />
-              {renderTools(messageTools, messageKey)}
-            </div>
-            {type === "ai" ? props.renderAnswerActions?.(message, incomplete, parts.answer) : null}
-            {props.renderMessageFooter?.(message)}
-          </article>
+          <MessageBubble
+            key={messageKey}
+            answer={parts.answer}
+            attachments={parts.attachments}
+            detailedStreams={detailedStreams}
+            incomplete={incomplete}
+            message={message}
+            messageKey={messageKey}
+            messageTools={messageTools}
+            onToggle={handleDetailToggle}
+            openStates={openStates}
+            reasoning={parts.reasoning}
+            renderAnswerActions={props.renderAnswerActions}
+            renderMessageFooter={props.renderMessageFooter}
+            toolsKey={toolsKey}
+            type={type}
+          />
         );
       })}
-      {renderTools(remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)), "live-tools")}
+      <ToolBlockList defaultOpen={detailedStreams} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call))} />
     </div></SourceScope.Provider>
   );
 }

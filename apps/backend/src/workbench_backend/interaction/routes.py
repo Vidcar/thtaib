@@ -93,7 +93,7 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
             for item in page:
                 cursor = item["seq"]
                 if interaction.matches(item, options):
-                    if item["method"] == "values" and not item["params"].get("namespace"):
+                    if item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
                         item["params"]["data"] = interaction.display_values(item["params"]["data"])
                     for wire in resume.present(item):
                         yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
@@ -103,7 +103,8 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
             # A subscriber that passes `since` continues after the snapshot it
             # painted. Omitting `since` still reads the durable log from the start.
             # A disconnect closes observation without cancelling work.
-            await anyio.sleep(0.1)
+            status = ((interaction.binding(thread_id)["snapshot"].get("workbench") or {}).get("run") or {}).get("status")
+            await anyio.sleep(0.016 if status in {"queued", "running", "cancel_requested"} else 0.1)
             idle += 1
             if idle >= 100:
                 yield format_sse_event(comment="keepalive")
