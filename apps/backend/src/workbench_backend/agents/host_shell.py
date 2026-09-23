@@ -506,7 +506,7 @@ def validated_decision_payloads(
             payload["message"] = decision.message
         elif decision.type == "reject":
             payload["message"] = (
-                "User rejected this host-shell command. The tool was not executed. "
+                "User rejected this action. The tool was not executed. "
                 "Do not retry unless the user asks."
             )
         payloads.append(payload)

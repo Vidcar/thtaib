@@ -336,6 +336,14 @@ class HostShellPolicyTests(unittest.TestCase):
         rejects = reject_decisions_for(pending)
         self.assertEqual(len(rejects), 1)
         self.assertEqual(rejects[0]["type"], "reject")
+        file_action = pending_interrupt_from_raw({
+            "action_requests": [{"name": "write_file", "args": {"file_path": "notes.txt", "content": "proposed"}}],
+            "review_configs": [{"action_name": "write_file", "allowed_decisions": ["approve", "reject"]}],
+        })
+        assert file_action is not None
+        file_rejection = validated_decision_payloads(file_action, [InterruptDecision(type="reject")])[0]
+        self.assertNotIn("host-shell", file_rejection["message"])
+        self.assertIn("not executed", file_rejection["message"])
 
 
 class HostShellHarnessTests(unittest.TestCase):
