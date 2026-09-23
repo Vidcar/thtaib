@@ -45,7 +45,7 @@ Light and dark themes SHALL follow Windows by default with a user override. Sett
 
 ### Requirement: API-017 - Expose compact effective model controls and measurements
 
-Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. Changing to a setup whose access is unspecified SHALL use Ask unless a current explicit override applies; it MUST NOT inherit Full access from the previous setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask, Approve for me, or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
+Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. When a setup leaves access unspecified, the backend SHALL resolve the current application, project, agent and conversation layers and show the effective value with its named source. Ask is the fallback when no selected layer supplies a value. An explicit conversation override, including Ask, takes precedence; choosing inherited access removes that override and uses the current resolved source. Access MUST NOT leak from the previously viewed setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask, Approve for me, or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
 
 The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment and permission controls beside the composer and focused popovers for details. The shield selects Ask, Approve for me, or Full access for later messages in that chat. It does not turn the agent's tool list on or off. Project, agent, and knowledge setup SHALL live on the Setup page of the conversation rail. The rail starts closed and MUST NOT take height from the transcript while it is closed. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
 
@@ -70,9 +70,15 @@ Sending with a stopped installed managed model SHALL load the selected setup thr
 - **WHEN** a person opens the conversation rail to Setup
 - **THEN** setup sits in that rail and the transcript remains readable beside or above it.
 
+#### Scenario: Inherited access follows its named source
+
+- **WHEN** a selected setup leaves access unspecified and an applicable saved default supplies Full access
+- **THEN** the control shows Full access with that named source, while an explicit conversation Ask override remains Ask
+- **AND** choosing inherited access removes the local override and restores the current resolved value without changing an active or queued turn.
+
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
-Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact reasoning button beside the model name SHALL default off and remember the user's preference across conversations/reopening. It uses an icon distinct from context and speed, and the accent colour when it is on. It is a pressed button, not a tick box. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
+Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact Reasoning and tools switch in the header's Conversation view menu SHALL default off and remember the user's preference across conversations/reopening. Its presentation controls stay distinct from model Thinking and effort controls. Changing this switch SHALL only change the visibility of returned detail, never model reasoning or tool permissions. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
 
 While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. One status announces that a reply is being written, has stopped, or is waiting.
 
@@ -186,25 +192,35 @@ The Files page SHALL show the bound project's files in a loaded virtualized tree
 
 While an assistant turn runs, and when that turn is reopened, Chat SHALL show planning and tool activity from the projected tool calls. This is visible with detailed streams on or off.
 
-`write_todos` SHALL appear as one checklist for that turn. Each item shows its content and its status: pending, in progress, or completed. The checklist is the arguments of the latest successful `write_todos` call. A later successful call replaces the list. A failed call leaves the previous list and shows the failure. The product MUST NOT keep a second todo list or read private graph state. Raw arguments remain available on expand. The checklist appears only once those arguments parse as the todo list.
+`write_todos` SHALL appear as one checklist for that turn. Each item shows its task content and its status: pending, in progress, or completed. The status is a mark on that row, separate from the sentence. The sentence is the task content alone. The checklist is the arguments of the latest successful `write_todos` call. A later successful call replaces the list. A failed call leaves the previous list and shows the failure. The product MUST NOT keep a second todo list or read private graph state. Raw arguments remain available on a further disclosure. The checklist appears only once those arguments parse as the todo list.
 
-Each other filesystem, search, shell, MCP, and memory tool SHALL appear as one line, one per call identity, in order, without a duplicate when live and retained records join:
+Each other filesystem, search, shell, MCP, and memory tool keeps one identity line, one per call identity, in order, without a duplicate when live and retained records join:
 
 - Reading or Read, plus the path. When the call includes an offset and limit, the line includes that line range.
 - Creating or Created, Editing or Edited, Deleting or Deleted, Renaming or Renamed, using the recorded operation. A rename shows the source and destination.
 - Listing or Listed, Finding or Found files matching, Searching or Searched for, Running or Ran, Calling or Called, Proposing or Proposed a memory.
 
-An actively running unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. Retained incomplete arguments from a stopped or failed turn SHALL be labelled as partial input, never as ongoing work or a completed file. Starting a later turn MUST NOT reactivate that label. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line; its full output stays on expand. The underlying tool name stays available on expand.
+An actively running unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. Retained incomplete arguments from a stopped or failed turn SHALL be labelled as partial input, never as ongoing work or a completed file. Starting a later turn MUST NOT reactivate that label. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line.
+
+A single finished call stays as that identity line. Two or more consecutive finished successful calls that share the same verb, and that are not waiting for a person, collapse into one summary line. The summary names the verb and how many calls it covers, for example "Read 6 files" or "Ran 3 commands". It does not add those calls' `+N -M` figures into a new total. Opening the summary shows the identity lines in their original order. A call that is still running, a call that failed, and a call that is waiting for approval or a typed answer each stay on their own line and are not folded into a summary. Closing the summary does not discard the calls.
+
+The first opening of an identity line shows the plain result: the path, the command, the output, or the short description of the change. The internal tool name and the raw arguments stay on a further disclosure. They MUST NOT be the first thing that opening shows.
 
 While a call is unfinished and its body is open, that body follows the newest line until the person scrolls inside it. The open body shows the full text produced so far. Every line stays reachable by scrolling, and copy copies that full text. The product MUST NOT drop earlier text to keep the view small. Completed file content SHALL remain readable with its original line breaks; raw arguments remain available separately.
 
-Choosing a file line opens the dock on that change, or on the file when no change record exists. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
+Choosing a file identity line opens the dock on that change, or on the file when no change record exists. Choosing a summary line does not open the dock. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
 
 #### Scenario: Todo list updates in place
 
 - **WHEN** the agent writes a todo list and later marks an item complete
 - **THEN** one checklist shows the latest successful items and statuses
 - **AND** detailed streams being off does not hide it.
+
+#### Scenario: Checklist status stays off the sentence
+
+- **WHEN** a checklist item is pending and its content is "Fix the frame step"
+- **THEN** the row shows that content as the sentence and shows pending as a separate mark
+- **AND** the sentence does not begin with the word pending.
 
 #### Scenario: File line with counts
 
@@ -234,3 +250,21 @@ Choosing a file line opens the dock on that change, or on the file when no chang
 - **WHEN** a file write is still streaming, the person has the row open, and they then scroll toward the start of that body
 - **THEN** the newest lines were in view while the body was following
 - **AND** scrolling reaches the earlier lines and copy copies the full text written so far.
+
+#### Scenario: A burst of reads is one line
+
+- **WHEN** a turn finishes six successful reads in a row and none of them is waiting for a person
+- **THEN** the transcript shows one summary equivalent to "Read 6 files"
+- **AND** opening it shows the six paths in the order they ran.
+
+#### Scenario: The live call stays visible
+
+- **WHEN** five reads have finished and a sixth read is still running
+- **THEN** the finished reads are one summary and the running read is its own line
+- **AND** a failed read is not folded into the successful summary.
+
+#### Scenario: Opening a tool shows the result first
+
+- **WHEN** a person opens a finished shell line
+- **THEN** the command and its output are the first content
+- **AND** the internal tool name and the raw arguments stay behind a further disclosure.

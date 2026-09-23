@@ -4,7 +4,13 @@
 
 ### Requirement: AGT-008 - Use framework interrupts for approvals
 
+Protected tool actions SHALL use Deep Agents `interrupt_on` and LangGraph resume on the same checkpointer thread. A pending interrupt SHALL keep the run `running` with typed details, not a new lifecycle status. Cancellation SHALL use `cancel_requested` until the worker confirms `cancelled`. The UI SHALL offer **Approve once**, **Allow for this session**, **Always allow** and **Reject**, showing exact action/resource scope. Once covers the pending action; session covers matching actions in the logical session across window reopening; Always allow creates an inspectable revocable matching grant; Reject does not create a permanent deny rule. Explicit rename/delete grants MAY satisfy matching future approvals.
+
 Chat SHALL offer Ask for approval, Approve for me and Full access with truthful effective values and named inherited sources. Ask SHALL pause before mutations, shell commands and external side effects unless an explicit saved matching grant applies. Approve for me SHALL automatically allow project edits only when verified recovery covers the operation; non-recoverable changes, shell and external side effects still require approval unless explicitly granted. Full access SHALL skip approval pauses only for enabled tools. Disabled tools remain disabled, typed questions still wait, and durable memory saving retains its separate policy. Host shell access SHALL be described as Windows-account authority, not a project sandbox. Plan mode SHALL override effectful execution under every access level.
+
+The four approval choices remain whenever a pause still happens. A queued turn keeps the mode it was queued with. Changing the mode applies to a later message and does not rewrite the saved agent.
+
+Grants SHALL be rechecked at dispatch/resume and MUST NOT enable disabled tools, expand denied access/child selection, authorize automatic memory saving or bypass authored workflow approval nodes. Read scope does not imply write/delete or global scope. Every decision SHALL identify its run, thread/checkpoint and exact interrupt. Reject stale/duplicate/wrong-run decisions; retain framework order for all actions inside one interrupt. Resume the saved interruption rather than resending the task. Cancel while interrupted SHALL reject/resume outstanding commands and reach cancelled only after owned work stops; external termination remains separately known or uncertain.
 
 #### Scenario: Approve deny cancel
 
@@ -13,7 +19,7 @@ Chat SHALL offer Ask for approval, Approve for me and Full access with truthful 
 
 #### Scenario: Approval mode skips a pause
 
-- **WHEN** a chat is set to Approve for me and the agent renames a selected file, or it is set to Full access and the agent runs a selected shell command
+- **WHEN** a chat is set to Approve for me and the agent renames a selected project file with verified recovery, or it is set to Full access and the agent runs a selected shell command
 - **THEN** that action proceeds without a review card
 - **AND** a typed question still waits, a tool that was not selected is still refused, and a memory proposal is not saved.
 

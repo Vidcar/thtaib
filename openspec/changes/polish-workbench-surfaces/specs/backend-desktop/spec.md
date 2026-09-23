@@ -2,6 +2,98 @@
 
 ## MODIFIED Requirements
 
+### Requirement: API-017 - Expose compact effective model controls and measurements
+
+Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. When a setup leaves access unspecified, the backend SHALL resolve the current application, project, agent and conversation layers and show the effective value with its named source. Ask is the fallback when no selected layer supplies a value. An explicit conversation override, including Ask, takes precedence; choosing inherited access removes that override and uses the current resolved source. Access MUST NOT leak from the previously viewed setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask, Approve for me, or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
+
+The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment and permission controls beside the composer and focused popovers for details. The shield selects Ask, Approve for me, or Full access for later messages in that chat. It does not turn the agent's tool list on or off. Project, agent, and knowledge setup SHALL live on the Setup page of the conversation rail. The rail starts closed and MUST NOT take height from the transcript while it is closed. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
+
+Compact status elements SHALL expose current context fill and generation speed in tok/s, with capacity, counting/measurement basis and relevant interval available on expansion. Observed measurements, labelled estimates and unavailable values SHALL remain distinguishable. Stream chunks MUST NOT be counted as tokens; absent usage MUST NOT appear as zero. Context changes/compaction and current versus completed-turn measurements SHALL remain attributable rather than silently showing stale values as current.
+
+Context details SHALL open on pointer hover and keyboard focus, with touch access and Escape dismissal. Prefer model-reported request input/output counts over preflight estimates once available. Supported llama.cpp timing streams SHALL supply live generation speed with bounded updates and no shared-slot polling; measurements SHALL reset at each model-call boundary and retain their current/completed/interrupted status. Compact settings SHALL avoid redundant default-value cards while preserving actionable failures, meaningful choices and accessible explanations.
+
+Sending with a stopped installed managed model SHALL load the selected setup through the existing model manager/admission path, show waiting/loading/readiness and submit once ready. Failure SHALL preserve the user's input and offer recovery. Conflicts SHALL be explained before disruptive action; active-work protections and connected-endpoint ownership MUST NOT be bypassed and models/settings MUST NOT be silently substituted.
+
+#### Scenario: Unsupported reasoning and unavailable telemetry
+
+- **WHEN** the selected model lacks a supported thinking-off control or supplies no usable token measurement
+- **THEN** the control/measurement explicitly reflects that limitation rather than claiming thinking is off or showing an invented tok/s value.
+
+#### Scenario: Start from Chat with a resource conflict or failure
+
+- **WHEN** a submitted draft selects an installed stopped model and loading conflicts with existing work or fails
+- **THEN** the draft remains recoverable, the conflict/failure and corrective action are visible, no protected work is silently disrupted and retry cannot duplicate accepted work.
+
+#### Scenario: Setup stays off the transcript
+
+- **WHEN** a person opens the conversation rail to Setup
+- **THEN** setup sits in that rail and the transcript remains readable beside or above it.
+
+#### Scenario: Inherited access follows its named source
+
+- **WHEN** a selected setup leaves access unspecified and an applicable saved default supplies Full access
+- **THEN** the control shows Full access with that named source, while an explicit conversation Ask override remains Ask
+- **AND** choosing inherited access removes the local override and restores the current resolved value without changing an active or queued turn.
+
+### Requirement: API-018 - Keep answer streaming independent of detail visibility
+
+Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact Reasoning and tools switch in the header's Conversation view menu SHALL default off and remember the user's preference across conversations/reopening. Its presentation controls stay distinct from model Thinking and effort controls. Changing this switch SHALL only change the visibility of returned detail, never model reasoning or tool permissions. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
+
+While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. One status announces that a reply is being written, has stopped, or is waiting.
+
+A speed or context measurement SHALL update its readout only. It MUST NOT rebuild the transcript, move the scroll position, delay the next tokens, or change execution.
+
+Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain on the Actions page of the conversation rail. That page MUST NOT cover the transcript. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
+
+#### Scenario: Hide details while an answer streams
+
+- **WHEN** a user disables detailed streams during generation and expands one tool result
+- **THEN** answer text continues, other raw tool input and output stay collapsed, the chosen result opens independently and execution/content identity remains unchanged.
+
+#### Scenario: Interrupt during compact presentation
+
+- **WHEN** an approval, typed question or error occurs with detailed streams hidden
+- **THEN** the actionable card remains visible and cannot be mistaken for continuing generation or hidden by collapsing activity.
+
+#### Scenario: Actions on a saved answer
+
+- **WHEN** a saved assistant answer is shown
+- **THEN** Copy, Regenerate answer and Branch are on that answer, and Retry task stays in the conversation menu until the user confirms the possible repeated effects.
+
+#### Scenario: Copy a presented chat block
+
+- **WHEN** a user copies a chat code block, tool input, tool output or file difference
+- **THEN** that block's text is copied without changing the conversation.
+
+#### Scenario: Planning stays visible while details are hidden
+
+- **WHEN** detailed streams are off and the agent updates its todo list or edits a file
+- **THEN** the checklist and the one-line activity row stay visible
+- **AND** the raw tool arguments stay collapsed.
+
+#### Scenario: Follow the newest line while a reply is written
+
+- **WHEN** a long reply is streaming and the person is at the bottom of the transcript
+- **THEN** the newest text stays in view as it arrives
+- **AND** earlier finished messages stay where they were.
+
+#### Scenario: Scrolling away keeps the person's place
+
+- **WHEN** the person scrolls up during a reply, or selects text in the transcript
+- **THEN** the view stays where they left it until they return to the bottom
+- **AND** the selected text is not cleared by the next tokens.
+
+#### Scenario: Speed updates leave the text alone
+
+- **WHEN** generation speed or context usage updates during a long reply
+- **THEN** the readout changes and the transcript text, scroll position, and next tokens are undisturbed.
+
+#### Scenario: Open reasoning stays fully readable
+
+- **WHEN** reasoning is open during a long trace and the person then scrolls up inside that section
+- **THEN** the section was following the newest line until that scroll
+- **AND** the earlier reasoning remains reachable.
+
 ### Requirement: API-026 - Show planning and file activity as it happens
 
 While an assistant turn runs, and when that turn is reopened, Chat SHALL show planning and tool activity from the projected tool calls. This is visible with detailed streams on or off.
@@ -82,6 +174,21 @@ Choosing a file identity line opens the dock on that change, or on the file when
 - **WHEN** a person opens a finished shell line
 - **THEN** the command and its output are the first content
 - **AND** the internal tool name and the raw arguments stay behind a further disclosure.
+
+### Requirement: API-028 - Confirm before swapping the loaded model
+
+Changing or unloading a model SHALL require explicit reviewed confirmation. An explicit Apply & reload or Unload action on that reviewed state SHALL count as confirmation. The confirmation names the conversation that will be kept and any work that must finish or be stopped. It MUST NOT unload a model as a side effect of choosing a different row. After confirmation, the conversation, its draft, and its history remain. The screen shows waiting, loading, or the failure, and the draft is still there if loading fails.
+
+#### Scenario: Swap during a quiet chat
+
+- **WHEN** a person chooses another model and confirms
+- **THEN** the same conversation stays open
+- **AND** the previous model is not unloaded until that confirmation.
+
+#### Scenario: Swap while work is running
+
+- **WHEN** a reply or a Lab run is still using the model
+- **THEN** the confirmation names that work and does not unload it silently.
 
 ## ADDED Requirements
 
