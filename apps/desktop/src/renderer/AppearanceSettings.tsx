@@ -84,7 +84,7 @@ const AppearanceRow = memo(function AppearanceRow({ token, value }: { token: App
       <div className="appearance-controls">
         <AppearanceControl token={token} value={value} />
       </div>
-      <div className="appearance-sample" style={sampleStyle(token, value)}>{sampleText(token)}</div>
+      <AppearanceSample token={token} value={value} />
     </div>
   );
 });
@@ -209,19 +209,82 @@ function parseShadow(value: string): { x: number; y: number; blur: number; sprea
   return { x: Number(match[1]), y: Number(match[2]), blur: Number(match[3]), spread: match[4] == null ? null : Number(match[4]), color: match[5] };
 }
 
-function sampleStyle(token: AppearanceToken, value: string): { background?: string; color?: string; fontSize?: string; borderRadius?: string; padding?: string; opacity?: string; fontFamily?: string; boxShadow?: string } {
-  if (token.kind === "color") return token.property === "color" ? { color: value, background: "var(--bg)" } : { background: value };
-  if (token.kind === "family") return { fontFamily: value };
-  if (token.kind === "shadow") return { boxShadow: value, background: "var(--bg-panel)" };
-  if (token.property === "font-size") return { fontSize: value };
-  if (token.property.includes("radius")) return { borderRadius: value, background: "var(--bg-panel)" };
-  if (token.property === "opacity") return { opacity: value, background: "var(--accent)" };
-  if (token.property.includes("padding") || token.property === "gap") return { padding: value, background: "var(--bg-panel)" };
-  return { background: "var(--bg-panel)" };
+function AppearanceSample({ token, value }: { token: AppearanceToken; value: string }) {
+  return <div className="appearance-sample" aria-hidden="true">{sampleBody(token, value)}</div>;
 }
 
-function sampleText(token: AppearanceToken): string {
-  if (token.property === "font-size" || token.kind === "family") return "Text";
-  if (token.kind === "color" && token.property === "color") return "Text";
-  return "";
+function sampleBody(token: AppearanceToken, value: string) {
+  if (token.kind === "color") {
+    if (token.id === "palette-text" || token.id === "palette-muted") {
+      return <span className="appearance-swatch writes" style={{ background: "var(--bg)", color: value }}>Text</span>;
+    }
+    if (token.id === "palette-border") {
+      return <span className="appearance-swatch" style={{ background: "var(--bg-panel)", borderColor: value }} />;
+    }
+    return <span className="appearance-swatch" style={{ background: value }} />;
+  }
+  if (token.kind === "family") return <span className="appearance-type" style={{ fontFamily: value }}>Ag</span>;
+  if (token.kind === "shadow") return <span className="appearance-shadow" style={{ boxShadow: value }} />;
+  if (token.property === "font-size") return <span className="appearance-type" style={{ fontSize: value }}>Ag</span>;
+  if (token.property === "font-weight") return <span className="appearance-type" style={{ fontWeight: value }}>Ag</span>;
+  if (token.property === "line-height") {
+    return <span className="appearance-type appearance-leading" style={{ lineHeight: value }}>Line<br />spacing</span>;
+  }
+  if (token.property === "letter-spacing") return <span className="appearance-type" style={{ letterSpacing: value }}>Wide</span>;
+  if (token.property.includes("radius")) {
+    return <span className="appearance-radius" style={{ borderRadius: value }} />;
+  }
+  if (token.id.startsWith("pad-")) {
+    return <span className="appearance-pad" style={{ padding: capLength(value, 40) }}><b>Inset</b></span>;
+  }
+  if (token.id.startsWith("space-")) {
+    return <span className="appearance-gap" style={{ gap: capLength(value, 32) }}><i /><i /></span>;
+  }
+  if (token.id.startsWith("icon-") && token.id !== "icon-stroke") {
+    const size = Math.min(lengthAmount(value) ?? 16, 40);
+    return <span className="appearance-icon" style={{ width: size, height: size }} />;
+  }
+  if (token.id.startsWith("control-height")) {
+    return <span className="appearance-control" style={{ height: capLength(value, 48) }} />;
+  }
+  if (token.id.startsWith("layout-")) {
+    return <span className="appearance-meter"><i style={{ width: meterWidth(value) }} /></span>;
+  }
+  if (token.id === "line-hairline" || token.id === "line-strong" || token.id === "line-mark" || token.id === "focus-ring" || token.id === "icon-stroke") {
+    return <span className="appearance-line" style={{ borderTopWidth: token.unit === "px" ? capLength(value, 8) : "2px" }} />;
+  }
+  if (token.id === "focus-offset") {
+    return <span className="appearance-offset" style={{ outlineOffset: capLength(value, 8) }} />;
+  }
+  if (token.property === "opacity" || token.id.startsWith("fade-")) {
+    return <span className="appearance-fade" style={{ opacity: value }} />;
+  }
+  if (token.id.startsWith("tint-")) {
+    return <span className="appearance-wash" style={{ background: `color-mix(in srgb, var(--accent) ${value}, var(--bg-panel))` }} />;
+  }
+  if (token.id === "effect-blur") {
+    return <span className="appearance-blur" style={{ filter: `blur(${capLength(value, 8)})` }} />;
+  }
+  return <span className="appearance-swatch" style={{ background: "var(--bg-panel)" }} />;
+}
+
+function lengthAmount(value: string): number | null {
+  const match = /^(-?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/i.exec(value.trim());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  if (match[2] === "rem") return amount * 14;
+  if (match[2] === "%") return amount;
+  return amount;
+}
+
+function capLength(value: string, cap: number): string {
+  const amount = lengthAmount(value);
+  if (amount == null) return value;
+  return `${Math.min(Math.max(amount, 0), cap)}px`;
+}
+
+function meterWidth(value: string): string {
+  const amount = lengthAmount(value) ?? 0;
+  return `${Math.max(8, Math.min(100, (amount / 1500) * 100))}%`;
 }

@@ -227,8 +227,30 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
       {message ? <p role="status" className="notice">{message}</p> : null}
 
-      <div className="packet03-grid settings-preferences-grid">
+      <div className="settings-preferences">
         <section className="packet03-item">
+          <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={preferences.attention_notifications}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
+            />
+            Notify when work needs attention
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={preferences.success_notifications}
+              disabled={preferenceControlsDisabled}
+              onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
+            />
+            Notify when work finishes
+          </label>
+          <p className="hint">Attention includes approvals, questions and failures.</p>
+        </section>
+        <section className="packet03-item settings-appearance">
           <h3>Appearance</h3>
           <label className="settings-theme">
             Theme
@@ -252,28 +274,6 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
             Show reasoning and tool details by default
           </label>
           <AppearanceSettings theme={preferences.theme} />
-        </section>
-        <section className="packet03-item">
-          <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={preferences.attention_notifications}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ attention_notifications: event.target.checked })}
-            />
-            Notify when work needs attention
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={preferences.success_notifications}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ success_notifications: event.target.checked })}
-            />
-            Notify when work finishes
-          </label>
-          <p className="hint">Attention includes approvals, questions and failures.</p>
         </section>
       </div>
 
