@@ -12,7 +12,7 @@ export function ModelDeletion({ kind, id, name, onDeleted }: { kind: "bundle" | 
   const [busy, setBusy] = useState(false);
   const [permanent, setPermanent] = useState(false);
   const pending = useRef(false);
-  const noun = kind === "bundle" ? "model installation" : "preset";
+  const noun = kind === "bundle" ? "model installation" : "configuration";
   async function inspect(deleteFiles = permanent) {
     if (pending.current) return;
     pending.current = true;

@@ -12,6 +12,7 @@ from pathlib import Path
 import argparse
 from contextlib import nullcontext
 import json
+import logging
 import os
 import sqlite3
 import fnmatch
@@ -104,10 +105,14 @@ class ImportJobRunner:
                     continue
                 bundle = self.store.get_bundle(job.bundle_id or "")
                 if bundle is not None and bundle.status == ImportStatus.complete:
+                    configuration_error = self._create_job_recipes(job, bundle, recovering=True)
                     reconciled.append(self.store.update_job_fields(job.id, status=ImportStatus.complete,
                         finished_at=utc_now(), updated_at=utc_now(), cancel_requested=False,
                         transfer_pid=None, transfer_create_time=None,
-                        progress=ImportProgress(stage=ImportStage.done, message="Recovered completed installation")))
+                        configuration_error=configuration_error,
+                        progress=ImportProgress(stage=ImportStage.done,
+                            message="Recovered installation; response configurations need attention" if configuration_error
+                                else "Recovered completed installation")))
                     continue
                 reconciled.append(
                     self.store.put_job(
@@ -129,14 +134,32 @@ class ImportJobRunner:
     def start_huggingface(self, request: HuggingFaceImportRequest, *, retry_of: str | None = None) -> ImportJob:
         with self._job_lock:
             listing = self.bundles.hf.inspect(repo_id=request.repo_id, revision=request.revision)
-            pinned = request.model_copy(update={"repo_id": listing.repo_id, "revision": listing.resolved_revision})
+            if request.default_recipe_id and request.default_recipe_id not in request.recipe_ids:
+                raise ManagerError("The default recipe must also be selected.", code="recipe_default", status_code=400)
+            selected_files = list(request.allow_patterns or [])
+            if request.recipe_ids:
+                with_recipes = self.bundles.hf.inspect(repo_id=listing.repo_id,
+                    revision=listing.resolved_revision, include_recipes=True)
+                available = {item.id for item in with_recipes.response_recipes}
+                if len(request.recipe_ids) != len(set(request.recipe_ids)) or any(item not in available for item in request.recipe_ids):
+                    raise ManagerError("Selected response recipes no longer match the pinned model card. Inspect it again.",
+                        code="recipe_stale", status_code=409)
+                card_name = next((name for name in listing.file_sizes
+                    if "/" not in name and name.casefold() == "readme.md"), None)
+                if card_name is None:
+                    raise ManagerError("This model has no pinned README for response recipes.",
+                        code="recipe_card_missing", status_code=409)
+                if card_name not in selected_files:
+                    selected_files.append(card_name)
+            pinned = request.model_copy(update={"repo_id": listing.repo_id, "revision": listing.resolved_revision,
+                "allow_patterns": selected_files if request.allow_patterns is not None or request.recipe_ids else None})
             staging = stable_hf_staging_path(
                 self.paths.state,
                 repo_id=pinned.repo_id,
                 revision=pinned.revision,
-                allow_patterns=request.allow_patterns,
+                allow_patterns=pinned.allow_patterns,
             )
-            selected_bytes = self._selected_known_bytes(listing, request.allow_patterns)
+            selected_bytes = self._selected_known_bytes(listing, pinned.allow_patterns)
             if selected_bytes:
                 self._preflight_hf_space(staging, self._future_install_root(), selected_bytes)
             self._require_no_active_staging(staging)
@@ -150,13 +173,15 @@ class ImportJobRunner:
                 repo_id=pinned.repo_id,
                 requested_revision=request.revision,
                 resolved_revision=pinned.revision,
-                allow_patterns=request.allow_patterns,
+                allow_patterns=pinned.allow_patterns,
+                recipe_ids=list(request.recipe_ids),
+                default_recipe_id=request.default_recipe_id,
                 staging_path=str(staging),
                 install_root=str(self._future_install_root()),
                 retry_of=retry_of,
                 progress=ImportProgress(stage=ImportStage.queued, message="Waiting to start", bytes_total=selected_bytes,
-                    files_total=len([name for name in listing.file_sizes if request.allow_patterns is None or
-                        any(fnmatch.fnmatchcase(name, pattern) for pattern in request.allow_patterns)]) or None),
+                    files_total=len([name for name in listing.file_sizes if pinned.allow_patterns is None or
+                        any(fnmatch.fnmatchcase(name, pattern) for pattern in pinned.allow_patterns)]) or None),
             )
             self.store.put_job(job)
         return self._launch(job, pinned)
@@ -285,6 +310,8 @@ class ImportJobRunner:
                 revision=job.resolved_revision or job.requested_revision or "main",
                 allow_patterns=job.allow_patterns,
                 display_name=job.display_name,
+                recipe_ids=list(job.recipe_ids),
+                default_recipe_id=job.default_recipe_id,
             )
             retried = self.start_huggingface(request, retry_of=job.id)
         else:
@@ -854,6 +881,7 @@ class ImportJobRunner:
                     }
                 )
             )
+        configuration_error = self._create_job_recipes(job, bundle)
         return self.store.put_job(
             current.model_copy(
                 update={
@@ -862,11 +890,56 @@ class ImportJobRunner:
                     "resolved_revision": download.resolved_revision,
                     "finished_at": utc_now(),
                     "updated_at": utc_now(),
-                    "progress": ImportProgress(stage=ImportStage.done, message="Import complete"),
+                    "progress": ImportProgress(stage=ImportStage.done,
+                        message="Model installed; response configurations need attention" if configuration_error else "Import complete"),
                     "error": None,
+                    "configuration_error": configuration_error,
                 }
             )
         )
+
+    def _create_job_recipes(self, job: ImportJob, bundle: ModelBundle, *, recovering: bool = False) -> str | None:
+        if not job.recipe_ids:
+            return None
+        try:
+            if recovering and bundle.huggingface_configuration is None:
+                from workbench_backend.inference.hf_configuration import configuration_from_download
+                payload = {}
+                if job.staging_path:
+                    result_path = Path(job.staging_path) / "download-result.json"
+                    try:
+                        payload = json.loads(result_path.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        pass
+                download = HuggingFaceDownload(
+                    repo_id=job.repo_id or bundle.source.repo_id or "",
+                    requested_revision=job.requested_revision or job.resolved_revision or "main",
+                    resolved_revision=job.resolved_revision or bundle.source.resolved_revision or "",
+                    local_dir=Path(job.staging_path or self.paths.state),
+                    source_repo_id=payload.get("source_repo_id"),
+                    source_revision=payload.get("source_revision"),
+                )
+                configured = configuration_from_download(bundle, download)
+                bundle = self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": configured}))
+            elif recovering and bundle.huggingface_configuration is not None and not all(
+                recipe_id in {item.id for item in bundle.huggingface_configuration.response_recipes}
+                for recipe_id in job.recipe_ids
+            ):
+                from workbench_backend.inference.hf_configuration import response_recipes_from_bundle_card
+                from workbench_backend.inference.schemas import ResponseRecipe
+                recipes, note = response_recipes_from_bundle_card(bundle)
+                if note is None:
+                    refreshed = bundle.huggingface_configuration.model_copy(update={
+                        "response_recipes": [ResponseRecipe.model_validate(item) for item in recipes]})
+                    bundle = self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": refreshed}))
+            from workbench_backend.inference.recipe_configurations import create_recipe_configurations
+            create_recipe_configurations(self.store, bundle.id, job.recipe_ids, job.default_recipe_id)
+            return None
+        except (ManagerError, OSError, ValueError) as exc:
+            return exc.message if isinstance(exc, ManagerError) else str(exc)
+        except Exception:
+            logging.getLogger(__name__).exception("Response configuration creation failed after model installation")
+            return "Model installed, but response configurations could not be saved. Open the model card and try again."
 
     def _future_install_root(self) -> Path:
         return Path(self.store.get_setting(FUTURE_INSTALL_ROOT_KEY) or self.paths.models).resolve()

@@ -138,10 +138,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ repo_id, revision }),
     }),
-  importHf: (repo_id: string, revision: string, allow_patterns: string[]) =>
+  importHf: (repo_id: string, revision: string, allow_patterns: string[], recipe_ids: string[] = [], default_recipe_id: string | null = null) =>
     request<ImportJob>("/v1/imports/huggingface", {
       method: "POST",
-      body: JSON.stringify({ repo_id, revision, allow_patterns }),
+      body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id }),
+    }),
+  refreshResponseRecipes: (bundleId: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST" }),
+  createRecipeConfigurations: (bundleId: string, recipe_ids: string[], default_recipe_id: string | null = null) =>
+    request<{ bundle: ModelBundle; configurations: RunProfile[] }>(`/v1/bundles/${bundleId}/response-recipes/configurations`, {
+      method: "POST",
+      body: JSON.stringify({ recipe_ids, default_recipe_id }),
     }),
   inspect: (bundleId: string) => request<InspectReport>(`/v1/bundles/${bundleId}/inspect`),
   modelConfiguration: (bundleId: string, deploymentId?: string, refresh = false) => request<BundleConfigurationOptions>(`/v1/bundles/${bundleId}/configuration-options?refresh=${refresh}${deploymentId ? `&deployment_id=${encodeURIComponent(deploymentId)}` : ""}`),

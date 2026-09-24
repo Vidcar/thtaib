@@ -71,6 +71,27 @@ class BundleFile(BaseModel):
     ownership: Literal["managed", "external"] = "managed"
 
 
+class ResponseRecipe(BaseModel):
+    id: str
+    name: str
+    section: str
+    per_request: dict[str, Any] = Field(default_factory=dict)
+    reasoning: Literal["on", "off"]
+    source_repo_id: str
+    source_revision: str
+    card_sha256: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class ResponseRecipeOrigin(BaseModel):
+    recipe_id: str
+    name: str
+    source_repo_id: str
+    source_revision: str
+    card_sha256: str
+    section: str
+
+
 class HuggingFaceConfiguration(BaseModel):
     source_repo_id: str | None = None
     source_revision: str | None = None
@@ -81,6 +102,8 @@ class HuggingFaceConfiguration(BaseModel):
     template_differs: bool = False
     template_compatible: bool | None = None
     generation_defaults: dict[str, Any] = Field(default_factory=dict)
+    response_recipes: list[ResponseRecipe] = Field(default_factory=list)
+    metadata_refreshed_at: str | None = None
     unsupported: dict[str, str] = Field(default_factory=dict)
 
 
@@ -159,6 +182,9 @@ class ImportJob(BaseModel):
     cancel_requested: bool = False
     retry_of: str | None = None
     repair_of_bundle_id: str | None = None
+    recipe_ids: list[str] = Field(default_factory=list)
+    default_recipe_id: str | None = None
+    configuration_error: str | None = None
 
 
 class StorageLocation(BaseModel):
@@ -187,6 +213,8 @@ class HuggingFaceImportRequest(BaseModel):
     revision: str = "main"
     allow_patterns: list[str] | None = None
     display_name: str | None = None
+    recipe_ids: list[str] = Field(default_factory=list)
+    default_recipe_id: str | None = None
 
 
 class ChatTemplateSelectionRequest(BaseModel):
@@ -231,6 +259,8 @@ class HubRepository(BaseModel):
     file_sizes: dict[str, int | None] = Field(default_factory=dict)
     source: HubSource | None = None
     gguf_candidates: list[HubSearchResult] = Field(default_factory=list)
+    file_hint: str | None = None
+    response_recipes: list[ResponseRecipe] = Field(default_factory=list)
 
 
 class LocalImportRequest(BaseModel):
@@ -286,6 +316,7 @@ class RunProfile(BaseModel):
     equivalent_configuration_ids: list[str] = Field(default_factory=list, json_schema_extra={"readOnly": True})
     merged_into_configuration_id: str | None = Field(default=None, json_schema_extra={"readOnly": True})
     configuration_origin: Literal["legacy", "recovered", "named"] = Field(default="legacy", json_schema_extra={"readOnly": True})
+    recipe_origin: ResponseRecipeOrigin | None = None
     bags: SettingsBags
     created_at: str
     updated_at: str
@@ -294,6 +325,16 @@ class RunProfile(BaseModel):
 
 class DefaultConfigurationRequest(BaseModel):
     configuration_id: str
+
+
+class ResponseRecipeConfigurationRequest(BaseModel):
+    recipe_ids: list[str] = Field(default_factory=list)
+    default_recipe_id: str | None = None
+
+
+class ResponseRecipeConfigurationResult(BaseModel):
+    bundle: ModelBundle
+    configurations: list[RunProfile]
 
 
 class ModelConfigurationWriteRequest(ProfileWriteRequest):

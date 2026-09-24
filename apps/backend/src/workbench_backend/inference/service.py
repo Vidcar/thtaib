@@ -34,6 +34,7 @@ from workbench_backend.inference.schemas import (
     DeploymentStatus,
     DuplicateProfileRequest,
     HuggingFaceImportRequest,
+    HuggingFaceConfiguration,
     ImportJob,
     InspectReport,
     GgufRuntimeMetadata,
@@ -49,6 +50,8 @@ from workbench_backend.inference.schemas import (
     ReconfigureDeploymentRequest,
     RenameProfileRequest,
     RunProfile,
+    ResponseRecipe,
+    ResponseRecipeConfigurationResult,
     RuntimeManifest,
     SettingsBags,
     SmokeResult,
@@ -305,6 +308,67 @@ class ModelManager:
         self._require_profile_bundle(bundle_id)
         return [profile for profile in self.list_profiles() if profile.bundle_id == bundle_id]
 
+    def refresh_response_recipes(self, bundle_id: str) -> ModelBundle:
+        """Refresh only a pinned model card; weights and saved setups stay untouched."""
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown model.", code="bundle_missing", status_code=404)
+        source = bundle.source
+        if source.kind.value != "huggingface" or not source.repo_id or not source.resolved_revision:
+            raise ManagerError("Only revision-pinned Hugging Face models can refresh response recipes.",
+                code="recipe_source", status_code=400)
+        from workbench_backend.inference.hf_configuration import response_recipes_from_bundle_card
+        from workbench_backend.inference.hf_recipes import parse_model_card_recipes
+        card_record = next((item for item in bundle.files if item.name.casefold() == "readme.md"), None)
+        recipes, local_note = response_recipes_from_bundle_card(bundle)
+        if card_record is None or local_note is not None:
+            card_name = card_record.name if card_record else None
+            if card_name is None:
+                listing = self.bundles.hf.inspect(repo_id=source.repo_id, revision=source.resolved_revision)
+                if listing.resolved_revision != source.resolved_revision:
+                    raise ManagerError("The model card listing differs from this model's pinned revision.",
+                        code="recipe_source_changed", status_code=409)
+                card_name = next((name for name in listing.guidance_files
+                    if "/" not in name and name.casefold() == "readme.md"), None)
+                if card_name is None:
+                    raise ManagerError("The pinned repository has no root model card.",
+                        code="recipe_card_missing", status_code=404)
+            card_text, digest = self.bundles.hf.read_pinned_card(source.repo_id, source.resolved_revision,
+                filename=card_name,
+                expected_sha256=card_record.sha256 if card_record else None)
+            recipes = parse_model_card_recipes(card_text, repo_id=source.repo_id,
+                revision=source.resolved_revision, sha256=digest)
+        with self.store.configuration_lock():
+            current = self.store.get_bundle(bundle_id)
+            if current is None or current.source != source:
+                raise ManagerError("Model source changed while refreshing its card. Try again.",
+                    code="recipe_source_changed", status_code=409)
+            config = current.huggingface_configuration or HuggingFaceConfiguration()
+            unsupported = dict(config.unsupported)
+            if local_note:
+                unsupported["README.md"] = f"{local_note} Recipes were read from the pinned repository."
+            else:
+                unsupported.pop("README.md", None)
+            updated = config.model_copy(update={"response_recipes": [ResponseRecipe.model_validate(item) for item in recipes],
+                "metadata_refreshed_at": utc_now(), "unsupported": unsupported})
+            return self.store.put_bundle(current.model_copy(update={"huggingface_configuration": updated}))
+
+    def create_response_recipe_configurations(
+        self, bundle_id: str, recipe_ids: list[str], default_recipe_id: str | None = None,
+    ) -> ResponseRecipeConfigurationResult:
+        from workbench_backend.inference.recipe_configurations import create_recipe_configurations
+        result = create_recipe_configurations(self.store, bundle_id, recipe_ids, default_recipe_id)
+        recipe_profiles = {profile.recipe_origin.recipe_id: profile for profile in self.store.list_profiles()
+            if profile.bundle_id == bundle_id and profile.recipe_origin is not None}
+        for job in self.store.list_jobs():
+            if job.bundle_id != bundle_id or not job.configuration_error:
+                continue
+            if all(recipe_id in recipe_profiles for recipe_id in job.recipe_ids) and (
+                not job.default_recipe_id or result.bundle.default_configuration_id == recipe_profiles[job.default_recipe_id].id
+            ):
+                self.store.put_job(job.model_copy(update={"configuration_error": None, "updated_at": utc_now()}))
+        return result
+
     def canonical_configuration(self, configuration_id: str) -> RunProfile:
         profile = self.get_profile(configuration_id)
         if profile.bundle_id:
@@ -449,6 +513,7 @@ class ModelManager:
                 "updated_at": now,
                 "revision": 1,
                 "configuration_origin": "named",
+                "recipe_origin": None,
                 "merged_into_configuration_id": None,
             },
             deep=True,

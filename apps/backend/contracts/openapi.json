@@ -5653,6 +5653,17 @@
             "title": "Auxiliary Ggufs",
             "type": "array"
           },
+          "file_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Hint"
+          },
           "file_sha256": {
             "additionalProperties": {
               "anyOf": [
@@ -5709,6 +5720,13 @@
           "resolved_revision": {
             "title": "Resolved Revision",
             "type": "string"
+          },
+          "response_recipes": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseRecipe"
+            },
+            "title": "Response Recipes",
+            "type": "array"
           },
           "source": {
             "anyOf": [
@@ -5872,6 +5890,24 @@
             "title": "Generation Defaults",
             "type": "object"
           },
+          "metadata_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Refreshed At"
+          },
+          "response_recipes": {
+            "items": {
+              "$ref": "#/components/schemas/ResponseRecipe"
+            },
+            "title": "Response Recipes",
+            "type": "array"
+          },
           "source_note": {
             "anyOf": [
               {
@@ -5975,6 +6011,17 @@
             ],
             "title": "Allow Patterns"
           },
+          "default_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Recipe Id"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -5985,6 +6032,13 @@
               }
             ],
             "title": "Display Name"
+          },
+          "recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recipe Ids",
+            "type": "array"
           },
           "repo_id": {
             "title": "Repo Id",
@@ -6135,9 +6189,31 @@
             "title": "Cancel Requested",
             "type": "boolean"
           },
+          "configuration_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Error"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "default_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Recipe Id"
           },
           "display_name": {
             "anyOf": [
@@ -6203,6 +6279,13 @@
           },
           "progress": {
             "$ref": "#/components/schemas/ImportProgress"
+          },
+          "recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recipe Ids",
+            "type": "array"
           },
           "repair_of_bundle_id": {
             "anyOf": [
@@ -9205,6 +9288,147 @@
         "title": "ResourceUsage",
         "type": "object"
       },
+      "ResponseRecipe": {
+        "properties": {
+          "card_sha256": {
+            "title": "Card Sha256",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "per_request": {
+            "additionalProperties": true,
+            "title": "Per Request",
+            "type": "object"
+          },
+          "reasoning": {
+            "enum": [
+              "on",
+              "off"
+            ],
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "source_repo_id": {
+            "title": "Source Repo Id",
+            "type": "string"
+          },
+          "source_revision": {
+            "title": "Source Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "section",
+          "reasoning",
+          "source_repo_id",
+          "source_revision",
+          "card_sha256"
+        ],
+        "title": "ResponseRecipe",
+        "type": "object"
+      },
+      "ResponseRecipeConfigurationRequest": {
+        "properties": {
+          "default_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Recipe Id"
+          },
+          "recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Recipe Ids",
+            "type": "array"
+          }
+        },
+        "title": "ResponseRecipeConfigurationRequest",
+        "type": "object"
+      },
+      "ResponseRecipeConfigurationResult": {
+        "properties": {
+          "bundle": {
+            "$ref": "#/components/schemas/ModelBundle"
+          },
+          "configurations": {
+            "items": {
+              "$ref": "#/components/schemas/RunProfile"
+            },
+            "title": "Configurations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundle",
+          "configurations"
+        ],
+        "title": "ResponseRecipeConfigurationResult",
+        "type": "object"
+      },
+      "ResponseRecipeOrigin": {
+        "properties": {
+          "card_sha256": {
+            "title": "Card Sha256",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "recipe_id": {
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "source_repo_id": {
+            "title": "Source Repo Id",
+            "type": "string"
+          },
+          "source_revision": {
+            "title": "Source Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_id",
+          "name",
+          "source_repo_id",
+          "source_revision",
+          "card_sha256",
+          "section"
+        ],
+        "title": "ResponseRecipeOrigin",
+        "type": "object"
+      },
       "RetainedAsset": {
         "properties": {
           "access_scope": {
@@ -10002,6 +10226,16 @@
             ],
             "readOnly": true,
             "title": "Merged Into Configuration Id"
+          },
+          "recipe_origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseRecipeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "revision": {
             "default": 1,
@@ -13504,6 +13738,94 @@
           }
         },
         "summary": "Repair Bundle"
+      }
+    },
+    "/v1/bundles/{bundle_id}/response-recipes/configurations": {
+      "post": {
+        "operationId": "create_response_recipe_configurations_v1_bundles__bundle_id__response_recipes_configurations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponseRecipeConfigurationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseRecipeConfigurationResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Response Recipe Configurations"
+      }
+    },
+    "/v1/bundles/{bundle_id}/response-recipes/refresh": {
+      "post": {
+        "operationId": "refresh_response_recipes_v1_bundles__bundle_id__response_recipes_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Response Recipes"
       }
     },
     "/v1/chat/conversations": {

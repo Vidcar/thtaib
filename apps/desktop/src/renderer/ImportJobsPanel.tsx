@@ -9,7 +9,8 @@ import { Icon } from "./Icon";
 import type { ImportJob } from "./types";
 
 const active = (job: ImportJob) => ["pending", "running", "stopping"].includes(job.status);
-const needsAttention = (job: ImportJob) => ["stopped", "failed", "interrupted"].includes(job.status);
+const retryable = (job: ImportJob) => ["stopped", "failed", "interrupted"].includes(job.status);
+const needsAttention = (job: ImportJob) => retryable(job) || (job.status === "complete" && Boolean(job.configuration_error));
 const stageNames: Record<string, string> = { queued: "Waiting", metadata: "Resolving files", transfer: "Downloading", verify: "Verifying", install: "Installing", repair: "Repairing", cleanup: "Cleaning up", done: "Complete" };
 
 export function useImportJobs(revision: number, onCompleted: () => Promise<void>) {
@@ -59,7 +60,7 @@ export function useImportJobs(revision: number, onCompleted: () => Promise<void>
 
 type ImportJobsState = ReturnType<typeof useImportJobs>;
 
-export function ImportJobsPanel({ state }: { state: ImportJobsState }) {
+export function ImportJobsPanel({ state, onOpenModel }: { state: ImportJobsState; onOpenModel?: (bundleId: string) => void }) {
   const { jobs, error, busy, action } = state;
   const [confirmDiscard, setConfirmDiscard] = useState("");
   const renderJob = (job: ImportJob) => {
@@ -73,20 +74,22 @@ export function ImportJobsPanel({ state }: { state: ImportJobsState }) {
         <span className="import-row-status hint" role="status">{status}</span>
         <div className="import-row-actions">
           {active(job) ? <button disabled={Boolean(busy) || (job.status === "stopping" && !job.error)} onClick={() => void action(job, () => api.cancelImport(job.id))}><Icon name="stop" size={14} />{job.status === "stopping" && job.error ? "Retry stop" : "Cancel"}</button> : null}
-          {needsAttention(job) ? <><button disabled={Boolean(busy)} onClick={() => void action(job, () => api.retryImport(job.id))}><Icon name="refresh" size={14} />Retry</button><button disabled={Boolean(busy)} onClick={() => setConfirmDiscard(job.id)}><Icon name="trash" size={14} />Discard</button></> : null}
+          {retryable(job) ? <><button disabled={Boolean(busy)} onClick={() => void action(job, () => api.retryImport(job.id))}><Icon name="refresh" size={14} />Retry</button><button disabled={Boolean(busy)} onClick={() => setConfirmDiscard(job.id)}><Icon name="trash" size={14} />Discard</button></> : null}
+          {job.status === "complete" && job.configuration_error && job.bundle_id && onOpenModel ? <button type="button" onClick={() => onOpenModel(job.bundle_id!)}>Open model recipes</button> : null}
           {job.status === "discarded" ? <button disabled={Boolean(busy)} onClick={() => void action(job, () => api.discardImport(job.id))}>Clear</button> : null}
         </div>
       </div>
       {active(job) ? <progress aria-label={`${name}: ${status}`} max={1} value={ratio} /> : null}
       {active(job) && job.progress ? <div className="import-progress-summary hint"><span>{job.progress.message ?? "Preparing download…"}</span><span>{ratio !== undefined ? `${Math.round(ratio * 100)}% · ${formatBytes(job.progress.bytes_done)} / ${formatBytes(total!)}` : job.progress.files_total != null ? `${job.progress.files_done} / ${job.progress.files_total} files` : ""}</span></div> : null}
       {job.error && job.status !== "stopped" && job.status !== "discarded" ? <Notice tone="error">{job.error}</Notice> : null}
+      {job.status === "complete" && job.configuration_error ? <Notice tone="warn">Model weights are installed. Its selected configurations need attention: {job.configuration_error}</Notice> : null}
       {confirmDiscard === job.id ? <ConfirmNote confirmLabel="Discard download" cancelLabel="Keep download" disabled={Boolean(busy)} cancelDisabled={false} onConfirm={() => { setConfirmDiscard(""); void action(job, () => api.discardImport(job.id)); }} onCancel={() => setConfirmDiscard("")}>Clear this stopped download and its eligible temporary files? Installed models, shared files and original local files stay.</ConfirmNote> : null}
       <details className="technical-details"><summary>Download details</summary><p className="hint">{name} · Job {job.id}{job.resolved_revision ? ` · revision ${job.resolved_revision}` : ""}{job.progress?.files_total != null ? ` · ${job.progress.files_done} / ${job.progress.files_total} files` : ""}</p></details>
     </li>;
   };
   const running = [...jobs].reverse().filter(active);
   const attention = [...jobs].reverse().filter(needsAttention);
-  const history = [...jobs].reverse().filter(job => ["complete", "discarded"].includes(job.status));
+  const history = [...jobs].reverse().filter(job => ["complete", "discarded"].includes(job.status) && !needsAttention(job));
   return <section className="card import-jobs" aria-label="Model downloads">
     <div className="setting-title"><h3>Downloads</h3><Help label="Downloads">Imports keep running when you leave this tab. Discard clears an incomplete job and only eligible temporary files; installed and shared files stay.</Help></div>
     {error ? <Notice tone="error">{error}</Notice> : null}

@@ -4,9 +4,13 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
+from unittest import TestCase
+from tempfile import TemporaryDirectory
+from urllib.parse import quote
 
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher, describe_repository, repository_id
+from workbench_backend.inference.schemas import ResponseRecipe
 
 
 def info(*names):
@@ -110,3 +114,70 @@ class HubSelectionTests(unittest.TestCase):
             with self.assertRaises(ManagerError):
                 HuggingFaceFetcher().search("   ")
             api.assert_not_called()
+
+
+REPO = "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF"
+REVISION = "c02caef111a8acf987947f35e1e288aa5450e184"
+STANDARD = "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-IQ4_XS.gguf"
+LOW = "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf"
+CARD = """# Demo
+<B>Qwen Model Settings (suggested):</B>
+- Thinking mode for general tasks: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
+- Thinking mode for precise coding: temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
+- Instruct (or non-thinking) mode: temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
+"""
+
+
+def _info():
+    return SimpleNamespace(sha=REVISION, card_data=None,
+        siblings=[SimpleNamespace(rfilename=name, size=100, lfs=None)
+            for name in (STANDARD, LOW, "README.md")])
+
+
+class HuggingFaceSelectionTests(TestCase):
+    def test_low_mtp_file_link_retains_exact_pinned_variant_hint(self):
+        url = f"https://huggingface.co/{REPO}?show_file_info={quote(LOW)}"
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            api.return_value.model_info.return_value = _info()
+            listing = HuggingFaceFetcher().inspect(repo_id=url)
+        self.assertEqual(listing.repo_id, REPO)
+        self.assertEqual(listing.resolved_revision, REVISION)
+        self.assertEqual(listing.file_hint, LOW)
+        self.assertTrue(any(LOW in variant.files and variant.complete for variant in listing.variants))
+        self.assertFalse(any("Linked file" in warning for warning in listing.warnings))
+
+    def test_unavailable_linked_file_is_visible_and_not_silently_substituted(self):
+        unavailable = "model-LOW-MTP-IQ4_XS.gguf"
+        url = f"https://huggingface.co/{REPO}?show_file_info={unavailable}"
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            api.return_value.model_info.return_value = _info()
+            listing = HuggingFaceFetcher().inspect(repo_id=url)
+        self.assertEqual(listing.file_hint, unavailable)
+        self.assertTrue(any(unavailable in warning and "not an available" in warning
+            for warning in listing.warnings))
+
+    def test_unsafe_file_hint_is_rejected_before_remote_lookup(self):
+        url = f"https://huggingface.co/{REPO}?show_file_info=..%2F..%2Fsecret.gguf"
+        with patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+            with self.assertRaises(ManagerError) as raised:
+                HuggingFaceFetcher().inspect(repo_id=url)
+            api.assert_not_called()
+        self.assertEqual(raised.exception.code, "hf_file_hint")
+
+    def test_inspect_returns_typed_recipes_from_pinned_readme(self):
+        scratch = Path(__file__).resolve().parents[3] / ".scratch"
+        scratch.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=scratch) as tmp:
+            card = Path(tmp) / "README.md"
+            card.write_text(CARD, encoding="utf-8")
+            with patch("workbench_backend.inference.hf_fetch.HfApi") as api, patch(
+                "workbench_backend.inference.hf_fetch.hf_hub_download", return_value=str(card)) as fetch:
+                api.return_value.model_info.return_value = _info()
+                listing = HuggingFaceFetcher().inspect(repo_id=REPO, include_recipes=True)
+        fetch.assert_called_once_with(repo_id=REPO, filename="README.md", revision=REVISION)
+        self.assertEqual([item.name for item in listing.response_recipes],
+            ["General thinking", "Precise coding", "Non-thinking"])
+        self.assertTrue(all(isinstance(item, ResponseRecipe) for item in listing.response_recipes))
+        self.assertEqual(listing.response_recipes[2].per_request["presence_penalty"], 1.5)
+        self.assertEqual(listing.response_recipes[2].reasoning, "off")
+        self.assertTrue(all(item.source_revision == REVISION for item in listing.response_recipes))

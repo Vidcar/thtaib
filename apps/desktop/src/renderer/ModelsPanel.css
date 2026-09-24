@@ -29,7 +29,10 @@
 .models-surface .model-picker {position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-compact); min-width: 0; max-width: 820px;}
 .models-surface .model-picker-label {font-size: var(--text-small); color: var(--muted); font-weight: var(--weight-medium);}
 .models-surface .model-picker-trigger {display: flex; align-items: center; gap: var(--space-compact); min-width: 0; width: 100%; text-align: left; background: var(--bg-raised); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact) var(--pad-card);}
-.models-surface .model-picker-trigger strong {display: block; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: var(--weight-medium);}
+.models-surface .model-picker-current {display: grid; min-width: 0; flex: 1;}
+.models-surface .model-picker-current strong, .models-surface .model-picker-current small {display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.models-surface .model-picker-current strong {font-weight: var(--weight-medium);}
+.models-surface .model-picker-current small {font-size: var(--text-small); color: var(--muted);}
 .models-surface .model-picker-chevron {font-size: var(--text-heading); line-height: 1; color: var(--muted);}
 .models-surface .model-picker-unsaved {font-size: var(--text-small); color: var(--accent); white-space: nowrap;}
 .models-surface .model-picker-popover {position: absolute; z-index: 50; top: calc(100% + 5px); left: 0; right: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); box-shadow: var(--shadow); min-width: min(320px, 100%);}
@@ -161,6 +164,25 @@
 .models-surface .visible-settings-group h4, .models-surface .response-settings-editor h4 {margin: 0;}
 .models-surface .model-setting-wrap {display: grid; gap: var(--space-tight); align-content: start; min-width: 0;}
 .models-surface .model-effective-hint {display: block; font-size: var(--text-small); line-height: var(--leading-body); overflow-wrap: anywhere;}
+.models-surface .model-effective-readout {display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-tight); min-width: 0; line-height: var(--leading-tight);}
+.models-surface .model-effective-readout strong {font-size: var(--text-body); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;}
+.models-surface .model-effective-readout small {font-size: var(--text-small); color: var(--muted); overflow-wrap: anywhere;}
+.models-surface .model-setting-reset {justify-self: start; min-height: 0; padding: var(--pad-tight) 0; font-size: var(--text-small);}
+.models-surface .model-recipe-library {display: grid; gap: var(--space-compact); margin-top: var(--space-stack); min-width: 0;}
+.models-surface .model-recipe-library :is(p, h3) {margin: 0;}
+.models-surface .model-recipe-library .section-heading {align-items: start; flex-wrap: wrap;}
+.models-surface .model-recipe-library .section-heading > div {min-width: min(300px, 100%); flex: 1;}
+.models-surface .model-recipe-choices {display: grid; gap: var(--space-tight); margin: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); min-width: 0;}
+.models-surface .model-recipe-choices legend {padding: 0 var(--space-tight); font-weight: var(--weight-medium);}
+.models-surface .model-recipe-choice {display: grid; gap: 2px; min-width: 0; padding: var(--pad-compact); border-radius: var(--radius-control); background: var(--bg-panel);}
+.models-surface .model-recipe-choice label {display: flex; align-items: start; gap: var(--space-compact); min-width: 0; margin: 0; cursor: pointer;}
+.models-surface .model-recipe-choice input {min-height: auto; margin-top: 3px; accent-color: var(--accent);}
+.models-surface .model-recipe-choice span {display: grid; gap: 2px; min-width: 0;}
+.models-surface .model-recipe-choice small {font-size: var(--text-small); color: var(--muted); overflow-wrap: anywhere;}
+.models-surface .model-recipe-source {padding-left: 28px;}
+.models-surface .model-recipe-actions {display: flex; align-items: end; flex-wrap: wrap; gap: var(--space-compact);}
+.models-surface .model-recipe-actions label {flex: 1 1 240px; min-width: 0; margin: 0;}
+.models-surface .model-recipe-actions select {display: block; width: 100%; margin-top: var(--space-tight);}
 .models-surface .model-edit-state {padding: var(--pad-tight) var(--pad-compact); border-radius: var(--radius-control); background: var(--bg-panel); border: var(--line-hairline) solid var(--border); color: var(--muted); font-size: var(--text-small); white-space: nowrap;}
 .models-surface .model-edit-state[data-dirty="true"] {border-color: var(--accent); color: var(--text);}
 .models-surface .model-facts-details > section {padding-top: var(--space-stack); margin-top: var(--space-stack); border-top: var(--line-hairline) solid var(--border);}

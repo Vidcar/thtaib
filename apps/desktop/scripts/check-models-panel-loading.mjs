@@ -22,10 +22,14 @@ try {
   const { ModelsPanel } = await vite.ssrLoadModule("/src/renderer/ModelsPanel.tsx");
   await checkModelPicker((await vite.ssrLoadModule("/src/renderer/ModelPicker.tsx")).ModelPicker);
   await checkVariantPresentation(await vite.ssrLoadModule("/src/renderer/modelVariantPresentation.ts"));
+  await checkFileLinkAndRecipes((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
+  await checkInstalledConfigurationWarning((await vite.ssrLoadModule("/src/renderer/ImportJobsPanel.tsx")).ImportJobsPanel);
   const { settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
+  await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkSelectedModelOwnsDetails(ModelsPanel);
+  await checkCardRefreshRetainsNewSelection(ModelsPanel);
   await checkRepositorySelectionLoadsFiles(ModelsPanel);
   await checkRepositoryChoicesAndLateResults((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
   await checkPermanentDeletionPreview((await vite.ssrLoadModule("/src/renderer/ModelDeletion.tsx")).ModelDeletion);
@@ -56,6 +60,18 @@ async function checkModelPicker(ModelPicker) {
     await act(async () => renderer.root.findByProps({ "aria-label": "Search installed models" }).props.onKeyDown({ key: "Enter", preventDefault() {} }));
     assert.deepEqual(chosen, ["short"], "Enter selects the filtered model");
     assert.equal(renderer.root.findAllByProps({ role: "dialog" }).length, 0, "selection closes the picker");
+    await act(async () => renderer.unmount());
+    const standard = { ...bundle("standard", "Same GGUF repository"), primary_path: "D:\\Models\\model-IQ4_XS.gguf" };
+    const low = { ...bundle("low", "Same GGUF repository"), primary_path: "D:\\Models\\model-LOW-MTP-IQ4_XS.gguf" };
+    await act(async () => { renderer = create(React.createElement(ModelPicker, { bundles: [standard, low], selectedId: "standard", dirtyIds: new Set(), onSelect: id => chosen.push(id) })); });
+    assert.ok(renderer.root.findByProps({ className: "model-picker-trigger" }).props["aria-label"].includes("Standard · model-IQ4_XS.gguf"), "trigger accessible name identifies the standard file");
+    assert.ok(textOf(renderer.root.findByProps({ className: "model-picker-trigger" })).includes("Standard"), "trigger visibly distinguishes the selected file");
+    await act(async () => renderer.root.findByProps({ className: "model-picker-trigger" }).props.onClick());
+    assert.ok(textOf(renderer.root.findAllByProps({ role: "option" })[1]).includes("LOW-MTP · model-LOW-MTP-IQ4_XS.gguf"), "options identify the low MTP file even when repository names match");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Search installed models" }).props.onChange({ target: { value: "low-mtp" } }));
+    assert.equal(renderer.root.findAllByProps({ role: "option" }).length, 1, "filename and variant kind are searchable");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Search installed models" }).props.onKeyDown({ key: "Enter", preventDefault() {} }));
+    assert.deepEqual(chosen, ["short", "low"]);
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.document = previousDocument; }
 }
 
@@ -152,9 +168,9 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     });
     assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
     const speculation = renderer.root.findAllByType("select").find(select => select.props.id === "model-spec_type");
-    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["none", "draft-mtp"]);
+    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct inherited choice");
     await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
-    assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "3", "MTP exposes the runtime default draft count");
+    assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "", "MTP draft count stays inherited until explicitly selected");
     const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
     assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");
     assert.equal(renderer.root.findAll(node => node.type === "label" && textOf(node).startsWith("Saved preset")).length, 0, "Models has one configuration editor instead of a second preset selection");
@@ -190,8 +206,143 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "image-input" && node.props.value === "vision").props.onChange());
     download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"] }], "download pins the inspected revision and exact files, escaping glob syntax and deduplicating clicks");
+    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null }], "download pins the inspected revision and exact files, escaping glob syntax and deduplicating clicks");
     assert.equal(completions, 1);
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
+  const originalFetch = globalThis.fetch;
+  const pendingCard = createDeferred();
+  const hfBundle = (id, name) => ({ ...bundle(id, name), source: { kind: "huggingface", repo_id: `org/${id}`, resolved_revision: "a".repeat(40) },
+    huggingface_configuration: { source_verified: false, template_origin: "gguf", generation_defaults: {}, unsupported: {}, response_recipes: [] } });
+  const first = hfBundle("first", "First model"), second = hfBundle("second", "Second model");
+  const active = { id: "second-live", bundle_id: second.id, display_name: "managed:Second", scope: "managed", status: "running", health: { healthy: true }, applied_startup: {}, endpoint: "http://localhost:8080/v1" };
+  globalThis.fetch = async url => {
+    const address = String(url);
+    if (address.endsWith("/v1/bundles")) return jsonResponse([first, second]);
+    if (address.endsWith("/v1/deployments")) return jsonResponse([active]);
+    if (address.endsWith("/v1/profiles") || address.endsWith("/v1/imports")) return jsonResponse([]);
+    if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
+    if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
+    if (address.includes("/configuration-options")) return jsonResponse(configurationOptions());
+    if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
+    if (address.endsWith("/probes")) return jsonResponse({ evidence: [], current_support: {}, current_fingerprint: "now", image_setup: {} });
+    if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
+    if (address.endsWith("/v1/bundles/first/response-recipes/refresh")) return pendingCard.promise;
+    throw new Error(`unexpected fetch ${address}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "first");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Other active models" }).findByType("button").props.onClick(); await tick(); });
+    await act(async () => { pendingCard.resolve(jsonResponse(first)); await tick(); });
+    assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Second model"), "late card refresh retains the newly selected model");
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "second");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkExistingBundleRecipes(ModelResponseRecipes) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let refreshFailures = 1;
+  const model = { ...bundle("bundle-card", "LOW-MTP"), disk_matches: false, source: { kind: "huggingface", repo_id: "org/model", resolved_revision: "a".repeat(40) },
+    huggingface_configuration: { response_recipes: [
+      { id: "general", name: "General thinking", section: "Suggested settings", per_request: { temperature: 1, min_p: 0 }, reasoning: "on", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+      { id: "coding", name: "Precise coding", section: "Coding guidance", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+    ] } };
+  const saved = [{ id: "profile-general", bundle_id: model.id, display_name: "General thinking edited", recipe_origin: { recipe_id: "general", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) } }];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ address: String(url), body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith("/response-recipes/refresh")) {
+      if (refreshFailures-- > 0) throw new Error("pinned card temporarily unavailable");
+      return jsonResponse(model);
+    }
+    if (String(url).endsWith("/response-recipes/configurations")) return jsonResponse({ bundle: model, configurations: saved });
+    throw new Error(`unexpected fetch ${String(url)}`);
+  };
+  let renderer, refreshed = 0;
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelResponseRecipes, { bundle: model, profiles: saved, onChanged: async () => { refreshed++; } })); });
+    assert.ok(textOf(renderer.root).includes("Created from model card as “General thinking edited”"), "edited configurations keep origin without claiming their current values match the card");
+    assert.ok(textOf(renderer.root).includes("Coding guidance"), "each recipe displays its own source section");
+    const checks = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
+    for (const checkbox of checks) await act(async () => checkbox.props.onChange({ target: { checked: true } }));
+    const defaultChoice = renderer.root.findByProps({ id: "model-recipe-default-bundle-card" });
+    assert.equal(defaultChoice.props.value, "", "creating configurations must not silently choose a model default");
+    await act(async () => defaultChoice.props.onChange({ target: { value: "general" } }));
+    const createButton = renderer.root.findAllByType("button").find(node => textOf(node) === "Create selected configurations");
+    assert.equal(createButton.props.disabled, false, "a missing guidance file does not block metadata-only configuration creation");
+    await act(async () => { createButton.props.onClick(); await tick(); });
+    assert.deepEqual(calls[0].body, { recipe_ids: ["general", "coding"], default_recipe_id: "general" });
+    assert.equal(refreshed, 1, "recipe creation refreshes the saved model and configurations");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Card refresh failed: pinned card temporarily unavailable"), "refresh errors are visible without losing saved recipe choices");
+    assert.equal(refreshed, 1, "a failed refresh leaves existing library metadata untouched");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
+    assert.ok(calls[2].address.endsWith("/response-recipes/refresh"), "retry reads only the pinned metadata endpoint rather than importing weights");
+    assert.equal(refreshed, 2);
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkFileLinkAndRecipes(HuggingFaceImport) {
+  const originalFetch = globalThis.fetch;
+  const files = ["model-IQ4_XS.gguf", "model-LOW-MTP-IQ4_XS.gguf", "model-MTP-IQ4_XS.gguf"];
+  const repo_id = "org/model-GGUF";
+  const linked = `https://huggingface.co/${repo_id}?show_file_info=${encodeURIComponent(files[1])}`;
+  let inspected = { repo_id, resolved_revision: "a".repeat(40), file_hint: files[1], variants: files.map((name, index) => ({ name, files: [name], size_bytes: 100 + index, complete: true })), projectors: [], guidance_files: ["README.md"], warnings: [], response_recipes: [
+    { id: "general", name: "General thinking", section: "Suggested settings", per_request: { temperature: 1, min_p: 0 }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+    { id: "coding", name: "Precise coding", section: "Suggested settings", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+    { id: "instruct", name: "Non-thinking", section: "Suggested settings", per_request: { temperature: 0.7, presence_penalty: 1.5 }, reasoning: "off", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+    { id: "invalid", name: "Invalid", section: "Suggested settings", per_request: { temperature: "high" }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+  ] };
+  const calls = [], downloads = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url);
+    if (address.endsWith("/huggingface/inspect")) { calls.push(JSON.parse(init.body)); return jsonResponse(inspected); }
+    if (address.endsWith("/imports/huggingface")) { downloads.push(JSON.parse(init.body)); return jsonResponse({ id: "import", status: "running", bundle_id: null }); }
+    throw new Error(`unexpected fetch ${address}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(HuggingFaceImport, { onStarted: async () => {} })); });
+    const query = renderer.root.findByProps({ id: "model-search-query" });
+    assert.ok(query.props.maxLength >= linked.length, "a pasted file-specific Hugging Face URL must fit in the search field");
+    await act(async () => query.props.onChange({ target: { value: linked } }));
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(calls[0].repo_id, linked, "the full file-specific URL reaches inspection");
+    const choices = renderer.root.findAllByType("input").filter(node => node.props.name === "model-variant");
+    assert.equal(choices.length, 3);
+    assert.equal(choices.find(node => node.props.value === files[1]).props.checked, true, "the linked LOW-MTP variant is selected exactly");
+    assert.ok(choices.find(node => node.props.value === files[1]).props["aria-label"].includes("LOW-MTP"), "the variant kind is accessible");
+    assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "the selected kind and exact file are shown before download");
+    const recipes = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
+    assert.equal(recipes.length, 3, "malformed card settings are hidden rather than offered as selectable recipes");
+    await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
+    await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.onChange());
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct"], default_recipe_id: "general" }], "download retains exact LOW-MTP file and explicit recipe/default choices");
+    inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
+    await act(async () => query.props.onChange({ target: { value: `https://huggingface.co/${repo_id}?show_file_info=missing-IQ4_XS.gguf` } }));
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Linked GGUF file unavailable"), "an unavailable file hint is visible");
+    assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant").props.checked, false, "an unavailable hint cannot fall back to a different file even when only one variant is listed");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkInstalledConfigurationWarning(ImportJobsPanel) {
+  const opened = [];
+  const job = { id: "import", status: "complete", kind: "huggingface", bundle_id: "bundle", error: null, configuration_error: "Could not create the selected recipe", display_name: "LOW-MTP model" };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ImportJobsPanel, { state: { jobs: [job], error: "", busy: "", action: async () => {}, attentionCount: 1 }, onOpenModel: id => opened.push(id) })); });
+    assert.ok(textOf(renderer.root).includes("Installed"), "completed weights remain installed when recipe setup fails");
+    assert.ok(textOf(renderer.root).includes("Could not create the selected recipe"), "configuration failure is visible in Downloads");
+    assert.ok(!renderer.root.findAllByType("button").some(node => textOf(node) === "Retry"), "configuration failure must not suggest downloading weights again");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Open model recipes").props.onClick());
+    assert.deepEqual(opened, ["bundle"]);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -288,9 +439,9 @@ async function checkRepositorySelectionLoadsFiles(ModelsPanel) {
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
     await act(async () => renderer.root.findByProps({ id: "models-tab-add" }).props.onClick());
-    const query = renderer.root.findAllByType("input").find(node => node.props.maxLength === 200);
+    const query = renderer.root.findByProps({ id: "model-search-query" });
     await act(async () => query.props.onChange({ target: { value: "model" } }));
-    const searchForm = renderer.root.findAllByType("form").find(node => node.findAllByType("input").some(input => input.props.maxLength === 200));
+    const searchForm = renderer.root.findAllByType("form").find(node => node.findAllByType("input").some(input => input.props.id === "model-search-query"));
     await act(async () => { searchForm.props.onSubmit({ preventDefault() {} }); await tick(); });
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node).includes("Select repository")).props.onClick(); await tick(); });
     assert.equal(calls.filter(call => call.address.endsWith("/huggingface/inspect")).length, 1, "selecting a search result must inspect that repository immediately");
@@ -322,6 +473,7 @@ async function checkVariantPresentation({ presentVariant, variantFamilies }) {
   assert.deepEqual(variants.map(presentVariant).map(item => [item.quant, item.family]), [["UD-IQ2_S", "2-bit"], ["Q4_K_M", "4-bit"], ["BF16", "16-bit"], ["FP16", "16-bit"], ["Unknown", "Unknown"]]);
   assert.deepEqual(variantFamilies(variants, "all", "asc").map(group => group.family), ["2-bit", "4-bit", "16-bit", "Unknown"]);
   assert.deepEqual(variantFamilies(variants, 4, "desc").flatMap(group => group.items.map(item => item.quant)), ["Q4_K_M"]);
+  assert.deepEqual(["model-IQ4_XS.gguf", "model-LOW-MTP-IQ4_XS.gguf", "model-MTP-IQ4_XS.gguf"].map(name => presentVariant({ name, files: [name], size_bytes: 1, complete: true }).flavour), ["Standard", "LOW-MTP", "MTP"]);
 }
 
 function bundle(id, displayName) {
