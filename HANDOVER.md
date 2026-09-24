@@ -1,6 +1,8 @@
 # Current handover
 
-Updated 2026-09-24. Hugging Face GGUF configuration delivery is in [PR #137](https://github.com/Vidcar/thtaib/pull/137) on `codex/hf-bundle-configuration`; completed OpenSpec change `openspec/changes/archive/2026-09-24-hf-bundle-configuration/` adds Models requirement MOD-024. Prior Chat event-storage delivery is [PR #136](https://github.com/Vidcar/thtaib/pull/136); its local backup remains `.scratch/chat-live-snapshot-predeploy.sqlite` pending Dave's testing.
+Updated 2026-09-24. Project chat actions are constrained to the sidebar in [PR #138](https://github.com/Vidcar/thtaib/pull/138). The clipped delete button was reproduced with a long title; pointer and keyboard access passed at 380px and 190px sidebar widths, and the desktop build passed. The desktop was reloaded with the new build.
+
+Hugging Face GGUF configuration delivery is in [PR #137](https://github.com/Vidcar/thtaib/pull/137) on `codex/hf-bundle-configuration`; completed OpenSpec change `openspec/changes/archive/2026-09-24-hf-bundle-configuration/` adds Models requirement MOD-024. Prior Chat event-storage delivery is [PR #136](https://github.com/Vidcar/thtaib/pull/136); its local backup remains `.scratch/chat-live-snapshot-predeploy.sqlite` pending Dave's testing.
 
 The importer now pins a GGUF revision and verifies a converter's declared publisher commit before using publisher files. Bundles record hashes, source/template provenance, supported generation defaults and unsupported fields. Managed llama.cpp loads the selected external Jinja and compares it with the running server's reported template, failing visibly on mismatch. Request defaults inherit beneath explicit settings; Gemma token suppression is applied only after tokenizer IDs match the GGUF. The desktop guides source-page users to matching GGUFs and displays discovered, selected and confirmed settings. A separate model reconfiguration endpoint bug found during integration was fixed.
 
