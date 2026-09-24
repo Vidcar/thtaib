@@ -68,7 +68,7 @@
 .sidebar-tools {display: flex; align-items: center; gap: var(--space-tight);}
 .sidebar-tools .chat-search {flex: 1; min-width: 0;}
 .sidebar-loose {margin-top: var(--space-compact);}
-.sidebar-loose h3 {margin: 0 var(--space-compact) var(--space-tight); font-size: var(--text-body); font-weight: var(--weight-medium); color: var(--muted);}
+.sidebar-loose h3 {margin: 0 0 var(--space-tight); padding: 0 var(--pad-compact); font-size: var(--text-body); font-weight: var(--weight-medium); color: var(--muted);}
 .chat-group-row {font-size: var(--text-body); font-weight: var(--weight-medium); color: var(--muted);}
 .chat-group-row {display: flex; align-items: center; gap: var(--space-tight); margin: 0;}
 .chat-group-toggle {display: flex; align-items: center; gap: var(--space-compact); flex: 1; min-width: 0; min-height: var(--control-height); padding: var(--pad-tight) var(--pad-tight); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
@@ -140,3 +140,4 @@
 .app-main {position: relative;}
 .persistent-chat {height: 100%; min-height: 0;}
 .persistent-chat[data-active="false"] {position: absolute; inset: 0; visibility: hidden; opacity: 0; pointer-events: none;}
+.chat-groups > .hint, .chat-group > .hint, .sidebar-loose > .hint {margin: 0; padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small);}

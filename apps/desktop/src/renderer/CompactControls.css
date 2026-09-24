@@ -1,9 +1,10 @@
 /* Setting sections and rows: label and provenance on the left, one control column on the right. */
 .setting-section {min-width: 0; padding: 0 var(--pad-card); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel);}
-.setting-section-head {display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-compact); padding: var(--pad-card) 0 var(--pad-tight);}
+.setting-section-head {display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-compact); padding: var(--pad-card) 0 var(--pad-tight);}
 .setting-section-head h3 {margin: 0; font-size: var(--text-body); font-weight: var(--weight-semibold);}
 .setting-section-head p {margin: var(--line-strong) 0 0; color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight);}
-.setting-section-actions {display: flex; align-items: center; gap: var(--space-tight); flex-shrink: 0;}
+.setting-section-actions {display: flex; align-items: center; gap: var(--space-tight); flex-shrink: 0; margin-left: auto;}
+.setting-section-actions > button {white-space: nowrap;}
 .setting-rows {display: grid; min-width: 0; container-type: inline-size;}
 .setting-rows > * + * {border-top: var(--line-hairline) solid color-mix(in srgb, var(--border) var(--tint-strong), transparent);}
 .setting-rows > .setting-row:last-child, .setting-rows > :last-child {padding-bottom: var(--pad-card);}

@@ -42,7 +42,7 @@
 .chat-header-status .badge {border-radius: var(--radius-card);}
 .chat-setup > summary {display: inline-flex; align-items: center; gap: var(--space-tight); color: var(--muted); font-size: var(--text-small); list-style: none;}
 .chat-setup[open] {border-bottom: var(--line-hairline) solid var(--border);}
-.transcript .empty-state {text-align: center;}
+.transcript .empty-state {text-align: center; justify-items: center; border: 0; background: transparent;}
 .bubble {border: 0; background: transparent;}
 .bubble-user {margin-left: auto;}
 .bubble header {font-size: var(--text-small); color: var(--muted);}

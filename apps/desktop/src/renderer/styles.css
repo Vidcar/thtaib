@@ -57,6 +57,7 @@ button.danger:hover:not(:disabled), button.danger-button:hover:not(:disabled) {b
 .linkish {width: 100%; background: none; border: var(--line-hairline) solid transparent; padding: var(--pad-tight) var(--pad-compact); color: var(--text); text-align: left;}
 .actions, .packet03-actions {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact);}
 :is(.actions, .packet03-actions, .empty-state) > button, .packet03-panel button:not(.help-icon, .tab, .compact-switch) {display: inline-flex; align-items: center; justify-content: center; gap: var(--space-tight);}
+:where(button:has(> svg:first-child)) {display: inline-flex; align-items: center; gap: var(--space-tight);}
 
 /* Fields */
 button, input, select, textarea {font: inherit;}
