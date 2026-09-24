@@ -696,3 +696,19 @@ A hydrated root view SHALL continue after the cursor paired with its saved state
 - **WHEN** a stream disconnects after an event ID but before the complete event frame
 - **THEN** its reconnect cursor remains before that event
 - **AND** the completed event is delivered once.
+
+### Requirement: API-042 - Use one control grammar across settings
+
+Every settings form in the desktop SHALL use one row grammar: the label, hover/focus help and a short provenance line (value, source and state, omitting unknown parts) on the left, the control on the right, and an optional hint underneath. Binary settings SHALL use a switch, two to five options a segmented choice, ordered numbers a slider with exact entry, long lists a select, and destructive confirmations a dialog. Inherited values SHALL be shown as an explicit Inherited choice or as the resolved value in an empty field, with a Reset to inherited action when a value is set; they MUST NOT use a separate "Use inherited" dropdown. Cards and controls SHALL take radius, padding, height and colour from the existing appearance tokens, so compact and comfortable densities and light and dark themes apply everywhere without a second appearance system.
+
+#### Scenario: Edit an inherited model setting
+
+- **WHEN** a person opens a model's settings, Defaults, or the chat model menu
+- **THEN** each setting shows its effective value and where it came from beside the control
+- **AND** choosing Inherited or Reset to inherited clears only that layer's value.
+
+#### Scenario: Narrow window and comfortable density
+
+- **WHEN** the window is about 360 px wide or density is comfortable, in light or dark
+- **THEN** rows stack the control under the label without horizontal scrolling
+- **AND** section actions stay on one line.
