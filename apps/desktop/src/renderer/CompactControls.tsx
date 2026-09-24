@@ -75,8 +75,7 @@ export function CompactSlider(props: { hideHeading?: boolean; label: string; val
   </div>;
 }
 
-/** Continuous slider plus exact number. `null` means inherited: the slider shows the resolved value muted and the number stays empty. */
-/** `exact` bounds the typed value separately; the slider range is only a comfortable span. */
+/** Continuous slider plus exact number. `null` means inherited: the slider shows the resolved value muted and the number stays empty. The slider range is only a comfortable span; the typed value is bounded by `exact` alone. */
 export function SliderField({ id, label, value, resolved, min, max, step, exact, unit, onChange, disabled }: {
   id?: string; label: string; value: number | null; resolved?: number | null; min: number; max: number; step: number; unit?: string;
   exact?: { min?: number; max?: number; step?: number | "any" };
@@ -86,7 +85,7 @@ export function SliderField({ id, label, value, resolved, min, max, step, exact,
   const clamped = Math.min(max, Math.max(min, shown));
   return <div className="slider-field">
     <input type="range" aria-label={label} min={min} max={max} step={step} value={clamped} disabled={disabled} data-inherited={value === null || undefined} style={{ "--range-fill": fillPercent(clamped, min, max) } as CSSProperties} onChange={event => onChange(Number(event.target.value))} />
-    <NumberField id={id} label={label} value={value} placeholder={resolved == null ? "" : String(resolved)} min={exact ? exact.min : min} max={exact ? exact.max : max} step={exact ? exact.step ?? "any" : step} unit={unit} disabled={disabled} onChange={onChange} />
+    <NumberField id={id} label={label} value={value} placeholder={resolved == null ? "" : String(resolved)} min={exact?.min} max={exact?.max} step={exact?.step ?? "any"} unit={unit} disabled={disabled} onChange={onChange} />
   </div>;
 }
 
