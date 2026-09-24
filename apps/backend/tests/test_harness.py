@@ -884,6 +884,82 @@ class HarnessApiTests(unittest.TestCase):
         self.assertTrue(recovered.final_snapshot_id)
         self.assertEqual([event.kind for event in recovered.events].count("completed"), 1)
 
+    def test_terminal_retry_does_not_orphan_another_live_worker(self) -> None:
+        hold = threading.Event()
+        entered = threading.Event()
+
+        class HeldModel(ScriptedChatModel):
+            def _next_message(self) -> AIMessage:
+                entered.set()
+                return super()._next_message()
+
+        def factory(run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
+            if run.task == "hold B":
+                return HeldModel([AIMessage(content="B completed")], hold=hold)
+            return ScriptedChatModel([AIMessage(content="A completed")])
+
+        harness = HarnessService(lambda: self.manager, model_factory=factory,
+            knowledge_provider=lambda: self.app.state.knowledge)
+        self.app.state.harness = harness
+        self.app.state.lab._harness_provider = lambda: harness
+        project = self.root / "terminal-retry-project"
+        project.mkdir()
+        b = self._start(task="hold B", project_path=str(project), presented_tools=[])
+        try:
+            self.assertTrue(entered.wait(timeout=10), "B never entered generation")
+            original_put = harness.store.put_run
+            failed_tasks: set[str] = set()
+            failure_seen = threading.Event()
+
+            def fail_once(record: AgentRun) -> AgentRun:
+                if record.task.startswith("settle A") and record.status is AgentRunStatus.completed and record.task not in failed_tasks:
+                    failed_tasks.add(record.task)
+                    failure_seen.set()
+                    raise OSError("injected terminal write failure")
+                return original_put(record)
+
+            with patch.object(harness.store, "put_run", side_effect=fail_once):
+                for task, path in (("settle A with project", str(project)), ("settle A without project", None)):
+                    failure_seen.clear()
+                    a = self._start(task=task, project_path=path, presented_tools=[])
+                    self.assertTrue(failure_seen.wait(timeout=10), f"{task} did not reach terminal persistence")
+                    recovered = harness.get_run(a["id"])
+                    self.assertEqual(recovered.status, AgentRunStatus.completed)
+                    self.assertEqual([event.kind for event in recovered.events].count("completed"), 1)
+                    self.assertEqual(harness.store.get_run(a["id"]).status, AgentRunStatus.completed)
+                    b_live = harness.get_run(b["id"])
+                    self.assertEqual(b_live.status, AgentRunStatus.running)
+                    self.assertTrue(harness._threads[b["id"]].is_alive())
+                    self.assertFalse(harness._cancels[b["id"]].is_set())
+                    self.assertTrue(harness._project_is_active(b_live))
+        finally:
+            hold.set()
+        self.assertEqual(wait_for_run(self.client, b["id"])["status"], "completed")
+
+    def test_terminal_retry_uses_durable_outcome_after_followup_read_failure(self) -> None:
+        harness = self.app.state.harness
+        harness._reconcile_startup_once()
+        now = utc_now()
+        run = AgentRun(id="agent_terminal_read_retry", status=AgentRunStatus.running,
+            deployment_id=self.deployment_id, task="settled", enabled_tools=[], presented_tools=[],
+            created_at=now, updated_at=now)
+        harness._runs[run.id] = run
+        harness.store.put_run(run)
+
+        def fail_observer(_run, _event):
+            raise OSError("injected display failure")
+
+        harness._interaction_observer = fail_observer
+        with patch.object(harness.store, "get_run", side_effect=OSError("injected follow-up read failure")):
+            with self.assertRaisesRegex(OSError, "injected display failure"):
+                with harness._lock:
+                    harness._commit_terminal_run(run, AgentRunStatus.completed, "completed")
+        harness._interaction_observer = None
+        recovered = harness.get_run(run.id)
+        self.assertEqual(recovered.status, AgentRunStatus.completed)
+        self.assertEqual([event.kind for event in recovered.events].count("completed"), 1)
+        self.assertNotIn(run.id, harness._terminal_retries)
+
     def test_restart_rejects_changed_published_final_snapshot(self) -> None:
         project = self.root / "changed-final-snapshot-project"
         project.mkdir()

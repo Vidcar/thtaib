@@ -184,10 +184,13 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         lambda: application.state.chat,
     )
     def _observe_run(run, event, *, telemetry=False):
-        application.state.interaction.observe(run, event, telemetry=telemetry)
-        coordinator = getattr(application.state, "chat_coordinator", None)
-        if coordinator is not None and event is None and not telemetry:
-            coordinator.observe(run)
+        try:
+            application.state.interaction.observe(run, event, telemetry=telemetry)
+        finally:
+            # A failed display write cannot strand a durably settled Chat queue.
+            coordinator = getattr(application.state, "chat_coordinator", None)
+            if coordinator is not None and event is None and not telemetry and not is_run_lifecycle_live(run.status):
+                coordinator.observe(run)
 
     application.state.harness = HarnessService(
         lambda: application.state.manager,

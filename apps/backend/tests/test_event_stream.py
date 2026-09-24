@@ -5,12 +5,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 import socket
+import sqlite3
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from typing import Any, Iterator
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 import httpx
@@ -20,6 +22,7 @@ import uvicorn
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.app import create_app
+from workbench_backend.chat.coordinator import ChatCoordinator
 from workbench_backend.contracts.auth import WORKBENCH_LOCAL_TOKEN_HEADER
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.interaction.projection import event
@@ -92,6 +95,7 @@ def read_loopback_interaction_events(
     body: dict[str, Any],
     stop: Any,
     timeout: float = 8.0,
+    opened: threading.Event | None = None,
 ) -> list[dict[str, Any]]:
     deadline = time.monotonic() + timeout
     collected: list[dict[str, Any]] = []
@@ -106,6 +110,8 @@ def read_loopback_interaction_events(
         if response.status_code != 200:
             payload = response.read().decode("utf-8", errors="replace")
             raise AssertionError(f"interaction stream HTTP {response.status_code}: {payload}")
+        if opened is not None:
+            opened.set()
         buffer = ""
         chunks = response.iter_text()
         while time.monotonic() < deadline:
@@ -178,6 +184,156 @@ class InteractionStreamTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["result"]
+
+    def test_native_write_failure_publishes_terminal_chat_and_pauses_queue(self) -> None:
+        hold = threading.Event()
+        set_generate_hold(hold)
+        self._install_model([AIMessage(content="This answer must not complete.")], hold=hold)
+        conversation = self.client.post("/v1/chat/conversations",
+            json={"deployment_id": self.deployment_id})
+        self.assertEqual(conversation.status_code, 200, conversation.text)
+        thread_id = conversation.json()["id"]
+        registered = self.client.post("/v1/agent-interaction/threads",
+            json={"source_surface": "chat", "conversation_id": thread_id})
+        self.assertEqual(registered.status_code, 200, registered.text)
+        cursor = self.app.state.app_store.get_interaction(thread_id)["seq"]
+        original_append = self.app.state.app_store.append_interaction
+        original_observe = self.app.state.harness._observe_interaction
+        failed = threading.Event()
+        armed = threading.Event()
+        native_observe = threading.local()
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+
+        def fail_native_once(ident, events, **kwargs):
+            if armed.is_set() and not failed.is_set() and getattr(native_observe, "active", False):
+                failed.set()
+                raise sqlite3.OperationalError("injected native interaction write failure")
+            return original_append(ident, events, **kwargs)
+
+        def marked_observe(run, event, *, telemetry=False):
+            native_observe.active = event is not None
+            try:
+                return original_observe(run, event, telemetry=telemetry)
+            finally:
+                native_observe.active = False
+
+        try:
+            with patch.object(self.app.state.app_store, "append_interaction", side_effect=fail_native_once), \
+                    patch.object(self.app.state.harness, "_observe_interaction", side_effect=marked_observe):
+                started = self.client.post(f"/v1/chat/conversations/{thread_id}/start",
+                    json={"task": "Answer once", "presented_tools": []})
+                self.assertEqual(started.status_code, 200, started.text)
+                run_id = started.json()["current_run_id"]
+                wait_for_generate_hold()
+                queued = self.client.post(f"/v1/chat/conversations/{thread_id}/queue",
+                    json={"task": "Wait until the failure is handled"})
+                self.assertEqual(queued.status_code, 200, queued.text)
+                opened = threading.Event()
+                streamed: list[dict[str, Any]] = []
+                stream_errors: list[BaseException] = []
+                with loopback_app_server(self.app) as base_url:
+                    def receive() -> None:
+                        try:
+                            streamed.extend(read_loopback_interaction_events(
+                                base_url, token=self.app.state.local_trust_token, thread_id=thread_id,
+                                body={"channels": ["values", "lifecycle"], "namespaces": [[]], "since": cursor},
+                                stop=lambda events: any(item.get("data", {}).get("method") == "lifecycle"
+                                    and item["data"]["params"]["data"].get("event") == "failed"
+                                    for item in events if isinstance(item.get("data"), dict)),
+                                timeout=8.0, opened=opened,
+                            ))
+                        except BaseException as exc:
+                            stream_errors.append(exc)
+
+                    subscriber = threading.Thread(target=receive, daemon=True)
+                    subscriber.start()
+                    try:
+                        self.assertTrue(opened.wait(timeout=5), "live subscriber did not connect")
+                        armed.set()
+                        hold.set()
+                        self.assertTrue(failed.wait(timeout=10), "native event was not written")
+                        deadline = time.monotonic() + 10
+                        while time.monotonic() < deadline:
+                            run = self.app.state.harness.get_run(run_id)
+                            if not is_run_lifecycle_live(run.status):
+                                break
+                            time.sleep(0.02)
+                        else:
+                            self.fail("run did not settle after interaction failure")
+                        self.assertEqual(run.status, AgentRunStatus.failed)
+                        self.assertEqual(run.stop_reason, "interaction_persistence_failed")
+                    finally:
+                        hold.set()
+                        subscriber.join(timeout=10)
+                    self.assertFalse(subscriber.is_alive(), "live subscriber did not finish")
+                    self.assertEqual(stream_errors, [])
+                self.assertTrue(any(item.get("data", {}).get("method") == "lifecycle"
+                    and item["data"]["params"]["data"].get("event") == "failed"
+                    for item in streamed if isinstance(item.get("data"), dict)))
+
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    saved = self.app.state.chat.store.get(thread_id)
+                    if saved and saved.queue and saved.queue[0].status == "paused":
+                        break
+                    time.sleep(0.02)
+                else:
+                    self.fail("Chat coordinator did not pause the queued turn")
+                self.assertEqual(saved.queue[0].pause_reason, "failed")
+                self.assertEqual(saved.run_ids, [run_id])
+        finally:
+            hold.set()
+            self.app.state.chat_coordinator.close()
+
+    def test_stream_repairs_durable_terminal_after_display_write_failure(self) -> None:
+        thread_id = self._register_agent()
+        cursor = self.app.state.app_store.get_interaction(thread_id)["seq"]
+        original_append = self.app.state.app_store.append_interaction
+        failed = threading.Event()
+
+        def fail_terminal_display(ident, events, **kwargs):
+            if any(item.get("method") == "lifecycle"
+                    and item.get("params", {}).get("data", {}).get("event") == "completed"
+                    for item in events):
+                failed.set()
+                raise sqlite3.OperationalError("injected terminal display write failure")
+            return original_append(ident, events, **kwargs)
+
+        with patch.object(self.app.state.app_store, "append_interaction", side_effect=fail_terminal_display), \
+                patch("workbench_backend.agents.harness.log.exception"):
+            started = self._start_command(thread_id)
+            self.assertTrue(failed.wait(timeout=10), "terminal display write was not attempted")
+            run_id = started["run_id"]
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                run = self.app.state.harness.get_run(run_id)
+                if not is_run_lifecycle_live(run.status):
+                    break
+                time.sleep(0.02)
+            else:
+                self.fail("run did not settle after terminal display failure")
+            self.assertEqual(run.status, AgentRunStatus.completed)
+            _seq, _cutover, projected, durable = self.app.state.app_store.interaction_stream_metadata(thread_id)
+            self.assertEqual((projected, durable), ("running", "completed"))
+            resume = self.app.state.interaction.resume_view(thread_id, cursor)
+            with self.assertRaises(sqlite3.OperationalError):
+                self.app.state.interaction.stream_poll(thread_id, cursor,
+                    {"channels": ["values", "lifecycle"], "namespaces": [[]]}, resume)
+
+        with loopback_app_server(self.app) as base_url:
+            streamed = read_loopback_interaction_events(
+                base_url, token=self.app.state.local_trust_token, thread_id=thread_id,
+                body={"channels": ["values", "lifecycle"], "namespaces": [[]], "since": cursor},
+                stop=lambda events: any(item.get("data", {}).get("method") == "lifecycle"
+                    and item["data"]["params"]["data"].get("event") == "completed"
+                    for item in events if isinstance(item.get("data"), dict)),
+                timeout=8.0,
+            )
+        self.assertTrue(any(item.get("data", {}).get("method") == "lifecycle"
+            and item["data"]["params"]["data"].get("event") == "completed"
+            for item in streamed if isinstance(item.get("data"), dict)))
+        self.assertEqual(self.app.state.app_store.interaction_stream_metadata(thread_id)[2:],
+                         ("completed", "completed"))
 
     def test_unknown_thread_and_subscription_validation(self) -> None:
         missing = self.client.get("/v1/agent-interaction/threads/missing/state")

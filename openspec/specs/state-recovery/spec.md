@@ -118,6 +118,12 @@ Already-registered faulty legacy projections SHALL be repaired narrowly and idem
 - THEN it MUST receive controlled resynchronization and truthful persisted outcome or uncertainty
 - AND neither resubscription nor hydration MUST execute a tool or create another run.
 
+#### Scenario: Interaction write fails during a live run
+
+- WHEN a subscriber read or telemetry publication cannot save buffered message or tool activity
+- THEN the unsaved batch MUST remain available for a later durable retry without duplicate events
+- AND a failed run's durable terminal outcome MUST reach live observation or cause an explicit transport failure until projection can recover.
+
 #### Scenario: Existing faulty archive and later edits
 
 - WHEN a provably affected persisted projection is reopened after subsequent output or a display-only edit
@@ -233,6 +239,12 @@ Execution settlement SHALL be persisted before project capture, and restart reco
 - **WHEN** one run is saving a large project snapshot while another run makes progress
 - **THEN** the second run's observation and execution can progress
 - **AND** the first run publishes one terminal outcome after capture settles.
+
+#### Scenario: Terminal write retry while another worker is live
+
+- **WHEN** one run's terminal record write fails transiently while another worker remains active
+- **THEN** recovery retries the settled run without marking the owned worker orphaned
+- **AND** each run publishes at most one confirmed terminal outcome.
 
 #### Scenario: Restart or capture failure
 
