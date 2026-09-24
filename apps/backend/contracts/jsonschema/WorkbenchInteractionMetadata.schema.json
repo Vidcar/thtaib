@@ -87,7 +87,6 @@
           "default": "ask",
           "enum": [
             "ask",
-            "approve_for_me",
             "full_access"
           ],
           "title": "Approval Mode",
@@ -267,13 +266,6 @@
             "$ref": "#/$defs/AgentEvent"
           },
           "title": "Events",
-          "type": "array"
-        },
-        "file_changes": {
-          "items": {
-            "$ref": "#/$defs/ProjectFileChange"
-          },
-          "title": "File Changes",
           "type": "array"
         },
         "final_snapshot_id": {
@@ -1258,48 +1250,6 @@
       "title": "EffectiveSetup",
       "type": "object"
     },
-    "FileImage": {
-      "properties": {
-        "exists": {
-          "title": "Exists",
-          "type": "boolean"
-        },
-        "sha256": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Sha256"
-        },
-        "size_bytes": {
-          "default": 0,
-          "title": "Size Bytes",
-          "type": "integer"
-        },
-        "text": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Text"
-        }
-      },
-      "required": [
-        "exists"
-      ],
-      "title": "FileImage",
-      "type": "object"
-    },
     "FrozenHelperSelection": {
       "properties": {
         "agent_id": {
@@ -2141,11 +2091,8 @@
           "type": "string"
         },
         "kind": {
+          "const": "deepagents_interrupt_on",
           "default": "deepagents_interrupt_on",
-          "enum": [
-            "deepagents_interrupt_on",
-            "ask_user"
-          ],
           "title": "Kind",
           "type": "string"
         },
@@ -2160,17 +2107,6 @@
           "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
           "title": "Note",
           "type": "string"
-        },
-        "question": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UserQuestion"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "title": "PendingInterrupt",
@@ -2205,136 +2141,23 @@
         "name": {
           "title": "Name",
           "type": "string"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "PendingInterruptAction",
-      "type": "object"
-    },
-    "ProjectFileChange": {
-      "properties": {
-        "after": {
+        },
+        "question": {
           "anyOf": [
             {
-              "$ref": "#/$defs/FileImage"
+              "$ref": "#/$defs/UserQuestion"
             },
             {
               "type": "null"
             }
           ],
           "default": null
-        },
-        "before": {
-          "$ref": "#/$defs/FileImage"
-        },
-        "created_at": {
-          "title": "Created At",
-          "type": "string"
-        },
-        "destination": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Destination"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Error"
-        },
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "observed_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Observed At"
-        },
-        "operation": {
-          "enum": [
-            "created",
-            "modified",
-            "renamed",
-            "deleted"
-          ],
-          "title": "Operation",
-          "type": "string"
-        },
-        "path": {
-          "title": "Path",
-          "type": "string"
-        },
-        "reversed_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reversed At"
-        },
-        "run_id": {
-          "title": "Run Id",
-          "type": "string"
-        },
-        "status": {
-          "default": "pending",
-          "enum": [
-            "pending",
-            "changed",
-            "unchanged",
-            "failed",
-            "unconfirmed"
-          ],
-          "title": "Status",
-          "type": "string"
-        },
-        "tool_call_id": {
-          "title": "Tool Call Id",
-          "type": "string"
-        },
-        "tool_name": {
-          "title": "Tool Name",
-          "type": "string"
         }
       },
       "required": [
-        "id",
-        "run_id",
-        "tool_call_id",
-        "tool_name",
-        "operation",
-        "path",
-        "before",
-        "created_at"
+        "name"
       ],
-      "title": "ProjectFileChange",
+      "title": "PendingInterruptAction",
       "type": "object"
     },
     "RelatedFile": {
@@ -2533,7 +2356,6 @@
             {
               "enum": [
                 "ask",
-                "approve_for_me",
                 "full_access"
               ],
               "type": "string"
@@ -2844,11 +2666,6 @@
           "default": "Structured output is the agent structured_response, not JSON-looking answer text. Schema validity is not factual correctness.",
           "title": "Note",
           "type": "string"
-        },
-        "repair_attempts": {
-          "default": 0,
-          "title": "Repair Attempts",
-          "type": "integer"
         },
         "requested_json_schema": {
           "additionalProperties": true,

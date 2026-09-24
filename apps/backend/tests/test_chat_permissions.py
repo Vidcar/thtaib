@@ -12,6 +12,7 @@ from workbench_backend.agents.schemas import (
     InterruptDecisionRequest,
     PendingInterrupt,
     PendingInterruptAction,
+    UserQuestion,
 )
 from workbench_backend.agents.harness import HarnessService, _resume_value
 from workbench_backend.errors import HarnessError
@@ -59,15 +60,16 @@ class ChatPermissionTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_mixed_ordered_approval_decisions_persist_only_requested_grants(self):
+    def test_mixed_ordered_question_and_approvals_survive_restart_without_extra_grants(self):
         with tempfile.TemporaryDirectory() as root:
             paths = WorkbenchPaths(Path(root))
             store = ApplicationStore(paths)
             stop_thread = threading.Event()
             try:
-                harness = HarnessService(lambda: type("Manager", (), {"paths": paths})(), app_store=store)
-                harness._startup_reconciled = True
                 actions = [
+                    PendingInterruptAction(name="ask_user", args={"prompt": "Choose a format", "answer_type": "choice", "choices": ["Text", "Code"]},
+                                           question=UserQuestion(prompt="Choose a format", answer_type="choice", choices=["Text", "Code"]),
+                                           allowed_decisions=["respond", "reject"]),
                     PendingInterruptAction(name="execute", args={"command": "echo once > once.txt"}),
                     PendingInterruptAction(name="execute", args={"command": "echo session > session.txt"}),
                     PendingInterruptAction(name="execute", args={"command": "echo always > always.txt"}),
@@ -80,8 +82,8 @@ class ChatPermissionTests(unittest.TestCase):
                     task="work",
                     thread_id="session1",
                     project_path=root,
-                    enabled_tools=["execute"],
-                    presented_tools=["execute"],
+                    enabled_tools=["ask_user", "execute"],
+                    presented_tools=["ask_user", "execute"],
                     created_at=utc_now(),
                     updated_at=utc_now(),
                     pending_interrupt=PendingInterrupt(
@@ -90,6 +92,18 @@ class ChatPermissionTests(unittest.TestCase):
                         action_requests=actions,
                     ),
                 )
+
+                store.put_run(run)
+                store.close()
+                store = ApplicationStore(paths)
+                restored = store.get_run(run.id)
+                self.assertIsNotNone(restored)
+                assert restored is not None
+                self.assertEqual([action.name for action in restored.pending_interrupt.action_requests],
+                                 ["ask_user", "execute", "execute", "execute", "execute"])
+                harness = HarnessService(lambda: type("Manager", (), {"paths": paths})(), app_store=store)
+                harness._startup_reconciled = True
+                run = restored
 
                 worker = threading.Thread(target=stop_thread.wait)
                 worker.start()
@@ -102,6 +116,7 @@ class ChatPermissionTests(unittest.TestCase):
                     interrupt_id="interrupt-mixed-decisions",
                     namespace=["__interrupt__", "mixed"],
                     decisions=[
+                        {"type": "respond", "message": "Code"},
                         {"type": "approve", "scope": "once"},
                         {"type": "approve", "scope": "session"},
                         {"type": "approve", "scope": "always"},
@@ -114,20 +129,20 @@ class ChatPermissionTests(unittest.TestCase):
                 self.assertEqual(exposed.id, run.id)
                 self.assertEqual(
                     [payload["type"] for payload in harness._pending_decisions[run.id]],
-                    ["approve", "approve", "approve", "reject"],
+                    ["respond", "approve", "approve", "approve", "reject"],
                 )
                 prefs = PreferenceStore(store)
                 grants = prefs.grants()
                 self.assertEqual(len(grants), 2)
-                self.assertFalse(prefs.matches(run, "execute", actions[0].args))
-                self.assertTrue(prefs.matches(run, "execute", actions[1].args))
+                self.assertFalse(prefs.matches(run, "execute", actions[1].args))
+                self.assertTrue(prefs.matches(run, "execute", actions[2].args))
                 self.assertFalse(
-                    prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[1].args)
-                )
-                self.assertTrue(
                     prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[2].args)
                 )
-                self.assertFalse(prefs.matches(run, "execute", actions[3].args))
+                self.assertTrue(
+                    prefs.matches(run.model_copy(update={"thread_id": "other"}), "execute", actions[3].args)
+                )
+                self.assertFalse(prefs.matches(run, "execute", actions[4].args))
                 self.assertEqual(
                     {(grant.scope, grant.arguments["command"]) for grant in grants},
                     {
@@ -285,10 +300,17 @@ class ChatPermissionTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_typed_question_and_cancellation_use_separate_resume_shape(self):
-        pending = pending_interrupt_from_raw({"kind": "ask_user", "question": {
-            "prompt": "Choose a format", "answer_type": "choice", "choices": ["Text", "Code"]}})
-        self.assertEqual(pending.kind, "ask_user")
-        self.assertEqual(pending.action_requests, [])
-        self.assertEqual(_resume_value([{"type": "user_answer", "answer": "Code"}]), {"answer": "Code"})
-        self.assertEqual(_resume_value(reject_decisions_for(pending)), {"cancelled": "true"})
+    def test_typed_question_and_cancellation_use_native_ordered_decisions(self):
+        pending = pending_interrupt_from_raw({
+            "action_requests": [{"name": "ask_user", "args": {
+                "prompt": "Choose a format", "answer_type": "choice", "choices": ["Text", "Code"]}}],
+            "review_configs": [{"action_name": "ask_user", "allowed_decisions": ["respond", "reject"]}],
+        })
+        self.assertIsNotNone(pending)
+        assert pending is not None
+        self.assertEqual(pending.kind, "deepagents_interrupt_on")
+        self.assertEqual(pending.action_requests[0].question.choices, ["Text", "Code"])
+        self.assertEqual(_resume_value([{"type": "respond", "message": "Code"}]),
+                         {"decisions": [{"type": "respond", "message": "Code"}]})
+        self.assertEqual(_resume_value(reject_decisions_for(pending)),
+                         {"decisions": reject_decisions_for(pending)})

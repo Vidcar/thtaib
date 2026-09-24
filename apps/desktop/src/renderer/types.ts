@@ -303,7 +303,6 @@ export interface StructuredOutputResult {
   validation_status: "not_requested" | "valid" | "missing" | "invalid";
   result: unknown;
   error: string | null;
-  repair_attempts: number;
   note: string;
 }
 
@@ -431,6 +430,7 @@ export interface PendingInterruptAction {
   args: Record<string, unknown>;
   description: string | null;
   allowed_decisions: string[];
+  question?: UserQuestion | null;
 }
 
 export interface UserQuestion {
@@ -443,12 +443,11 @@ export interface PendingInterrupt {
   interrupt_id?: string | null;
   namespace?: string[];
   identity?: string | null;
-  kind: "deepagents_interrupt_on" | "ask_user";
+  kind: "deepagents_interrupt_on";
   environment: "windows_host_shell";
   isolation: "none";
   note: string;
   action_requests: PendingInterruptAction[];
-  question?: UserQuestion | null;
 }
 
 export function visiblePendingInterrupt(run: AgentRun | null | undefined): PendingInterrupt | null {
@@ -529,6 +528,7 @@ export interface ChatConversation {
   transcript: ChatMessage[];
   current_run_id: string | null;
   run_ids: string[];
+  source_checkpoint_id?: string | null;
   history_replaced: boolean;
   harness: "deepagents";
   second_agent_loop: false;
@@ -547,7 +547,7 @@ export interface ChatConversation {
   deploy_health?: ChatDeployHealth | null;
   filesystem_tools_available?: boolean;
   shell_tools_available?: boolean;
-  approval_mode?: "ask" | "approve_for_me" | "full_access";
+  approval_mode?: "ask" | "full_access";
   enabled_tools?: string[];
   created_at: string;
   updated_at: string;

@@ -35,7 +35,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     if work_mode == "plan":
         presented = [name for name in presented if name in PLAN_TOOLS]
     require_setup_capabilities(config, project_bound=bool(parent.project_path), presented_tools=presented)
-    rank = {"ask": 0, "approve_for_me": 1, "full_access": 2}
+    rank = {"ask": 0, "full_access": 1}
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
     selected_connections = [ident for ident in (config.connection_ids if config.connection_ids is not None else parent.connection_ids) if ident in parent.connection_ids]
     request = AgentStartRequest(deployment_id=deployment.id, task="Helper task",
@@ -79,7 +79,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         protected_instruction_version_refs=refs.protected_instruction_version_refs,
         connection_ids=selected_connections, connection_snapshots=[item for item in parent.connection_snapshots if item.id in selected_connections],
         embedding_deployment_id=config.embedding_deployment_id,
-        events=[], model_requests=[], tool_invocations=[], file_changes=[], related_files=[],
+        events=[], model_requests=[], tool_invocations=[], related_files=[],
         completion=None, output_schema=None, structured_output=None, context_observation=observation,
         generation_observation=None, starting_snapshot_id=None, final_snapshot_id=None,
         checkpoint_ids=[], resume_checkpoint_id=None, dispatched_tool_calls=0, dispatched_tool_ids=[], completed_tool_ids=[], tool_authorizations={}, tool_authorization_grants={},

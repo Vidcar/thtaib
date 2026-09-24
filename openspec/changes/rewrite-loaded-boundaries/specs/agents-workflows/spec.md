@@ -6,7 +6,7 @@
 
 Agent tasks SHALL run through `create_deep_agent` using LangChain components and LangGraph. Chat SHALL call the same harness with or without a bound project; the application MUST NOT add a model/tool loop. Each run executes once; native streaming, scoped selectors and audit projections observe that invocation while preserving message/block/tool and namespace identities. Without a project, project-filesystem and host-shell access SHALL be absent or rejected, not assigned an invented working directory. Explicitly supplied session attachments MAY be read through their authorized content/scoped backend without granting project or host access.
 
-The harness SHALL receive the run's backend, filesystem permissions, `interrupt_on`, `memory`, and `skills` through those official parameters when the run uses them. Planning SHALL be the official `write_todos` tool when planning is selected. Exactly one summarization middleware SHALL run, and it SHALL use the model's configured usable input budget. A default summarizer MUST NOT stay stacked on a replacement. Ordinary Chat SHALL disable the general-purpose subagent through the upstream profile switch, and SHALL NOT rely on a parent-only filter that a compiled child does not inherit. The product MUST NOT embed the Deep Agents CLI or a hosted agent runtime.
+The harness SHALL receive the run's backend, filesystem permissions, `interrupt_on`, `memory`, and `skills` through those official parameters when the run uses them. Planning SHALL be the official `write_todos` tool when planning is selected. Exactly one Deep Agents summarization middleware SHALL run with its native model-aware trigger and retention defaults. Only its input-capacity value MAY be adjusted to avoid reserving output space again when the model profile already reports usable input. The application MUST NOT set a separate early compaction threshold or stack another summarizer. Ordinary Chat SHALL disable the general-purpose subagent through the upstream profile switch, and SHALL NOT rely on a parent-only filter that a compiled child does not inherit. The product MUST NOT embed the Deep Agents CLI or a hosted agent runtime.
 
 #### Scenario: Project-bound and project-free chat
 
@@ -28,8 +28,8 @@ The harness SHALL receive the run's backend, filesystem permissions, `interrupt_
 #### Scenario: Summarize once
 
 - **WHEN** a long turn is compacted
-- **THEN** one summarizer runs against the configured usable input budget
-- **AND** a second default summarizer MUST NOT shrink that budget again.
+- **THEN** one Deep Agents summarizer applies its native model-aware compaction defaults against the configured usable input budget
+- **AND** no custom early threshold or second summarizer shrinks that budget again.
 
 ### Requirement: AGT-009 - Enforce tools-off without disabling context housekeeping
 

@@ -41,7 +41,14 @@ def attention(request: Request) -> list[AttentionItem]:
         run = state.app_store.get_run(run_id)
         if run is None:
             continue
-        kind = "question" if run.pending_interrupt and run.pending_interrupt.kind == "ask_user" else "approval" if run.pending_interrupt else "failure" if run.status == "failed" else "success" if run.status == "completed" and state.preferences.preferences().success_notifications else None
+        pending = run.pending_interrupt
+        kind = (
+            "question" if pending and any(action.name == "ask_user" for action in pending.action_requests)
+            else "approval" if pending
+            else "failure" if run.status == "failed"
+            else "success" if run.status == "completed" and state.preferences.preferences().success_notifications
+            else None
+        )
         if kind is None or run.status == "cancel_requested":
             continue
         owner = _conversation_for_run(conversations, run.id)

@@ -8,7 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from workbench_backend.agents.context import ContextObservation
-from workbench_backend.agents.file_changes import ProjectFileChange
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
 from workbench_backend.agents.setup_schemas import FrozenHelperSelection, ReviewConfiguration
@@ -160,6 +159,7 @@ class PendingInterruptAction(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     description: str | None = None
     allowed_decisions: list[str] = Field(default_factory=lambda: ["approve", "reject"])
+    question: UserQuestion | None = None
 
 
 class UserQuestion(BaseModel):
@@ -169,30 +169,21 @@ class UserQuestion(BaseModel):
     choices: list[str] = Field(default_factory=list, max_length=30)
 
 
-class UserAnswerRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    answer: str = Field(default="", max_length=32000)
-    cancelled: bool = False
-    interrupt_id: str | None = Field(default=None, min_length=1, max_length=200)
-    namespace: list[str] = Field(default_factory=list, max_length=20)
-
-
 class PendingInterrupt(BaseModel):
     """Native Deep Agents interrupt persisted by the application and surfaced in Chat."""
 
     interrupt_id: str | None = None
     namespace: list[str] = Field(default_factory=list)
-    kind: Literal["deepagents_interrupt_on", "ask_user"] = "deepagents_interrupt_on"
+    kind: Literal["deepagents_interrupt_on"] = "deepagents_interrupt_on"
     environment: Literal["windows_host_shell", "tool_actions", "user_input"] = "windows_host_shell"
     isolation: Literal["none"] = "none"
     note: str = HOST_SHELL_NOTE
     action_requests: list[PendingInterruptAction] = Field(default_factory=list)
-    question: UserQuestion | None = None
 
 
 class InterruptDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["approve", "reject"]
+    type: Literal["approve", "reject", "respond"]
     message: str | None = None
     scope: Literal["once", "session", "always"] = "once"
 
@@ -223,7 +214,7 @@ class AgentStartRequest(BaseModel):
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     presented_tools: list[str] | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    approval_mode: Literal["ask", "full_access"] = "ask"
     system_prompt: str | None = None
     output_schema: OutputSchemaRequest | None = None
     criteria: TaskCriteria | None = None
@@ -275,7 +266,7 @@ class AgentRun(BaseModel):
     content_blocks: list[UserContentBlock] | None = None
     enabled_tools: list[str]
     presented_tools: list[str]
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    approval_mode: Literal["ask", "full_access"] = "ask"
     work_mode: Literal["work", "plan"] = "work"
     requires_project: bool = False
     requires_host_shell: bool = False
@@ -297,7 +288,6 @@ class AgentRun(BaseModel):
     events: list[AgentEvent] = Field(default_factory=list)
     model_requests: list[ModelRequestCapture] = Field(default_factory=list)
     tool_invocations: list[dict[str, Any]] = Field(default_factory=list)
-    file_changes: list[ProjectFileChange] = Field(default_factory=list)
     completion: CompletionReport | None = None
     output_schema: OutputSchemaRequest | None = None
     structured_output: StructuredOutputResult | None = None

@@ -226,7 +226,7 @@ class StructuredHarnessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
-    def test_effectful_tool_then_invalid_structured_call_repairs_once_without_repeating_effect(self) -> None:
+    def test_effectful_tool_then_invalid_structured_call_fails_without_retry(self) -> None:
         self._record_capabilities("tools", "structured_tools", "structured_tools_with_tools")
         model = RecordingStructuredModel(
             [
@@ -241,10 +241,6 @@ class StructuredHarnessTests(unittest.TestCase):
                         {"name": "AnswerShape", "args": {"answer": "bad-b"}, "id": "call_bad_b"},
                     ],
                 ),
-                AIMessage(
-                    content="",
-                    tool_calls=[{"name": "AnswerShape", "args": {"answer": "repaired"}, "id": "call_good"}],
-                ),
             ]
         )
         self._install_harness(model)
@@ -254,21 +250,16 @@ class StructuredHarnessTests(unittest.TestCase):
             self._start(presented_tools=["echo"], output_schema=self._schema())["id"],
         )
 
-        self.assertEqual(body["status"], "completed", body.get("error"))
-        self.assertEqual(body["structured_output"]["validation_status"], "valid")
-        self.assertEqual(body["structured_output"]["repair_attempts"], 1)
-        self.assertEqual(body["structured_output"]["result"], {"answer": "repaired"})
+        self.assertEqual(body["status"], "failed")
+        self.assertEqual(body["structured_output"]["validation_status"], "invalid")
         self.assertEqual(
             [item["name"] for item in body["tool_invocations"]].count("echo"),
             1,
         )
-        self.assertEqual(
-            [event["kind"] for event in body["events"]].count("structured_output_repair_attempted"),
-            1,
-        )
+        self.assertEqual(len(model.generate_messages), 2)
         self.assertTrue(any("AnswerShape" in names for names in model.bind_calls))
 
-    def test_malicious_effectful_tool_call_during_repair_does_not_execute(self) -> None:
+    def test_invalid_structured_call_never_reaches_later_tool_call(self) -> None:
         self._record_capabilities("tools", "structured_tools", "structured_tools_with_tools")
         model = RecordingStructuredModel(
             [
@@ -300,12 +291,12 @@ class StructuredHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(body["status"], "failed")
-        self.assertEqual(body["structured_output"]["repair_attempts"], 1)
+        self.assertEqual(body["structured_output"]["validation_status"], "invalid")
         self.assertEqual(
             [item["name"] for item in body["tool_invocations"]].count("echo"),
             1,
         )
-        self.assertIn("Formatting recovery cannot execute", body["error"])
+        self.assertEqual(len(model.generate_messages), 2)
 
     def test_write_todos_strategy_matches_actual_structured_tool_binding(self) -> None:
         self._record_capabilities("tools", "structured_tools", "structured_tools_with_tools")

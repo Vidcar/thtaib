@@ -148,7 +148,7 @@ class RerunRequest(BaseModel):
 class AppliedConfig(BaseModel):
     deployment_id: str | None = None
     profile_id: str | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    approval_mode: Literal["ask", "full_access"] = "ask"
     work_mode: Literal["work", "plan"] = "work"
     presented_tools: list[str] = Field(default_factory=list)
     tool_mode: ToolMode

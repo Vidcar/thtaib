@@ -24,6 +24,29 @@ import type {
   RedactionMode,
 } from "./types";
 
+const SKILL_STARTER = `---
+name: my-skill
+description: Describe when the assistant should use this skill.
+---
+
+# My skill
+
+Explain the steps the assistant should follow.
+`;
+
+function skillDocumentIssue(content: string): string | null {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const frontmatter = normalized.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
+  if (!frontmatter) return "A skill needs SKILL.md frontmatter between --- lines.";
+  const name = frontmatter.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) {
+    return "Set name to a unique lowercase kebab-case value, up to 64 characters.";
+  }
+  const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+  if (!description || description.length > 1024) return "Add a description of when to use the skill (up to 1024 characters).";
+  return null;
+}
+
 export function KnowledgePanel() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selected, setSelected] = useState<KnowledgeEntry | null>(null);
@@ -126,7 +149,7 @@ export function KnowledgePanel() {
     <section className="surface workspace-records-surface knowledge-surface">
       <header className="surface-head">
         <div className="entity-head"><h2>Knowledge</h2><HoverHelp title="About Knowledge">Save memories, skills and instructions here. Choose which entries each chat uses.</HoverHelp></div>
-        <button type="button" disabled={busy} onClick={() => { setKind(filterKind); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
+        <button type="button" disabled={busy} onClick={() => { setKind(filterKind); setDisplayName(""); setContent(filterKind === "skill" ? SKILL_STARTER : ""); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
       </header>
 
       <nav className="model-tabs" aria-label="Knowledge types">{([["memory", "Memories"], ["skill", "Skills"], ["protected_instruction", "Instructions"]] as const).map(([value, label]) => <button type="button" key={value} disabled={busy} aria-current={filterKind === value ? "page" : undefined} onClick={() => { setFilterKind(value); setKind(value); setCreating(false); setSelected(entries.find(entry => entry.kind === value) ?? null); }}>{label} <span>{entries.filter(entry => entry.kind === value).length}</span></button>)}</nav>
@@ -166,7 +189,7 @@ export function KnowledgePanel() {
         <div className="setup-form-grid">
           <label>
             Kind
-            <select disabled={busy} value={kind} onChange={(event) => setKind(event.target.value as KnowledgeKind)}>
+            <select disabled={busy} value={kind} onChange={(event) => { const next = event.target.value as KnowledgeKind; setKind(next); if (next === "skill" && !content.trim()) setContent(SKILL_STARTER); }}>
               <option value="memory">Memory</option>
               <option value="skill">Skill</option>
               <option value="protected_instruction">Instruction</option>
@@ -183,13 +206,14 @@ export function KnowledgePanel() {
           {scope !== "user" ? <label>{scope === "project" ? "Project" : "Agent"}<select value={scopeId} disabled={busy} required onChange={event => setScopeId(event.target.value)}><option value="">Choose {scope === "project" ? "a project" : "an agent"}</option>{scopes.filter(option => option.scope === scope && option.active).map(record => <option key={record.scope_id} value={record.scope_id ?? ""}>{record.label}</option>)}</select></label> : null}
         </div>
         <label>
-          Name (optional)
+          Display name (optional)
           <input disabled={busy} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
         </label>
         <label>
-          Content
+          {kind === "skill" ? "SKILL.md content" : "Content"}
           <textarea disabled={busy} value={content} onChange={(event) => setContent(event.target.value)} />
         </label>
+        {kind === "skill" ? <><p className="hint">Deep Agents uses the name and description inside SKILL.md. Give each skill a unique name; the display name only labels it here.</p>{skillDocumentIssue(content) ? <Notice tone="warn">{skillDocumentIssue(content)}</Notice> : null}</> : null}
         <div className="actions"><button type="submit" className="primary-button" disabled={busy || !content.trim() || (scope !== "user" && !scopeId)}><Icon name="plus" size={14} /> Save</button><button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button></div>
       </form>
       </section> : null}
@@ -244,9 +268,10 @@ export function KnowledgePanel() {
               </details>
               {selected.kind === "skill" ? <><SkillResources key={selected.current_version_id} versionId={selected.current_version_id} resources={selected.resources} /><details><summary>Update from a package</summary><SkillPackageImport key={selected.id} entry={selected} onImported={async next => { await refresh(); setSelected(next); setDrafts(current => { const drafts = { ...current }; delete drafts[next.id]; return drafts; }); }} /></details></> : null}
               <label>
-                Content
+                {selected.kind === "skill" ? "SKILL.md content" : "Content"}
                 <textarea disabled={busy} value={editContent} onChange={(event) => { const value = event.target.value; setEditContent(value); setDrafts(current => ({ ...current, [selected.id]: { content: value, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id } })); }} />
               </label>
+              {selected.kind === "skill" && skillDocumentIssue(editContent) ? <Notice tone="warn">{skillDocumentIssue(editContent)}</Notice> : null}
               <div className="actions">
                 <button
                   type="button"

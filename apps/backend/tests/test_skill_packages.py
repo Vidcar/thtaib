@@ -1,4 +1,4 @@
-"""Full inert skill packages and same-thread official knowledge refresh."""
+"""Native skill packages, same-thread skill reload and fixed chat memory."""
 
 import stat
 import tempfile
@@ -11,7 +11,6 @@ from langchain_core.messages import AIMessage
 from workbench_backend.app import create_app
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import harness_scratch_root
-from workbench_backend.agents.memory_skills import skill_slug_from_entry_id
 from tests.scripted_model import ScriptedChatModel, RECEIVED_PROMPTS, reset_received_prompts
 from tests.support import close_workbench_sqlite, offline_workbench_client
 from tests.test_chat import wait_for_chat
@@ -77,6 +76,31 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(self.client.post('/v1/knowledge/skills/import', json={'source_path': str(self.package)}).status_code, 400)
         self.assertEqual(self.app.state.knowledge.list_entries(), [])
 
+    def test_editor_requires_native_skill_and_keeps_content_verbatim(self):
+        for content in ('Use a checklist.', '---\nname: Bad Name\ndescription: Check the work.\n---\nBody', '---\nname: valid-name\ndescription: Check the work.\n---\n'):
+            response = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'skill', 'content': content})
+            self.assertEqual(response.status_code, 400, response.text)
+        created = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'skill', 'content': MARKDOWN})
+        self.assertEqual(created.status_code, 200, created.text)
+        skill = created.json()
+        self.assertEqual(skill['content'], MARKDOWN)
+        invalid = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={'base_version': skill['current_version_id'], 'content': 'freeform replacement'})
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+        self.assertEqual(self.client.get(f'/v1/knowledge/entries/{skill["id"]}').json()['current_version_id'], skill['current_version_id'])
+        changed_markdown = MARKDOWN.replace('example-skill', 'renamed-skill').replace('Scripts are optional task data.', 'Resources remain optional.')
+        changed = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={'base_version': skill['current_version_id'], 'content': changed_markdown})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()['content'], changed_markdown)
+
+    def test_single_file_import_requires_skill_markdown_filename(self):
+        arbitrary = self.root / 'instructions.md'
+        arbitrary.write_text(MARKDOWN, encoding='utf-8')
+        refused = self.client.post('/v1/knowledge/skills/import', json={'source_path': str(arbitrary)})
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertEqual(refused.json()['code'], 'skill_package_missing')
+        imported = self.import_package(self.package / 'SKILL.md')
+        self.assertEqual(imported['content'], (self.package / 'SKILL.md').read_bytes().decode('utf-8'))
+
     def test_update_and_revert_preserve_each_resource_version_and_detect_corruption(self):
         original = self.import_package()
         (self.package / 'references' / 'checklist.txt').write_text('RESOURCE-TWO')
@@ -91,9 +115,9 @@ class SkillPackageTests(unittest.TestCase):
         failed = self.client.get(f'/v1/knowledge/versions/{reverted["current_version_id"]}/resource', params={'path': 'references/checklist.txt'})
         self.assertEqual(failed.status_code, 409, failed.text)
 
-    def test_same_thread_refresh_reads_new_resource_and_removes_deselected_discovery(self):
+    def test_same_thread_skill_reload_reads_new_resource_and_removes_deselected_discovery(self):
         imported = self.import_package()
-        slug = skill_slug_from_entry_id(imported['id'])
+        slug = 'example-skill'
         virtual = f'/skills/{slug}/references/checklist.txt'
         deployment = self.client.post('/v1/deployments/connected', json={'endpoint': 'http://127.0.0.1:9/v1', 'display_name': 'fixture'}).json()
         def model(run, _):
@@ -126,7 +150,7 @@ class SkillPackageTests(unittest.TestCase):
         self.assertTrue((scratch / 'large_tool_results' / 'keep.txt').is_file())
         self.assertNotIn(slug, finished['current_run']['model_requests'][-1]['instructions'])
 
-    def test_next_turn_memory_refresh_changes_actual_instructions_without_resetting_history(self):
+    def test_memory_version_is_fixed_for_a_chat_and_new_chat_reads_updated_version(self):
         reset_received_prompts()
         memory = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'memory', 'content': 'MEMORY-ORIGINAL-UNIQUE'}).json()
         deployment = self.client.post('/v1/deployments/connected', json={'endpoint': 'http://127.0.0.1:9/v1', 'display_name': 'fixture'}).json()
@@ -140,16 +164,20 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn('Editing files under /memories changes derived scratch only', RECEIVED_PROMPTS[-1])
         self.assertNotIn('To persist new knowledge, call `edit_file`', RECEIVED_PROMPTS[-1])
         changed = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={'content': 'MEMORY-UPDATED-UNIQUE', 'base_version': memory['current_version_id']}).json()
-        self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Second message', 'presented_tools': [], 'memory_version_refs': [changed['current_version_id']]})
+        attempted = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Change memory here', 'presented_tools': [], 'memory_version_refs': [changed['current_version_id']]})
+        self.assertEqual(attempted.status_code, 409, attempted.text)
+        self.assertIn('new chat', attempted.text.lower())
+        self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Second message', 'presented_tools': []})
         second = wait_for_chat(self.client, chat['id'])
         self.assertEqual(second['current_run']['status'], 'completed', second['current_run'].get('error'))
         prompt = RECEIVED_PROMPTS[-1]
-        self.assertIn('MEMORY-UPDATED-UNIQUE', prompt)
-        self.assertNotIn('MEMORY-ORIGINAL-UNIQUE', prompt)
+        self.assertIn('MEMORY-ORIGINAL-UNIQUE', prompt)
+        self.assertNotIn('MEMORY-UPDATED-UNIQUE', prompt)
         self.assertEqual(first['thread_id'], second['thread_id'])
         self.assertGreater(len(second['transcript']), len(first['transcript']))
-        self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Third message', 'presented_tools': [], 'memory_version_refs': []})
-        third = wait_for_chat(self.client, chat['id'])
+        fresh = self.client.post('/v1/chat/conversations', json={'deployment_id': deployment['id'], 'memory_version_refs': [changed['current_version_id']]}).json()
+        self.client.post(f'/v1/chat/conversations/{fresh["id"]}/start', json={'task': 'New chat', 'presented_tools': []})
+        third = wait_for_chat(self.client, fresh['id'])
         self.assertEqual(third['current_run']['status'], 'completed', third['current_run'].get('error'))
-        self.assertNotIn('MEMORY-UPDATED-UNIQUE', RECEIVED_PROMPTS[-1])
-        self.assertEqual(third['thread_id'], first['thread_id'])
+        self.assertIn('MEMORY-UPDATED-UNIQUE', RECEIVED_PROMPTS[-1])
+        self.assertNotEqual(third['thread_id'], first['thread_id'])

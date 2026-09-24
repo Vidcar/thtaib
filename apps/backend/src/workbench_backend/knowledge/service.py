@@ -32,7 +32,7 @@ from workbench_backend.knowledge.schemas import (
     SkillPackageImportRequest, SkillResource, SkillResourceView,
 )
 from workbench_backend.knowledge.store import KnowledgeStore
-from workbench_backend.knowledge.packages import read_skill_package, safe_resource_path
+from workbench_backend.knowledge.packages import parse_skill_markdown, read_skill_package, safe_resource_path
 from workbench_backend.paths import WorkbenchPaths
 
 PROTECTED_KIND = "protected_instruction"
@@ -80,6 +80,8 @@ class KnowledgeService:
             return self._create_locked(request)
 
     def _create_locked(self, request: KnowledgeCreateRequest, *, resources: list[SkillResource] | None = None, package_source: str | None = None) -> KnowledgeEntryView:
+        if request.kind == "skill":
+            parse_skill_markdown(request.content)
         now = utc_now()
         entry_id = new_id("kn")
         version_id = new_id("knv")
@@ -259,6 +261,8 @@ class KnowledgeService:
         resources: list[SkillResource] | None = None,
         package_source: str | None = None,
     ) -> KnowledgeEntryView:
+        if entry.kind == "skill":
+            parse_skill_markdown(content)
         now = utc_now()
         prior = self.get_version(previous_version_id)
         version = KnowledgeVersion(
@@ -354,6 +358,7 @@ class KnowledgeService:
 
     def import_skill(self, request: SkillPackageImportRequest) -> KnowledgeEntryView:
         content, files = read_skill_package(Path(request.source_path))
+        skill_name, _ = parse_skill_markdown(content)
         with self._lock:
             self._require_scope(request.scope, request.scope_id)
             entry = self._require_entry(request.entry_id) if request.entry_id else None
@@ -368,7 +373,7 @@ class KnowledgeService:
             provenance = KnowledgeProvenance(actor="human", note="Imported inert skill package; no scripts or dependencies executed.")
             if entry is not None:
                 return self._append_version(entry, content=content, provenance=provenance, previous_version_id=entry.current_version_id, resources=resources, package_source=source)
-            return self._create_locked(KnowledgeCreateRequest(scope=request.scope, scope_id=request.scope_id, kind="skill", content=content, display_name=request.display_name or Path(source).stem, provenance=provenance), resources=resources, package_source=source)
+            return self._create_locked(KnowledgeCreateRequest(scope=request.scope, scope_id=request.scope_id, kind="skill", content=content, display_name=request.display_name or skill_name, provenance=provenance), resources=resources, package_source=source)
 
     def resource_bytes(self, version: KnowledgeVersion, relative_path: str) -> bytes:
         path = safe_resource_path(relative_path)

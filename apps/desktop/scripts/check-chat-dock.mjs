@@ -21,7 +21,8 @@ assert.doesNotMatch(css, /files-expanded[\s\S]*display:\s*none/, "widening the d
 assert.match(css, /grid-area: 1 \/ 2 \/ 3 \/ 3/, "the rail stays a full-height column beside the transcript and composer");
 assert.doesNotMatch(css, /max-width: 1120px/, "a narrower window does not move the rail above the composer");
 assert.match(css, /\.chat-rail \.chat-history-actions \{[^}]*position: static/, "conversation actions sit in the rail instead of covering the answer");
-assert.match(dockSource, /DiffEditor/, "file differences use Monaco's diff editor");
+assert.match(dockSource, /Project files/, "the dock retains the project file browser");
+assert.doesNotMatch(dockSource, /file-changes|reverse|DiffEditor/, "the retired file-change and undo path is absent");
 assert.match(monacoSource, /loader\.config\(\{ monaco \}\)/, "Monaco is loaded from the desktop package");
 assert.doesNotMatch(`${dockSource}\n${monacoSource}`, /cdn\.|jsdelivr|unpkg/, "the editor does not request a CDN");
 
@@ -43,8 +44,6 @@ try {
   const failedTodos = { id: "todo-3", name: "write_todos", args: { todos: [{ content: "Should not replace", status: "pending" }] } };
   const html = renderToStaticMarkup(React.createElement(ChatDockContext.Provider, {
     value: {
-      fileChanges: [{ id: "change-1", toolCallId: "edit-1", path: "thistest.md", addedLines: 5, removedLines: 4 }],
-      openChange: (id) => opened.push(id),
       openFile: (file) => opened.push(file),
     },
   }, React.createElement(AgentMessageFeed, {
@@ -57,7 +56,7 @@ try {
     ],
   })));
   assert.match(html, /Read SKILL\.md(?! \+)/, "a read has no added or removed count");
-  assert.match(html, /Edited thistest\.md \+5 -4/);
+  assert.match(html, /Edited thistest\.md/);
   assert.match(html, /Replace/);
   assert.doesNotMatch(html, />Start</, "a later successful list replaces the previous one");
   assert.match(html, /List arguments/, "raw todo arguments stay behind expand");
@@ -114,32 +113,10 @@ try {
   assert.equal(groups[0].label, "Read 2 files");
   assert.deepEqual(groups.flatMap(group => group.items), activity, "grouping retains every original tool record");
 
-  const { groupConsecutiveChanges, MonacoDiff } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
-  const changes = [
-    { change: { id: "first", path: "one.md" }, before: "A", after: "B" },
-    { change: { id: "second", path: "one.md" }, before: "B", after: "C" },
-    { change: { id: "third", path: "two.md" }, before: "X", after: "Y" },
-    { change: { id: "fourth", path: "one.md" }, before: "C", after: "D" },
-  ];
-  const changeGroups = groupConsecutiveChanges(changes);
-  assert.deepEqual(changeGroups.map(group => group.items.map(item => item.change.id)), [["first", "second"], ["third"], ["fourth"]]);
-  assert.equal(changeGroups[0].items[1], changes[1], "a grouped edit keeps its own before/after evidence and reversal identity");
-  let loadAttempts = 0;
-  const rejectEditor = async () => { loadAttempts += 1; throw new Error("Editor resource unavailable"); };
-  let unavailable;
-  await act(async () => { unavailable = create(React.createElement(MonacoDiff, { original: "A", modified: "B", sideBySide: true, load: rejectEditor })); });
-  assert.match(JSON.stringify(unavailable.toJSON()), /The difference is unavailable/);
-  assert.doesNotMatch(JSON.stringify(unavailable.toJSON()), /Opening the difference/, "failed loading cannot leave an indefinite progress label");
-  await act(async () => unavailable.root.findByType("button").props.onClick());
-  assert.equal(loadAttempts, 2, "retry reattempts the failed editor resource");
-  await act(async () => unavailable.unmount());
-
   let renderer;
   await act(async () => {
     renderer = create(React.createElement(ChatDockContext.Provider, {
       value: {
-        fileChanges: [{ id: "change-1", toolCallId: "edit-1", path: "thistest.md", addedLines: 5, removedLines: 4 }],
-        openChange: (id) => opened.push(id),
         openFile: (file) => opened.push(file),
       },
     }, React.createElement(AgentMessageFeed, {
@@ -151,7 +128,7 @@ try {
   });
   const line = renderer.root.findByProps({ className: "activity-line" });
   await act(async () => { line.props.onClick({ preventDefault() {}, stopPropagation() {} }); });
-  assert.deepEqual(opened, ["change-1"]);
+  assert.deepEqual(opened, ["thistest.md"], "activity opens the current project file");
   assert.deepEqual(sends, []);
 
   const failed = renderToStaticMarkup(React.createElement(AgentMessageFeed, {

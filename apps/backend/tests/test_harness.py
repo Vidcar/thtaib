@@ -384,8 +384,6 @@ class HarnessApiTests(unittest.TestCase):
                 "edit_file",
                 "glob",
                 "grep",
-                "rename_file",
-                "delete_file",
                 "execute",
                 "write_todos",
                 "ask_user",
@@ -443,16 +441,13 @@ class HarnessApiTests(unittest.TestCase):
         )
         self.assertEqual(with_file, ["read_attachment"])
         self.assertEqual(still_denied, [])
-        from workbench_backend.agents.tools import ENABLED_TOOLS, project_mutation_tools
+        from workbench_backend.agents.tools import ENABLED_TOOLS
         self.assertFalse(set(ENABLED_TOOLS) & {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "task"})
-        mutations = [tool.name for tool in project_mutation_tools(str(project))]
-        self.assertEqual(mutations, ["rename_file", "delete_file"])
 
     def test_ordinary_chat_does_not_offer_task_or_recursive_delete(self) -> None:
         from deepagents import create_deep_agent
         from deepagents.backends import FilesystemBackend
         from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
-        from workbench_backend.agents.tools import project_mutation_tools
 
         project = self.root / "offered-tools"
         project.mkdir()
@@ -474,7 +469,6 @@ class HarnessApiTests(unittest.TestCase):
         ensure_ordinary_chat_profile(model)
         child_agent = create_deep_agent(
             model=model,
-            tools=project_mutation_tools(str(project)),
             system_prompt="parent",
             backend=FilesystemBackend(root_dir=str(project), virtual_mode=True),
             subagents=[{
@@ -492,7 +486,6 @@ class HarnessApiTests(unittest.TestCase):
             self.assertNotIn("delete", names)
             self.assertNotIn("task", names)
             self.assertIn("read_file", names)
-        self.assertIn("delete_file", set().union(*_RecordingModel.offered))
 
         _RecordingModel.offered.clear()
         self.scripted = _RecordingModel([AIMessage(content="ordinary chat")])
@@ -505,7 +498,7 @@ class HarnessApiTests(unittest.TestCase):
             self.assertNotIn("delete", names)
         offered = set().union(*_RecordingModel.offered)
         self.assertIn("read_file", offered)
-        self.assertIn("delete_file", offered)
+        self.assertNotIn("delete_file", offered)
         self.assertNotIn("task", [item["name"] for item in body["tool_invocations"]])
 
     def test_completion_evidence_is_not_judgement(self) -> None:
@@ -931,7 +924,6 @@ class HarnessApiTests(unittest.TestCase):
                     self.assertEqual(b_live.status, AgentRunStatus.running)
                     self.assertTrue(harness._threads[b["id"]].is_alive())
                     self.assertFalse(harness._cancels[b["id"]].is_set())
-                    self.assertTrue(harness._project_is_active(b_live))
         finally:
             hold.set()
         self.assertEqual(wait_for_run(self.client, b["id"])["status"], "completed")

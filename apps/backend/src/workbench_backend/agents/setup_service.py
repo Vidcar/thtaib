@@ -107,7 +107,7 @@ class SetupService:
     def read_project_file(self, project_id: str, relative_path: str) -> ProjectFileContent:
         """Return captured text for one project file. Does not call the model."""
 
-        from workbench_backend.agents.file_changes import TEXT_LIMIT, file_image, project_file
+        from workbench_backend.agents.project_files import TEXT_LIMIT, file_image, project_file
 
         project = self.get_project(project_id, require_active=True)
         root = Path(project.path).resolve()

@@ -1,10 +1,10 @@
-"""Windows host shell policy on Deep Agents 0.7.15 (ENV-001 / OQ-003).
+"""Windows host shell policy on Deep Agents 0.7.18.
 
 Uses ``LocalShellBackend``, ``permissions=``, and ``interrupt_on=``. The
-framework pauses dangerous ``execute`` calls; the application persists native
+framework pauses selected ``execute`` calls in Ask mode; the application persists native
 interrupts and surfaces them through shared Chat.
 
-Sources consulted 2026-09-19 for pinned ``deepagents==0.7.15``:
+Sources consulted for pinned ``deepagents==0.7.18``:
 
 - https://docs.langchain.com/oss/python/deepagents/backends
 - https://docs.langchain.com/oss/python/deepagents/human-in-the-loop
@@ -20,9 +20,6 @@ to routed prefixes. ``interrupt_on`` is the human gate for ``execute``.
 
 from __future__ import annotations
 
-from workbench_backend.errors import HarnessError
-
-import re
 from typing import Any
 
 from deepagents import FilesystemPermission
@@ -37,44 +34,10 @@ from workbench_backend.agents.schemas import (
     PendingInterrupt,
     PendingInterruptAction,
     ToolMode,
+    UserQuestion,
 )
+from pydantic import ValidationError
 
-# Compound / redirect / substitution forms are never auto-allowed, even when
-# the first token is a read-only command.
-_UNSAFE_META = re.compile(r"[;&|`$><\n\r%!^()\"'{}\[\]*?~\\]")
-
-_NO_ARG_COMMANDS = frozenset({"pwd", "whoami", "hostname", "ver"})
-_SAFE_ECHO_FLAGS = frozenset({"on", "off"})
-_SAFE_DIR_FLAGS = frozenset({"/b", "/a"})
-_SAFE_LS_FLAGS = frozenset({"-a", "-l", "-la", "-al"})
-_SAFE_LOOKUP_FLAGS = frozenset({"/q"})
-_SAFE_GIT_STATUS_FLAGS = frozenset({"--short", "-s", "--porcelain", "--porcelain=v1"})
-_SAFE_GIT_LOG_FLAGS = frozenset({"--oneline", "--decorate", "--graph"})
-_SAFE_GIT_BRANCH_FLAGS = frozenset({"--show-current", "-a", "--all", "-r", "--remotes"})
-_SAFE_GIT_DIFF_FLAGS = frozenset(
-    {
-        "--stat",
-        "--name-only",
-        "--name-status",
-        "--cached",
-        "--staged",
-        "--check",
-        "--no-ext-diff",
-        "--no-textconv",
-    }
-)
-_SAFE_GIT_SHOW_FLAGS = frozenset(
-    {"--stat", "--name-only", "--name-status", "--no-ext-diff", "--no-textconv"}
-)
-_SAFE_GIT_REV_PARSE_FLAGS = frozenset({"--show-toplevel", "--is-inside-work-tree", "--abbrev-ref"})
-
-# Routed prefixes the composite already isolates. Deny a unused subtree so
-# ``permissions=`` is real without blocking harness scratch writes.
-PERMISSION_DENY_PATHS = (
-    "/large_tool_results/denied/**",
-    "/conversation_history/denied/**",
-    "/retrieved/denied/**",
-)
 SKILLS_WRITE_DENY_PATHS = ("/skills/**",)
 
 HOST_SHELL_NOTE = (
@@ -87,193 +50,11 @@ HOST_SHELL_NOTE = (
 )
 
 
-def is_dangerous_shell_command(command: str) -> bool:
-    """True when ``execute`` must pause for approval.
-
-    Only explicitly understood command/argument forms are auto-allowed.
-    Quotes, expansions, unknown options and ambiguous forms need approval.
-    """
-
-    stripped = command.strip() if isinstance(command, str) else ""
-    if not stripped:
-        return True
-    if _UNSAFE_META.search(stripped):
-        return True
-    if not re.fullmatch(r"[A-Za-z0-9_./:=+ \t-]+", stripped):
-        return True
-    tokens = _split_command(stripped)
-    if not tokens:
-        return True
-    head = tokens[0]
-    if "/" in head or "\\" in head:
-        return True
-    args = tokens[1:]
-    if head in _NO_ARG_COMMANDS:
-        return bool(args)
-    if head == "echo":
-        return not _safe_echo_args(args)
-    if head in {"dir", "ls"}:
-        return not _safe_list_args(args, _SAFE_DIR_FLAGS if head == "dir" else _SAFE_LS_FLAGS)
-    if head == "type":
-        return not _safe_read_file_args(args)
-    if head in {"where", "which"}:
-        return not _safe_lookup_args(args)
-    if head == "git":
-        return not _is_safe_git_command(args)
-    return True
-
-
-def _split_command(command: str) -> list[str]:
-    # Quote/escape/expansion forms were rejected above. Do not pretend that
-    # shlex understands both cmd.exe and POSIX shell quoting semantics.
-    return command.split()
-
-
-def _is_safe_git_command(args: list[str]) -> bool:
-    if not args:
-        return False
-    subcommand = args[0]
-    rest = args[1:]
-    if subcommand == "status":
-        return _only_allowed_flags(rest, _SAFE_GIT_STATUS_FLAGS)
-    if subcommand == "log":
-        return _safe_git_log_args(rest)
-    if subcommand == "branch":
-        return _only_allowed_flags(rest, _SAFE_GIT_BRANCH_FLAGS)
-    if subcommand == "diff":
-        return _safe_git_path_args(
-            rest,
-            _SAFE_GIT_DIFF_FLAGS,
-            required_flags=frozenset({"--no-ext-diff", "--no-textconv"}),
-        )
-    if subcommand == "show":
-        return _safe_git_path_args(
-            rest,
-            _SAFE_GIT_SHOW_FLAGS,
-            required_flags=frozenset({"--no-ext-diff", "--no-textconv"}),
-        )
-    if subcommand == "rev-parse":
-        return _only_allowed_flags(rest, _SAFE_GIT_REV_PARSE_FLAGS)
-    return False
-
-
-def _only_allowed_flags(args: list[str], allowed: frozenset[str]) -> bool:
-    return all(arg in allowed for arg in args)
-
-
-def _safe_echo_args(args: list[str]) -> bool:
-    if not args:
-        return True
-    if len(args) == 1 and args[0].lower() in _SAFE_ECHO_FLAGS:
-        return True
-    return all(_is_plain_word(arg) for arg in args)
-
-
-def _safe_list_args(args: list[str], allowed: frozenset[str]) -> bool:
-    paths = 0
-    for arg in args:
-        lower = arg.lower()
-        if lower in allowed:
-            continue
-        if arg.startswith("-") or arg.startswith("/"):
-            return False
-        if _looks_unsafe_path_arg(arg):
-            return False
-        paths += 1
-    return paths <= 1
-
-
-def _safe_read_file_args(args: list[str]) -> bool:
-    return bool(args) and all(
-        not arg.startswith("-") and not arg.startswith("/") and not _looks_unsafe_path_arg(arg)
-        for arg in args
-    )
-
-
-def _safe_lookup_args(args: list[str]) -> bool:
-    if not args:
-        return False
-    for arg in args:
-        lower = arg.lower()
-        if lower in _SAFE_LOOKUP_FLAGS:
-            continue
-        if arg.startswith("-") or arg.startswith("/") or not _is_plain_word(arg):
-            return False
-    return True
-
-
-def _safe_git_log_args(args: list[str]) -> bool:
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg in _SAFE_GIT_LOG_FLAGS:
-            index += 1
-            continue
-        if arg in {"-n", "--max-count"}:
-            if index + 1 >= len(args) or not args[index + 1].isdigit():
-                return False
-            index += 2
-            continue
-        if arg.startswith("-n") and arg[2:].isdigit():
-            index += 1
-            continue
-        return False
-    return True
-
-
-def _safe_git_path_args(
-    args: list[str],
-    allowed_flags: frozenset[str],
-    *,
-    required_flags: frozenset[str] = frozenset(),
-) -> bool:
-    path_mode = False
-    seen_flags: set[str] = set()
-    for arg in args:
-        if arg == "--":
-            path_mode = True
-            continue
-        if not path_mode and arg.startswith("-"):
-            if arg not in allowed_flags:
-                return False
-            seen_flags.add(arg)
-            continue
-        if arg.startswith("-") or _looks_unsafe_path_arg(arg):
-            return False
-    if not required_flags.issubset(seen_flags):
-        return False
-    return True
-
-
-def _looks_unsafe_path_arg(arg: str) -> bool:
-    return (
-        not arg
-        or arg.startswith("/")
-        or "\\" in arg
-        or ":" in arg
-        or ".." in arg.split("/")
-    )
-
-
-def _is_plain_word(arg: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9_.:-]+", arg))
-
-
-def execute_requires_approval(request: ToolCallRequest) -> bool:
-    """``interrupt_on`` ``when`` predicate: True pauses, False auto-approves."""
-
-    call = request.tool_call
-    args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
-    command = args.get("command") if isinstance(args, dict) else None
-    return is_dangerous_shell_command(command if isinstance(command, str) else "")
-
-
 def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] | None:
     """Route-scoped allow/deny rules, or none when no routed backend is attached.
 
     ``/skills/**`` writes are denied whenever selected skills are materialized,
-    including project-less and recorded-tool knowledge runs. Unused-subtree
-    denies stay on live project backends. Rules stay on routed prefixes so
+    including project-less and recorded-tool knowledge runs. Rules stay on routed prefixes so
     a sandbox default (``LocalShellBackend``) is not given project-wide
     ``permissions=``.
     """
@@ -286,14 +67,6 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
     if recorded and not knowledge_routes:
         return None
     rules: list[FilesystemPermission] = []
-    if not recorded and run.project_path:
-        rules.append(
-            FilesystemPermission(
-                operations=["write"],
-                paths=list(PERMISSION_DENY_PATHS),
-                mode="deny",
-            )
-        )
     if run.skill_version_refs:
         rules.append(
             FilesystemPermission(
@@ -308,13 +81,11 @@ def filesystem_permissions_for_run(run: AgentRun) -> list[FilesystemPermission] 
 def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | dict[str, Any]] | None:
     """HITL config for protected tools. The run's approval mode chooses which pauses remain.
 
-    Ask keeps every pause. Approve for me permits recoverable project text changes.
-    Full access also lets a selected shell command and external tool proceed.
-    A typed question and a memory proposal are not decided here.
+    Ask pauses selected side-effecting tools. Full access permits them.
+    A typed question always pauses in either mode.
     """
 
-    mode = run.approval_mode if run.approval_mode in {"ask", "approve_for_me", "full_access"} else "ask"
-    auto_file = mode in {"approve_for_me", "full_access"}
+    mode = run.approval_mode if run.approval_mode in {"ask", "full_access"} else "ask"
     auto_external = mode == "full_access"
 
     def saved_permission(name, args, request):
@@ -347,18 +118,18 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             ),
         }
     } if host_shell_requested(run) else {}
-    for name in ("write_file", "edit_file", "rename_file", "delete_file"):
+    if "ask_user" in run.presented_tools:
+        result["ask_user"] = {
+            "allowed_decisions": ["respond", "reject"],
+            "description": "Answer this task question. Answering does not grant access to any other tool.",
+        }
+    for name in ("write_file", "edit_file"):
         if name not in run.presented_tools:
             continue
         def file_approval(request: ToolCallRequest, name=name) -> bool:
             call = request.tool_call
             args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
             if auto_external:
-                return False
-            if auto_file and reversible_file_request(run, name, args):
-                ident = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
-                if ident:
-                    run.tool_authorizations[ident] = "recoverable_edit"
                 return False
             return not saved_permission(name, args, request)
         result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
@@ -389,12 +160,6 @@ def approval_mode_instructions(mode: str) -> str:
             "Access for this turn: Full access. Selected file mutations, shell commands, "
             "and external tools proceed under this mode without a permission card. "
         )
-    elif mode == "approve_for_me":
-        policy = (
-            "Access for this turn: Approve for me. Selected reversible project text edits proceed "
-            "without a permission card when a complete recovery image can be recorded. Shell commands, other file mutations and external tools "
-            "still pause unless a saved matching grant allows them. "
-        )
     else:
         policy = (
             "Access for this turn: Ask. Selected file mutations, shell commands, and external tools pause unless a saved matching grant allows them. "
@@ -409,41 +174,12 @@ def approval_mode_instructions(mode: str) -> str:
     )
 
 
-def reversible_file_request(run: AgentRun, name: str, args: dict[str, Any]) -> bool:
-    """Auto-approval requires the same complete images as the file recorder."""
-    from pathlib import Path
-    from workbench_backend.agents.file_changes import file_image, project_file, TEXT_LIMIT
-    if not run.project_path:
-        return False
-    try:
-        source = project_file(Path(run.project_path), str(args.get("file_path", "")))
-        before = file_image(source)
-        if before.exists and before.text is None:
-            return False
-        if name == "write_file":
-            text = args.get("content")
-            return isinstance(text, str) and len(text.encode("utf-8")) <= TEXT_LIMIT
-        if name == "edit_file":
-            old, new = args.get("old_string"), args.get("new_string")
-            if before.text is None or not isinstance(old, str) or not old or not isinstance(new, str):
-                return False
-            result = before.text.replace(old, new, -1 if args.get("replace_all") else 1)
-            return len(result.encode("utf-8")) <= TEXT_LIMIT
-        if name == "rename_file":
-            return before.exists and not project_file(Path(run.project_path), str(args.get("destination", ""))).exists()
-        return name == "delete_file" and before.exists
-    except (OSError, ValueError, HarnessError):
-        return False
-
-
 def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     """Normalize a LangGraph / HITL interrupt value into the run record."""
 
     value = _interrupt_value(raw)
     if value is None:
         return None
-    if value.get("kind") == "ask_user":
-        return PendingInterrupt(kind="ask_user", question=value.get("question"), environment="user_input", note="A user answer is required. This is not a permission approval.")
     requests = value.get("action_requests")
     reviews = value.get("review_configs")
     if not isinstance(requests, list) or not requests:
@@ -466,31 +202,45 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
             continue
         args = item.get("args")
         description = item.get("description")
+        question = None
+        if name == "ask_user" and isinstance(args, dict):
+            try:
+                question = UserQuestion.model_validate({**args, "choices": args.get("choices") or []})
+                if question.answer_type == "choice" and not question.choices:
+                    question = None
+            except ValidationError:
+                pass
         actions.append(
             PendingInterruptAction(
                 name=name,
                 args=args if isinstance(args, dict) else {},
                 description=description if isinstance(description, str) else None,
-                allowed_decisions=review_map.get(name, ["approve", "reject"]),
+                allowed_decisions=review_map.get(name, ["respond", "reject"] if name == "ask_user" else ["approve", "reject"]),
+                question=question,
             )
         )
     if not actions:
         return None
     if all(action.name == "execute" for action in actions):
         return PendingInterrupt(action_requests=actions)
+    if all(action.name == "ask_user" for action in actions):
+        return PendingInterrupt(action_requests=actions, environment="user_input",
+            note="Answer each question or cancel it.")
     return PendingInterrupt(action_requests=actions, environment="tool_actions",
         note="Review each selected action and its exact inputs. Approval does not grant other tools or allow automatic memory saving.")
 
 
 def reject_decisions_for(pending: PendingInterrupt) -> list[dict[str, str]]:
-    if pending.kind == "ask_user":
-        return [{"type": "user_answer", "cancelled": "true"}]
     return [
         {
             "type": "reject",
-            "message": "Run cancelled before this action was approved.",
+            "message": (
+                "The user cancelled this question. Do not repeat it unless asked."
+                if action.name == "ask_user"
+                else "Run cancelled before this action was approved."
+            ),
         }
-        for _ in pending.action_requests
+        for action in pending.action_requests
     ]
 
 
@@ -504,13 +254,35 @@ def validated_decision_payloads(
     for action, decision in zip(pending.action_requests, decisions, strict=True):
         if decision.type not in action.allowed_decisions:
             raise ValueError("interrupt_decision_not_allowed")
+        if decision.type != "approve" and decision.scope != "once":
+            raise ValueError("Only approvals can save permission grants")
+        if action.name == "ask_user":
+            if decision.type == "respond":
+                question = action.question
+                if question is None:
+                    raise ValueError("This question is invalid; reject it so the assistant can retry")
+                answer = decision.message
+                if not isinstance(answer, str) or not answer.strip() or len(answer) > 32000:
+                    raise ValueError("An answer is required")
+                if question.answer_type == "choice" and answer not in question.choices:
+                    raise ValueError("Choose one of the offered answers")
+                if question.answer_type in {"file", "folder"}:
+                    from pathlib import Path
+                    chosen = Path(answer).expanduser()
+                    if not chosen.is_absolute() or not (chosen.is_file() if question.answer_type == "file" else chosen.is_dir()):
+                        raise ValueError("Select an existing absolute file or folder path")
+            elif decision.type != "reject":
+                raise ValueError("Questions require a response or rejection")
+        elif decision.type == "respond":
+            raise ValueError("Only questions can receive an answer")
         payload: dict[str, str] = {"type": decision.type}
         if decision.message:
             payload["message"] = decision.message
         elif decision.type == "reject":
             payload["message"] = (
-                "User rejected this action. The tool was not executed. "
-                "Do not retry unless the user asks."
+                "The user cancelled this question. Do not repeat it unless asked."
+                if action.name == "ask_user"
+                else "User rejected this action. The tool was not executed. Do not retry unless the user asks."
             )
         payloads.append(payload)
     return payloads
@@ -526,6 +298,6 @@ def _interrupt_value(raw: Any) -> dict[str, Any] | None:
                 return found
         return None
     value = getattr(raw, "value", raw)
-    if isinstance(value, dict) and (value.get("action_requests") or value.get("kind") == "ask_user"):
+    if isinstance(value, dict) and value.get("action_requests"):
         return value
     return None

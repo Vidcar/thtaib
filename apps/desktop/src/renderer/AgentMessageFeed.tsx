@@ -2,7 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { activityLine, groupActivity, lineCounts, parseTodoList, type TodoItem } from "./activityLine";
+import { activityLine, groupActivity, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -538,7 +538,7 @@ function AttachmentList({ attachments }: { attachments: MessageParts["attachment
   );
 }
 
-const FILE_ACTIVITY = new Set(["read_file", "write_file", "edit_file", "delete_file", "rename_file", "ls", "glob", "grep"]);
+const FILE_ACTIVITY = new Set(["read_file", "write_file", "edit_file", "ls", "glob", "grep"]);
 
 function todoLabel(status: TodoItem["status"]): string {
   if (status === "in_progress") return "In progress";
@@ -624,15 +624,13 @@ function ToolBlockList({
     const fileContent = tool.name === "write_file" ? writtenFileContent(tool.args) : null;
     const readableInput = incomplete ? writing : fileContent;
     const finished = !incomplete && !error;
-    const change = dock?.fileChanges.find(item => item.toolCallId && item.toolCallId === tool.id) ?? null;
     const path = toolFilePath(tool.args);
     const label = waiting && incomplete
       ? path ? `Proposed change to ${path}` : `Waiting: ${tool.name}`
       : stopped
       ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
-      : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error), change });
-    const counts = !error && finished ? lineCounts(change) : "";
-    const openable = FILE_ACTIVITY.has(tool.name) && (Boolean(change) || (Boolean(path) && !stopped));
+      : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) });
+    const openable = FILE_ACTIVITY.has(tool.name) && Boolean(path) && !stopped;
     const open = openStates.get(id) ?? defaultOpen;
     const output = parseContent(tool.result && typeof tool.result === "object" && !Array.isArray(tool.result) && "content" in tool.result ? (tool.result as { content: unknown }).content : tool.result);
     const grant = tool.authorizationSource === "saved_permission" ? tool.authorizationGrant : undefined;
@@ -648,9 +646,8 @@ function ToolBlockList({
           {openable ? <button type="button" className="activity-line" onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (change) dock?.openChange(change.id);
-            else if (path) dock?.openFile(path);
-          }}>{label}{counts && !label.includes(counts) ? ` ${counts}` : ""}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
+            if (path) dock?.openFile(path);
+          }}>{label}{error ? " failed" : ""}</button> : <span className="activity-line">{label}{error ? " failed" : ""}</span>}
           {streaming && writing ? <span className="tool-call-progress">{proposedAmount(writing.length)}</span> : null}
           {tool.authorizationSource === "saved_permission" ? <span className="tool-call-permission">Allowed by saved permission{grant ? `: ${grant.display_name}` : ""}</span> : null}
         </>}

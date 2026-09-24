@@ -8,8 +8,9 @@ On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It sta
 
 1. Open **Models**, choose an installed model and its configuration, then load it. **Save changes** updates that configuration; **Save as variant** creates another. Loading changes use **Apply & reload**. An already running model can be used directly.
 2. Open **Chat**. New unpinned chats use the loaded model. The model menu shows effective thinking and context settings. **Apply** keeps changes in the conversation; **Save to model** explicitly updates future defaults.
-3. Add an existing project from the left rail for file tasks. **Ask** pauses before effects; **Approve for me** permits recoverable project edits; **Full access** permits enabled tools. **Plan** remains read-only at every access level. Named helpers and review are optional.
-4. Use **Stop** to cancel active work. Choose a saved conversation from the left to continue; visiting another destination retains its draft and reading position. Unload the model from **Models** when you want to release its memory.
+3. Add an existing project from the left rail for file tasks. **Ask** pauses before edits, shell commands, and other effects unless a saved permission applies; **Full access** permits enabled tools. **Plan** remains read-only at either access level. Named helpers and review are optional.
+4. Select Knowledge in the chat setup. Memory versions are fixed once that conversation's first turn starts; start a new chat to use edited memory. Skills use native `SKILL.md` content and a skill edit or selection change takes effect on the next new message.
+5. Use **Stop** to cancel active work. Queued messages follow a successful turn, and pause after cancellation or failure. Choose a saved conversation from the left to continue; visiting another destination retains its draft and reading position. Unload the model from **Models** when you want to release its memory.
 
 ## Install and run
 

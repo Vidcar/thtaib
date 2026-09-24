@@ -1,9 +1,6 @@
 import { createContext, useContext } from "react";
-import type { ObservedFileChange } from "./activityLine";
 
 export interface ChatDockControls {
-  fileChanges: ObservedFileChange[];
-  openChange: (changeId: string) => void;
   openFile: (path: string) => void;
 }
 

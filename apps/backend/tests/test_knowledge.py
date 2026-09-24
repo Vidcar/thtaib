@@ -94,7 +94,7 @@ class KnowledgeApiTests(unittest.TestCase):
         agent = self._create(
             scope="agent",
             kind="skill",
-            content="skill body",
+            content="---\nname: agent-skill\ndescription: Agent skill instructions.\n---\n\nskill body",
             scope_id=self.client.post("/v1/agent-setups", json={"name": "Alpha"}).json()["id"],
             display_name="agent-skill",
         )
@@ -331,7 +331,7 @@ class KnowledgeLabHarnessTests(unittest.TestCase):
                 "scope": "agent",
                 "scope_id": self.client.post("/v1/agent-setups", json={"name": "Lab agent"}).json()["id"],
                 "kind": "skill",
-                "content": "skill text",
+                "content": "---\nname: lab-skill\ndescription: Lab skill instructions.\n---\n\nskill text",
                 "provenance": HUMAN,
             },
         ).json()

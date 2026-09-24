@@ -68,13 +68,19 @@ Snapshots SHALL NOT undo external actions or restore a whole environment unless 
 
 ### Requirement: STATE-005 - Version durable knowledge and enforce its write policy
 
-Durable knowledge SHALL preserve user, agent, and project scopes; `memory`, `skill`, and `protected_instruction` kinds; provenance; append-only versions; and reversible edits through new versions. Writes SHALL name an expected base version and report conflicts. Protected instructions SHALL reject agent-origin writes. Context-capture retention and redaction SHALL be local configuration and SHALL govern persisted diagnostic copies of model requests.
+Durable knowledge SHALL preserve user, agent, and project scopes; `memory`, `skill`, and `protected_instruction` kinds; provenance; append-only versions; and reversible edits through new versions. Writes SHALL name an expected base version and report conflicts. Protected instructions SHALL reject agent-origin writes. Skill creation, edit, and import SHALL require valid native `SKILL.md` content with a matching name and nonempty description; the body SHALL be materialized unchanged. A starter template MAY assist creation. Package name collisions SHALL be explicit, and an imported script MUST NOT execute during import. Context-capture retention and redaction SHALL be local configuration and SHALL govern persisted diagnostic copies of model requests.
 
 #### Scenario: Knowledge write policy
 
 - WHEN memory is edited, reverted, concurrently updated, or a protected instruction is overwritten by an agent
 - THEN version history, conflict behavior, and protected-instruction rejection MUST be enforced
 - AND configured context-retention and redaction behavior MUST be applied.
+
+#### Scenario: Native skill validation
+
+- **WHEN** a person creates, edits or imports a skill package
+- **THEN** invalid `SKILL.md` name/description or a name collision is rejected before materialization
+- **AND** a valid body is stored unchanged without running bundled scripts or converting freeform notes.
 
 ### Requirement: STATE-006 - Retrieve through LangChain components, not a second knowledge store
 
@@ -178,21 +184,6 @@ Restore SHALL use a clean application-data destination, validate data/checkpoint
 
 - **WHEN** an on-demand backup is restored with some external dependencies absent
 - **THEN** integrity and linkage are verified in a clean root, missing dependencies are shown and no uncertain action is automatically replayed.
-
-### Requirement: STATE-017 - Render file changes from the stored images
-
-A project-file change SHALL keep its before and after images, including text when the existing capture rules can read it, keyed by the tool call that made the change. The Changes page and the activity-line counts SHALL use those images. Added and removed counts are the added and removed content lines of that observed difference, excluding diff headers. A pre-rendered unified-diff string remains available to copy. It MUST NOT be the view and MUST NOT be a second record. When the text is unavailable, the view says so and the counts are omitted. Presenting the change MUST NOT call the model, write the file, or treat the diff as a rollback of anything beyond the existing single-file reverse.
-
-#### Scenario: Counts match the stored texts
-
-- **WHEN** a change has before and after text and the activity line shows added and removed counts
-- **THEN** those counts are the observed difference of those two texts
-- **AND** a copied unified diff is not stored as another change.
-
-#### Scenario: No text
-
-- **WHEN** a change has no captured text
-- **THEN** the diff view explains that the difference is unavailable and the activity line omits added and removed counts.
 
 ### Requirement: STATE-018 - Archive immediately and delete a chat without its project files
 

@@ -20,13 +20,18 @@ Archiving a conversation SHALL remove it from the active list and from active se
 
 ### Requirement: STATE-019 - Import a skill package without running it
 
-A skill SHALL be importable as one skill file or as a folder or archive that contains the skill file plus relative scripts, references, and assets. The import SHALL reject path traversal, links that escape the package, and Windows reserved names. Imported scripts MUST NOT run as part of import. The Knowledge screen lists the skill by name, shows the files it contains, and lets the person select or clear it for a later conversation. Selecting it uses the official skills path on the next turn. It does not execute the package.
+A skill SHALL be importable as one native `SKILL.md` file or as a folder or archive that contains `SKILL.md` plus relative scripts, references, and assets. The entrypoint MUST have valid skill frontmatter, a lowercase name, and a nonempty description; it SHALL materialize under a skill folder matching that name. Name collisions SHALL be reported rather than silently replacing a skill. The import SHALL reject path traversal, links that escape the package, and Windows reserved names. Imported scripts MUST NOT run as part of import. The Knowledge screen lists the skill by name, shows the files it contains, and lets the person select or clear it for a later conversation. Selecting it uses the official skills path on the next new user turn, including after an edit or deselection. It does not execute the package or convert freeform notes into a skill.
 
 #### Scenario: Import does not execute
 
 - **WHEN** a person imports a skill package that contains a script
 - **THEN** the skill appears in the list with its files
 - **AND** the script has not been run.
+
+#### Scenario: Invalid or conflicting package
+
+- **WHEN** an imported skill has invalid `SKILL.md` frontmatter or an existing skill name
+- **THEN** import fails with the reason and no existing skill body is overwritten.
 
 ### Requirement: STATE-020 - Extract supported documents without a source-inspection journey
 

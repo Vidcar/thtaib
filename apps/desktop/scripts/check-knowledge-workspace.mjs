@@ -18,12 +18,46 @@ try {
   await checkAgentDraftConflict((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkAgentSavedActions((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkKnowledgeSavedActions(KnowledgePanel);
+  await checkPinnedConversationMemory((await vite.ssrLoadModule("/src/renderer/ConversationSetup.tsx")).ConversationSetup);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
-  await checkFileReversalConflict((await vite.ssrLoadModule("/src/renderer/FileChangesPanel.tsx")).FileChangesPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
   await checkLifecyclePreview((await vite.ssrLoadModule("/src/renderer/LifecycleAction.tsx")).LifecycleAction);
 } finally { await vite.close(); }
 console.log("Knowledge workspace checks passed.");
+
+async function checkPinnedConversationMemory(Component) {
+  globalThis.fetch = async url => {
+    const pathname = new URL(String(url)).pathname;
+    if (pathname === "/v1/agent-tools") return json({ tools: [] });
+    throw new Error(`unexpected ${pathname}`);
+  };
+  const entries = [
+    { ...entry("memory", "Versioned memory"), current_version_id: "memory-v2" },
+    { ...entry("skill", "Current skill"), kind: "skill", current_version_id: "skill-v1" },
+  ];
+  let toggled = "";
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Component, {
+      projectId: null, projects: [], conversation: true, selectionBusy: false, sending: false,
+      agentSetupVersionId: null, agentSetups: [], onProject() {}, onAgent() {}, setupResolving: false,
+      onManageAgents() {}, instructionLayers: [], missingDeployment: false, selectedProfile: null,
+      embeddingDeploymentId: "", onEmbedding() {}, embedderDeployments: [], deployments: [],
+      knowledgeEntries: entries, selectedKnowledgeIds: ["memory-v1", "skill-v1"],
+      memoryLocked: true, pinnedMemoryVersionIds: ["memory-v1"], onToggleKnowledge: value => { toggled = value; },
+      tools: [], filesystemToolsAvailable: true, shellToolsAvailable: true,
+    })); await tick(); });
+    const labels = renderer.root.findAllByType("label");
+    const memory = labels.find(label => text(label).includes("Versioned memory")).findByType("input");
+    const skill = labels.find(label => text(label).includes("Current skill")).findByType("input");
+    assert.equal(memory.props.disabled, true, "an existing chat cannot switch to the current memory version");
+    assert.equal(memory.props.checked, false, "a newer memory version must not appear selected");
+    assert.match(text(renderer.root), /Pinned earlier memory version/, "the pinned earlier version remains visible");
+    assert.equal(skill.props.disabled, false, "skills remain selectable on later turns");
+    await act(async () => skill.props.onChange());
+    assert.equal(toggled, "skill-v1");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
 
 async function checkSkillResourceNavigation(Component) {
   const pending = [];
@@ -102,7 +136,7 @@ async function checkKnowledgeOwnershipAndReview(Component) {
     await act(async () => button(renderer, "New memory").props.onClick());
     await act(async () => field(renderer, "Use in", "select").props.onChange({ target: { value: "project" } }));
     assert.ok(text(field(renderer, "Project", "select")).includes("Actual project"));
-    await act(async () => { field(renderer, "Project", "select").props.onChange({ target: { value: "project_real" } }); field(renderer, "Name (optional)", "input").props.onChange({ target: { value: "Scoped fact" } }); field(renderer, "Content", "textarea").props.onChange({ target: { value: "Remember this" } }); });
+    await act(async () => { field(renderer, "Project", "select").props.onChange({ target: { value: "project_real" } }); field(renderer, "Display name (optional)", "input").props.onChange({ target: { value: "Scoped fact" } }); field(renderer, "Content", "textarea").props.onChange({ target: { value: "Remember this" } }); });
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
     const created = calls.find(call => call.path === "/v1/knowledge/entries" && call.method === "POST").body;
     assert.equal(created.scope_id, "project_real"); assert.equal(created.scope, "project"); assert.ok(!Object.hasOwn(created, "provenance"), "the desktop cannot forge actor or run provenance");
@@ -206,29 +240,6 @@ async function checkConnectionCredentialsAndTest(Component) {
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
-async function checkFileReversalConflict(Component) {
-  const held = deferred(); const calls = [];
-  const change = { change: { id: "edit", run_id: "second", operation: "modified", path: "notes.txt", status: "changed", before: { exists: true, text: "before" }, after: { exists: true, text: "after" } }, diff: "-before\n+after", reversal_available: true, current_matches: true, note: "Only this file change is reversed." };
-  globalThis.fetch = async (url, init = {}) => {
-    const path = new URL(String(url)).pathname; calls.push(path);
-    if (path.endsWith("/reverse")) return { ok: false, status: 409, json: async () => ({ error: "File changed since this run. Refresh before reversing." }) };
-    if (path.includes("/first/")) return held.promise;
-    return json([change]);
-  };
-  let renderer;
-  try {
-    await act(async () => { renderer = create(React.createElement(Component, { runIds: ["first"], currentRunId: "first" })); await tick(); });
-    await act(async () => { renderer.update(React.createElement(Component, { runIds: ["first", "second"], currentRunId: "second" })); await tick(); });
-    assert.ok(text(renderer.root).includes("notes.txt"));
-    await act(async () => { held.resolve(json([{ ...change, change: { ...change.change, id: "stale", path: "stale.txt" } }])); await tick(); });
-    assert.ok(!text(renderer.root).includes("stale.txt"), "old run file changes must not leak into the selected run");
-    await act(async () => button(renderer, "Reverse this file change").props.onClick());
-    assert.ok(!calls.some(path => path.endsWith("/reverse")), "show the concrete file reversal before submitting it");
-    await act(async () => { button(renderer, "Reverse change").props.onClick(); await tick(); });
-    assert.ok(text(renderer.root).includes("File changed since this run"));
-    assert.ok(text(renderer.root).includes("+after"), "a conflict must not pretend the file was reversed");
-  } finally { held.resolve(json([])); if (renderer) await act(async () => renderer.unmount()); }
-}
 function button(renderer, label) { const result = renderer.root.findAllByType("button").find(item => text(item).trim() === label); assert.ok(result, `expected button ${label}`); return result; }
 async function checkRunProposalConflict(Component) {
   let requestedRun;

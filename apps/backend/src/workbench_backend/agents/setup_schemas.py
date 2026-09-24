@@ -27,7 +27,7 @@ class SetupConfiguration(BaseModel):
     inherit_deployment_settings: bool | None = None
     instructions: str | None = None
     presented_tools: list[str] | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] | None = None
+    approval_mode: Literal["ask", "full_access"] | None = None
     connection_ids: list[str] | None = None
     memory_version_refs: list[str] | None = None
     skill_version_refs: list[str] | None = None

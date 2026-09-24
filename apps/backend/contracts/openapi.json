@@ -83,7 +83,6 @@
             "default": "ask",
             "enum": [
               "ask",
-              "approve_for_me",
               "full_access"
             ],
             "title": "Approval Mode",
@@ -256,13 +255,6 @@
               "$ref": "#/components/schemas/AgentEvent"
             },
             "title": "Events",
-            "type": "array"
-          },
-          "file_changes": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectFileChange"
-            },
-            "title": "File Changes",
             "type": "array"
           },
           "final_snapshot_id": {
@@ -931,7 +923,6 @@
             "default": "ask",
             "enum": [
               "ask",
-              "approve_for_me",
               "full_access"
             ],
             "title": "Approval Mode",
@@ -1820,7 +1811,6 @@
             "default": "ask",
             "enum": [
               "ask",
-              "approve_for_me",
               "full_access"
             ],
             "title": "Approval Mode",
@@ -2261,7 +2251,6 @@
               {
                 "enum": [
                   "ask",
-                  "approve_for_me",
                   "full_access"
                 ],
                 "type": "string"
@@ -2540,7 +2529,6 @@
             "default": "ask",
             "enum": [
               "ask",
-              "approve_for_me",
               "full_access"
             ],
             "title": "Approval Mode",
@@ -3595,7 +3583,6 @@
               {
                 "enum": [
                   "ask",
-                  "approve_for_me",
                   "full_access"
                 ],
                 "type": "string"
@@ -5339,46 +5326,6 @@
         "title": "ExtractedSection",
         "type": "object"
       },
-      "FileImage": {
-        "properties": {
-          "exists": {
-            "title": "Exists",
-            "type": "boolean"
-          },
-          "sha256": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sha256"
-          },
-          "size_bytes": {
-            "default": 0,
-            "title": "Size Bytes",
-            "type": "integer"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text"
-          }
-        },
-        "required": [
-          "exists"
-        ],
-        "title": "FileImage",
-        "type": "object"
-      },
       "FileRole": {
         "enum": [
           "primary_weights",
@@ -6754,7 +6701,8 @@
           "type": {
             "enum": [
               "approve",
-              "reject"
+              "reject",
+              "respond"
             ],
             "title": "Type",
             "type": "string"
@@ -8462,11 +8410,8 @@
             "type": "string"
           },
           "kind": {
+            "const": "deepagents_interrupt_on",
             "default": "deepagents_interrupt_on",
-            "enum": [
-              "deepagents_interrupt_on",
-              "ask_user"
-            ],
             "title": "Kind",
             "type": "string"
           },
@@ -8481,16 +8426,6 @@
             "default": "Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.",
             "title": "Note",
             "type": "string"
-          },
-          "question": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/UserQuestion"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "title": "PendingInterrupt",
@@ -8524,6 +8459,16 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -8696,207 +8641,6 @@
           "kind"
         ],
         "title": "ProjectFile",
-        "type": "object"
-      },
-      "ProjectFileChange": {
-        "properties": {
-          "after": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/FileImage"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "before": {
-            "$ref": "#/components/schemas/FileImage"
-          },
-          "created_at": {
-            "title": "Created At",
-            "type": "string"
-          },
-          "destination": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Destination"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "observed_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Observed At"
-          },
-          "operation": {
-            "enum": [
-              "created",
-              "modified",
-              "renamed",
-              "deleted"
-            ],
-            "title": "Operation",
-            "type": "string"
-          },
-          "path": {
-            "title": "Path",
-            "type": "string"
-          },
-          "reversed_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reversed At"
-          },
-          "run_id": {
-            "title": "Run Id",
-            "type": "string"
-          },
-          "status": {
-            "default": "pending",
-            "enum": [
-              "pending",
-              "changed",
-              "unchanged",
-              "failed",
-              "unconfirmed"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "tool_call_id": {
-            "title": "Tool Call Id",
-            "type": "string"
-          },
-          "tool_name": {
-            "title": "Tool Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "run_id",
-          "tool_call_id",
-          "tool_name",
-          "operation",
-          "path",
-          "before",
-          "created_at"
-        ],
-        "title": "ProjectFileChange",
-        "type": "object"
-      },
-      "ProjectFileChangeView": {
-        "properties": {
-          "added_lines": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Added Lines"
-          },
-          "change": {
-            "$ref": "#/components/schemas/ProjectFileChange"
-          },
-          "current_matches": {
-            "default": false,
-            "title": "Current Matches",
-            "type": "boolean"
-          },
-          "diff": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Diff"
-          },
-          "diff_unavailable_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Diff Unavailable Reason"
-          },
-          "note": {
-            "default": "Observed file changes only. This does not undo shell commands, remote actions or an entire run.",
-            "title": "Note",
-            "type": "string"
-          },
-          "removed_lines": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Removed Lines"
-          },
-          "reversal_available": {
-            "default": false,
-            "title": "Reversal Available",
-            "type": "boolean"
-          },
-          "reversal_unavailable_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reversal Unavailable Reason"
-          }
-        },
-        "required": [
-          "change"
-        ],
-        "title": "ProjectFileChangeView",
         "type": "object"
       },
       "ProjectFileContent": {
@@ -10803,7 +10547,6 @@
               {
                 "enum": [
                   "ask",
-                  "approve_for_me",
                   "full_access"
                 ],
                 "type": "string"
@@ -11616,11 +11359,6 @@
             "title": "Note",
             "type": "string"
           },
-          "repair_attempts": {
-            "default": 0,
-            "title": "Repair Attempts",
-            "type": "integer"
-          },
           "requested_json_schema": {
             "additionalProperties": true,
             "title": "Requested Json Schema",
@@ -12285,97 +12023,6 @@
           }
         },
         "summary": "Cancel Agent Run"
-      }
-    },
-    "/v1/agent-runs/{run_id}/file-changes": {
-      "get": {
-        "operationId": "list_file_changes_v1_agent_runs__run_id__file_changes_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ProjectFileChangeView"
-                  },
-                  "title": "Response List File Changes V1 Agent Runs  Run Id  File Changes Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List File Changes"
-      }
-    },
-    "/v1/agent-runs/{run_id}/file-changes/{change_id}/reverse": {
-      "post": {
-        "operationId": "reverse_file_change_v1_agent_runs__run_id__file_changes__change_id__reverse_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "change_id",
-            "required": true,
-            "schema": {
-              "title": "Change Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectFileChangeView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Reverse File Change"
       }
     },
     "/v1/agent-runs/{run_id}/interrupt-decision": {
@@ -14488,54 +14135,6 @@
           }
         },
         "summary": "Update Conversation Queue Item"
-      }
-    },
-    "/v1/chat/conversations/{conversation_id}/queue/{item_id}/steer": {
-      "post": {
-        "operationId": "steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "item_id",
-            "required": true,
-            "schema": {
-              "title": "Item Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatConversationView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Steer Conversation Queue Item"
       }
     },
     "/v1/chat/conversations/{conversation_id}/reopen": {

@@ -12,7 +12,6 @@ from langchain_core.messages import BaseMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
-from workbench_backend.agents.file_changes import FileChangeRecorder, MUTATION_TOOLS
 from workbench_backend.agents.context import observe_payload, require_context_fit
 from workbench_backend.agents.harness_backend import is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
@@ -53,7 +52,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         settings_provider: Callable[[], ContextCaptureSettings] | None = None,
         *,
         fixture_bank: FixtureBank | None = None,
-        file_changes: FileChangeRecorder | None = None,
         execution_control: ExecutionControl | None = None,
     ) -> None:
         super().__init__()
@@ -61,7 +59,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.http_sink = http_sink if http_sink is not None else []
         self._settings_provider = settings_provider
         self.fixture_bank = fixture_bank
-        self.file_changes = file_changes
         self.execution_control = execution_control or ExecutionControl(run)
 
     def wrap_model_call(
@@ -171,26 +168,14 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _wrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
-            name, args, call_id = _tool_call_parts(request)
+            name, _, call_id = _tool_call_parts(request)
             if name == "task":
                 token = CURRENT_TOOL_CALL.set(call_id)
                 try:
                     return handler(request)
                 finally:
                     CURRENT_TOOL_CALL.reset(token)
-            if self.file_changes is None or name not in MUTATION_TOOLS:
-                return handler(request)
-            with self.file_changes.lock:
-                self._require_dispatch_allowed()
-                self._require_recoverable_edit(name, args, call_id)
-                change = self.file_changes.prepare(name, args, call_id)
-                try:
-                    result = handler(request)
-                except BaseException as exc:
-                    self.file_changes.finish(change, error=exc)
-                    raise
-                self.file_changes.finish(change, error=_file_tool_error(result))
-                return result
+            return handler(request)
         return self._replay_tool_call(request)
 
     async def awrap_tool_call(
@@ -207,7 +192,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     async def _awrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
-            name, args, call_id = _tool_call_parts(request)
+            name, _, call_id = _tool_call_parts(request)
             async def invoke() -> Any:
                 if name == "task":
                     token = CURRENT_TOOL_CALL.set(call_id)
@@ -215,23 +200,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                         return await handler(request)
                     finally:
                         CURRENT_TOOL_CALL.reset(token)
-                recorder = self.file_changes if name in MUTATION_TOOLS else None
-                if recorder is None:
-                    return await handler(request)
-                await asyncio.to_thread(recorder.lock.acquire)
-                try:
-                    self._require_dispatch_allowed()
-                    self._require_recoverable_edit(name, args, call_id)
-                    change = await asyncio.to_thread(recorder.prepare, name, args, call_id)
-                    try:
-                        result = await handler(request)
-                    except BaseException as exc:
-                        await asyncio.to_thread(recorder.finish, change, error=exc)
-                        raise
-                    await asyncio.to_thread(recorder.finish, change, error=_file_tool_error(result))
-                    return result
-                finally:
-                    recorder.lock.release()
+                return await handler(request)
             if name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
                 # These upstream async backends run synchronous local work in
                 # an executor. Cancelling the await cannot stop that work.
@@ -246,14 +215,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                         raise
             return await invoke()
         return self._replay_tool_call(request)
-
-    def _require_recoverable_edit(self, name, args, call_id):
-        if self.run.tool_authorizations.get(call_id) != "recoverable_edit":
-            return
-        from workbench_backend.agents.host_shell import reversible_file_request
-        if not reversible_file_request(self.run, name, args):
-            from workbench_backend.errors import HarnessError
-            raise HarnessError("The file changed before execution and cannot be safely recovered. Request this action again for approval.", code="file_recovery_changed", status_code=409)
 
     def _require_dispatch_allowed(self) -> None:
         self.execution_control.require_dispatch(self.run)
@@ -272,9 +233,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         name, args, call_id = _tool_call_parts(request)
         if self.run.work_mode == "plan" and name not in PLAN_TOOLS:
             return ToolMessage(content="Plan mode is read-only. This action was not executed. Switch to Work before requesting changes.", name=name, tool_call_id=call_id, status="error")
-        if self.run.structured_output is not None and self.run.structured_output.repair_attempts:
-            from workbench_backend.errors import HarnessError
-            raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
         if not self.run.presented_tools:
             return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
         if name == "read_file" and self.run.framework_read_paths:
@@ -466,12 +424,6 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                     },
                 )
             )
-
-
-def _file_tool_error(result: Any) -> Exception | None:
-    if isinstance(result, ToolMessage) and result.status == "error":
-        return RuntimeError(str(result.content))
-    return None
 
 
 def _allow_projectless_knowledge_tool(

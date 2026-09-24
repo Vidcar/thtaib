@@ -99,11 +99,12 @@ class InteractionApiTests(unittest.TestCase):
             state = self.client.get(f"/v1/agent-interaction/threads/{thread}/state").json()
         interrupt = state["values"]["__interrupt__"][0]
         run = state["values"]["workbench"]["run"]
-        self.assertEqual(run["pending_interrupt"]["kind"], "ask_user")
+        self.assertEqual(run["pending_interrupt"]["kind"], "deepagents_interrupt_on")
+        self.assertEqual(run["pending_interrupt"]["action_requests"][0]["name"], "ask_user")
         def answer(value, ident="answer1", interrupt_id=None):
             return self.client.post(f"/v1/agent-interaction/threads/{thread}/commands", json={
                 "id": ident, "method": "input.respond", "params": {"namespace": interrupt.get("namespace", []),
-                    "interrupt_id": interrupt_id or interrupt["id"], "response": {"answer": value}}})
+                    "interrupt_id": interrupt_id or interrupt["id"], "response": {"decisions": [{"type": "respond", "message": value}]}}})
         self.assertEqual(answer("Text", "stale", "wrong").status_code, 409)
         self.assertEqual(answer("Invalid", "invalid").status_code, 400)
         accepted = answer("Code")
@@ -499,7 +500,7 @@ class InteractionApiTests(unittest.TestCase):
                 thread_id,
                 command_id="compact-second",
                 message_id="compact-input-2",
-                content="Now preserve the important details from this later material. " + ("recent detail " * 1100),
+                content="Now preserve the important details from this later material. " + ("recent detail " * 1400),
                 metadata={"presented_tools": []},
             )
             self.assertEqual(second.status_code, 200, second.text)

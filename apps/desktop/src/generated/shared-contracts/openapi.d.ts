@@ -141,40 +141,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/agent-runs/{run_id}/file-changes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List File Changes */
-        get: operations["list_file_changes_v1_agent_runs__run_id__file_changes_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/agent-runs/{run_id}/file-changes/{change_id}/reverse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reverse File Change */
-        post: operations["reverse_file_change_v1_agent_runs__run_id__file_changes__change_id__reverse_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/agent-runs/{run_id}/interrupt-decision": {
         parameters: {
             query?: never;
@@ -810,23 +776,6 @@ export interface paths {
         head?: never;
         /** Update Conversation Queue Item */
         patch: operations["update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch"];
-        trace?: never;
-    };
-    "/v1/chat/conversations/{conversation_id}/queue/{item_id}/steer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Steer Conversation Queue Item */
-        post: operations["steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/v1/chat/conversations/{conversation_id}/reopen": {
@@ -2140,7 +2089,7 @@ export interface components {
              * @default ask
              * @enum {string}
              */
-            approval_mode: "ask" | "approve_for_me" | "full_access";
+            approval_mode: "ask" | "full_access";
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /** Checkpoint Ids */
             checkpoint_ids?: string[];
@@ -2179,8 +2128,6 @@ export interface components {
             error?: string | null;
             /** Events */
             events?: components["schemas"]["AgentEvent"][];
-            /** File Changes */
-            file_changes?: components["schemas"]["ProjectFileChange"][];
             /** Final Snapshot Id */
             final_snapshot_id?: string | null;
             /** Finalization Phase */
@@ -2394,7 +2341,7 @@ export interface components {
              * @default ask
              * @enum {string}
              */
-            approval_mode: "ask" | "approve_for_me" | "full_access";
+            approval_mode: "ask" | "full_access";
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /** Connection Ids */
             connection_ids?: string[] | null;
@@ -2689,7 +2636,7 @@ export interface components {
              * @default ask
              * @enum {string}
              */
-            approval_mode: "ask" | "approve_for_me" | "full_access";
+            approval_mode: "ask" | "full_access";
             /**
              * Archived
              * @default false
@@ -2826,7 +2773,7 @@ export interface components {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /** Approval Mode */
-            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
+            approval_mode?: ("ask" | "full_access") | null;
             /** Connection Ids */
             connection_ids?: string[] | null;
             /** Deployment Id */
@@ -2892,7 +2839,7 @@ export interface components {
              * @default ask
              * @enum {string}
              */
-            approval_mode: "ask" | "approve_for_me" | "full_access";
+            approval_mode: "ask" | "full_access";
             /**
              * Archived
              * @default false
@@ -3233,7 +3180,7 @@ export interface components {
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /** Approval Mode */
-            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
+            approval_mode?: ("ask" | "full_access") | null;
             /** Attachment Ids */
             attachment_ids?: string[];
             /** Connection Ids */
@@ -3817,20 +3764,6 @@ export interface components {
             /** Text */
             text: string;
         };
-        /** FileImage */
-        FileImage: {
-            /** Exists */
-            exists: boolean;
-            /** Sha256 */
-            sha256?: string | null;
-            /**
-             * Size Bytes
-             * @default 0
-             */
-            size_bytes: number;
-            /** Text */
-            text?: string | null;
-        };
         /**
          * FileRole
          * @enum {string}
@@ -4302,7 +4235,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "approve" | "reject";
+            type: "approve" | "reject" | "respond";
         };
         /** InterruptDecisionRequest */
         InterruptDecisionRequest: {
@@ -5011,9 +4944,9 @@ export interface components {
             /**
              * Kind
              * @default deepagents_interrupt_on
-             * @enum {string}
+             * @constant
              */
-            kind: "deepagents_interrupt_on" | "ask_user";
+            kind: "deepagents_interrupt_on";
             /** Namespace */
             namespace?: string[];
             /**
@@ -5021,7 +4954,6 @@ export interface components {
              * @default Host shell has no isolation. Commands run through Deep Agents LocalShellBackend with the bound project as cwd. permissions= apply to routed filesystem prefixes only while the default backend is a sandbox. interrupt_on pauses dangerous execute calls; the application persists native interrupts and surfaces them through shared Chat.
              */
             note: string;
-            question?: components["schemas"]["UserQuestion"] | null;
         };
         /** PendingInterruptAction */
         PendingInterruptAction: {
@@ -5035,6 +4967,7 @@ export interface components {
             description?: string | null;
             /** Name */
             name: string;
+            question?: components["schemas"]["UserQuestion"] | null;
         };
         /**
          * PinRuntimeRequest
@@ -5110,71 +5043,6 @@ export interface components {
             path: string;
             /** Size Bytes */
             size_bytes?: number | null;
-        };
-        /** ProjectFileChange */
-        ProjectFileChange: {
-            after?: components["schemas"]["FileImage"] | null;
-            before: components["schemas"]["FileImage"];
-            /** Created At */
-            created_at: string;
-            /** Destination */
-            destination?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Id */
-            id: string;
-            /** Observed At */
-            observed_at?: string | null;
-            /**
-             * Operation
-             * @enum {string}
-             */
-            operation: "created" | "modified" | "renamed" | "deleted";
-            /** Path */
-            path: string;
-            /** Reversed At */
-            reversed_at?: string | null;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @default pending
-             * @enum {string}
-             */
-            status: "pending" | "changed" | "unchanged" | "failed" | "unconfirmed";
-            /** Tool Call Id */
-            tool_call_id: string;
-            /** Tool Name */
-            tool_name: string;
-        };
-        /** ProjectFileChangeView */
-        ProjectFileChangeView: {
-            /** Added Lines */
-            added_lines?: number | null;
-            change: components["schemas"]["ProjectFileChange"];
-            /**
-             * Current Matches
-             * @default false
-             */
-            current_matches: boolean;
-            /** Diff */
-            diff?: string | null;
-            /** Diff Unavailable Reason */
-            diff_unavailable_reason?: string | null;
-            /**
-             * Note
-             * @default Observed file changes only. This does not undo shell commands, remote actions or an entire run.
-             */
-            note: string;
-            /** Removed Lines */
-            removed_lines?: number | null;
-            /**
-             * Reversal Available
-             * @default false
-             */
-            reversal_available: boolean;
-            /** Reversal Unavailable Reason */
-            reversal_unavailable_reason?: string | null;
         };
         /**
          * ProjectFileContent
@@ -5893,7 +5761,7 @@ export interface components {
         /** SetupConfiguration */
         SetupConfiguration: {
             /** Approval Mode */
-            approval_mode?: ("ask" | "approve_for_me" | "full_access") | null;
+            approval_mode?: ("ask" | "full_access") | null;
             /** Bundle Id */
             bundle_id?: string | null;
             /** Connection Ids */
@@ -6170,11 +6038,6 @@ export interface components {
              * @default Structured output is the agent structured_response, not JSON-looking answer text. Schema validity is not factual correctness.
              */
             note: string;
-            /**
-             * Repair Attempts
-             * @default 0
-             */
-            repair_attempts: number;
             /** Requested Json Schema */
             requested_json_schema?: {
                 [key: string]: unknown;
@@ -6341,7 +6204,6 @@ export type SchemaDeploymentProfileChanges = components['schemas']['DeploymentPr
 export type SchemaDeploymentStatus = components['schemas']['DeploymentStatus'];
 export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaExtractedSection = components['schemas']['ExtractedSection'];
-export type SchemaFileImage = components['schemas']['FileImage'];
 export type SchemaFileRole = components['schemas']['FileRole'];
 export type SchemaFrozenExecutionSelection = components['schemas']['FrozenExecutionSelection'];
 export type SchemaFrozenHelperSelection = components['schemas']['FrozenHelperSelection'];
@@ -6404,8 +6266,6 @@ export type SchemaProcessIdentity = components['schemas']['ProcessIdentity'];
 export type SchemaProfileWriteRequest = components['schemas']['ProfileWriteRequest'];
 export type SchemaProjectCreateRequest = components['schemas']['ProjectCreateRequest'];
 export type SchemaProjectFile = components['schemas']['ProjectFile'];
-export type SchemaProjectFileChange = components['schemas']['ProjectFileChange'];
-export type SchemaProjectFileChangeView = components['schemas']['ProjectFileChangeView'];
 export type SchemaProjectFileContent = components['schemas']['ProjectFileContent'];
 export type SchemaProjectFiles = components['schemas']['ProjectFiles'];
 export type SchemaProjectRecord = components['schemas']['ProjectRecord'];
@@ -6747,69 +6607,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_file_changes_v1_agent_runs__run_id__file_changes_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectFileChangeView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reverse_file_change_v1_agent_runs__run_id__file_changes__change_id__reverse_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-                change_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectFileChangeView"];
                 };
             };
             /** @description Validation Error */
@@ -8274,38 +8071,6 @@ export interface operations {
                 "application/json": components["schemas"]["ChatQueueItemUpdateRequest"];
             };
         };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChatConversationView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    steer_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__steer_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                conversation_id: string;
-                item_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

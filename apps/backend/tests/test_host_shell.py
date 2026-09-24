@@ -17,11 +17,9 @@ from langchain_core.messages import AIMessage
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import host_shell_requested
 from workbench_backend.agents.host_shell import (
-    PERMISSION_DENY_PATHS,
-    execute_requires_approval,
+    SKILLS_WRITE_DENY_PATHS,
     filesystem_permissions_for_run,
     interrupt_on_for_run,
-    is_dangerous_shell_command,
     pending_interrupt_from_raw,
     reject_decisions_for,
     validated_decision_payloads,
@@ -171,91 +169,24 @@ def _run(*, project_path: str | None, presented: list[str] | None = None) -> Age
 
 
 class HostShellPolicyTests(unittest.TestCase):
-    def test_dangerous_command_rules(self) -> None:
-        cases = {
-            "": True,
-            "rm -rf /tmp/x": True,
-            "echo hi && rm -rf /": True,
-            "git commit": True,
-            r"C:\Windows\System32\cmd.exe": True,
-            "touch file": True,
-            "git branch -D doomed": True,
-            "git branch -m old new": True,
-            "git diff --output=out.patch": True,
-            "git diff --output out.patch": True,
-            'git diff --no-ext-diff --no-textconv "--output=out.patch"': True,
-            "git diff --no-ext-diff --no-textconv '--output=out.patch'": True,
-            "git diff --no-ext-diff --no-textconv *": True,
-            "git DIFF --no-ext-diff --no-textconv": True,
-            "Git status": True,
-            "git diff --ext-diff": True,
-            "git diff -- README.md": True,
-            "git show --stat": True,
-            "echo %USERNAME%": True,
-            "echo !USERNAME!": True,
-            "echo ^& whoami": True,
-            "echo (hello)": True,
-            "echo hello\rwhoami": True,
-            "echo /?": True,
-            "dir /s": True,
-            "dir --all": True,
-            "ls --all": True,
-            "Get-ChildItem -Recurse": True,
-            "type /?": True,
-            "type ..\\secret.txt": True,
-            "Get-Content -Raw file.txt": True,
-            "where /r . cmd.exe": True,
-            "which --all python": True,
-            "whoami /priv": True,
-            "pwd extra": True,
-            "Get-Help -Full": True,
-            "git status --short": False,
-            "git log --oneline -n 3": False,
-            "git branch --show-current": False,
-            "git diff --no-ext-diff --no-textconv -- README.md": False,
-            "git show --no-ext-diff --no-textconv --stat": False,
-            "git rev-parse --show-toplevel": False,
-            "echo host-shell-ok": False,
-            "echo off": False,
-            "dir": False,
-            "dir README.md": False,
-            "ls README.md": False,
-            "type README.md": False,
-            "where python": False,
-            "which python": False,
-            "Get-Help Get-ChildItem": True,
-            "Get-ChildItem": True,
-        }
-        for command, dangerous in cases.items():
-            with self.subTest(command=command):
-                self.assertEqual(is_dangerous_shell_command(command), dangerous)
-
-    def test_execute_predicate_reads_command_arg(self) -> None:
-        class _Req:
-            tool_call = {"name": "execute", "args": {"command": "echo ok"}}
-
-        self.assertFalse(execute_requires_approval(_Req()))  # type: ignore[arg-type]
-        _Req.tool_call = {"name": "execute", "args": {"command": "rm -rf x"}}
-        self.assertTrue(execute_requires_approval(_Req()))  # type: ignore[arg-type]
-
     def test_permissions_are_route_scoped_deny_only(self) -> None:
-        live = filesystem_permissions_for_run(_run(project_path="/tmp/project"))
+        ordinary = _run(project_path="/tmp/project")
+        self.assertIsNone(filesystem_permissions_for_run(ordinary))
+        selected_skill = _run(project_path="/tmp/project")
+        selected_skill.skill_version_refs = ["skill-version"]
+        live = filesystem_permissions_for_run(selected_skill)
         self.assertIsNotNone(live)
         assert live is not None
         self.assertEqual(live[0].mode, "deny")
-        self.assertEqual(list(live[0].paths), list(PERMISSION_DENY_PATHS))
-        self.assertTrue(
-            all(
-                path.startswith("/large_tool_results/")
-                or path.startswith("/conversation_history/")
-                or path.startswith("/retrieved/")
-                for path in live[0].paths
-            )
-        )
+        self.assertEqual(list(live[0].paths), list(SKILLS_WRITE_DENY_PATHS))
         recorded_run = _run(project_path="/tmp/project")
         recorded_run.tool_mode = ToolMode.recorded_tool
         self.assertIsNone(filesystem_permissions_for_run(recorded_run))
-        self.assertIsNone(filesystem_permissions_for_run(_run(project_path=None)))
+        recorded_run.skill_version_refs = ["skill-version"]
+        self.assertEqual(list(filesystem_permissions_for_run(recorded_run)[0].paths), list(SKILLS_WRITE_DENY_PATHS))
+        project_free = _run(project_path=None)
+        project_free.skill_version_refs = ["skill-version"]
+        self.assertEqual(list(filesystem_permissions_for_run(project_free)[0].paths), list(SKILLS_WRITE_DENY_PATHS))
         echo_only = _run(project_path="/tmp/project", presented=["echo"])
         self.assertFalse(host_shell_requested(echo_only))
         self.assertIsNone(interrupt_on_for_run(echo_only))
@@ -268,7 +199,7 @@ class HostShellPolicyTests(unittest.TestCase):
 
         run = _run(
             project_path="/tmp/project",
-            presented=["execute", "rename_file", "delete_file", "docs_search", "ask_user", "propose_memory"],
+            presented=["execute", "write_file", "edit_file", "docs_search", "ask_user", "propose_memory"],
         )
         run.connection_snapshots = [
             ConnectionSnapshot(
@@ -299,22 +230,19 @@ class HostShellPolicyTests(unittest.TestCase):
 
             return bool(gate[name]["when"](_Req()))  # type: ignore[index, operator]
 
-        self.assertTrue(pauses("ask", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
-        self.assertTrue(pauses("ask", "delete_file", {"file_path": "a.txt"}))
+        self.assertTrue(pauses("ask", "write_file", {"file_path": "a.txt", "content": "text"}))
+        self.assertTrue(pauses("ask", "edit_file", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}))
         self.assertTrue(pauses("ask", "execute", {"command": "rm -rf x"}))
         self.assertTrue(pauses("ask", "execute", {"command": "echo ok"}))
         self.assertTrue(pauses("ask", "docs_search", {"query": "notes"}))
         asked = interrupt_on_for_run(run)
         assert asked is not None
-        self.assertNotIn("ask_user", asked)
+        self.assertEqual(asked["ask_user"]["allowed_decisions"], ["respond", "reject"])
         self.assertNotIn("propose_memory", asked)
-        self.assertTrue(pauses("approve_for_me", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}), "without a captured project preimage reversibility is unproven")
-        self.assertTrue(pauses("approve_for_me", "delete_file", {"file_path": "a.txt"}))
-        self.assertTrue(pauses("approve_for_me", "execute", {"command": "rm -rf x"}))
-        self.assertTrue(pauses("approve_for_me", "docs_search", {"query": "notes"}))
         self.assertFalse(pauses("full_access", "execute", {"command": "rm -rf x"}))
         self.assertFalse(pauses("full_access", "docs_search", {"query": "notes"}))
-        self.assertFalse(pauses("full_access", "rename_file", {"file_path": "a.txt", "destination": "b.txt"}))
+        self.assertFalse(pauses("full_access", "write_file", {"file_path": "a.txt", "content": "text"}))
+        self.assertFalse(pauses("full_access", "edit_file", {"file_path": "a.txt", "old_string": "a", "new_string": "b"}))
 
     def test_pending_interrupt_and_decisions(self) -> None:
         pending = pending_interrupt_from_raw(
@@ -344,6 +272,33 @@ class HostShellPolicyTests(unittest.TestCase):
         file_rejection = validated_decision_payloads(file_action, [InterruptDecision(type="reject")])[0]
         self.assertNotIn("host-shell", file_rejection["message"])
         self.assertIn("not executed", file_rejection["message"])
+
+    def test_mixed_question_and_tool_decisions_keep_framework_order(self) -> None:
+        pending = pending_interrupt_from_raw({
+            "action_requests": [
+                {"name": "ask_user", "args": {"prompt": "Which path?", "answer_type": "choice", "choices": ["A", "B"]}},
+                {"name": "write_file", "args": {"file_path": "notes.txt", "content": "A"}},
+            ],
+            "review_configs": [
+                {"action_name": "ask_user", "allowed_decisions": ["respond", "reject"]},
+                {"action_name": "write_file", "allowed_decisions": ["approve", "reject"]},
+            ],
+        })
+        self.assertIsNotNone(pending)
+        assert pending is not None
+        self.assertEqual(pending.kind, "deepagents_interrupt_on")
+        self.assertEqual([item.name for item in pending.action_requests], ["ask_user", "write_file"])
+        decisions = [InterruptDecision(type="respond", message="B"), InterruptDecision(type="approve")]
+        self.assertEqual(validated_decision_payloads(pending, decisions), [
+            {"type": "respond", "message": "B"}, {"type": "approve"},
+        ])
+        with self.assertRaises(ValueError):
+            validated_decision_payloads(pending, decisions[:1])
+        with self.assertRaises(ValueError):
+            validated_decision_payloads(pending, [InterruptDecision(type="respond", message="C"), decisions[1]])
+        with self.assertRaises(ValueError):
+            validated_decision_payloads(pending, [InterruptDecision(type="approve"), decisions[0]])
+        self.assertEqual([item["type"] for item in reject_decisions_for(pending)], ["reject", "reject"])
 
 
 class HostShellHarnessTests(unittest.TestCase):
@@ -409,8 +364,9 @@ class HostShellHarnessTests(unittest.TestCase):
         self,
         *,
         stop_original_worker: bool = False,
+        start_payload: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], HarnessService]:
-        started = self._start()
+        started = self._start(**(start_payload or {}))
         paused = wait_for_interrupt(self.client, started["id"])
         self.assertTrue(paused["checkpoint_ids"], paused)
         old_harness = self.app.state.harness
@@ -822,6 +778,81 @@ class HostShellHarnessTests(unittest.TestCase):
             json=run_direct_interrupt_decision(paused, "reject"),
         )
         wait_for_run(self.client, started["id"])
+
+    def test_mixed_native_question_and_shell_approval_resume_once(self) -> None:
+        marker = self.project / "mixed-decision.txt"
+        self._install([
+            AIMessage(content="", tool_calls=[
+                {"name": "ask_user", "args": {"prompt": "Choose a label", "answer_type": "choice", "choices": ["A", "B"]}, "id": "call_question"},
+                {"name": "execute", "args": {"command": write_marker_command(marker.name)}, "id": "call_shell"},
+            ]),
+            AIMessage(content="Both decisions applied."),
+        ])
+        started = self._start(presented_tools=["ask_user", "execute"])
+        paused = wait_for_interrupt(self.client, started["id"])
+        pending = paused["pending_interrupt"]
+        self.assertEqual([action["name"] for action in pending["action_requests"]], ["ask_user", "execute"])
+        self.assertFalse(marker.exists())
+        endpoint = f'/v1/agent-runs/{started["id"]}/interrupt-decision'
+        identity = {"interrupt_id": pending["interrupt_id"], "namespace": pending["namespace"]}
+        invalid = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "respond", "message": "C"}, {"type": "approve"},
+        ]})
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+        self.assertFalse(marker.exists())
+        accepted = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "respond", "message": "B"}, {"type": "approve"},
+        ]})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        finished = wait_for_run(self.client, started["id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        self.assertTrue(marker.exists())
+        self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("tool_call_id") == "call_question"
+            and "B" in str(event["detail"].get("content")) for event in finished["events"]))
+        stale = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "respond", "message": "B"}, {"type": "approve"},
+        ]})
+        self.assertEqual(stale.status_code, 409, stale.text)
+
+    def test_restart_mixed_question_and_shell_approval_preserves_order_and_one_effect(self) -> None:
+        marker = self.project / "mixed-restart.txt"
+        self._install([
+            AIMessage(content="", tool_calls=[
+                {"name": "ask_user", "args": {"prompt": "Choose a label", "answer_type": "choice", "choices": ["A", "B"]}, "id": "restart_question"},
+                {"name": "execute", "args": {"command": append_marker_command(marker.name)}, "id": "restart_shell"},
+            ]),
+            AIMessage(content="Both decisions applied after restart."),
+        ])
+        started, _old_harness = self._restart_from_script(
+            stop_original_worker=True,
+            start_payload={"presented_tools": ["ask_user", "execute"]},
+        )
+        resumed = self.client.get(f'/v1/agent-runs/{started["id"]}').json()
+        pending = resumed["pending_interrupt"]
+        self.assertTrue(resumed["checkpoint_ids"])
+        self.assertEqual([action["name"] for action in pending["action_requests"]], ["ask_user", "execute"])
+        self.assertEqual(self._marker_lines(marker), [])
+        endpoint = f'/v1/agent-runs/{started["id"]}/interrupt-decision'
+        identity = {"interrupt_id": pending["interrupt_id"], "namespace": pending["namespace"]}
+        reversed_decisions = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "approve"}, {"type": "respond", "message": "B"},
+        ]})
+        self.assertEqual(reversed_decisions.status_code, 400, reversed_decisions.text)
+        self.assertEqual(self._marker_lines(marker), [])
+        accepted = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "respond", "message": "B"}, {"type": "approve"},
+        ]})
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        final = wait_for_run(self.client, started["id"])
+        self.assertEqual(final["status"], "completed", final.get("error"))
+        self.assertEqual(self._marker_lines(marker), ["hit"])
+        self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("tool_call_id") == "restart_question"
+            and "B" in str(event["detail"].get("content")) for event in final["events"]))
+        stale = self.client.post(endpoint, json={**identity, "decisions": [
+            {"type": "respond", "message": "B"}, {"type": "approve"},
+        ]})
+        self.assertEqual(stale.status_code, 409, stale.text)
+        self.assertEqual(self._marker_lines(marker), ["hit"])
 
     def test_chat_interrupt_and_shell_flag(self) -> None:
         self._install(execute_then_reply(write_marker_command("chat-host-shell.txt")))

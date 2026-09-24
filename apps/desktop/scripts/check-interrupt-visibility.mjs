@@ -108,30 +108,39 @@ try {
   assert.deepEqual(responses.at(-1), { decisions: [{ type: "approve", scope: "once" }] }, "new interrupt must not keep stale decisions");
 
   const choicePending = {
-    kind: "ask_user",
+    kind: "deepagents_interrupt_on",
     environment: "windows_host_shell",
     isolation: "none",
     note: "A user answer is required.",
-    action_requests: [],
-    question: { prompt: "Pick one", answer_type: "choice", choices: ["alpha", "beta"] },
+    identity: "mixed-question",
+    action_requests: [
+      { name: "execute", args: { command: "echo before" }, allowed_decisions: ["approve", "reject"] },
+      { name: "ask_user", args: {}, allowed_decisions: ["respond", "reject"], question: { prompt: "Pick one", answer_type: "choice", choices: ["alpha", "beta"] } },
+      { name: "write_file", args: { path: "later.md" }, allowed_decisions: ["approve", "reject"] },
+    ],
   };
   await act(async () => {
     renderer.update(React.createElement(InterruptApproval, { pending: choicePending, onRespond: (payload) => responses.push(payload) }));
   });
+  assert.equal(button(renderer, "Send decisions").props.disabled, true, "a question needs a typed answer before the mixed batch can resume");
   const beta = renderer.root.findAll((node) => node.type === "input").find((node) => textOf(node.parent).includes("beta"));
   await act(async () => {
     beta.props.onChange();
   });
   await act(async () => {
-    button(renderer, "Send answer").props.onClick();
+    button(renderer, "Send decisions").props.onClick();
   });
-  assert.deepEqual(responses.at(-1), { answer: "beta" }, "choice question response must send only an answer");
+  assert.deepEqual(responses.at(-1), { decisions: [
+    { type: "approve", scope: "once" },
+    { type: "respond", message: "beta" },
+    { type: "approve", scope: "once" },
+  ] }, "mixed question and approval decisions must preserve native action order");
 
   globalThis.window = { workbench: { selectPath: async () => "C:\\Temp\\chosen.txt" } };
   const filePending = {
     ...choicePending,
     identity: "file-question",
-    question: { prompt: "Choose file", answer_type: "file", choices: [] },
+    action_requests: [{ name: "ask_user", args: {}, allowed_decisions: ["respond", "reject"], question: { prompt: "Choose file", answer_type: "file", choices: [] } }],
   };
   await act(async () => {
     renderer.update(React.createElement(InterruptApproval, { pending: filePending, onRespond: (payload) => responses.push(payload) }));
@@ -140,13 +149,16 @@ try {
     await button(renderer, "Browse").props.onClick();
   });
   await act(async () => {
-    button(renderer, "Send answer").props.onClick();
+    button(renderer, "Send decisions").props.onClick();
   });
-  assert.deepEqual(responses.at(-1), { answer: "C:\\Temp\\chosen.txt" }, "native file selection should become a typed answer only");
+  assert.deepEqual(responses.at(-1), { decisions: [{ type: "respond", message: "C:\\Temp\\chosen.txt" }] }, "native file selection should become a typed respond decision");
   await act(async () => {
-    button(renderer, "Cancel question").props.onClick();
+    renderer.root.findAll((node) => node.type === "input").find((node) => textOf(node.parent).includes("Cancel this question")).props.onChange({ target: { checked: true } });
   });
-  assert.deepEqual(responses.at(-1), { answer: "", cancelled: true }, "cancel question should send an explicit cancellation payload");
+  await act(async () => {
+    button(renderer, "Send decisions").props.onClick();
+  });
+  assert.deepEqual(responses.at(-1), { decisions: [{ type: "reject", scope: "once", message: "The user cancelled this question. Do not repeat it unless asked." }] }, "cancel question should reject its action explicitly");
 } finally {
   await vite.close();
 }

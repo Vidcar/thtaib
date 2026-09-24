@@ -489,7 +489,7 @@ class ChatBranchTests(unittest.TestCase):
                 "params": {
                     "namespace": interrupt.get("namespace", []),
                     "interrupt_id": interrupt["id"],
-                    "response": {"answer": ""},
+                    "response": {"decisions": [{"type": "respond", "message": ""}]},
                 },
             },
         )
@@ -502,7 +502,7 @@ class ChatBranchTests(unittest.TestCase):
                 "params": {
                     "namespace": interrupt.get("namespace", []),
                     "interrupt_id": interrupt["id"],
-                    "response": {"answer": "", "cancelled": True},
+                    "response": {"decisions": [{"type": "reject", "message": "The user cancelled this question. Do not repeat it unless asked."}]},
                 },
             },
         )

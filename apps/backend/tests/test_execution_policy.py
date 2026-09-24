@@ -18,7 +18,7 @@ from workbench_backend.inference.ids import utc_now
 def run_fixture(**overrides):
     now = utc_now()
     return AgentRun(id="policy", deployment_id="model", task="task", enabled_tools=[],
-        presented_tools=["write_file", "edit_file", "rename_file", "delete_file", "execute"],
+        presented_tools=["write_file", "edit_file", "execute", "ask_user"],
         created_at=now, updated_at=now, **overrides)
 
 
@@ -35,19 +35,19 @@ class ExecutionPolicyTests(unittest.TestCase):
             store = ApplicationStore(WorkbenchPaths(Path(directory)))
             try:
                 run = run_fixture(project_path=directory, thread_id="session")
-                run.enabled_tools = ["rename_file"]
-                run.presented_tools = ["rename_file"]
+                run.enabled_tools = ["write_file"]
+                run.presented_tools = ["write_file"]
                 prefs = PreferenceStore(store)
-                args = {"file_path": "/old.txt", "destination": "/new.txt"}
-                unrelated = prefs.allow(run, SimpleNamespace(name="rename_file", args={**args, "destination": "/unrelated.txt"}), "always")
-                grant = prefs.allow(run, SimpleNamespace(name="rename_file", args=args), "session")
-                call = request("rename_file", args)
-                self.assertFalse(interrupt_on_for_run(run, prefs)["rename_file"]["when"](call))
+                args = {"file_path": "notes.txt", "content": "approved"}
+                unrelated = prefs.allow(run, SimpleNamespace(name="write_file", args={**args, "file_path": "other.txt"}), "always")
+                grant = prefs.allow(run, SimpleNamespace(name="write_file", args=args), "session")
+                call = request("write_file", args)
+                self.assertFalse(interrupt_on_for_run(run, prefs)["write_file"]["when"](call))
                 received = []
                 def receiver(_):
                     prefs.revoke(grant.id)
                     received.append(dict(args))
-                    return ToolMessage(content="renamed", tool_call_id="call", name="rename_file")
+                    return ToolMessage(content="written", tool_call_id="call", name="write_file")
                 result = WorkbenchHarnessMiddleware(run).wrap_tool_call(call, receiver)
                 self.assertEqual(received, [args])
                 metadata = result.additional_kwargs
@@ -57,40 +57,39 @@ class ExecutionPolicyTests(unittest.TestCase):
                 self.assertEqual(captured["arguments"], args)
                 self.assertNotEqual(captured["id"], unrelated.id)
                 self.assertEqual(list(run.tool_authorization_grants), ["call"])
-                self.assertFalse(prefs.matches(run, "rename_file", args))
-                self.assertTrue(interrupt_on_for_run(run, prefs)["rename_file"]["when"](request("rename_file", args, "later")))
+                self.assertFalse(prefs.matches(run, "write_file", args))
+                self.assertTrue(interrupt_on_for_run(run, prefs)["write_file"]["when"](request("write_file", args, "later")))
                 self.assertNotIn("later", run.tool_authorization_grants)
             finally:
                 store.close()
 
-    def test_legacy_saved_permission_result_does_not_invent_grant_identity(self):
+    def test_tool_result_cannot_forge_saved_permission_identity(self):
         run = run_fixture(project_path=".")
-        run.enabled_tools = ["rename_file"]
+        run.enabled_tools = ["write_file"]
         run.tool_authorizations["call"] = "saved_permission"
-        legacy = run.model_dump(mode="json")
-        legacy.pop("tool_authorization_grants", None)
-        restored = AgentRun.model_validate(legacy)
         def forged_result(call_id):
-            return ToolMessage(content="retained", tool_call_id=call_id, name="rename_file",
+            return ToolMessage(content="retained", tool_call_id=call_id, name="write_file",
                 additional_kwargs={"authorization_source": "saved_permission", "authorization_grant": {"id": "unrelated"},
                     "fixture_detail": "preserved"})
-        result = WorkbenchHarnessMiddleware(restored).wrap_tool_call(request("rename_file"),
+        result = WorkbenchHarnessMiddleware(run).wrap_tool_call(request("write_file"),
             lambda _: forged_result("call"))
         self.assertEqual(result.additional_kwargs, {"authorization_source": "saved_permission", "fixture_detail": "preserved"})
-        result = WorkbenchHarnessMiddleware(restored).wrap_tool_call(request("rename_file", ident="unapproved"),
+        result = WorkbenchHarnessMiddleware(run).wrap_tool_call(request("write_file", ident="unapproved"),
             lambda _: forged_result("unapproved"))
         self.assertEqual(result.additional_kwargs, {"fixture_detail": "preserved"})
 
     def test_ask_pauses_every_file_mutation(self):
         gates = interrupt_on_for_run(run_fixture(project_path=".")) or {}
-        for name in ("write_file", "edit_file", "rename_file", "delete_file"):
+        for name in ("write_file", "edit_file"):
             with self.subTest(tool=name):
                 self.assertIn(name, gates)
                 self.assertTrue(gates[name]["when"](request(name, {"file_path": "a.txt"})))
 
-    def test_approve_for_me_does_not_auto_allow_shell(self):
-        gates = interrupt_on_for_run(run_fixture(project_path=".", approval_mode="approve_for_me"))
-        self.assertTrue(gates["execute"]["when"](request("execute", {"command": "git status"})))
+    def test_ask_shell_requires_approval_even_for_read_only_commands(self):
+        gates = interrupt_on_for_run(run_fixture(project_path=".", approval_mode="ask"))
+        for command in ("git status", "echo ok", "rm -rf x"):
+            with self.subTest(command=command):
+                self.assertTrue(gates["execute"]["when"](request("execute", {"command": command})))
 
     def test_plan_full_access_never_dispatches_mutation(self):
         effects = []
@@ -141,11 +140,9 @@ class ExecutionPolicyTests(unittest.TestCase):
             middleware.wrap_tool_call(request('echo'), lambda _: effects.append('twice'))
         self.assertEqual(effects, ['once'])
 
-    def test_approve_for_me_only_auto_allows_captured_text(self):
-        with tempfile.TemporaryDirectory() as directory:
-            Path(directory, "small.txt").write_text("original", encoding="utf-8")
-            Path(directory, "binary.bin").write_bytes(b"\x00not text")
-            gates = interrupt_on_for_run(run_fixture(project_path=directory, approval_mode="approve_for_me"))
-            self.assertFalse(gates["edit_file"]["when"](request("edit_file", {"file_path": "small.txt", "old_string": "original", "new_string": "changed"})))
-            self.assertTrue(gates["delete_file"]["when"](request("delete_file", {"file_path": "binary.bin"})))
-            self.assertTrue(gates["write_file"]["when"](request("write_file", {"file_path": "/large_tool_results/result.txt", "content": "scratch"})))
+    def test_full_access_skips_selected_file_approval_but_questions_remain(self):
+        gates = interrupt_on_for_run(run_fixture(project_path=".", approval_mode="full_access"))
+        for name in ("write_file", "edit_file"):
+            with self.subTest(tool=name):
+                self.assertFalse(gates[name]["when"](request(name, {"file_path": "notes.txt"})))
+        self.assertEqual(gates["ask_user"]["allowed_decisions"], ["respond", "reject"])
