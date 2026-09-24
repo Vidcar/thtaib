@@ -5,16 +5,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 import fnmatch
+import hashlib
+import json
 import re
 from itertools import islice
 import httpx
 from urllib.parse import urlparse, unquote
 
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.schemas import HubRepository, HubSearchResult, HubVariant
+from workbench_backend.inference.schemas import HubRepository, HubSearchResult, HubSource, HubVariant
+
+PUBLISHER_DIR = ".workbench-publisher"
+REPOSITORY_TEMPLATE_DIR = ".workbench-repository-template"
+CONFIG_NAMES = frozenset({"config.json", "generation_config.json", "tokenizer_config.json", "tokenizer.json", "chat_template.jinja"})
 
 
 def _access_error(exc: Exception) -> ManagerError:
@@ -61,7 +67,7 @@ def describe_repository(repo_id: str, info: object) -> HubRepository:
             else:
                 group = re.sub(r"-\d{5}-of-\d{5}\.gguf$", ".gguf", name, flags=re.I)
                 groups.setdefault(group, []).append(name)
-        elif path.name.lower() in {"readme.md", "config.json", "generation_config.json", "tokenizer_config.json", "chat_template.jinja"}:
+        elif path.name.lower() in {"readme.md", ".src_sha", *CONFIG_NAMES}:
             guidance.append(name)
     variants = []
     for name, names in groups.items():
@@ -111,6 +117,9 @@ class HuggingFaceDownload:
     local_dir: Path
     expected_sizes: dict[str, int | None] = field(default_factory=dict)
     expected_sha256: dict[str, str | None] = field(default_factory=dict)
+    source_repo_id: str | None = None
+    source_revision: str | None = None
+    source_files: list[str] = field(default_factory=list)
 
 
 class HuggingFaceFetcher:
@@ -139,7 +148,46 @@ class HuggingFaceFetcher:
             info = HfApi().model_info(repo_id=repo_id, revision=revision or "main", files_metadata=True)
         except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled) as exc:
             raise _access_error(exc) from exc
-        return describe_repository(repo_id, info)
+        listing = describe_repository(repo_id, info)
+        if listing.variants:
+            listing.source = self._verified_source(listing, info)
+        else:
+            listing.gguf_candidates = self._gguf_candidates(listing.repo_id)
+        return listing
+
+    def _gguf_candidates(self, source_repo_id: str) -> list[HubSearchResult]:
+        name = source_repo_id.split("/", 1)[1]
+        try:
+            matches = HfApi().list_models(search=name, filter="gguf", sort="downloads", limit=50, cardData=True)
+            candidates = [item for item in matches if _base_model(getattr(item, "card_data", None)) == source_repo_id]
+        except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled) as exc:
+            raise _access_error(exc) from exc
+        return [HubSearchResult(repo_id=str(getattr(item, "modelId", "") or getattr(item, "id", "")),
+            downloads=getattr(item, "downloads", None), likes=getattr(item, "likes", None))
+            for item in candidates[:12] if getattr(item, "modelId", None) or getattr(item, "id", None)]
+
+    def _verified_source(self, listing: HubRepository, info: object) -> HubSource | None:
+        base_model = _base_model(getattr(info, "card_data", None))
+        if not base_model or base_model == listing.repo_id:
+            return None
+        source = HubSource(repo_id=base_model, note="Conversion source commit could not be verified.")
+        if ".src_sha" not in listing.file_sizes:
+            return source
+        try:
+            marker = Path(hf_hub_download(repo_id=listing.repo_id, filename=".src_sha",
+                revision=listing.resolved_revision)).read_text(encoding="utf-8")
+            match = re.search(r"(?im)^PRIMARY=([0-9a-f]{40})\s*$", marker)
+            if match is None:
+                return source
+            source_info = HfApi().model_info(repo_id=base_model, revision=match[1], files_metadata=True)
+            source_listing = describe_repository(base_model, source_info)
+        except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled, OSError, UnicodeError, ManagerError):
+            return source
+        if source_listing.resolved_revision.lower() != match[1].lower():
+            return source
+        return HubSource(repo_id=base_model, resolved_revision=source_listing.resolved_revision,
+            verified=True, note="Conversion marker matches this publisher commit.",
+            guidance_files=[name for name in source_listing.guidance_files if name in CONFIG_NAMES])
 
     def download(
         self,
@@ -166,6 +214,9 @@ class HuggingFaceFetcher:
             raise ManagerError("Select exactly one complete GGUF variant, including every shard, before downloading.", code="hf_variant_selection", status_code=400)
         if sum(bool(selected.intersection(v.files)) for v in listing.projectors) > 1:
             raise ManagerError("Select one compatible projector or choose text-only before downloading.", code="hf_projector_selection", status_code=400)
+        if any(name == prefix or name.startswith(prefix + "/")
+            for name in listing.file_sizes for prefix in (PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR)):
+            raise ManagerError("The repository uses a reserved configuration path.", code="hf_file_path_collision", status_code=400)
         # A moving branch may resolve to a different commit on retry. Keep its
         # upstream resume metadata separate so removed files cannot leak into
         # the newly selected bundle.
@@ -178,11 +229,75 @@ class HuggingFaceFetcher:
             force_download=force_download,
             allow_patterns=[f.replace("[", "[[]").replace("?", "[?]").replace("*", "[*]") for f in sorted(selected)],
         )
+        source_files: list[str] = []
+        expected_sizes = {name: files.get(name) for name in selected}
+        expected_sha256 = {name: listing.file_sha256.get(name) for name in selected}
+        _materialize_tokenizer_template(dest, selected, REPOSITORY_TEMPLATE_DIR,
+            expected_sizes, expected_sha256)
+        source = listing.source
+        if source is not None and source.verified and source.resolved_revision:
+            pinned_source = describe_repository(source.repo_id, HfApi().model_info(
+                repo_id=source.repo_id, revision=source.resolved_revision, files_metadata=True))
+            if pinned_source.resolved_revision != source.resolved_revision:
+                raise ManagerError("Publisher source changed during selection.", code="hf_source_revision", status_code=409)
+            source_files = [name for name in source.guidance_files if name in CONFIG_NAMES]
+            if source_files:
+                snapshot_download(repo_id=source.repo_id, revision=source.resolved_revision,
+                    local_dir=str(dest / PUBLISHER_DIR), force_download=force_download,
+                    allow_patterns=sorted(source_files))
+                for name in source_files:
+                    bundled_name = f"{PUBLISHER_DIR}/{name}"
+                    expected_sizes[bundled_name] = pinned_source.file_sizes.get(name)
+                    expected_sha256[bundled_name] = pinned_source.file_sha256.get(name)
+                _materialize_tokenizer_template(dest / PUBLISHER_DIR, set(source_files),
+                    PUBLISHER_DIR, expected_sizes, expected_sha256, root=dest)
         return HuggingFaceDownload(
             repo_id=repo_id,
             requested_revision=revision,
             resolved_revision=resolved,
             local_dir=dest,
-            expected_sizes={name: files.get(name) for name in selected},
-            expected_sha256={name: listing.file_sha256.get(name) for name in selected},
+            expected_sizes=expected_sizes,
+            expected_sha256=expected_sha256,
+            source_repo_id=source.repo_id if source and source.verified else None,
+            source_revision=source.resolved_revision if source and source.verified else None,
+            source_files=source_files,
         )
+
+
+def _base_model(card_data: object) -> str | None:
+    raw = card_data.get("base_model") if isinstance(card_data, dict) else getattr(card_data, "base_model", None)
+    values = raw if isinstance(raw, list) else [raw]
+    candidates: set[str] = set()
+    for value in values:
+        if isinstance(value, str):
+            try:
+                candidates.add(repository_id(value))
+            except ManagerError:
+                continue
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _materialize_tokenizer_template(directory: Path, selected: set[str], namespace: str,
+    expected_sizes: dict[str, int | None], expected_sha256: dict[str, str | None],
+    *, root: Path | None = None) -> None:
+    if "chat_template.jinja" in selected or "tokenizer_config.json" not in selected:
+        return
+    try:
+        config = json.loads((directory / "tokenizer_config.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    raw = config.get("chat_template") if isinstance(config, dict) else None
+    if isinstance(raw, dict):
+        raw = raw.get("default")
+    elif isinstance(raw, list):
+        raw = next((item.get("template") for item in raw if isinstance(item, dict)
+            and item.get("name") == "default"), None)
+    if not isinstance(raw, str) or not raw.strip():
+        return
+    destination = (root or directory) / namespace / "chat_template.from-tokenizer.jinja"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = raw.encode("utf-8")
+    destination.write_bytes(payload)
+    relative = f"{namespace}/chat_template.from-tokenizer.jinja"
+    expected_sizes[relative] = len(payload)
+    expected_sha256[relative] = hashlib.sha256(payload).hexdigest()

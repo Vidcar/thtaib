@@ -644,6 +644,8 @@ class ImportJobRunner:
                 self.require_repair_allowed(bundle.id)
             cancel_check = lambda: self.get_job(job.id).cancel_requested
             files = collect_bundle_files(download.local_dir)
+            if download.expected_sizes:
+                files = [path for path in files if path.relative_to(download.local_dir).as_posix() in download.expected_sizes]
             self.bundles._verify_expected_sizes(files, download.local_dir, download.expected_sizes)
             self.bundles._verify_expected_hashes(files, download.local_dir, download.expected_sha256, cancel_check=cancel_check)
             by_name = {path.resolve().relative_to(download.local_dir.resolve()).as_posix(): path for path in files}
@@ -818,6 +820,9 @@ class ImportJobRunner:
             local_dir=Path(str(payload["local_dir"])),
             expected_sizes=dict(payload.get("expected_sizes") or {}),
             expected_sha256=dict(payload.get("expected_sha256") or {}),
+            source_repo_id=payload.get("source_repo_id"),
+            source_revision=payload.get("source_revision"),
+            source_files=list(payload.get("source_files") or []),
         )
         try:
             current = self.get_job(job.id)
@@ -1027,6 +1032,9 @@ def _download_child(input_path: Path) -> int:
                     "local_dir": str(download.local_dir),
                     "expected_sizes": download.expected_sizes,
                     "expected_sha256": download.expected_sha256,
+                    "source_repo_id": download.source_repo_id,
+                    "source_revision": download.source_revision,
+                    "source_files": download.source_files,
                 }
             ),
             encoding="utf-8",

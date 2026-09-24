@@ -148,6 +148,7 @@ export const api = {
   deploymentConfiguration: (deploymentId: string) => request<BundleConfigurationOptions>(`/v1/deployments/${deploymentId}/configuration-options`),
   modelProjectors: (id: string) => request<SchemaBundleProjectors>(`/v1/bundles/${id}/projectors`),
   selectModelProjector: (id: string, path: string | null) => request<ModelBundle>(`/v1/bundles/${id}/projector`, { method: "PUT", body: JSON.stringify({ path }) }),
+  selectModelChatTemplate: (id: string, origin: "gguf" | "repository" | "publisher") => request<ModelBundle>(`/v1/bundles/${id}/chat-template`, { method: "PUT", body: JSON.stringify({ origin }) }),
   capabilityProbe: (id: string, capability: string) => request<SchemaCapabilityEvidence>(`/v1/compatibility/deployments/${id}/probes`, { method: "POST", body: JSON.stringify({ capability }) }),
   capabilityStatus: (id: string) => request<SchemaCapabilityProbeReport>(`/v1/compatibility/deployments/${id}/probes`),
   previewSettings: (startup: object, per_request: object, agent: object) =>

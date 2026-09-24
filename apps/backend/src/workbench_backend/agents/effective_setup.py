@@ -378,13 +378,18 @@ def _resolve_per_request(
     if profile is not None:
         requested = dict(profile.bags.per_request.requested)
         requested.update(overrides or {})
-        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS,
+            defaults=deployment.publisher_request_defaults)
     if not inherit_deployment_settings:
-        return resolve_bag({key: value for key, value in (overrides or {}).items() if value is not None}, PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in (overrides or {}).items() if value is not None}, PER_REQUEST_KEYS,
+            defaults=deployment.publisher_request_defaults)
     requested = dict(deployment.settings.per_request.requested)
     requested.update(overrides or {})
     if requested:
-        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS)
+        return resolve_bag({key: value for key, value in requested.items() if value is not None}, PER_REQUEST_KEYS,
+            defaults=deployment.publisher_request_defaults)
+    if deployment.publisher_request_defaults:
+        return resolve_bag({}, PER_REQUEST_KEYS, defaults=deployment.publisher_request_defaults)
     return deployment.settings.per_request
 
 

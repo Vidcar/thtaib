@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 import time
+import httpx
 
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import ManagerError
@@ -14,7 +15,8 @@ from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
 from workbench_backend.inference.configurations import ensure_model_configurations, requested_identity
 from workbench_backend.inference.deployments import DeploymentService
-from workbench_backend.inference.hf_fetch import HuggingFaceFetcher
+from workbench_backend.inference.hf_fetch import HuggingFaceFetcher, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
+from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.inspect import inspect_gguf_file, read_gguf_runtime_metadata
 from workbench_backend.inference.inspection_cache import cached_inspection
@@ -151,6 +153,77 @@ class ModelManager:
                 raise ManagerError("Complete the model installation before selecting its image companion.", code="bundle_not_deployable", status_code=409)
             return self.bundles.select_projector(bundle, path)
 
+    def select_bundle_chat_template(self, bundle_id: str, origin: str) -> ModelBundle:
+        if origin not in {"gguf", "repository", "publisher"}:
+            raise ManagerError("Choose the GGUF or an available standalone template.", code="template_choice", status_code=400)
+        with self.lifecycle.mutate("select_chat_template", bundle_ids={bundle_id}):
+            self._require_no_live_runs(bundle_ids={bundle_id}, code="bundle_active")
+            for deployment in self.store.list_deployments():
+                if deployment.bundle_id == bundle_id and (deployment.status in {
+                    DeploymentStatus.starting, DeploymentStatus.running, DeploymentStatus.unhealthy}
+                    or deployment.pid is not None or deployment.process_identity is not None):
+                    raise ManagerError("Unload this model before changing its chat template.", code="bundle_active", status_code=409)
+            bundle = self.store.get_bundle(bundle_id)
+            if bundle is None or bundle.huggingface_configuration is None:
+                raise ManagerError("This bundle has no recorded Hugging Face template choices.", code="template_unavailable", status_code=404)
+            config = bundle.huggingface_configuration
+            if origin == "gguf":
+                metadata = self._read_bundle_runtime_metadata(bundle)
+                if not metadata.chat_template:
+                    raise ManagerError("This GGUF has no embedded chat template.", code="template_unavailable", status_code=409)
+                unsupported = dict(config.unsupported)
+                if config.template_differs:
+                    unsupported["chat_template.jinja"] = ("Standalone template differs from GGUF; "
+                        "GGUF is selected until a compatible template choice is made.")
+                updated = config.model_copy(update={"template_origin": "gguf", "template_file": None,
+                    "unsupported": unsupported})
+            else:
+                names = ([f"{PUBLISHER_DIR}/chat_template.jinja", f"{PUBLISHER_DIR}/chat_template.from-tokenizer.jinja"]
+                    if origin == "publisher" else ["chat_template.jinja", f"{REPOSITORY_TEMPLATE_DIR}/chat_template.from-tokenizer.jinja"])
+                record = next((item for name in names for item in bundle.files if item.name == name), None)
+                if record is None or (origin == "publisher" and not config.source_verified):
+                    raise ManagerError("This template has no verified file in the bundle.", code="template_unavailable", status_code=409)
+                path = Path(record.path)
+                if not path.is_file() or sha256_file(path) != record.sha256:
+                    raise ManagerError("The template file is missing or changed.", code="bundle_template_invalid", status_code=409)
+                self._probe_chat_template(bundle, path)
+                unsupported = dict(config.unsupported)
+                unsupported.pop("chat_template.jinja", None)
+                updated = config.model_copy(update={"template_origin": origin, "template_file": str(path),
+                    "template_compatible": True, "unsupported": unsupported})
+            saved = bundle.model_copy(update={"huggingface_configuration": updated})
+            return self.store.put_bundle(saved)
+
+    def _probe_chat_template(self, bundle: ModelBundle, path: Path) -> None:
+        probe = self.deployments.create_managed(ManagedDeploymentRequest(bundle_id=bundle.id,
+            startup={"chat_template_file": str(path), "ctx_size": 2048}, auto_start=False))
+        try:
+            running = self.deployments.start(probe.id)
+            if running.status != DeploymentStatus.running or not running.endpoint:
+                raise ManagerError(running.error or "The publisher template could not start with this model.",
+                    code="template_incompatible", status_code=409)
+            reported = running.server_props.chat_template if running.server_props else None
+            if reported is None or reported.rstrip("\r\n") != path.read_text(encoding="utf-8").rstrip("\r\n"):
+                raise ManagerError("The runtime did not load the publisher template for the compatibility check.",
+                    code="template_incompatible", status_code=409)
+            endpoint = running.endpoint.removesuffix("/v1")
+            try:
+                response = httpx.post(f"{endpoint}/apply-template", json={"messages": [
+                    {"role": "user", "content": "Template compatibility check"}],
+                    "add_generation_prompt": True}, timeout=30)
+                response.raise_for_status()
+                rendered = response.json().get("prompt")
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                raise ManagerError("The publisher template failed the runtime conversation check.",
+                    code="template_incompatible", status_code=409) from exc
+            if not isinstance(rendered, str) or "Template compatibility check" not in rendered:
+                raise ManagerError("The publisher template did not render the check conversation.",
+                    code="template_incompatible", status_code=409)
+        finally:
+            stopped = self.deployments.stop(probe.id)
+            if stopped.process_identity is None and stopped.pid is None:
+                self.store.delete_deployment(probe.id)
+
     def inspect_bundle(self, bundle_id: str, *, refresh: bool = False) -> InspectReport:
         bundle = self.store.get_bundle(bundle_id)
         if bundle is None:
@@ -189,6 +262,7 @@ class ModelManager:
             verified.id,
             metadata,
             deployment=deployment,
+            huggingface_configuration=verified.huggingface_configuration,
         )
         result.metadata.update(inspection_cached=cached, inspected_at=inspected_at)
         return result
@@ -301,6 +375,8 @@ class ModelManager:
                     startup=profile.bags.startup.requested,
                     per_request=profile.bags.per_request.requested,
                     agent=profile.bags.agent.requested,
+                    per_request_defaults=(bundle.huggingface_configuration.generation_defaults
+                        if bundle and bundle.huggingface_configuration else None),
                 )
             }
         )

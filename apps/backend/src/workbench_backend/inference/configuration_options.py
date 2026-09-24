@@ -19,6 +19,7 @@ from workbench_backend.inference.schemas import (
     BundleConfigurationOptions,
     Deployment,
     GgufRuntimeMetadata,
+    HuggingFaceConfiguration,
     RuntimeControlDescriptor,
     RuntimeControlOption,
     SettingsBag,
@@ -36,6 +37,7 @@ def bundle_configuration_options(
     *,
     deployment: Deployment | None = None,
     recommended_threads: int | None = None,
+    huggingface_configuration: HuggingFaceConfiguration | None = None,
 ) -> BundleConfigurationOptions:
     """Build controls from read-only bundle metadata and optional live props."""
 
@@ -44,13 +46,27 @@ def bundle_configuration_options(
         if deployment is not None and deployment.server_props is not None
         else None
     )
+    per_request_defaults = _per_request_defaults(metadata, deployment)
+    if huggingface_configuration is not None:
+        source = (f"Hugging Face {huggingface_configuration.source_repo_id}"
+            if huggingface_configuration.source_verified else "Hugging Face GGUF repository")
+        for key, value in huggingface_configuration.generation_defaults.items():
+            observed = per_request_defaults.get(key)
+            per_request_defaults[key] = RuntimeControlDescriptor(
+                key=key, label=key.replace("_", " ").title(),
+                description="Downloaded generation setting used when no explicit override is saved.",
+                source="huggingface_generation_config", applied=value,
+                observed=observed.observed if observed else None,
+                default_value=value, default_source=source,
+                supported=True,
+            )
     return BundleConfigurationOptions(
         bundle_id=bundle_id,
         deployment_id=deployment.id if deployment is not None else None,
         context_size=_context_descriptor(metadata.context_length, observed_context),
         gpu_layers=_gpu_layers_descriptor(metadata.block_count),
         startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata)},
-        per_request_defaults=_per_request_defaults(metadata, deployment),
+        per_request_defaults=per_request_defaults,
         metadata={
             "architecture": metadata.architecture,
             "name": metadata.name,

@@ -51,6 +51,18 @@ export interface ModelBundle {
   primary_path: string | null;
   disk_matches: boolean;
   status: string;
+  huggingface_configuration?: {
+    source_repo_id: string | null;
+    source_revision: string | null;
+    source_verified: boolean;
+    source_note: string | null;
+    template_origin: "gguf" | "repository" | "publisher" | "none";
+    template_file: string | null;
+    template_differs: boolean;
+    template_compatible: boolean | null;
+    generation_defaults: Record<string, unknown>;
+    unsupported: Record<string, string>;
+  } | null;
 }
 
 export interface ImportJob {
@@ -145,6 +157,7 @@ export interface Deployment {
   applied_startup: Record<string, unknown>;
   requested_startup?: Record<string, unknown>;
   startup_overrides?: Record<string, unknown>;
+  loaded_chat_template_origin?: "publisher" | "repository" | null;
   settings: SettingsBags;
   health: { healthy: boolean; detail: string | null } | null;
   resource_usage: { available: boolean; cpu_percent: number | null; rss_bytes: number | null; reason: string | null } | null;
