@@ -329,6 +329,18 @@ try {
   assert.equal(harness.state.commands.length, commandsBeforeReopen, "notification activation cannot replay a saved task");
   await act(async () => renderer.unmount());
 
+  const finalizing = { ...run("saved_finalizing", "running", "Save project changes"),
+    finalization_phase: "saving_changes", settled_status: "completed" };
+  harness.state.savedRuns.set(finalizing.id, finalizing);
+  const cancelsBeforeFinalizing = harness.state.cancels.length;
+  await act(async () => { renderer = create(React.createElement(AgentRunPanel, { attentionRunId: finalizing.id })); });
+  await waitFor(() => assert.match(allText(renderer), /Saving project state/), "workflow finalization status visible");
+  const savingButton = renderer.root.findAllByType("button").find(item => textOf(item).includes("Saving…"));
+  assert.equal(savingButton?.props.disabled, true, "Cancel is unavailable after execution settles");
+  await act(async () => savingButton.props.onClick());
+  assert.equal(harness.state.cancels.length, cancelsBeforeFinalizing, "finalizing run does not send a cancel request");
+  await act(async () => renderer.unmount());
+
   harness.state.rejectRegistration = true;
   const handledBeforeFailure = handled.length;
   await act(async () => { renderer = create(React.createElement(AgentRunPanel, { attentionRunId: "saved_a", onAttentionHandled })); });

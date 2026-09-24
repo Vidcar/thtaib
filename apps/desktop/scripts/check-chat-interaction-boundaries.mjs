@@ -2095,6 +2095,32 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
   }
 }
 
+async function testSavingProjectStateDisablesStop(vite) {
+  const initial = run("run_a");
+  const finalizing = { ...initial, finalization_phase: "saving_changes", settled_status: "completed",
+    events: [...initial.events, { at: now(), kind: "finalizing", detail: { phase: "saving_changes" } }] };
+  const harness = makeHarness({ aRun: initial });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(harness.state.openStreams.has("thread_a")), "A SDK stream connected");
+    assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false, "Stop is available during execution");
+    const stream = harness.state.openStreams.get("thread_a");
+    await act(async () => {
+      stream.write(`data: ${JSON.stringify(streamFrame(finalizing))}\n\n`);
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Saving project state").props.disabled, true), "Stop disabled during finalization");
+    assert.match(allText(renderer), /Saving project state/);
+    const cancelCount = harness.state.requests.cancels.length;
+    await act(async () => buttonByAriaLabel(renderer, "Saving project state").props.onClick());
+    assert.equal(harness.state.requests.cancels.length, cancelCount, "saving phase does not send a cancel request");
+  } finally {
+    await closeHarness(renderer, harness);
+  }
+}
+
 async function testUnknownProjectionAdoptsAuthoritativeNewCurrentRun(vite) {
   const known = run("run_known_previous", "completed", "old-input", "previous answer");
   const nextRun = run("run_authoritative_new", "running", "new-input", "new queued answer");
@@ -2763,6 +2789,7 @@ try {
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],
     ["unknown projection requires authoritative current run", testUnknownProjectionRequiresAuthoritativeCurrentRun],
     ["measurement-only projection refresh and isolation", testMeasurementOnlyProjectionRefreshesCurrentConversation],
+    ["saving project state disables Stop", testSavingProjectStateDisablesStop],
     ["unknown projection adopts authoritative new current run", testUnknownProjectionAdoptsAuthoritativeNewCurrentRun],
     ["older unknown projection lookup cannot overwrite newer adopted run", testOlderUnknownProjectionLookupCannotOverwriteNewerAdoptedRun],
     ["rejected submit keeps draft", testRejectedSubmitWithOnlyStagedInputKeepsDraftAndError],

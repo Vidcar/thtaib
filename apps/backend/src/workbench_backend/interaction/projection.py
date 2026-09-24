@@ -1,6 +1,9 @@
 """Controlled display projection of public native protocol events."""
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import time
 from typing import Any
 
@@ -91,7 +94,64 @@ def message_resume_seed(prefix: list[dict[str, Any]], *, seq: int) -> list[dict[
         if "node" in params:
             seed_params["node"] = params["node"]
         seeds.append({"type": "event", "method": "messages", "seq": seq, "params": seed_params})
+    for seed in seeds:
+        identity = json.dumps(seed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        seed["event_id"] = "resume:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return seeds
+
+
+def compact_finished_message_deltas(
+    thread_id: str, events: list[dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], set[int]]:
+    """Replace completed token streams with final blocks at their original positions.
+
+    Message start/finish, tools, lifecycle and nested namespace identity remain
+    in the durable log. An unfinished message is left byte-for-byte intact.
+    """
+    active: dict[tuple[str, ...], dict[str, Any]] = {}
+    replacements: dict[int, dict[str, Any]] = {}
+    deletions: set[int] = set()
+    for item in events:
+        params = item.get("params") or {}
+        data = params.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        key = tuple(params.get("namespace") or [])
+        event_name = data.get("event")
+        if event_name == "message-start":
+            active[key] = {"blocks": {}, "finished": set(), "deltas": {}}
+            continue
+        stream = active.get(key)
+        if stream is None:
+            continue
+        index = data.get("index", 0)
+        if not isinstance(index, int) or isinstance(index, bool):
+            index = 0
+        if event_name == "content-block-start" and isinstance(data.get("content"), dict):
+            stream["blocks"][index] = dict(data["content"])
+        _accumulate_message_block(stream["blocks"], data)
+        if event_name == "content-block-delta":
+            stream["deltas"].setdefault(index, []).append(item)
+        elif event_name == "content-block-finish":
+            stream["finished"].add(index)
+        elif event_name == "message-finish":
+            for block_index, deltas in stream["deltas"].items():
+                if block_index in stream["finished"]:
+                    deletions.update(int(delta["seq"]) for delta in deltas)
+                    continue
+                block = stream["blocks"].get(block_index)
+                if not isinstance(block, dict):
+                    continue
+                last = deltas[-1]
+                final = copy.deepcopy(last)
+                final["params"]["data"] = {
+                    "event": "content-block-finish", "index": block_index, "content": block,
+                }
+                final["event_id"] = f"compact:{thread_id}:{last['seq']}"
+                replacements[int(last["seq"])] = final
+                deletions.update(int(delta["seq"]) for delta in deltas[:-1])
+            active.pop(key, None)
+    return replacements, deletions
 
 
 def open_tool_starts(events: Any) -> list[dict[str, Any]]:
@@ -139,6 +199,72 @@ def _block_has_visible_content(block: dict[str, Any]) -> bool:
     return block.get("type") not in {None, "text", "reasoning"}
 
 
+class PartialArchiveAccumulator:
+    """Incrementally project saved native events with upstream ChatModelStream."""
+
+    def __init__(self) -> None:
+        self.active: dict[tuple[str, ...], ChatModelStream] = {}
+        self.blocks_by_namespace: dict[tuple[str, ...], dict[int, dict[str, Any]]] = {}
+        self.finished: dict[str, dict[str, Any]] = {}
+
+    def consume(self, item: dict[str, Any]) -> None:
+        if self.finished and item["method"] == "values" and not item["params"].get("namespace"):
+            # A completed message event can precede its graph values update.
+            # Keep that finished output only until the authoritative complete
+            # message arrives, so hydration cannot briefly drop the answer.
+            for message in item["params"].get("data", {}).get("messages", []):
+                if isinstance(message, dict):
+                    self.finished.pop(message.get("id"), None)
+        if item["method"] != "messages":
+            return
+        params = item["params"]
+        key = tuple(params.get("namespace", []))
+        data = params["data"]
+        if data.get("event") == "message-start":
+            self.active[key] = ChatModelStream(namespace=list(key), message_id=data.get("id"))
+            self.blocks_by_namespace[key] = {}
+        projection = self.active.get(key)
+        if projection is None:
+            return
+        if data.get("event") == "error":
+            # Failure is owned by the application run. Keep the last observed
+            # projections readable without turning the error into completion.
+            return
+        projection.dispatch(data)
+        _accumulate_message_block(self.blocks_by_namespace[key], data)
+        if data.get("event") == "message-finish":
+            if not key and projection.output_message is not None:
+                message = message_dict(projection.output_message)
+                if message is not None and message.get("id"):
+                    self.finished[message["id"]] = message
+            self.active.pop(key, None)
+            self.blocks_by_namespace.pop(key, None)
+
+    def snapshot(self) -> tuple[list[dict[str, Any]], list[str]]:
+        messages, incomplete = list(self.finished.values()), []
+        for namespace, projection in self.active.items():
+            if namespace or not projection.message_id:
+                continue
+            blocks = []
+            text, reasoning = "".join(projection.text), "".join(projection.reasoning)
+            if reasoning:
+                blocks.append({"type": "reasoning", "reasoning": reasoning})
+            if text:
+                blocks.append({"type": "text", "text": text})
+            # Native block deltas carry complete argument snapshots. Retain those
+            # bytes as display-only chunks, including unfinished JSON. Do not parse
+            # them into tool_calls or claim that the tool was ever executed.
+            for _index, block in sorted(self.blocks_by_namespace[namespace].items()):
+                if block.get("type") in {"tool_call_chunk", "tool_call", "invalid_tool_call"}:
+                    blocks.append({"type": "tool_call_chunk", **{
+                        key: block[key] for key in ("id", "name", "args") if key in block
+                    }})
+            incomplete.append(projection.message_id)
+            if blocks:
+                messages.append({"type": "ai", "id": projection.message_id, "content": blocks})
+        return messages, incomplete
+
+
 def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
     """Use the public upstream projection to retain interrupted real output.
 
@@ -146,63 +272,10 @@ def partial_archive(events: Any) -> tuple[list[dict[str, Any]], list[str]]:
     invoke anything: their only input is the already-persisted event iterator.
     Incomplete tool arguments remain inert content blocks, never executable calls.
     """
-    active: dict[tuple[str, ...], ChatModelStream] = {}
-    blocks_by_namespace: dict[tuple[str, ...], dict[int, dict[str, Any]]] = {}
-    finished: dict[str, dict[str, Any]] = {}
+    projection = PartialArchiveAccumulator()
     for item in events:
-        if finished and item["method"] == "values" and not item["params"].get("namespace"):
-            # A completed message event can precede its graph values update.
-            # Keep that finished output only until the authoritative complete
-            # message arrives, so hydration cannot briefly drop the answer.
-            for message in item["params"].get("data", {}).get("messages", []):
-                if isinstance(message, dict):
-                    finished.pop(message.get("id"), None)
-        if item["method"] != "messages":
-            continue
-        params = item["params"]
-        key = tuple(params.get("namespace", []))
-        data = params["data"]
-        if data.get("event") == "message-start":
-            active[key] = ChatModelStream(namespace=list(key), message_id=data.get("id"))
-            blocks_by_namespace[key] = {}
-        projection = active.get(key)
-        if projection is None:
-            continue
-        if data.get("event") == "error":
-            # Failure is owned by the application run. Keep the last observed
-            # projections readable without turning the error into completion.
-            continue
-        projection.dispatch(data)
-        _accumulate_message_block(blocks_by_namespace[key], data)
-        if data.get("event") == "message-finish":
-            if not key and projection.output_message is not None:
-                message = message_dict(projection.output_message)
-                if message is not None and message.get("id"):
-                    finished[message["id"]] = message
-            active.pop(key, None)
-            blocks_by_namespace.pop(key, None)
-    messages, incomplete = list(finished.values()), []
-    for namespace, projection in active.items():
-        if namespace or not projection.message_id:
-            continue
-        blocks = []
-        text, reasoning = "".join(projection.text), "".join(projection.reasoning)
-        if reasoning:
-            blocks.append({"type": "reasoning", "reasoning": reasoning})
-        if text:
-            blocks.append({"type": "text", "text": text})
-        # Native block deltas carry complete argument snapshots. Retain those
-        # bytes as display-only chunks, including unfinished JSON. Do not parse
-        # them into tool_calls or claim that the tool was ever executed.
-        for _index, block in sorted(blocks_by_namespace[namespace].items()):
-            if block.get("type") in {"tool_call_chunk", "tool_call", "invalid_tool_call"}:
-                blocks.append({"type": "tool_call_chunk", **{
-                    key: block[key] for key in ("id", "name", "args") if key in block
-                }})
-        incomplete.append(projection.message_id)
-        if blocks:
-            messages.append({"type": "ai", "id": projection.message_id, "content": blocks})
-    return messages, incomplete
+        projection.consume(item)
+    return projection.snapshot()
 
 
 def native_event(raw: dict[str, Any]) -> list[Event]:

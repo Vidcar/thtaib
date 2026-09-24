@@ -21,7 +21,7 @@ from tests.support import wait_for_run
 from tests import test_harness as harness_tests
 from tests.scripted_model import RECEIVED_PROMPTS, reset_received_prompts
 from workbench_backend.agents.schemas import UserAnswerRequest
-from workbench_backend.inference.adapter import _AsyncObservation
+from workbench_backend.inference.telemetry import LatestGenerationPublisher
 from workbench_backend.state.checkpointer import (
     close_sqlite_checkpointer, open_sqlite_checkpointer, run_checkpoint_task,
 )
@@ -149,15 +149,19 @@ class AsyncLifecycleTests(unittest.TestCase):
             self.assertTrue(release.wait(5))
             observed.append(sample['n'])
         async def check():
-            observer = _AsyncObservation(publish)
-            observer({'n': 1})
-            self.assertTrue(await asyncio.to_thread(entered.wait, 5))
-            # This query must finish while publication is blocked on another owner.
-            saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
-            self.assertIsNone(await asyncio.wait_for(saver.aget_tuple({'configurable': {'thread_id': 'empty'}}), 2))
-            observer({'n': 2})
-            release.set()
-            await observer.flush()
+            publisher = LatestGenerationPublisher(publish)
+            try:
+                publisher.publish({'request_id': 'test', 'reset': True, 'n': 1})
+                self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+                # This query must finish while publication is blocked on another owner.
+                saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
+                self.assertIsNone(await asyncio.wait_for(saver.aget_tuple({'configurable': {'thread_id': 'empty'}}), 2))
+                publisher.publish({'request_id': 'test', 'n': 2})
+                release.set()
+                self.assertTrue(await asyncio.to_thread(publisher.wait_idle, 5))
+            finally:
+                release.set()
+                publisher.close()
         try:
             run_checkpoint_task(self.manager.paths.checkpoints_db, check())
         finally:

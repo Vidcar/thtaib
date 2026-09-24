@@ -1377,6 +1377,7 @@ class ChatHarnessTests(unittest.TestCase):
             release.set()
             worker.join(timeout=10)
         self.assertFalse(worker.is_alive())
+        self.assertEqual(result["response"].status_code, 200, result["response"].text)
         second = result["response"].json()
         self.assertNotEqual(second["current_run_id"], first_run_id)
         body = wait_for_chat(self.client, conversation["id"])

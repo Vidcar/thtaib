@@ -29,6 +29,10 @@ class InteractionProjectionTests(unittest.TestCase):
             "event": "content-block-start", "index": 0, "content": {"type": "text", "text": "Hello"},
         })
         self.assertEqual(seed[1]["params"]["node"], "model")
+        self.assertEqual([item["event_id"] for item in seed],
+                         [item["event_id"] for item in message_resume_seed(prefix, seq=4)])
+        self.assertEqual(len({item["event_id"] for item in seed}), len(seed))
+        self.assertNotEqual(seed[1]["event_id"], message_resume_seed(prefix, seq=5)[1]["event_id"])
 
     def test_open_tool_start_drops_a_finished_call(self) -> None:
         started = {"method": "tools", "params": {"namespace": [], "data": {"event": "tool-started", "tool_call_id": "call-1", "tool_name": "write_file"}}}

@@ -303,6 +303,9 @@ class AgentRun(BaseModel):
     structured_output: StructuredOutputResult | None = None
     context_observation: ContextObservation | None = None
     generation_observation: GenerationObservation | None = None
+    finalization_phase: Literal["saving_changes"] | None = None
+    settled_status: Literal["completed", "failed", "cancelled"] | None = None
+    settled_stop_reason: str | None = None
     stop_reason: str | None = None
     error: str | None = None
     created_at: str
@@ -327,6 +330,7 @@ class AgentRun(BaseModel):
     retrieval_project_paths: list[str] = Field(default_factory=list)
     retrieved_material: list[str] = Field(default_factory=list)
     thread_id: str | None = None
+    pre_run_checkpoint_id: str | None = None
     checkpoint_ids: list[str] = Field(default_factory=list)
     resume_checkpoint_id: str | None = None
     related_files: list[RelatedFile] = Field(default_factory=list)

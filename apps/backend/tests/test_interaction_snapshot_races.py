@@ -158,6 +158,24 @@ class InteractionSnapshotRaceTests(unittest.TestCase):
         saved = self.service.state("display")
         self.assertEqual(saved["values"]["messages"][-1]["content"][0]["text"], "Visible answer")
 
+    def test_failed_run_compacts_finished_tokens_after_terminal_projection(self):
+        self.service.observe(self.run, event("messages", {
+            "event": "content-block-delta", "index": 0,
+            "delta": {"type": "text-delta", "text": " retained"},
+        }))
+        self.service.observe(self.run, event("messages", {"event": "message-finish"}))
+        self.run.status = AgentRunStatus.failed
+        self.store.put_run(self.run)
+        self.service.observe(self.run, None)
+        page, _latest, gap = self.store.interaction_page("display", 0)
+        self.assertFalse(gap)
+        self.assertFalse(any(item["method"] == "messages" and
+            item["params"]["data"]["event"] == "content-block-delta" for item in page))
+        blocks = [item["params"]["data"]["content"]["text"] for item in page
+            if item["method"] == "messages" and
+            item["params"]["data"]["event"] == "content-block-finish"]
+        self.assertEqual(blocks, ["Visible answer retained"])
+
     def test_complete_graph_values_supersede_finished_stream_projection(self):
         self.service.observe(self.run, event("messages", {
             "event": "content-block-finish", "index": 0,
@@ -177,13 +195,49 @@ class InteractionSnapshotRaceTests(unittest.TestCase):
         }))
         wires, cursor, gap = self.service.stream_page(
             "display", self.cursor, {"channels": ["messages", "values"]}, resume)
+        reopened = self.service.resume_view("display", self.cursor)
+        replayed, _replayed_cursor, replayed_gap = self.service.stream_page(
+            "display", self.cursor, {"channels": ["messages", "values"]}, reopened)
         self.complete()
         self.assertFalse(gap)
+        self.assertFalse(replayed_gap)
         self.assertGreater(cursor, self.cursor)
         self.assertEqual([wire["params"]["data"]["event"] for wire in wires],
                          ["message-start", "content-block-start", "content-block-delta"])
         self.assertEqual(wires[1]["params"]["data"]["content"]["text"], "Visible answer")
         self.assertEqual(wires[2]["params"]["data"]["delta"]["text"], " continues")
+        self.assertEqual([wire["event_id"] for wire in wires[:2]],
+                         [wire["event_id"] for wire in replayed[:2]])
+
+    def test_open_tool_restoration_has_stable_identity_at_hydration_cursor(self):
+        self.service.observe(self.run, event("tools", {
+            "event": "tool-started", "tool_call_id": "read-1", "tool_name": "read_file",
+        }))
+        cursor = self.store.get_interaction("display")["seq"]
+        options = {"channels": ["tools"], "namespaces": [[]], "depth": 1}
+        first = self.service.resume_view("display", cursor).opening(options)
+        second = self.service.resume_view("display", cursor).opening(options)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0]["seq"], cursor)
+        self.assertEqual(first[0]["event_id"], second[0]["event_id"])
+        self.assertTrue(first[0]["event_id"].startswith("resume:tool:"))
+
+    def test_live_values_projection_reuses_one_prefix_across_replay_pages(self):
+        resume = self.service.resume_view("display", self.cursor)
+        snapshot = self.store.get_interaction("display")["snapshot"]
+        deltas = [event("messages", {"event": "content-block-delta", "index": 0,
+                   "delta": {"type": "text-delta", "text": "x"}}) for _ in range(130)]
+        self.store.append_interaction("display", [*deltas, event("values", snapshot)], snapshot=snapshot)
+        with patch.object(self.service, "replay", wraps=self.service.replay) as replay:
+            first, cursor, gap = self.service.stream_page(
+                "display", self.cursor, {"channels": ["messages", "values"]}, resume)
+            second, _cursor, second_gap = self.service.stream_page(
+                "display", cursor, {"channels": ["messages", "values"]}, resume)
+        self.assertFalse(gap or second_gap)
+        self.assertEqual(replay.call_count, 1)
+        self.assertEqual(len(first) + len(second), 133)
+        self.assertEqual(second[-1]["params"]["data"]["messages"][-1]["content"],
+                         [{"type": "text", "text": "Visible answer" + "x" * 130}])
 
 
 if __name__ == "__main__":

@@ -328,14 +328,18 @@ class InteractionStreamTests(unittest.TestCase):
         completed = wait_for_state(self.client, thread_id)
         self.assertEqual(completed["values"]["workbench"]["run"]["status"], "completed")
 
-    def test_replay_gap_resynchronizes_saved_output_without_execution(self) -> None:
+    def test_missing_historical_detail_resynchronizes_saved_output_without_execution(self) -> None:
         thread_id = self._register_agent()
         started = self._start_command(thread_id)
         original = wait_for_state(self.client, thread_id)
         calls_before = len(self.app.state.harness.list_runs())
         store = self.app.state.app_store
+        missing = store.append_interaction(thread_id, [event("tools", {
+            "event": "tool-started", "tool_call_id": "lost-tool", "tool_name": "read_file",
+        })])
+        store.append_interaction(thread_id, [event("lifecycle", {"event": "completed"})])
         with store._lock:
-            store._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=1", (thread_id,))
+            store._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", (thread_id, missing))
             store._conn.commit()
         with loopback_app_server(self.app) as base_url:
             events = read_loopback_interaction_events(
@@ -345,7 +349,7 @@ class InteractionStreamTests(unittest.TestCase):
             )
         values = next(item["data"]["params"]["data"] for item in events if (item.get("data") or {}).get("method") == "values")
         self.assertEqual(values["messages"], original["values"]["messages"])
-        self.assertEqual(values["workbench"]["recovery"]["kind"], "replay_gap")
+        self.assertEqual(values["workbench"]["recovery"]["kind"], "history_unavailable")
         self.assertEqual(values["workbench"]["run"]["id"], started["run_id"])
         self.assertEqual(len(self.app.state.harness.list_runs()), calls_before)
 

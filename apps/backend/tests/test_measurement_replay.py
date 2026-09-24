@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
+from workbench_backend.errors import InteractionPersistenceError
 from workbench_backend.interaction.projection import event, partial_archive
 from workbench_backend.interaction.resume import ResumeProjection
 from workbench_backend.interaction.service import InteractionService
@@ -194,10 +195,11 @@ class MeasurementReplayTests(unittest.TestCase):
         events = self.store.interaction_events_after("display", 0)
         self.store._conn.execute("CREATE TRIGGER fail_full_snapshot BEFORE UPDATE ON interaction_threads BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
         self.store._conn.commit()
-        with self.assertRaisesRegex(sqlite3.IntegrityError, "injected failure"):
+        with self.assertRaises(InteractionPersistenceError) as failure:
             self.service.observe(self.run, event("values", {"messages": [{
                 "type": "ai", "id": "new", "content": "after",
             }]}))
+        self.assertIsInstance(failure.exception.__cause__, sqlite3.IntegrityError)
         self.assertEqual(self.store.get_interaction("display"), before)
         self.assertEqual(self.store.interaction_events_after("display", 0), events)
 
@@ -250,6 +252,124 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertEqual(len(stored), 40)
         self.assertEqual("".join(item["params"]["data"]["delta"]["text"] for item in stored), "x" * 40)
 
+    def test_native_token_batch_decodes_binding_once(self) -> None:
+        with patch.object(self.store, "interaction_for_graph", side_effect=AssertionError("full binding read")), \
+                patch.object(self.service, "binding", wraps=self.service.binding) as binding:
+            for _ in range(32):
+                self.service.observe(self.run, event("messages", {"event": "content-block-delta", "index": 0,
+                    "delta": {"type": "text-delta", "text": "x"}}))
+        self.assertEqual(binding.call_count, 1)
+
+    def test_poll_and_append_use_scalar_metadata_without_decoding_snapshot(self) -> None:
+        before = self.store.get_interaction("display")
+        snapshot = {**before["snapshot"], "workbench": {
+            **before["snapshot"]["workbench"], "display_cutover_seq": before["seq"] + 1,
+        }}
+        self.store.append_interaction("display", [event("lifecycle", {"event": "running"})], snapshot=snapshot)
+        with patch.object(self.store, "get_interaction", side_effect=AssertionError("snapshot read")):
+            latest, cutover, status = self.store.interaction_stream_metadata("display")
+            page, high_water, gap = self.store.interaction_page("display", before["seq"])
+            appended = self.store.append_interaction("display", [event("tools", {"event": "tool-started", "tool_call_id": "a"})])
+        self.assertEqual((latest, cutover, status), (before["seq"] + 1, before["seq"] + 1, "running"))
+        self.assertEqual((len(page), high_water, gap), (1, latest, False))
+        self.assertEqual(appended, latest + 1)
+
+    def test_delayed_telemetry_cannot_erase_saving_or_terminal_state(self) -> None:
+        delayed = self.run.model_copy(deep=True)
+        delayed.generation_observation = GenerationObservation(
+            request_id="old", phase="generating", input_tokens=10, output_tokens=5,
+            context_used_tokens=15, elapsed_seconds=0.1, tokens_per_second=50,
+            measured_at=delayed.updated_at, basis="llama_cpp_timings",
+            interval="current_model_call_generation",
+        )
+        self.run.finalization_phase = "saving_changes"
+        self.service.observe(self.run, None)
+        saving = self.store.get_interaction("display")
+        self.service.observe(delayed, None, telemetry=True)
+        self.assertEqual(self.store.get_interaction("display"), saving)
+        self.run.finalization_phase = None
+        self.run.status = AgentRunStatus.completed
+        self.store.put_run(self.run)
+        self.service.observe(self.run, None)
+        finished = self.store.get_interaction("display")
+        self.service.observe(delayed, None, telemetry=True)
+        self.assertEqual(self.store.get_interaction("display"), finished)
+
+    def test_completed_delta_compaction_retains_ordered_tool_and_nested_history(self) -> None:
+        before = self.store.get_interaction("display")["seq"]
+        nested = ["worker:one"]
+        events = [
+            event("messages", {"event": "message-start", "id": "root", "role": "ai"}),
+            event("messages", {"event": "content-block-start", "index": 0,
+                               "content": {"type": "text", "text": ""}}),
+            event("messages", {"event": "content-block-delta", "index": 0,
+                               "delta": {"type": "text-delta", "text": "Hel"}}),
+            event("tools", {"event": "tool-started", "tool_call_id": "call", "tool_name": "worker"}),
+            event("lifecycle", {"event": "running", "graph_name": "worker"}, nested),
+            event("messages", {"event": "message-start", "id": "child", "role": "ai"}, nested),
+            event("messages", {"event": "content-block-delta", "index": 0,
+                               "delta": {"type": "text-delta", "text": "ch"}}, nested),
+            event("messages", {"event": "content-block-delta", "index": 0,
+                               "delta": {"type": "text-delta", "text": "ild"}}, nested),
+            event("messages", {"event": "message-finish"}, nested),
+            event("lifecycle", {"event": "completed", "graph_name": "worker"}, nested),
+            event("messages", {"event": "content-block-delta", "index": 0,
+                               "delta": {"type": "text-delta", "text": "lo"}}),
+            event("messages", {"event": "message-finish"}),
+            event("tools", {"event": "tool-finished", "tool_call_id": "call", "output": "done"}),
+            event("lifecycle", {"event": "completed"}),
+        ]
+        self.store.append_interaction("display", events)
+        self.assertEqual(self.store.discard_finished_token_log("display"), 0)
+        self.run.status = AgentRunStatus.completed
+        self.store.put_run(self.run)
+        snapshot = self.store.get_interaction("display")["snapshot"]
+        snapshot["workbench"]["run"] = self.run.model_dump(mode="json")
+        self.store.append_interaction("display", [], snapshot=snapshot, run_id=self.run.id)
+        self.assertEqual(self.store.discard_finished_token_log("display"), 2)
+        page, _latest, gap = self.store.interaction_page("display", before)
+        self.assertFalse(gap)
+        self.assertEqual([item["params"]["data"]["event"] for item in page if item["method"] == "tools"],
+                         ["tool-started", "tool-finished"])
+        self.assertEqual([item["params"]["data"]["event"] for item in page if item["method"] == "lifecycle"],
+                         ["running", "completed", "completed"])
+        compacted = [item for item in page if item["method"] == "messages" and
+                     item["params"]["data"]["event"] == "content-block-finish"]
+        self.assertEqual([(item["params"]["namespace"], item["params"]["data"]["content"]["text"])
+                          for item in compacted], [(["worker:one"], "child"), ([], "Hello")])
+        self.assertTrue(all(item["event_id"].startswith("compact:display:") for item in compacted))
+        self.assertIn("Hello", str(partial_archive(page)[0]))
+        self.assertEqual(self.store.discard_finished_token_log("display"), 0)
+        self.assertEqual(self.store.interaction_page("display", before)[0], page)
+        # A different missing event remains detectable after deliberate gaps
+        # from compacted deltas have been bridged.
+        tool_seq = next(item["seq"] for item in page if item["method"] == "tools")
+        self.store._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", ("display", tool_seq))
+        self.store._conn.commit()
+        self.assertTrue(self.store.interaction_page("display", before)[2])
+
+    def test_legacy_deleted_history_is_labelled_on_hydration(self) -> None:
+        self.store.register_interaction("legacy", "agent", "old-graph", None, {
+            "messages": [{"type": "human", "id": "old-input", "content": "Saved text"}],
+            "workbench": {"run": None},
+        })
+        self.store.append_interaction("legacy", [
+            event("tools", {"event": "tool-started", "tool_call_id": "old"}),
+            event("tools", {"event": "tool-finished", "tool_call_id": "old"}),
+            event("lifecycle", {"event": "completed"}),
+        ])
+        self.store.close()
+        with closing(sqlite3.connect(self.paths.application_db)) as connection:
+            connection.execute("ALTER TABLE interaction_threads DROP COLUMN history_unavailable")
+            connection.execute("DELETE FROM interaction_events WHERE thread_id='legacy' AND seq=2")
+            connection.commit()
+        self.store = ApplicationStore(self.paths)
+        service = InteractionService(self.store, lambda: None, lambda: None)
+        hydrated = service.state("legacy")
+        self.assertEqual(hydrated["values"]["messages"][0]["content"], "Saved text")
+        self.assertEqual(hydrated["values"]["workbench"]["recovery"]["kind"], "history_unavailable")
+        self.assertTrue(self.store.interaction_history_unavailable("legacy"))
+
     def test_token_events_do_not_copy_the_run_or_rewrite_the_snapshot(self):
         harness = HarnessService(lambda: None, app_store=self.store, interaction_observer=self.service.observe)
         before = self.store.get_interaction("display")
@@ -289,7 +409,9 @@ class MeasurementReplayTests(unittest.TestCase):
         while page := self.store.interaction_events_after("display", cursor):
             methods.extend(item["method"] for item in page)
             cursor = page[-1]["seq"]
-        self.assertEqual(methods.count("messages"), 0)
+        # These deltas have no matching message-finish. Their partial output
+        # cannot be replaced by a truthful final message record.
+        self.assertEqual(methods.count("messages"), 200)
         self.assertIn("lifecycle", methods)
         self.assertEqual(self.store.get_run(self.run.id).status, AgentRunStatus.completed)
         harness._startup_reconciled = True

@@ -1,6 +1,7 @@
 import { isRunLifecycleLive, type RunLifecycleStatus } from "./sharedContracts";
 import type { MatchedPermissionGrant } from "./packet03Api";
 import type {
+  SchemaAgentRun,
   SchemaChatDraft,
   SchemaChatQueueItem,
   SchemaChatSearchResult,
@@ -314,6 +315,9 @@ export interface AgentRun {
   review_observation?: { enabled: boolean; max_revisions: number; status: string; evidence_scope?: string; evaluations: Array<{ iteration?: number; grading_run_id?: string; result?: unknown; explanation?: string; criteria?: Array<{ name: string; passed: boolean; gap?: string }> }> };
   input_message_id?: string | null;
   status: AgentRunStatus;
+  finalization_phase?: SchemaAgentRun["finalization_phase"];
+  settled_status?: SchemaAgentRun["settled_status"];
+  settled_stop_reason?: SchemaAgentRun["settled_stop_reason"];
   deployment_id: string;
   task: string;
   content_blocks?: UserContentBlock[] | null;

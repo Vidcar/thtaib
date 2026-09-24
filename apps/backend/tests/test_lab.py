@@ -299,9 +299,9 @@ class LabApiTests(unittest.TestCase):
         self.assertEqual(reasons[".env"], "env_credentials")
         self.assertEqual(reasons["credentials.json"], "secrets")
         self.assertEqual(reasons["weights.gguf"], "weights")
-        self.assertEqual(reasons[".scratch/tmp.txt"], "scratch")
-        self.assertEqual(reasons[".venv/lib.py"], "venv")
-        self.assertEqual(reasons["node_modules/pkg/index.js"], "node_modules")
+        self.assertEqual(reasons[".scratch"], "scratch")
+        self.assertEqual(reasons[".venv"], "venv")
+        self.assertEqual(reasons["node_modules"], "node_modules")
         included = {item["path"] for item in snapshot["included_files"]}
         self.assertIn("keep.md", included)
         self.assertNotIn(".env", included)
@@ -313,6 +313,23 @@ class LabApiTests(unittest.TestCase):
         dumped = json.dumps(export)
         self.assertNotIn("SECRET_VALUE", dumped)
         self.assertEqual(export["snapshot"]["environment_restore"], "not_this_milestone")
+
+    def test_explicit_empty_case_allowlist_overrides_workspace_allowlist(self) -> None:
+        workspace = self.client.post("/v1/lab/workspaces", json={
+            "display_name": "allowlist",
+            "files": {"keep.md": "safe"},
+            "allowlist": ["keep.md"],
+        }).json()
+        captured = self.client.post("/v1/lab/cases/capture", json={
+            "workspace_id": workspace["id"],
+            "task": "empty capture",
+            "deployment_id": self.deployment_id,
+            "allowlist": [],
+        })
+        self.assertEqual(captured.status_code, 200, captured.text)
+        snapshot = self.client.get(f"/v1/lab/snapshots/{captured.json()['snapshot_id']}").json()
+        self.assertEqual(snapshot["allowlist"], [])
+        self.assertEqual(snapshot["included_files"], [])
 
     def test_capture_fails_when_run_is_still_writing(self) -> None:
         workspace = self._workspace()

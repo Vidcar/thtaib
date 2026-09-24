@@ -1,9 +1,10 @@
 """Counts and speed are request-local reported measurements, not chunk guesses."""
 
 import unittest
+import threading
 from unittest.mock import patch
 
-from workbench_backend.inference.telemetry import RequestTelemetry
+from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry
 
 
 def sample(*, ident="request-one", output=10, cached=80, processed=20, **extra):
@@ -67,3 +68,37 @@ class RequestTelemetryTests(unittest.TestCase):
         value["timings"]["predicted_per_second"] = float("inf")
         telemetry.receive(value)
         self.assertIsNone(seen[-1]["tokens_per_second"])
+
+
+class LatestGenerationPublisherTests(unittest.TestCase):
+    def test_blocked_publication_keeps_only_newest_request_reset_and_sample(self):
+        entered, release = threading.Event(), threading.Event()
+        seen = []
+
+        def callback(sample):
+            seen.append(sample)
+            if sample["request_id"] == "old":
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("measurement publisher was not released")
+
+        publisher = LatestGenerationPublisher(callback)
+        try:
+            publisher.publish({"request_id": "old", "reset": True})
+            self.assertTrue(entered.wait(2))
+            publisher.publish({"request_id": "old", "output_tokens": 1})
+            publisher.publish({"request_id": "old", "output_tokens": 2})
+            publisher.publish({"request_id": "new", "reset": True})
+            publisher.publish({"request_id": "new", "output_tokens": 3})
+            publisher.publish({"request_id": "new", "output_tokens": 4, "phase": "completed"})
+            self.assertEqual(publisher.latest_sample()["output_tokens"], 4)
+            release.set()
+            self.assertTrue(publisher.wait_idle(2))
+            self.assertEqual(seen, [
+                {"request_id": "old", "reset": True},
+                {"request_id": "new", "reset": True},
+                {"request_id": "new", "output_tokens": 4, "phase": "completed"},
+            ])
+        finally:
+            release.set()
+            publisher.close()

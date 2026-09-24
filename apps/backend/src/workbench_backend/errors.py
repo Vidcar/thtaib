@@ -50,6 +50,17 @@ class StateError(WorkbenchError):
     """Application-owned recovery/effect error. Not an exactly-once claim."""
 
 
+class InteractionPersistenceError(WorkbenchError):
+    """Essential native activity could not be projected or saved durably."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Interaction activity could not be saved.",
+            code="interaction_persistence_failed",
+            status_code=500,
+        )
+
+
 class DefinitionCompileError(WorkbenchError):
     """WF-001 definition compiler error. Not a Builder or workflow-runtime claim."""
 

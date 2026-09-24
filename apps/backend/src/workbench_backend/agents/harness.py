@@ -135,7 +135,12 @@ from workbench_backend.knowledge.schemas import (
     KnowledgeVersion,
 )
 from workbench_backend.knowledge.service import KnowledgeService
-from workbench_backend.lab.snapshot import capture_project_snapshot
+from workbench_backend.lab.schemas import SnapshotManifest
+from workbench_backend.lab.snapshot import (
+    capture_project_snapshot,
+    discard_incomplete_snapshot_staging,
+    verify_snapshot_tree,
+)
 from workbench_backend.lab.store import LabStore
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -172,11 +177,13 @@ class HarnessService:
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._native_streams: dict[str, Any] = {}
+        self._interaction_failure_runs: set[str] = set()
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._model_clients: dict[str, httpx.Client] = {}
         self._adapter_models: dict[str, Any] = {}
         self._start_cancel_guards: dict[tuple[str | None, str | None], threading.Event] = {}
+        self._finalizing_runs: set[str] = set()
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
@@ -672,6 +679,8 @@ class HarnessService:
             # Agent-run / Lab own one thread per run. Chat follow-ups pass the
             # conversation thread so LangGraph resumes the same checkpointer state.
             run.thread_id = request.thread_id or run.id
+            if request.thread_id:
+                run.pre_run_checkpoint_id = self._checkpoint_head(run.thread_id)
             with self._lock:
                 cancel = self._start_cancel_guards.get((request.thread_id, input_message_id)) or threading.Event()
                 if cancel.is_set():
@@ -724,6 +733,12 @@ class HarnessService:
         reject_after_restart: tuple[PendingInterrupt, threading.Event] | None = None
         with self._lock:
             run = self._require_run(run_id)
+            if run.finalization_phase is not None:
+                raise HarnessError(
+                    "Execution has finished and this run is saving its project snapshot.",
+                    code="run_finalizing",
+                    status_code=409,
+                )
             if run.parent_run_id:
                 parent = self._runs.get(run.parent_run_id) or self.store.get_run(run.parent_run_id)
                 if parent is not None and any(item.run_id == run.id for item in parent.child_runs) and is_run_lifecycle_live(parent.status):
@@ -952,6 +967,10 @@ class HarnessService:
             self._finish(run, AgentRunStatus.failed, "failed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
             self._collect_related_files(run)
+            if isinstance(exc, HarnessError) and exc.code == "interaction_persistence_failed":
+                run.error = str(exc)
+                self._finish(run, AgentRunStatus.failed, "interaction_persistence_failed")
+                return
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -998,6 +1017,10 @@ class HarnessService:
             self._finish(run, AgentRunStatus.failed, "failed")
         except Exception as exc:  # noqa: BLE001 - surface harness failure, do not invent success
             self._collect_related_files(run)
+            if isinstance(exc, HarnessError) and exc.code == "interaction_persistence_failed":
+                run.error = str(exc)
+                self._finish(run, AgentRunStatus.failed, "interaction_persistence_failed")
+                return
             if cancel.is_set():
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
@@ -1030,7 +1053,8 @@ class HarnessService:
         except Exception as exc:  # noqa: BLE001 - surface failure without replaying approval
             self._collect_related_files(run)
             run.error = clarify_connection_error(exc)
-            self._finish(run, AgentRunStatus.failed, "failed")
+            self._finish(run, AgentRunStatus.failed,
+                "interaction_persistence_failed" if isinstance(exc, HarnessError) and exc.code == "interaction_persistence_failed" else "failed")
         finally:
             cancel.set()
             with self._lock:
@@ -1060,8 +1084,12 @@ class HarnessService:
                     if decisions is not None:
                         await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
                     await self._adrive_until_terminal(run, agent, cancel, payload)
-            except BaseException:
-                await self._alink_run(run, agent)
+            except BaseException as exc:
+                if not isinstance(exc, HarnessError) or exc.code != "checkpoint_linkage_failed":
+                    try:
+                        await self._alink_run(run, agent)
+                    except Exception:  # noqa: BLE001 - retain the original graph or display failure
+                        pass
                 raise
 
     def _create_compiled_agent(
@@ -1095,19 +1123,33 @@ class HarnessService:
             def observe_generation(sample: dict[str, Any]) -> None:
                 nonlocal latest_request_id
                 with self._lock:
-                    if not is_run_lifecycle_live(run.status):
+                    if not is_run_lifecycle_live(run.status) or run.finalization_phase is not None:
+                        return
+                    latest_sample = model.latest_generation_sample() if callable(getattr(model, "latest_generation_sample", None)) else None
+                    if latest_sample is not None and sample.get("request_id") != latest_sample.get("request_id"):
                         return
                     if sample.get("reset"):
                         latest_request_id = sample["request_id"]
                         run.generation_observation = None
                     elif sample["request_id"] == latest_request_id:
+                        if latest_sample is not None and sample != latest_sample:
+                            return
                         run.generation_observation = GenerationObservation(
                             **sample, context_limit=observation.capacity_tokens if observation else None,
                         )
                     else:
                         return
                     run.updated_at = utc_now()
-                    self._persist_and_notify(run, telemetry=True)
+                    # Persistence/projection can block on SQLite. Preserve the
+                    # sampled identity, then publish after releasing the shared
+                    # harness lock so one measurement cannot freeze other runs.
+                    telemetry_run = run.model_copy(update={
+                        "events": list(run.events),
+                        "tool_invocations": list(run.tool_invocations),
+                        "model_requests": [],
+                    }, deep=False)
+                    self._updates.notify_all()
+                self._observe_interaction(telemetry_run, None, telemetry=True)
 
             model.set_generation_observer(observe_generation)
         if observation is not None and callable(getattr(model, "set_context_guard", None)):
@@ -1262,7 +1304,10 @@ class HarnessService:
             if cancel.is_set():
                 return None
             async for event in stream:
-                await asyncio.to_thread(self._observe_interaction, run, event)
+                try:
+                    await asyncio.to_thread(self._observe_interaction, run, event)
+                except Exception as exc:  # noqa: BLE001 - essential display publication failed
+                    raise self._interaction_persistence_failure(run, exc) from exc
                 found = _pending_from_native_event(event)
                 if found is not None and (pending is None or len(found.namespace) > len(pending.namespace)):
                     pending = found
@@ -1270,6 +1315,8 @@ class HarnessService:
                     return None
                 await asyncio.to_thread(self._ingest_native_event, run, event, seen_messages, message_nodes)
         except Exception as exc:  # noqa: BLE001 - interrupt may surface as GraphInterrupt
+            if isinstance(exc, HarnessError) and exc.code == "interaction_persistence_failed":
+                raise
             run.structured_output = mark_structured_failure(run.structured_output, str(exc))
             found = pending_interrupt_from_raw(exc) or pending_interrupt_from_raw(
                 getattr(exc, "interrupts", None)
@@ -1287,6 +1334,16 @@ class HarnessService:
         except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
             return None
         return pending_interrupt_from_raw(getattr(state, "interrupts", None))
+
+    def _interaction_persistence_failure(self, run: AgentRun, exc: Exception) -> HarnessError:
+        with self._lock:
+            self._interaction_failure_runs.add(run.id)
+            run.events.append(AgentEvent(at=utc_now(), kind="interaction_persistence_failed",
+                detail={"code": "interaction_persistence_failed", "message": str(exc)}))
+        return HarnessError(
+            f"Interaction events could not be saved: {exc}",
+            code="interaction_persistence_failed", status_code=500,
+        )
 
     def _publish_interrupt(self, run: AgentRun, pending: Any) -> None:
         if isinstance(pending, PendingInterrupt) and not pending.interrupt_id:
@@ -1383,8 +1440,6 @@ class HarnessService:
 
     def _finish(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         with self._lock:
-            if run.stop_reason == "tool_budget_exhausted" and status == AgentRunStatus.failed:
-                stop_reason = run.stop_reason
             if run.status in TERMINAL_RUN_LIFECYCLE_STATUSES:
                 if run.status is AgentRunStatus.cancelled and status is not AgentRunStatus.cancelled:
                     run.stop_reason = "cancelled"
@@ -1392,48 +1447,156 @@ class HarnessService:
                     run.updated_at = run.finished_at
                     self._persist_and_notify(run)
                 return
-            if run.project_path and run.final_snapshot_id is None:
+            recovering = run.finalization_phase is not None
+            if recovering:
+                if run.id in self._finalizing_runs:
+                    return
+                # A restart may have interrupted only snapshot persistence. The
+                # graph outcome was already durable; never rerun its tools.
+                status = AgentRunStatus(run.settled_status or "failed")
+                stop_reason = run.settled_stop_reason or status.value
+                snapshot_id = self._settled_snapshot_id(run)
+            else:
+                if run.stop_reason == "tool_budget_exhausted" and status == AgentRunStatus.failed:
+                    stop_reason = run.stop_reason
+                cancel = self._cancels.get(run.id)
+                if cancel is not None and cancel.is_set() and status is not AgentRunStatus.cancelled:
+                    status, stop_reason = AgentRunStatus.cancelled, "cancelled"
+                if not run.project_path or run.final_snapshot_id is not None:
+                    self._commit_terminal_run(run, status, stop_reason)
+                    return
+                self._merge_latest_generation_sample(run)
+                run.finalization_phase = "saving_changes"
+                run.settled_status = status.value
+                run.settled_stop_reason = stop_reason
+                run.updated_at = utc_now()
+                snapshot_id = new_id("snap")
+                run.events.append(AgentEvent(at=run.updated_at, kind="finalizing",
+                    detail={"phase": "saving_changes", "execution_settled": True, "snapshot_id": snapshot_id}))
+                self._finalizing_runs.add(run.id)
                 try:
-                    manifest = capture_project_snapshot(self.manager.paths, workspace_id=run.workspace_id or "unbound",
-                        project_root=Path(run.project_path), kind="final")
-                    run.final_snapshot_id = manifest.id
-                except Exception as exc:
-                    run.events.append(AgentEvent(at=utc_now(), kind="branch_snapshot_unavailable",
-                        detail={"message": str(exc)}))
-            run.status = status
-            run.stop_reason = stop_reason
-            run.finished_at = utc_now()
-            run.updated_at = run.finished_at
-            # Inline children have no detached worker once their owning graph ends.
-            for activity in run.child_runs:
-                child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
-                if child is not None and is_run_lifecycle_live(child.status):
-                    child.status = AgentRunStatus.cancelled if status == AgentRunStatus.cancelled else AgentRunStatus.failed
-                    child.stop_reason = "parent_" + str(status.value)
-                    child.finished_at = run.finished_at
-                    child.updated_at = run.finished_at
-                    activity.status = child.status.value
-                    self._persist(child)
-            if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
-                run.generation_observation = run.generation_observation.model_copy(update={
-                    "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
-                })
-            event_detail: dict[str, Any] = {
-                "stop_reason": stop_reason,
-                "error": run.error,
-                "confirmed": True,
-            }
-            failure_code = classify_connection_failure(run.error or "")
-            if failure_code:
-                event_detail["code"] = failure_code
-            run.events.append(
-                AgentEvent(
-                    at=run.updated_at,
-                    kind=status.value,
-                    detail=event_detail,
-                )
+                    self._persist_and_notify(run)
+                except BaseException:
+                    self._finalizing_runs.discard(run.id)
+                    raise
+            self._finalizing_runs.add(run.id)
+            project_path = Path(run.project_path or "")
+            workspace_id = run.workspace_id or "unbound"
+
+        manifest = None
+        snapshot_error: Exception | None = None
+        try:
+            if recovering:
+                if snapshot_id is not None:
+                    discard_incomplete_snapshot_staging(self.manager.paths, snapshot_id)
+                manifest = self._published_settled_snapshot(snapshot_id, workspace_id)
+            else:
+                manifest = capture_project_snapshot(self.manager.paths, workspace_id=workspace_id,
+                    project_root=project_path, kind="final", snapshot_id=snapshot_id)
+        except Exception as exc:  # noqa: BLE001 - execution outcome survives a missing branch snapshot
+            snapshot_error = exc
+        with self._lock:
+            self._finalizing_runs.discard(run.id)
+            if manifest is not None:
+                run.final_snapshot_id = manifest.id
+            elif snapshot_error is not None:
+                run.events.append(AgentEvent(at=utc_now(), kind="branch_snapshot_unavailable",
+                    detail={"message": str(snapshot_error)}))
+            self._commit_terminal_run(run, status, stop_reason)
+
+    @staticmethod
+    def _settled_snapshot_id(run: AgentRun) -> str | None:
+        for event in reversed(run.events):
+            if event.kind == "finalizing":
+                ident = event.detail.get("snapshot_id")
+                if isinstance(ident, str) and ident.startswith("snap_") and all(
+                    char.isalnum() or char in {"_", "-"} for char in ident
+                ):
+                    return ident
+                return None
+        return None
+
+    def _published_settled_snapshot(self, snapshot_id: str | None, workspace_id: str) -> SnapshotManifest:
+        if snapshot_id is None:
+            raise OSError("The settled run has no reserved final snapshot identity.")
+        root = self.manager.paths.snapshots / snapshot_id
+        manifest_path = root / "manifest.json"
+        if not manifest_path.is_file():
+            raise OSError("Final snapshot capture was interrupted before publication.")
+        manifest = SnapshotManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        if (manifest.id != snapshot_id or manifest.workspace_id != workspace_id or manifest.kind != "final"
+            or Path(manifest.tree_path) != root / "tree"):
+            raise OSError("The published final snapshot does not match the settled run.")
+        verify_snapshot_tree(root / "tree", manifest.included_files)
+        return manifest
+
+    def _merge_latest_generation_sample(self, run: AgentRun) -> None:
+        model = self._adapter_models.get(run.id)
+        accessor = getattr(model, "latest_generation_sample", None)
+        sample = accessor() if callable(accessor) else None
+        if not isinstance(sample, dict):
+            return
+        if sample.get("reset"):
+            run.generation_observation = None
+            return
+        try:
+            run.generation_observation = GenerationObservation(
+                **sample,
+                context_limit=run.context_observation.capacity_tokens if run.context_observation else None,
             )
+        except (TypeError, ValueError):
+            # A malformed measurement cannot change the graph's settled result.
+            return
+
+    def _commit_terminal_run(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
+        settled_copy = run.model_copy(deep=True)
+        self._merge_latest_generation_sample(run)
+        run.finalization_phase = None
+        run.settled_status = None
+        run.settled_stop_reason = None
+        run.status = status
+        run.stop_reason = stop_reason
+        run.finished_at = utc_now()
+        run.updated_at = run.finished_at
+        # Inline children have no detached worker once their owning graph ends.
+        for activity in run.child_runs:
+            child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+            if child is not None and is_run_lifecycle_live(child.status):
+                child.status = AgentRunStatus.cancelled if status == AgentRunStatus.cancelled else AgentRunStatus.failed
+                child.stop_reason = "parent_" + str(status.value)
+                child.finished_at = run.finished_at
+                child.updated_at = run.finished_at
+                activity.status = child.status.value
+                self._persist(child)
+        if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
+            run.generation_observation = run.generation_observation.model_copy(update={
+                "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
+            })
+        event_detail: dict[str, Any] = {
+            "stop_reason": stop_reason,
+            "error": run.error,
+            "confirmed": True,
+        }
+        failure_code = classify_connection_failure(run.error or "")
+        if failure_code:
+            event_detail["code"] = failure_code
+        elif stop_reason == "interaction_persistence_failed":
+            event_detail["code"] = "interaction_persistence_failed"
+        run.events.append(AgentEvent(at=run.updated_at, kind=status.value, detail=event_detail))
+        try:
             self._persist_and_notify(run)
+        except Exception:
+            # The SQLite write can fail after the run was mutated in memory.
+            # Restore the saved settlement so a later read can retry without
+            # publishing a second terminal event or recapturing the project.
+            try:
+                saved = self.store.get_run(run.id)
+            except Exception:  # noqa: BLE001 - keep the original persistence error
+                saved = None
+            if saved is None or is_run_lifecycle_live(saved.status):
+                self._runs[run.id] = saved or settled_copy
+                self._startup_reconciled = False
+            raise
 
     async def _seed_native_audit_seen(self, agent: Any, config: dict[str, Any]) -> set[tuple[str, str]]:
         try:
@@ -1504,7 +1667,10 @@ class HarnessService:
                 changed = True
         if changed:
             with self._lock:
-                self._persist_and_notify(run)
+                try:
+                    self._persist_and_notify(run)
+                except Exception as exc:  # noqa: BLE001 - audit publication is essential
+                    raise self._interaction_persistence_failure(run, exc) from exc
 
     def _is_internal_summary_message(self, message: Any) -> bool:
         additional = getattr(message, "additional_kwargs", None)
@@ -1725,7 +1891,7 @@ class HarnessService:
     async def _alink_run(self, run: AgentRun, agent: object) -> None:
         """Record checkpoint ids and related files in application records only."""
 
-        run.checkpoint_ids = await acheckpoint_ids_from_graph(agent, _invoke_config(run))
+        await self._alink_new_checkpoints(run, agent)
         try:
             state = await agent.aget_state(_invoke_config(run))
             values = getattr(state, "values", {}) or {}
@@ -1770,7 +1936,7 @@ class HarnessService:
                     _invoke_config(run),
                     {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *repaired_messages, *results]},
                 )
-                run.checkpoint_ids = await acheckpoint_ids_from_graph(agent, _invoke_config(run))
+                await self._alink_new_checkpoints(run, agent)
                 run.events.append(AgentEvent(at=utc_now(), kind="cancelled_tool_results", detail={"tool_call_ids": list(pending_calls), "execution_confirmed": False}))
         compaction = values.get(SUMMARIZATION_EVENT_KEY)
         if isinstance(compaction, dict):
@@ -1791,6 +1957,39 @@ class HarnessService:
             except Exception as exc:  # noqa: BLE001 - state loss is diagnostic, not success.
                 run.structured_output = mark_structured_failure(run.structured_output, str(exc))
         self._collect_related_files(run)
+
+    def _checkpoint_head(self, thread_id: str) -> str | None:
+        try:
+            latest = next(iter(checkpoint_history(
+                self.manager.paths.checkpoints_db,
+                {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+                limit=1,
+            )), None)
+        except Exception as exc:  # noqa: BLE001 - cannot safely attribute older thread history
+            raise HarnessError(
+                f"The conversation checkpoint could not be read: {exc}",
+                code="checkpoint_linkage_failed", status_code=409,
+            ) from exc
+        if latest is None:
+            return None
+        configurable = latest.config.get("configurable") if isinstance(latest.config, dict) else None
+        checkpoint_id = configurable.get("checkpoint_id") if isinstance(configurable, dict) else None
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise HarnessError(
+                "The conversation checkpoint has no identity.",
+                code="checkpoint_linkage_failed", status_code=409,
+            )
+        return checkpoint_id
+
+    async def _alink_new_checkpoints(self, run: AgentRun, agent: object) -> None:
+        anchor = run.checkpoint_ids[0] if run.checkpoint_ids else run.pre_run_checkpoint_id
+        try:
+            added = await acheckpoint_ids_from_graph(agent, _invoke_config(run), stop_at_id=anchor)
+        except ValueError as exc:
+            run.events.append(AgentEvent(at=utc_now(), kind="checkpoint_linkage_failed",
+                detail={"code": "checkpoint_anchor_missing", "message": str(exc)}))
+            raise HarnessError(str(exc), code="checkpoint_linkage_failed", status_code=409) from exc
+        run.checkpoint_ids = list(dict.fromkeys([*added, *run.checkpoint_ids]))
 
     def _validate_content_capabilities(
         self,
@@ -1901,11 +2100,15 @@ class HarnessService:
         return self._runs.setdefault(run_id, stored)
 
     def _reconcile_startup_once(self) -> None:
+        settled: list[AgentRun] = []
         with self._lock:
             if self._startup_reconciled:
                 return
             for run in self.store.list_runs():
                 if not is_run_lifecycle_live(run.status):
+                    continue
+                if run.finalization_phase == "saving_changes" and run.settled_status is not None:
+                    settled.append(self._runs.setdefault(run.id, run))
                     continue
                 if (
                     run.status is not AgentRunStatus.cancel_requested
@@ -1920,6 +2123,13 @@ class HarnessService:
                     continue
                 self._mark_orphaned_run(run)
             self._startup_reconciled = True
+        for run in settled:
+            try:
+                self._finish(run, AgentRunStatus(run.settled_status), run.settled_stop_reason or run.settled_status)
+            except Exception:
+                with self._lock:
+                    self._startup_reconciled = False
+                raise
 
     def _mark_orphaned_run(self, run: AgentRun) -> None:
         with self._lock:
@@ -1928,6 +2138,9 @@ class HarnessService:
                 return
             missing_checkpoint = live.pending_interrupt is not None
             cancelling = live.status is AgentRunStatus.cancel_requested
+            live.finalization_phase = None
+            live.settled_status = None
+            live.settled_stop_reason = None
             live.status = AgentRunStatus.failed
             live.stop_reason = "orphaned"
             live.error = _orphan_error(
@@ -1988,7 +2201,8 @@ class HarnessService:
     def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
         if not telemetry:
             self._persist(run)
-        self._observe_interaction(run, None, telemetry=telemetry)
+        if run.id not in self._interaction_failure_runs:
+            self._observe_interaction(run, None, telemetry=telemetry)
         self._updates.notify_all()
 
     def _capture_settings(self) -> ContextCaptureSettings:

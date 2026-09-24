@@ -78,21 +78,20 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
         if stopping.is_set():
             return
         idle = 0
-        for wire in resume.opening(options):
+        for wire in await anyio.to_thread.run_sync(resume.opening, options):
             yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
         while not stopping.is_set() and not await request.is_disconnected():
             # Display-only edits hide prior display events, never graph state.
             # Their first values record is the new authoritative display.
-            cutover = interaction.binding(thread_id)["snapshot"].get("workbench", {}).get("display_cutover_seq", 0)
-            if cursor < cutover - 1:
-                cursor = cutover - 1
             previous_cursor = cursor
-            wires, cursor, gap = interaction.stream_page(thread_id, cursor, options, resume)
+            wires, cursor, gap, status = await anyio.to_thread.run_sync(
+                interaction.stream_poll, thread_id, cursor, options, resume)
             if gap:
                 # Released SDKs do not interpret a special gap control frame.
                 # Resynchronize via ordinary upstream values/lifecycle events
                 # and an explicit application recovery notice. Never rerun.
-                cursor = interaction.resynchronize(thread_id)
+                cursor = await anyio.to_thread.run_sync(
+                    lambda: interaction.resynchronize(thread_id, historical=previous_cursor == 0))
                 continue
             for wire in wires:
                 yield format_sse_event(data_str=json.dumps(wire), event="message", id=str(wire.get("seq", cursor)))
@@ -102,7 +101,6 @@ def stream(thread_id: str, body: dict, request: Request) -> EventSourceResponse:
             # A subscriber that passes `since` continues after the snapshot it
             # painted. Omitting `since` still reads the durable log from the start.
             # A disconnect closes observation without cancelling work.
-            status = ((interaction.binding(thread_id)["snapshot"].get("workbench") or {}).get("run") or {}).get("status")
             await anyio.sleep(0.016 if status in {"queued", "running", "cancel_requested"} else 0.1)
             idle += 1
             if idle >= 100:

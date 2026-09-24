@@ -184,6 +184,7 @@ function AgentRunStreamContent(props: {
             run={displayRun}
             title={displayRun.task}
             onCancel={() => {
+              if (displayRun.finalization_phase === "saving_changes") return;
               const runId = displayRun.id;
               void api.cancelAgentRun(runId).then((next) => {
                 if (next.id === runId) {

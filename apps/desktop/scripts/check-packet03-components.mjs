@@ -124,6 +124,12 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.match(tipText(), /2,005/);
     assert.doesNotMatch(tipText(), /Estimated|2,516/);
     assert.match(tipText(), /43.3 tok\/s/);
+    run = { ...run, finalization_phase: "saving_changes" };
+    await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
+    assert.match(tipText(), /Saving/);
+    assert.doesNotMatch(tipText(), /Live|Generating/, "settled generation is not presented as live while saving");
+    assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Saving project state");
+    run = { ...run, finalization_phase: null };
     await update({ ...run.generation_observation, phase: "completed", interval: "last_model_call_generation" });
     assert.match(tipText(), /Last request/);
     assert.doesNotMatch(tipText(), /Live/);
