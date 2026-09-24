@@ -17,4 +17,4 @@
 
 - [x] 3.1 Run desktop, backend, integration, contract and OpenSpec checks; fix failures and verify the change strictly.
 - [x] 3.2 Validate the Windows UI, isolated download and real model settings flow; clear the three old discarded records safely and update the everyday deployment.
-- [ ] 3.3 Refresh the handover, review the diff, commit, push and deliver the change through the repository's Git workflow.
+- [x] 3.3 Refresh the handover, review the diff, commit, push and open the delivery PR.
