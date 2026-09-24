@@ -16,6 +16,7 @@ try {
   const { SetupConfigurationEditor } = await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx");
   const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
   await configurations(DeploymentsPanel);
+  await retainedModelDrafts(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel, true);
   await chatApplyOwnership(ChatModelControls, false);
@@ -65,14 +66,17 @@ async function configurations(Panel) {
     const lastPreview = () => calls.findLast(call => call.path.endsWith('/v1/setup-resolution')).body;
     assert.deepEqual(lastPreview().overrides.per_request_overrides, {}, 'unchanged saved response settings retain named configuration provenance');
     assert.equal(lastPreview().editing_layer, 'application', 'Models replacement preview excludes application and Chat overrides');
-    assert.ok(text(renderer.root).includes('0.5 · Configuration: Example model'));
-    const numeric = label => renderer.root.findAllByType('label').find(node => text(node).startsWith(label)).findByType('input');
+    assert.ok(text(renderer.root).includes('Default unknown'), 'unknown defaults are labelled without repeating the saved value');
+    const numeric = label => {
+      const ids = { Temperature: 'model-response-temperature', 'Reply limit': 'model-response-max_tokens' };
+      return renderer.root.findAllByType('input').find(node => node.props.id === ids[label]);
+    };
     await act(async () => { numeric('Temperature').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.temperature, null, 'clearing a saved response setting explicitly resets the authoritative preview');
     assert.equal(numeric('Temperature').props.placeholder, '0.8', 'known model default replaces the removed saved value');
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
-    assert.equal(numeric('Reply limit').props.placeholder, 'Default not reported', 'unknown default is not invented from the saved value');
+    assert.equal(numeric('Reply limit').props.placeholder, 'Default unknown', 'unknown default is not invented from the saved value');
     assert.ok(button("Save changes"), "save is available without a running deployment");
     await act(async () => { button("Save changes").props.onClick(); await tick(); });
     assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
@@ -86,6 +90,42 @@ async function configurations(Panel) {
     await act(async () => { button("Save variant").props.onClick(); await tick(); });
     assert.equal(profiles.length, 2, "only explicit Save as variant creates another configuration");
     assert.equal(profiles[1].display_name, "Example model variant");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function retainedModelDrafts(Panel) {
+  const bundles = ["first", "second"].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, disk_matches: true, files: [], companions: [] }));
+  const profiles = [
+    { id: "first-default", bundle_id: "first", display_name: "First default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } },
+    { id: "first-variant", bundle_id: "first", display_name: "First variant", revision: 1, bags: { startup: bag({ ctx_size: 4096 }), per_request: bag({}), agent: bag({}) } },
+    { id: "second-default", bundle_id: "second", display_name: "Second default", revision: 1, bags: { startup: bag({ ctx_size: 4096 }), per_request: bag({}), agent: bag({}) } },
+  ];
+  let selected = "first", renderer, dirty = new Set();
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url);
+    if (path.endsWith("/v1/runtime")) return response({ status: "ready" });
+    if (path.endsWith("/v1/deployments")) return response([]);
+    if (path.endsWith("/projectors")) return response({ candidates: [] });
+    if (path.includes("/configuration-options")) return response({ bundle_id: path.includes("/first/") ? "first" : "second", context_size: { maximum: 32768, options: [] }, gpu_layers: { maximum: 32 }, startup_defaults: {}, per_request_defaults: {}, metadata: {} });
+    if (path.endsWith("/v1/setup-resolution")) return response({ configuration: JSON.parse(init.body).overrides, effective_values: {}, instruction_layers: [] });
+    throw new Error(`Unexpected draft request ${path}`);
+  };
+  const props = () => ({ selectedBundleId: selected, initialBundles: bundles, initialProfiles: profiles, onDirtyModelsChange: ids => { dirty = ids; } });
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel, props())); await tick(); });
+    await act(async () => renderer.root.findByProps({ id: "model-ctx-size" }).props.onChange({ target: { value: "16384" } }));
+    assert.ok(dirty.has("first"), "an unsaved edit marks its model");
+    await act(async () => { selected = "second"; renderer.update(React.createElement(Panel, props())); await tick(); });
+    assert.ok(dirty.has("first"), "another model keeps the earlier unsaved marker");
+    await act(async () => { selected = "first"; renderer.update(React.createElement(Panel, props())); await tick(); });
+    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "16384", "unsaved startup edit survives model switching");
+    const configuration = () => renderer.root.findAllByType("select").find(node => node.findAllByType("option").some(option => option.props.value === "first-variant"));
+    await act(async () => configuration().props.onChange({ target: { value: "first-variant" } }));
+    await act(async () => renderer.root.findByProps({ id: "model-ctx-size" }).props.onChange({ target: { value: "12288" } }));
+    await act(async () => configuration().props.onChange({ target: { value: "first-default" } }));
+    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "16384", "the first configuration keeps its draft");
+    await act(async () => configuration().props.onChange({ target: { value: "first-variant" } }));
+    assert.equal(renderer.root.findByProps({ id: "model-ctx-size" }).props.value, "12288", "the second configuration keeps its own draft");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -135,7 +175,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, props()), { createNodeMock: element => element.type === 'form' ? { reportValidity: () => true } : null }); await tick(); });
     const button = label => renderer.root.findAllByType('button').find(node => text(node) === label);
-    await act(async () => renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }));
+    await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
     await act(async () => { button('Save changes').props.onClick(); await tick(); });
     assert.ok(releasePreview, 'save waits at the actual preview receiver');
     await act(async () => { selected = 'second'; renderer.update(React.createElement(Panel, props())); await tick(); });
@@ -146,7 +186,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     assert.equal(saves[0].body.startup.ctx_size, 16384, 'navigation cannot remove staged edits from an already requested save');
     const chooser = renderer.root.findAllByType('select').find(node => node.findAllByType('option').some(option => option.props.value === `${selected}-default`));
     assert.equal(chooser.props.value, `${selected}-default`, 'old completion cannot replace the newly selected configuration');
-    if (navigateBack) assert.equal(Number(renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.value), 16384, 'a clean editor refreshes to the newly saved revision after returning');
+    if (navigateBack) assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'the saved revision is visible after returning');
     assert.equal(text(renderer.root).includes('Configuration saved.'), false, 'old status is not shown as completion for the new model');
     assert.equal(text(renderer.root).includes('Checked launch settings'), false, 'old checked settings are not presented for the new model');
   } finally { if (renderer) await act(async () => renderer.unmount()); }
@@ -211,14 +251,14 @@ async function failedReloadFacts(Panel, ChatControl) {
   };
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: 'model', initialBundles: [bundle], initialProfiles: [profile] })); await tick(); });
-    await act(async () => renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }));
+    await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
     await act(async () => { renderer.root.findByProps({ className: 'model-settings' }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.ok(reads > 1, 'failed Apply refreshes the receiver state instead of retaining a stale healthy deployment');
     const badges = renderer.root.findAll(node => node.type === 'span' && String(node.props.className).startsWith('badge '));
     assert.equal(badges.some(node => text(node) === 'Ready'), false, 'a failed receiver is no longer labeled Ready');
     assert.ok(text(renderer.root).includes('Needs attention'));
     assert.ok(text(renderer.root).includes(originalError));
-    assert.equal(Number(renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.value), 16384, 'failed reload refresh preserves staged edits');
+    assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'failed reload refresh preserves staged edits');
     await act(async () => renderer.unmount()); renderer = null;
     deployment = { ...deployment, status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 } };
     await act(async () => { renderer = create(React.createElement(ChatControl, { profiles: [profile], deployments: [deployment], selectedDeploymentId: 'deploy', configuration: { model_configuration_id: 'config' }, onApply: () => assert.fail('failed reload must not apply'), onReloaded: async () => { reloads++; throw new Error('Secondary refresh failure'); } })); await tick(); });

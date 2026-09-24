@@ -295,6 +295,10 @@ class RuntimePinTests(unittest.TestCase):
             self.assertEqual(result, argv)
         native = [str(self.root / "llama-server.exe"), "-m", "tiny.gguf"]
         self.assertEqual(argv_for_host(native), native)
+        long_script = self.root / "long-shebang-llama-server"
+        long_script.write_text("#!C:/" + "nested/" * 20 + "python.exe\n", encoding="utf-8")
+        long_argv = [str(long_script), "-m", "tiny.gguf"]
+        self.assertEqual(argv_for_host(long_argv), [sys.executable, *long_argv] if os.name == "nt" else long_argv)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ globalThis.window = {
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { ModelsPanel } = await vite.ssrLoadModule("/src/renderer/ModelsPanel.tsx");
+  await checkModelPicker((await vite.ssrLoadModule("/src/renderer/ModelPicker.tsx")).ModelPicker);
   await checkVariantPresentation(await vite.ssrLoadModule("/src/renderer/modelVariantPresentation.ts"));
   const { settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
@@ -35,6 +36,28 @@ try {
 }
 
 console.log("Models panel deferred loading checks passed.");
+
+async function checkModelPicker(ModelPicker) {
+  const previousDocument = globalThis.document;
+  globalThis.document = { addEventListener() {}, removeEventListener() {} };
+  const longName = "Publisher/Qwen3.8-27B-Very-Long-Installed-Model-Name-UD-IQ4_XS";
+  const bundles = [bundle("long", longName), bundle("short", "Gemma 4")];
+  const chosen = [];
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelPicker, { bundles, selectedId: "long", dirtyIds: new Set(["long"]), onSelect: id => chosen.push(id) })); });
+    const trigger = renderer.root.findByProps({ className: "model-picker-trigger" });
+    assert.equal(textOf(trigger).includes(longName), true, "the full model name remains available to accessibility and title text");
+    assert.equal(textOf(trigger).includes("Unsaved"), true);
+    await act(async () => trigger.props.onKeyDown({ key: "ArrowDown", preventDefault() {} }));
+    const search = renderer.root.findByProps({ "aria-label": "Search installed models" });
+    await act(async () => search.props.onChange({ target: { value: "gemma" } }));
+    assert.equal(renderer.root.findAllByProps({ role: "option" }).length, 1);
+    await act(async () => renderer.root.findByProps({ "aria-label": "Search installed models" }).props.onKeyDown({ key: "Enter", preventDefault() {} }));
+    assert.deepEqual(chosen, ["short"], "Enter selects the filtered model");
+    assert.equal(renderer.root.findAllByProps({ role: "dialog" }).length, 0, "selection closes the picker");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.document = previousDocument; }
+}
 
 async function checkSelectedModelOwnsDetails(ModelsPanel) {
   const originalFetch = globalThis.fetch;
@@ -127,7 +150,7 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     await act(async () => {
       await tick();
     });
-    assert.ok(textOf(renderer.root).includes("256k context"), "deferred configuration result should hydrate model capacity");
+    assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
     const speculation = renderer.root.findAllByType("select").find(select => select.props.id === "model-spec_type");
     assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["none", "draft-mtp"]);
     await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });

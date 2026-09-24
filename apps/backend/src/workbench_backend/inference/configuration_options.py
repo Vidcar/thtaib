@@ -65,7 +65,8 @@ def bundle_configuration_options(
         deployment_id=deployment.id if deployment is not None else None,
         context_size=_context_descriptor(metadata.context_length, observed_context),
         gpu_layers=_gpu_layers_descriptor(metadata.block_count),
-        startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata)},
+        startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata),
+                          "reasoning_preserve": reasoning_history_descriptor(metadata, deployment)},
         per_request_defaults=per_request_defaults,
         metadata={
             "architecture": metadata.architecture,
@@ -172,6 +173,45 @@ def _literal_template_default(template: str, variable: str):
     matches = re.findall(r"\b" + re.escape(variable) + r"\s*\|\s*default\s*\(\s*(['\"][a-z]+['\"]|true|false)\s*\)", template)
     values = {True if value == "true" else False if value == "false" else value[1:-1] for value in matches}
     return next(iter(values)) if len(values) == 1 else None
+
+
+def reasoning_history_descriptor(metadata: GgufRuntimeMetadata, deployment: Deployment | None = None) -> RuntimeControlDescriptor:
+    """Describe history replay only when the actual template gives evidence.
+
+    The server capability says whether replay is understood, while the Jinja
+    template determines what an omitted preserve_thinking value means.
+    """
+    props = deployment.server_props if deployment is not None else None
+    template = props.chat_template if props is not None and props.chat_template else metadata.chat_template or ""
+    if deployment is not None and not (props and props.chat_template) and any(
+        deployment.applied_startup.get(key) for key in ("chat_template", "chat_template_file")
+    ):
+        template = ""
+    caps = props.chat_template_caps if props is not None else {}
+    declared = bool(re.search(r"\bpreserve_thinking\b", template))
+    supported = caps.get("supports_preserve_reasoning")
+    if supported is not False:
+        supported = True if declared or supported is True else False if template else None
+    default = _literal_template_default(template, "preserve_thinking")
+    if default is None and re.search(
+        r"\bpreserve_thinking\s+is\s+undefined\s+or\s+preserve_thinking\s+is\s+true\b", template
+    ):
+        default = True
+    if default is None and re.search(
+        r"\bpreserve_thinking\s+is\s+defined\s+and\s+preserve_thinking\s+is\s+true\b", template
+    ):
+        default = False
+    if supported is not True or not isinstance(default, bool):
+        default = None
+    return RuntimeControlDescriptor(
+        key="reasoning_preserve", flag="--reasoning-preserve", label="Thinking history",
+        description="Keep or drop earlier thinking in later ordinary turns when the model template supports it.",
+        source="server_template" if props is not None and props.chat_template else "gguf_template" if template else "unavailable",
+        supported=supported, applied=None, default_value=default,
+        default_source=("server_template" if props is not None and props.chat_template else "gguf_template") if default is not None else None,
+        options=[RuntimeControlOption(value=value, label=label) for value, label in
+                 (("default", "Default"), ("keep", "Keep"), ("drop", "Drop"))] if supported else [],
+    )
 
 
 def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:

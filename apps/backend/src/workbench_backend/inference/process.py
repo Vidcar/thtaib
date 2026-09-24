@@ -66,7 +66,7 @@ def _python_fixture(path: Path) -> bool:
         return True
     try:
         with path.open("rb") as handle:
-            head = handle.read(64)
+            head = handle.readline(4096)
     except OSError:
         return False
     return head.startswith(b"#!") and b"python" in head.lower()

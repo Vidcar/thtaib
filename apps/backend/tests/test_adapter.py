@@ -585,6 +585,38 @@ class AdapterTests(unittest.TestCase):
         body = _RecordingHandler.requests[0]["body"]
         self.assertNotIn("reasoning_content", body["messages"][0])
 
+    def test_reasoning_replay_follows_verified_template_default_and_explicit_drop(self) -> None:
+        template = "{% if preserve_thinking is undefined or preserve_thinking is true %}{{ message.reasoning_content }}{% endif %}"
+        props = ServerProperties(
+            fetched=utc_now(), source_url=f"{self.endpoint}/props", model_alias="reasoning-model",
+            chat_template=template, chat_template_caps={"supports_preserve_reasoning": True},
+        )
+        for startup, expected in (({}, True), ({"reasoning_preserve": True}, True),
+                                  ({"reasoning_preserve": False}, False)):
+            _RecordingHandler.requests.clear()
+            model = chat_model_for_deployment(self._deployment(server_props=props, applied_startup=startup))
+            try:
+                model.invoke([AIMessage(content="answer", additional_kwargs={"reasoning_content": "earlier reasoning"}),
+                              HumanMessage(content="continue")])
+            finally:
+                model.close()
+            replayed = "reasoning_content" in _RecordingHandler.requests[0]["body"]["messages"][0]
+            self.assertIs(replayed, expected, startup)
+
+    def test_reasoning_replay_unknown_template_default_is_conservative(self) -> None:
+        props = ServerProperties(
+            fetched=utc_now(), source_url=f"{self.endpoint}/props", model_alias="reasoning-model",
+            chat_template="{% if preserve_thinking %}{{ message.reasoning_content }}{% endif %}",
+            chat_template_caps={"supports_preserve_reasoning": True},
+        )
+        model = chat_model_for_deployment(self._deployment(server_props=props))
+        try:
+            model.invoke([AIMessage(content="answer", additional_kwargs={"reasoning_content": "earlier reasoning"}),
+                          HumanMessage(content="continue")])
+        finally:
+            model.close()
+        self.assertNotIn("reasoning_content", _RecordingHandler.requests[0]["body"]["messages"][0])
+
     def test_context_guard_sees_final_payload_and_can_block_dispatch(self) -> None:
         props = ServerProperties(
             fetched=utc_now(),
