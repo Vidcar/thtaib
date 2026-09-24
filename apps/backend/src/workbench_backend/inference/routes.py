@@ -17,6 +17,8 @@ from workbench_backend.inference.schemas import (
     ProfileWriteRequest,
     ModelConfigurationWriteRequest,
     DefaultConfigurationRequest,
+    ResponseRecipeConfigurationRequest,
+    ResponseRecipeConfigurationResult,
     ReconfigureDeploymentRequest,
     SettingsPreviewRequest,
     RenameProfileRequest,
@@ -72,7 +74,7 @@ def import_huggingface(request: Request, body: HuggingFaceImportRequest) -> Impo
 
 @router.post("/models/huggingface/inspect", response_model=HubRepository)
 def inspect_huggingface(request: Request, body: HuggingFaceInspectRequest) -> HubRepository:
-    return get_manager(request).bundles.hf.inspect(repo_id=body.repo_id, revision=body.revision)
+    return get_manager(request).bundles.hf.inspect(repo_id=body.repo_id, revision=body.revision, include_recipes=True)
 
 
 @router.get("/models/huggingface/search", response_model=list[HubSearchResult])
@@ -189,6 +191,19 @@ def list_profiles(request: Request) -> object:
 @router.get("/bundles/{bundle_id}/configurations", response_model=list[RunProfile])
 def model_configurations(request: Request, bundle_id: str):
     return get_manager(request).list_model_configurations(bundle_id)
+
+
+@router.post("/bundles/{bundle_id}/response-recipes/refresh", response_model=ModelBundle)
+def refresh_response_recipes(request: Request, bundle_id: str) -> ModelBundle:
+    return get_manager(request).refresh_response_recipes(bundle_id)
+
+
+@router.post("/bundles/{bundle_id}/response-recipes/configurations", response_model=ResponseRecipeConfigurationResult)
+def create_response_recipe_configurations(
+    request: Request, bundle_id: str, body: ResponseRecipeConfigurationRequest,
+) -> ResponseRecipeConfigurationResult:
+    return get_manager(request).create_response_recipe_configurations(
+        bundle_id, body.recipe_ids, body.default_recipe_id)
 
 
 @router.post("/bundles/{bundle_id}/configurations", response_model=RunProfile)

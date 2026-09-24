@@ -7,10 +7,12 @@ module reads verified companions and records only settings with a safe mapping.
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
 from workbench_backend.inference.hf_fetch import HuggingFaceDownload, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
+from workbench_backend.inference.hf_recipes import MAX_CARD_BYTES, normalize_sampling_value, parse_model_card_recipes
 from workbench_backend.inference.inspect import read_gguf_runtime_metadata, _RuntimeMetadataReader, _close_reader
 from workbench_backend.inference.schemas import HuggingFaceConfiguration, ModelBundle
 
@@ -21,6 +23,10 @@ def configuration_from_download(bundle: ModelBundle, download: HuggingFaceDownlo
     origin = "publisher" if prefix else "repository"
     generation = _read_json(by_name, prefix + "generation_config.json")
     defaults, unsupported = _generation_defaults(generation)
+    response_recipes, card_note = _response_recipes(by_name,
+        repo_id=download.repo_id, revision=download.resolved_revision)
+    if card_note:
+        unsupported["README.md"] = card_note
     if prefix:
         source_tokenizer = _read_json(by_name, prefix + "tokenizer.json")
     else:
@@ -72,6 +78,7 @@ def configuration_from_download(bundle: ModelBundle, download: HuggingFaceDownlo
         template_file=selected_file,
         template_differs=differs,
         generation_defaults=defaults,
+        response_recipes=response_recipes,
         unsupported=unsupported,
     )
 
@@ -86,6 +93,34 @@ def _read_json(by_name: dict[str, Any], name: str) -> Any:
         return None
 
 
+def response_recipes_from_bundle_card(bundle: ModelBundle) -> tuple[list[dict[str, Any]], str | None]:
+    """Inspect an already installed card without opening model weights."""
+    if not bundle.source.repo_id or not bundle.source.resolved_revision:
+        return [], "The bundle has no pinned Hugging Face card revision."
+    return _response_recipes({item.name: item for item in bundle.files},
+        repo_id=bundle.source.repo_id, revision=bundle.source.resolved_revision)
+
+
+def _response_recipes(by_name: dict[str, Any], *, repo_id: str,
+    revision: str) -> tuple[list[dict[str, Any]], str | None]:
+    record = by_name.get("README.md") or next(
+        (item for name, item in by_name.items() if name.casefold() == "readme.md"), None)
+    if record is None:
+        return [], None
+    try:
+        path = Path(record.path)
+        if path.stat().st_size > MAX_CARD_BYTES:
+            return [], "Model card exceeds the supported recipe-inspection size."
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest().casefold() != record.sha256.casefold():
+            return [], "Model card hash does not match the installed file record."
+        card = payload.decode("utf-8-sig")
+    except (OSError, UnicodeError, AttributeError):
+        return [], "Model card could not be read and verified as UTF-8."
+    return parse_model_card_recipes(card, repo_id=repo_id,
+        revision=revision, sha256=record.sha256), None
+
+
 def _generation_defaults(config: Any) -> tuple[dict[str, Any], dict[str, str]]:
     if not isinstance(config, dict):
         return {}, {} if config is None else {"generation_config.json": "Expected a JSON object."}
@@ -94,19 +129,23 @@ def _generation_defaults(config: Any) -> tuple[dict[str, Any], dict[str, str]]:
     sampled = config.get("do_sample", True)
     if sampled is False:
         defaults["temperature"] = 0.0
+        # Penalties still alter logits under greedy decoding. Sampling-only
+        # controls do not, so keep the existing do_sample=False behaviour.
+        numeric = ("repetition_penalty", "presence_penalty", "frequency_penalty")
     elif sampled is True:
-        numeric = {"temperature": (0, 100), "top_p": (0, 1), "top_k": (0, 1000000),
-            "min_p": (0, 1), "typical_p": (0, 1), "repetition_penalty": (0, 100)}
-        for key, (minimum, maximum) in numeric.items():
-            if key not in config:
-                continue
-            value = config[key]
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not minimum < value <= maximum:
-                unsupported[key] = "Invalid publisher sampling value."
-                continue
-            defaults["repeat_penalty" if key == "repetition_penalty" else key] = value
+        numeric = ("temperature", "top_p", "top_k", "min_p", "typical_p",
+            "repetition_penalty", "presence_penalty", "frequency_penalty")
     else:
+        numeric = ()
         unsupported["do_sample"] = "Expected true or false."
+    for key in numeric:
+        if key not in config:
+            continue
+        value = normalize_sampling_value(key, config[key])
+        if value is None:
+            unsupported[key] = "Invalid publisher sampling value."
+            continue
+        defaults["repeat_penalty" if key == "repetition_penalty" else key] = value
     limit = config.get("max_new_tokens")
     if limit is not None:
         if isinstance(limit, int) and not isinstance(limit, bool) and 0 < limit <= 1000000:
@@ -120,7 +159,8 @@ def _generation_defaults(config: Any) -> tuple[dict[str, Any], dict[str, str]]:
         else:
             unsupported["stop_strings"] = "Expected nonempty stop text."
     known = {"do_sample", "temperature", "top_p", "top_k", "min_p", "typical_p",
-        "repetition_penalty", "max_new_tokens", "stop_strings", "suppress_tokens"}
+        "repetition_penalty", "presence_penalty", "frequency_penalty",
+        "max_new_tokens", "stop_strings", "suppress_tokens"}
     tokenizer = {"bos_token_id", "eos_token_id", "pad_token_id", "decoder_start_token_id"}
     for key in config.keys() - known:
         if key in tokenizer:

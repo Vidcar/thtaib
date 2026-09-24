@@ -10,17 +10,18 @@ import json
 import re
 from itertools import islice
 import httpx
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
 
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, OfflineModeIsEnabled
 
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.schemas import HubRepository, HubSearchResult, HubSource, HubVariant
+from workbench_backend.inference.schemas import HubRepository, HubSearchResult, HubSource, HubVariant, ResponseRecipe
 
 PUBLISHER_DIR = ".workbench-publisher"
 REPOSITORY_TEMPLATE_DIR = ".workbench-repository-template"
 CONFIG_NAMES = frozenset({"config.json", "generation_config.json", "tokenizer_config.json", "tokenizer.json", "chat_template.jinja"})
+MAX_CARD_BYTES = 2 * 1024 * 1024
 
 
 def _access_error(exc: Exception) -> ManagerError:
@@ -46,6 +47,27 @@ def repository_id(value: str) -> str:
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", value):
         raise ManagerError("Use a model repository in owner/name form.", code="hf_repository", status_code=400)
     return value
+
+
+def repository_file_hint(value: str) -> str | None:
+    """Retain an explicitly linked file without guessing from the repository name."""
+    value = value.strip()
+    if "://" not in value:
+        return None
+    url = urlparse(value)
+    if url.scheme != "https" or url.hostname != "huggingface.co":
+        return None
+    hints = parse_qs(url.query, keep_blank_values=True).get("show_file_info", [])
+    if not hints:
+        return None
+    if len(hints) != 1 or not hints[0] or len(hints[0]) > 1024:
+        raise ManagerError("This model link has an invalid file selection.", code="hf_file_hint", status_code=400)
+    hint = hints[0]
+    path = PurePosixPath(hint)
+    if (path.is_absolute() or ".." in path.parts or "\\" in hint or ":" in hint
+            or any(mark in hint for mark in ("*", "?", "[", "]")) or not hint.lower().endswith(".gguf")):
+        raise ManagerError("This model link has an unsafe or unsupported file selection.", code="hf_file_hint", status_code=400)
+    return hint
 
 
 def describe_repository(repo_id: str, info: object) -> HubRepository:
@@ -153,18 +175,55 @@ class HuggingFaceFetcher:
             if getattr(item, "modelId", None) or getattr(item, "id", None)
         ]
 
-    def inspect(self, *, repo_id: str, revision: str = "main") -> HubRepository:
+    def inspect(self, *, repo_id: str, revision: str = "main", include_recipes: bool = False) -> HubRepository:
+        file_hint = repository_file_hint(repo_id)
         repo_id = repository_id(repo_id)
         try:
             info = HfApi().model_info(repo_id=repo_id, revision=revision or "main", files_metadata=True)
         except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled) as exc:
             raise _access_error(exc) from exc
         listing = describe_repository(repo_id, info)
+        listing.file_hint = file_hint
+        if file_hint and not any(variant.complete and file_hint in variant.files for variant in listing.variants):
+            listing.warnings.append(f"Linked file {file_hint} is not an available complete primary variant at this revision.")
         if listing.variants:
             listing.source = self._verified_source(listing, info)
         else:
             listing.gguf_candidates = self._gguf_candidates(listing.repo_id)
+        card_name = next((name for name in listing.guidance_files
+            if "/" not in name and name.casefold() == "readme.md"), None)
+        if include_recipes and listing.variants and card_name:
+            try:
+                from workbench_backend.inference.hf_recipes import parse_model_card_recipes
+                if (listing.file_sizes.get(card_name) or 0) > MAX_CARD_BYTES:
+                    raise ManagerError("Model card exceeds the supported size for response recipes.",
+                        code="hf_card_size", status_code=400)
+                card, digest = self.read_pinned_card(listing.repo_id, listing.resolved_revision,
+                    filename=card_name, expected_sha256=listing.file_sha256.get(card_name))
+                listing.response_recipes = [ResponseRecipe.model_validate(item) for item in
+                    parse_model_card_recipes(card, repo_id=listing.repo_id,
+                        revision=listing.resolved_revision, sha256=digest)]
+            except ManagerError as exc:
+                listing.warnings.append(f"Response recipes could not be read: {exc.message}")
         return listing
+
+    def read_pinned_card(self, repo_id: str, revision: str, *, filename: str = "README.md",
+        expected_sha256: str | None = None) -> tuple[str, str]:
+        if "/" in filename or "\\" in filename or filename.casefold() != "readme.md":
+            raise ManagerError("The model card must be a root README.", code="hf_card_path", status_code=400)
+        try:
+            card_path = Path(hf_hub_download(repo_id=repo_id, filename=filename, revision=revision))
+            if card_path.stat().st_size > MAX_CARD_BYTES:
+                raise ManagerError("Model card exceeds the supported size for response recipes.", code="hf_card_size", status_code=400)
+            payload = card_path.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            if expected_sha256 and digest != expected_sha256:
+                raise ManagerError("Model card checksum differs from the pinned repository listing.", code="hf_card_checksum", status_code=409)
+            return payload.decode("utf-8"), digest
+        except (HfHubHTTPError, httpx.TransportError, OfflineModeIsEnabled) as exc:
+            raise _access_error(exc) from exc
+        except (OSError, UnicodeError) as exc:
+            raise ManagerError("Model card could not be read as UTF-8.", code="hf_card_read", status_code=400) from exc
 
     def _gguf_candidates(self, source_repo_id: str) -> list[HubSearchResult]:
         name = source_repo_id.split("/", 1)[1]

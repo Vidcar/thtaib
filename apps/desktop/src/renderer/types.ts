@@ -34,6 +34,27 @@ export interface BundleFile {
   size_bytes: number;
 }
 
+export interface ResponseRecipe {
+  id: string;
+  name: string;
+  section: string;
+  per_request: Record<string, number>;
+  reasoning: "on" | "off";
+  source_repo_id: string;
+  source_revision: string;
+  card_sha256: string;
+  notes?: string[];
+}
+
+export interface ResponseRecipeOrigin {
+  recipe_id: string;
+  name: string;
+  source_repo_id: string;
+  source_revision: string;
+  card_sha256: string;
+  section: string;
+}
+
 export interface ModelBundle {
   id: string;
   default_configuration_id?: string | null;
@@ -62,6 +83,8 @@ export interface ModelBundle {
     template_differs: boolean;
     template_compatible: boolean | null;
     generation_defaults: Record<string, unknown>;
+    response_recipes?: ResponseRecipe[];
+    metadata_refreshed_at?: string | null;
     unsupported: Record<string, string>;
   } | null;
 }
@@ -72,6 +95,9 @@ export interface ImportJob {
   status: string;
   bundle_id: string | null;
   error: string | null;
+  configuration_error?: string | null;
+  recipe_ids?: string[];
+  default_recipe_id?: string | null;
   display_name?: string | null;
   repo_id?: string | null;
   requested_revision?: string | null;
@@ -124,6 +150,7 @@ export interface RunProfile {
   bundle_id: string | null;
   bundle_name?: string | null;
   equivalent_configuration_ids?: string[];
+  recipe_origin?: ResponseRecipeOrigin | null;
   bags: SettingsBags;
 }
 

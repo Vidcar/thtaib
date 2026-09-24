@@ -38,17 +38,26 @@ export function settingSource(source?: string | null): string {
   return source ? labels[source] ?? source : "Default not reported";
 }
 
+export function effectiveSettingDisplay(fact?: EffectiveSetting, loading = false): { value: string; source: string } {
+  if (loading) return { value: "Checking…", source: "" };
+  if (fact?.supported === false) return { value: "Unavailable", source: fact.unavailable_reason || "This model does not support this setting" };
+  if (!fact?.known) return { value: "Not reported", source: "No resolved value reported" };
+  return { value: settingValue(fact.value), source: settingSource(fact.source) };
+}
+
 /** Preview the same resolution used at submission; never show a previous selection's facts. */
-export function useSetupPreview(value: SetupConfiguration, projectId: string | null = null, agentId: string | null = null, scope: "application" | "project" | "agent" | "conversation" = "conversation") {
+export function useSetupPreview(value: SetupConfiguration, projectId: string | null = null, agentId: string | null = null, scope: "application" | "project" | "agent" | "conversation" = "conversation", revision = "", enabled = true) {
   const serialized = JSON.stringify(value);
-  const key = `${scope}:${projectId}:${agentId}:${serialized}`;
+  const key = `${scope}:${projectId}:${agentId}:${revision}:${serialized}`;
   const [result, setResult] = useState<{ key: string; data: SetupPreview | null; error: string }>({ key: "", data: null, error: "" });
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     void workspaceApi.resolveSetup(projectId, agentId, JSON.parse(serialized) as SetupConfiguration, scope).then(data => {
       if (!cancelled) setResult({ key, data, error: "" });
     }).catch(failure => { if (!cancelled) setResult({ key, data: null, error: errorMessage(failure) }); });
     return () => { cancelled = true; };
-  }, [key, serialized, projectId, agentId, scope]);
+  }, [enabled, key, serialized, projectId, agentId, scope]);
+  if (!enabled) return { key, data: null, error: "", loading: false };
   return result.key === key ? { ...result, loading: false } : { key, data: null, error: "", loading: true };
 }

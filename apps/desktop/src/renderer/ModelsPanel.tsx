@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { api } from "./api";
 import { DeploymentsPanel } from "./DeploymentsPanel";
@@ -12,6 +12,7 @@ import { ModelStoragePanel } from "./ModelStoragePanel";
 import { Help } from "./ModelControls";
 import { PathBrowseButton } from "./PathField";
 import { ModelPicker } from "./ModelPicker";
+import { ModelResponseRecipes } from "./ModelResponseRecipes";
 import type { InspectReport, ModelBundle, RunProfile } from "./types";
 import { HuggingFaceImport } from "./HuggingFaceImport";
 import "./ModelsPanel.css";
@@ -32,22 +33,30 @@ export function ModelsPanel() {
   const [importRevision, setImportRevision] = useState(0);
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [draftModelIds, setDraftModelIds] = useState<ReadonlySet<string>>(new Set());
+  const refreshGeneration = useRef(0);
 
   async function refresh(): Promise<void> {
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     let bundlesLoaded = false;
     try {
       const nextBundles = await api.bundles();
+      if (generation !== refreshGeneration.current) return;
       setBundles(nextBundles);
       setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
       bundlesLoaded = true;
       setLoading(false);
       const nextProfiles = await api.profiles();
+      if (generation !== refreshGeneration.current) return;
       setProfiles(nextProfiles);
-      setBundles(await api.bundles());
+      const latestBundles = await api.bundles();
+      if (generation !== refreshGeneration.current) return;
+      setBundles(latestBundles);
       setLoadError("");
+    } catch (error) {
+      if (generation === refreshGeneration.current) throw error;
     } finally {
-      if (!bundlesLoaded) setLoading(false);
+      if (generation === refreshGeneration.current && !bundlesLoaded) setLoading(false);
     }
   }
 
@@ -70,6 +79,19 @@ export function ModelsPanel() {
   }
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
+  const selectedBundleVersion = selected ? JSON.stringify([
+    selected.id,
+    selected.default_configuration_id,
+    selected.primary_path,
+    selected.disk_matches,
+    selected.source.resolved_revision,
+    selected.huggingface_configuration?.metadata_refreshed_at,
+    selected.huggingface_configuration?.template_origin,
+    selected.huggingface_configuration?.template_file,
+    selected.huggingface_configuration?.generation_defaults,
+    selected.files.map(file => [file.name, file.sha256]),
+    selected.companions.map(file => [file.name, file.sha256]),
+  ]) : selectedId;
   const publisherTemplateFound = Boolean(selected?.huggingface_configuration?.source_verified && selected.files.some(file =>
     file.name === ".workbench-publisher/chat_template.jinja" || file.name === ".workbench-publisher/chat_template.from-tokenizer.jinja"));
   function fail(error: unknown): void {
@@ -153,7 +175,8 @@ export function ModelsPanel() {
       {loading ? <EmptyState title="Loading your models">Loading saved model details.</EmptyState> : bundles.length === 0 ? <EmptyState title="Your first model starts here">Add a model from your computer or download one from Hugging Face. <button type="button" onClick={() => setView("add")}>Add models</button></EmptyState> : null}
       {bundles.length ? <ModelPicker bundles={bundles} selectedId={selectedId} dirtyIds={draftModelIds} onSelect={id => { setSelectedId(id); setInspect(null); }} /> : null}
       <div className="model-detail">
-      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} onDirtyModelsChange={setDraftModelIds} />
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={selectedBundleVersion} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} onDirtyModelsChange={setDraftModelIds} />
+      {selected?.source.kind === "huggingface" ? <ModelResponseRecipes key={selected.id} bundle={selected} profiles={profiles} onChanged={refresh} /> : null}
       {selected ? <details className="card technical-details model-facts-details"><summary>Files, source &amp; metadata</summary>
       <div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div>
       {selected.huggingface_configuration ? <section className="source-provenance" aria-label="Hugging Face model settings">
@@ -235,7 +258,7 @@ export function ModelsPanel() {
         </details> : null}
       </div></div>
       <div id="models-panel-downloads" role="tabpanel" aria-labelledby="models-tab-downloads" className="models-tab-panel models-downloads-panel" hidden={view !== "downloads"}>
-        <ImportJobsPanel state={imports} />
+        <ImportJobsPanel state={imports} onOpenModel={id => { setSelectedId(id); setInspect(null); setView("library"); void refresh().catch(fail); }} />
         <ModelStoragePanel />
       </div>
     </section>

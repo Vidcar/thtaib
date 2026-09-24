@@ -491,6 +491,15 @@ class BundleService:
         )
         if bundle is not None:
             if bundle.huggingface_configuration is not None:
+                if request.recipe_ids and not all(recipe_id in {item.id for item in bundle.huggingface_configuration.response_recipes}
+                    for recipe_id in request.recipe_ids):
+                    from workbench_backend.inference.hf_configuration import response_recipes_from_bundle_card
+                    from workbench_backend.inference.schemas import ResponseRecipe
+                    recipes, note = response_recipes_from_bundle_card(bundle)
+                    if note is None:
+                        refreshed = bundle.huggingface_configuration.model_copy(update={
+                            "response_recipes": [ResponseRecipe.model_validate(item) for item in recipes]})
+                        bundle = self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": refreshed}))
                 return bundle
         else:
             bundle = self._record_files(

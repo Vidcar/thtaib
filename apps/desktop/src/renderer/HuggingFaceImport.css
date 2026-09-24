@@ -1,0 +1,43 @@
+.models-surface .response-recipe-choices,
+.models-surface .response-recipe-choices fieldset {
+  display: grid;
+  gap: var(--space-tight);
+  min-width: 0;
+  margin: 0;
+  padding: var(--pad-compact);
+  border: var(--line-hairline) solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.models-surface .response-recipe-choices legend {
+  padding-inline: var(--space-tight);
+  font-weight: var(--weight-semibold);
+}
+
+.models-surface .response-recipe-choices p {margin: 0;}
+
+.models-surface .response-recipe-choices label {
+  display: flex;
+  align-items: start;
+  gap: var(--space-tight);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-small);
+}
+
+.models-surface .response-recipe-choices label > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.models-surface .response-recipe-choices input {
+  flex: none;
+  min-height: auto;
+  margin-block: 2px;
+  accent-color: var(--accent);
+}
+
+.models-surface .response-recipe-choices small {color: var(--muted);}
+.models-surface .selected-download-files > p {grid-column: 1 / -1; margin: 0;}

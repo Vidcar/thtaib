@@ -47,6 +47,9 @@ async function configurations(Panel) {
         const value = requested ?? (key === 'temperature' ? 0.8 : null);
         return [`per_request.${key}`, { value, known: value != null, source: requested == null ? 'Model default' : specified ? 'Application defaults' : 'Configuration: Example model' }];
       }));
+      const startupChanges = body.overrides.startup_overrides ?? {};
+      const ctxSize = startupChanges.ctx_size ?? profiles.find(item => item.id === body.overrides.model_configuration_id)?.bags.startup.requested.ctx_size;
+      facts['startup.ctx_size'] = { value: ctxSize, known: ctxSize != null, source: Object.hasOwn(startupChanges, 'ctx_size') ? 'Application defaults' : 'Configuration: Example model' };
       return response({ configuration: body.overrides, effective_values: facts, instruction_layers: [] });
     }
     if (path.endsWith("/v1/settings/preview")) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
@@ -65,18 +68,24 @@ async function configurations(Panel) {
     const button = label => renderer.root.findAllByType("button").find(node => text(node) === label);
     const lastPreview = () => calls.findLast(call => call.path.endsWith('/v1/setup-resolution')).body;
     assert.deepEqual(lastPreview().overrides.per_request_overrides, {}, 'unchanged saved response settings retain named configuration provenance');
+    assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'unchanged startup settings remain inherited from the saved configuration');
     assert.equal(lastPreview().editing_layer, 'application', 'Models replacement preview excludes application and Chat overrides');
-    assert.ok(text(renderer.root).includes('Default unknown'), 'unknown defaults are labelled without repeating the saved value');
+    assert.ok(text(renderer.root).includes('512'), 'the saved reply limit is displayed as its resolved value');
+    assert.match(text(renderer.root.findByProps({ id: 'model-ctx-size' }).parent), /8,192 tokens.*Configuration: Example model.*Set in configuration/, 'startup control displays its resolved value and saved source');
+    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
+    assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 16384, 'staged launch changes reach the shared setup preview');
+    assert.match(text(renderer.root.findByProps({ id: 'model-ctx-size' }).parent), /16,384 tokens.*This editor.*Selected for next load/, 'edited launch value and status replace stale saved readout');
     const numeric = label => {
       const ids = { Temperature: 'model-response-temperature', 'Reply limit': 'model-response-max_tokens' };
       return renderer.root.findAllByType('input').find(node => node.props.id === ids[label]);
     };
     await act(async () => { numeric('Temperature').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.temperature, null, 'clearing a saved response setting explicitly resets the authoritative preview');
-    assert.equal(numeric('Temperature').props.placeholder, '0.8', 'known model default replaces the removed saved value');
+    assert.equal(numeric('Temperature').props.placeholder, 'Use inherited', 'empty input remains an inherited setting, not a saved default');
+    assert.match(text(numeric('Temperature').parent), /0\.8.*Model default.*Inherited/, 'resolved model default and its source are the visible readout');
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
-    assert.equal(numeric('Reply limit').props.placeholder, 'Default unknown', 'unknown default is not invented from the saved value');
+    assert.match(text(numeric('Reply limit').parent), /Not reported.*Inherited/, 'unknown default is not invented from the saved value');
     assert.ok(button("Save changes"), "save is available without a running deployment");
     await act(async () => { button("Save changes").props.onClick(); await tick(); });
     assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
@@ -86,10 +95,10 @@ async function configurations(Panel) {
     assert.equal(profiles[0].revision, 6);
     assert.equal(profiles[0].bags.startup.requested.port, undefined, "automatic port is not frozen into a saved configuration");
     assert.equal(calls.some(call => call.path.includes("/deployments/managed")), false, "saving never creates a deployment");
-    await act(async () => { button("Save as variant").props.onClick(); });
-    await act(async () => { button("Save variant").props.onClick(); await tick(); });
-    assert.equal(profiles.length, 2, "only explicit Save as variant creates another configuration");
-    assert.equal(profiles[1].display_name, "Example model variant");
+    await act(async () => { button("Save as configuration").props.onClick(); });
+    await act(async () => { button("Create configuration").props.onClick(); await tick(); });
+    assert.equal(profiles.length, 2, "only explicit Save as configuration creates another configuration");
+    assert.equal(profiles[1].display_name, "Example model copy");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 

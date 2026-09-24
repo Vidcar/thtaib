@@ -605,6 +605,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bundles/{bundle_id}/response-recipes/configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Response Recipe Configurations */
+        post: operations["create_response_recipe_configurations_v1_bundles__bundle_id__response_recipes_configurations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bundles/{bundle_id}/response-recipes/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Response Recipes */
+        post: operations["refresh_response_recipes_v1_bundles__bundle_id__response_recipes_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations": {
         parameters: {
             query?: never;
@@ -3893,6 +3927,8 @@ export interface components {
         HubRepository: {
             /** Auxiliary Ggufs */
             auxiliary_ggufs?: components["schemas"]["HubVariant"][];
+            /** File Hint */
+            file_hint?: string | null;
             /** File Sha256 */
             file_sha256?: {
                 [key: string]: string | null;
@@ -3911,6 +3947,8 @@ export interface components {
             repo_id: string;
             /** Resolved Revision */
             resolved_revision: string;
+            /** Response Recipes */
+            response_recipes?: components["schemas"]["ResponseRecipe"][];
             source?: components["schemas"]["HubSource"] | null;
             /** Variants */
             variants: components["schemas"]["HubVariant"][];
@@ -3962,6 +4000,10 @@ export interface components {
             generation_defaults?: {
                 [key: string]: unknown;
             };
+            /** Metadata Refreshed At */
+            metadata_refreshed_at?: string | null;
+            /** Response Recipes */
+            response_recipes?: components["schemas"]["ResponseRecipe"][];
             /** Source Note */
             source_note?: string | null;
             /** Source Repo Id */
@@ -3997,8 +4039,12 @@ export interface components {
         HuggingFaceImportRequest: {
             /** Allow Patterns */
             allow_patterns?: string[] | null;
+            /** Default Recipe Id */
+            default_recipe_id?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Recipe Ids */
+            recipe_ids?: string[];
             /** Repo Id */
             repo_id: string;
             /**
@@ -4057,8 +4103,12 @@ export interface components {
              * @default false
              */
             cancel_requested: boolean;
+            /** Configuration Error */
+            configuration_error?: string | null;
             /** Created At */
             created_at: string;
+            /** Default Recipe Id */
+            default_recipe_id?: string | null;
             /** Display Name */
             display_name?: string | null;
             /** Error */
@@ -4073,6 +4123,8 @@ export interface components {
             /** Owned Install Path */
             owned_install_path?: string | null;
             progress?: components["schemas"]["ImportProgress"];
+            /** Recipe Ids */
+            recipe_ids?: string[];
             /** Repair Of Bundle Id */
             repair_of_bundle_id?: string | null;
             /** Repo Id */
@@ -5239,6 +5291,60 @@ export interface components {
             /** Rss Bytes */
             rss_bytes?: number | null;
         };
+        /** ResponseRecipe */
+        ResponseRecipe: {
+            /** Card Sha256 */
+            card_sha256: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Notes */
+            notes?: string[];
+            /** Per Request */
+            per_request?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Reasoning
+             * @enum {string}
+             */
+            reasoning: "on" | "off";
+            /** Section */
+            section: string;
+            /** Source Repo Id */
+            source_repo_id: string;
+            /** Source Revision */
+            source_revision: string;
+        };
+        /** ResponseRecipeConfigurationRequest */
+        ResponseRecipeConfigurationRequest: {
+            /** Default Recipe Id */
+            default_recipe_id?: string | null;
+            /** Recipe Ids */
+            recipe_ids?: string[];
+        };
+        /** ResponseRecipeConfigurationResult */
+        ResponseRecipeConfigurationResult: {
+            bundle: components["schemas"]["ModelBundle"];
+            /** Configurations */
+            configurations: components["schemas"]["RunProfile"][];
+        };
+        /** ResponseRecipeOrigin */
+        ResponseRecipeOrigin: {
+            /** Card Sha256 */
+            card_sha256: string;
+            /** Name */
+            name: string;
+            /** Recipe Id */
+            recipe_id: string;
+            /** Section */
+            section: string;
+            /** Source Repo Id */
+            source_repo_id: string;
+            /** Source Revision */
+            source_revision: string;
+        };
         /** RetainedAsset */
         RetainedAsset: {
             /** Access Scope */
@@ -5551,6 +5657,7 @@ export interface components {
             id: string;
             /** Merged Into Configuration Id */
             readonly merged_into_configuration_id?: string | null;
+            recipe_origin?: components["schemas"]["ResponseRecipeOrigin"] | null;
             /**
              * Revision
              * @default 1
@@ -6278,6 +6385,10 @@ export type SchemaRenameProfileRequest = components['schemas']['RenameProfileReq
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
+export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
+export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];
+export type SchemaResponseRecipeConfigurationResult = components['schemas']['ResponseRecipeConfigurationResult'];
+export type SchemaResponseRecipeOrigin = components['schemas']['ResponseRecipeOrigin'];
 export type SchemaRetainedAsset = components['schemas']['RetainedAsset'];
 export type SchemaRetainedAssetContent = components['schemas']['RetainedAssetContent'];
 export type SchemaRetainedAssetDeletionPreview = components['schemas']['RetainedAssetDeletionPreview'];
@@ -7639,6 +7750,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_response_recipe_configurations_v1_bundles__bundle_id__response_recipes_configurations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseRecipeConfigurationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseRecipeConfigurationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_response_recipes_v1_bundles__bundle_id__response_recipes_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBundle"];
                 };
             };
             /** @description Validation Error */

@@ -1,11 +1,11 @@
 import { CompactSwitch, CompactSlider, SegmentedChoice } from "./CompactControls";
 import { HoverHelp } from "./HoverHelp";
-import { settingSource, settingValue, type EffectiveSetting } from "./effectiveSettings";
+import { effectiveSettingDisplay, settingSource, settingValue, type EffectiveSetting } from "./effectiveSettings";
 import type { BundleConfigurationOptions } from "./types";
 
-export function ResponseSettingsEditor({ value, onChange, facts, options, disabled = false, compact = false, inheritance = "layer" }: {
+export function ResponseSettingsEditor({ value, onChange, facts, options, disabled = false, compact = false, inheritance = "layer", loading = false }: {
   value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void;
-  facts: Record<string, EffectiveSetting>; options: BundleConfigurationOptions | null; disabled?: boolean; compact?: boolean; inheritance?: "layer" | "model";
+  facts: Record<string, EffectiveSetting>; options: BundleConfigurationOptions | null; disabled?: boolean; compact?: boolean; inheritance?: "layer" | "model"; loading?: boolean;
 }) {
   const patch = (key: string, next: unknown) => onChange({ ...value, [key]: next });
   const inherit = (key: string) => { const next = { ...value }; delete next[key]; onChange(next); };
@@ -18,12 +18,11 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
   const effectiveEffort = current("reasoning_effort");
   const effectiveMode = current("reasoning");
   if (inheritance === "model") {
-    const defaultLabel = (key: string) => {
-      const descriptor = options?.per_request_defaults[key];
+    const readout = (key: string) => {
       const resolved = fact(key);
-      const reported = descriptor?.default_value ?? resolved?.default_value ?? (value[key] === undefined && resolved?.known ? resolved.value : null);
-      const origin = descriptor?.default_source ?? resolved?.default_source ?? (value[key] === undefined ? resolved?.source : null);
-      return reported == null ? "Default unknown" : `Default ${settingValue(reported)} · ${settingSource(origin)}`;
+      const display = effectiveSettingDisplay(resolved, loading);
+      const state = resolved?.source === "Unsaved changes" ? "Unsaved change" : Object.prototype.hasOwnProperty.call(value, key) ? "Set in configuration" : "Inherited";
+      return <div className="model-effective-readout"><strong>{display.value}</strong><small>{display.source}{!loading ? ` · ${state}` : ""}</small></div>;
     };
     const numbers = [
       { key: "max_tokens", label: "Reply limit", min: 1, step: 1 },
@@ -36,10 +35,10 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
       { key: "frequency_penalty", label: "Frequency penalty", step: "any" },
     ] as const;
     return <div className="response-settings-editor model-response-editor">
-      {modes?.supported ? <SegmentedChoice label="Thinking" value={String(value.reasoning ?? "auto")} options={[{ value: "auto", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={next => next === "auto" ? inherit("reasoning") : patch("reasoning", next)} disabled={disabled} meta={defaultLabel("reasoning")} description="Control whether the model generates thinking for future turns." /> : null}
-      {efforts?.supported && value.reasoning !== "off" && effectiveMode !== "off" ? <div className="model-response-setting"><div className="setting-title"><label htmlFor="model-thinking-level">Thinking level</label><HoverHelp title="Thinking level">Only levels declared by this model template are offered.</HoverHelp><small className="control-provenance">{defaultLabel("reasoning_effort")}</small></div><select id="model-thinking-level" value={String(value.reasoning_effort ?? "default")} disabled={disabled} onChange={event => event.target.value === "default" ? inherit("reasoning_effort") : patch("reasoning_effort", event.target.value)}><option value="default">Default</option>{effortOptions.map(item => <option key={String(item.value)} value={String(item.value)}>{item.label}</option>)}</select></div> : null}
+      {modes?.supported ? <div className="model-response-setting"><SegmentedChoice label="Thinking" value={String(value.reasoning ?? "auto")} options={[{ value: "auto", label: "Use inherited" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={next => next === "auto" ? inherit("reasoning") : patch("reasoning", next)} disabled={disabled} description="Control whether the model generates thinking for future turns." />{readout("reasoning")}</div> : null}
+      {efforts?.supported && value.reasoning !== "off" && effectiveMode !== "off" ? <div className="model-response-setting"><div className="setting-title"><label htmlFor="model-thinking-level">Thinking level</label><HoverHelp title="Thinking level">Only levels declared by this model template are offered.</HoverHelp></div><select id="model-thinking-level" value={String(value.reasoning_effort ?? "default")} disabled={disabled} onChange={event => event.target.value === "default" ? inherit("reasoning_effort") : patch("reasoning_effort", event.target.value)}><option value="default">Use inherited</option>{effortOptions.map(item => <option key={String(item.value)} value={String(item.value)}>{item.label}</option>)}</select>{readout("reasoning_effort")}</div> : null}
       {!modes?.supported && !efforts?.supported ? <span className="hint">Thinking controls unavailable for this model.</span> : null}
-      {!compact ? <div className="response-numeric-grid">{numbers.map(item => <div className="model-response-setting" key={item.key}><div className="setting-title"><label htmlFor={`model-response-${item.key}`}>{item.label}</label><HoverHelp title={item.label}>Empty uses the model or runtime default.</HoverHelp><small className="control-provenance">{defaultLabel(item.key)}</small></div><input id={`model-response-${item.key}`} type="number" min={"min" in item ? item.min : undefined} max={"max" in item ? item.max : undefined} step={item.step} disabled={disabled} value={typeof value[item.key] === "number" ? Number(value[item.key]) : ""} placeholder={options?.per_request_defaults[item.key]?.default_value == null ? current(item.key) == null ? "Default unknown" : settingValue(current(item.key)) : settingValue(options?.per_request_defaults[item.key]?.default_value)} onChange={event => event.target.value === "" ? inherit(item.key) : patch(item.key, Number(event.target.value))} /></div>)}</div> : null}
+      {!compact ? <div className="response-numeric-grid">{numbers.map(item => <div className="model-response-setting" key={item.key}><div className="setting-title"><label htmlFor={`model-response-${item.key}`}>{item.label}</label><HoverHelp title={item.label}>Empty uses the inherited setting.</HoverHelp></div><input id={`model-response-${item.key}`} type="number" min={"min" in item ? item.min : undefined} max={"max" in item ? item.max : undefined} step={item.step} disabled={disabled} value={typeof value[item.key] === "number" ? Number(value[item.key]) : ""} placeholder="Use inherited" onChange={event => event.target.value === "" ? inherit(item.key) : patch(item.key, Number(event.target.value))} />{readout(item.key)}{Object.prototype.hasOwnProperty.call(value, item.key) ? <button type="button" className="quiet-button model-setting-reset" disabled={disabled} onClick={() => inherit(item.key)}>Reset to inherited</button> : null}</div>)}</div> : null}
     </div>;
   }
   return <div className="response-settings-editor">
