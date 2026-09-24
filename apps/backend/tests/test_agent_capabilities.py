@@ -220,28 +220,28 @@ class AgentCapabilitiesTests(unittest.TestCase):
         run = self.start(project_path=str(self.folder), presented_tools=['write_file'], approval_mode='ask')
         waiting = approval_fixtures.wait_for_interrupt(self.client, run['id'])
         self.assertFalse((self.folder / 'ask.txt').exists())
-        self.assertFalse(waiting['file_changes'])
         self.post(f'/v1/agent-runs/{run["id"]}/interrupt-decision', approval_fixtures.run_direct_interrupt_decision(waiting, 'approve'))
         finished = wait_for_run(self.client, run['id'])
         self.assertEqual(finished['status'], 'completed', finished.get('error'))
         self.assertEqual((self.folder / 'ask.txt').read_text(), 'approved')
-        self.assertEqual(len(finished['file_changes']), 1)
+        self.assertTrue(any(event['kind'] == 'tool_result' for event in finished['events']))
 
-    def test_approve_text_is_recoverable_but_binary_delete_still_pauses(self):
+    def test_full_access_native_edit_is_effective_without_an_approval(self):
         self.harness(lambda *_: ScriptedChatModel([call('edit_file', {'file_path': 'sample.txt', 'old_string': 'original', 'new_string': 'changed'}, 'edit'), AIMessage(content='Done')]))
-        run = self.start(project_path=str(self.folder), presented_tools=['edit_file'], approval_mode='approve_for_me')
+        run = self.start(project_path=str(self.folder), presented_tools=['edit_file'], approval_mode='full_access')
         finished = wait_for_run(self.client, run['id'])
         self.assertEqual(finished['status'], 'completed', finished.get('error'))
-        view, = self.client.get(f'/v1/agent-runs/{run["id"]}/file-changes').json()
-        self.assertTrue(view['reversal_available'])
-        self.assertEqual(view['change']['before']['text'], 'original')
-        (self.folder / 'binary.dat').write_bytes(b'\x00binary')
-        self.harness(lambda *_: ScriptedChatModel([call('delete_file', {'file_path': 'binary.dat'}, 'delete'), AIMessage(content='Done')]))
-        run = self.start(project_path=str(self.folder), presented_tools=['delete_file'], approval_mode='approve_for_me')
-        waiting = approval_fixtures.wait_for_interrupt(self.client, run['id'])
-        self.assertEqual((self.folder / 'binary.dat').read_bytes(), b'\x00binary')
-        self.post(f'/v1/agent-runs/{run["id"]}/interrupt-decision', approval_fixtures.run_direct_interrupt_decision(waiting, 'reject'))
-        wait_for_run(self.client, run['id'])
+        self.assertIsNone(finished['pending_interrupt'])
+        self.assertEqual((self.folder / 'sample.txt').read_text(), 'changed')
+
+    def test_full_access_native_write_cannot_escape_the_project(self):
+        outside = self.folder.parent / 'outside.txt'
+        self.harness(lambda *_: ScriptedChatModel([call('write_file', {'file_path': '../outside.txt', 'content': 'forbidden'}, 'escape'), AIMessage(content='Done')]))
+        run = self.start(project_path=str(self.folder), presented_tools=['write_file'], approval_mode='full_access')
+        finished = wait_for_run(self.client, run['id'])
+        self.assertFalse(outside.exists())
+        self.assertTrue(any(event['kind'] == 'tool_result' and event['detail'].get('tool_call_id') == 'escape'
+            for event in finished['events']))
 
     def test_external_receiver_requires_approval_except_full_access(self):
         from fastmcp import FastMCP, Client
@@ -264,7 +264,7 @@ class AgentCapabilitiesTests(unittest.TestCase):
         tested = asyncio.run(service.test(record.id))
         tool_name = tested.tools[0].name
         with patch.object(HarnessService, 'connections', new_callable=PropertyMock, return_value=service):
-            for mode in ('ask', 'approve_for_me', 'full_access'):
+            for mode in ('ask', 'full_access'):
                 self.harness(lambda *_, mode=mode: ScriptedChatModel([call(tool_name, {'value':mode}, mode), AIMessage(content='Done')]))
                 run = self.start(connection_ids=[record.id], presented_tools=[tool_name], approval_mode=mode)
                 if mode != 'full_access':
@@ -276,7 +276,7 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(effects, ['full_access'])
 
     def test_access_does_not_commit_memory_without_scope_permission(self):
-        for mode in ('ask', 'approve_for_me', 'full_access'):
+        for mode in ('ask', 'full_access'):
             self.harness(lambda *_, mode=mode: ScriptedChatModel([call('propose_memory', {'content':'A proposed preference', 'scope':'user'}, mode), AIMessage(content='Proposed')]))
             run = self.start(presented_tools=['propose_memory'], approval_mode=mode)
             finished = wait_for_run(self.client, run['id'])

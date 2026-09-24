@@ -6,7 +6,7 @@ The accepted [polish-workbench-surfaces delivery](../archive/2026-09-24-polish-w
 
 - [x] 1.1 Build the compact destination treatment from API-027 and verify Chat, Lab, Workflows, and Settings share type, focus, and help on hover without horizontal scrolling.
 - [x] 1.2 Archive a conversation so it leaves the active list immediately, and delete a chat so project files remain. Verify both with a focused state test and the sidebar.
-- [ ] 1.3 Import a skill package without executing its script, and extract a text PDF while reporting an encrypted PDF as unread. Verify the import and extraction tests.
+- [ ] 1.3 Import a native `SKILL.md` package with validated name/description, path and collision checks without executing its script; extract a text PDF while reporting an encrypted PDF as unread. Verify import and extraction tests.
 - [ ] 1.4 Add the Settings connection list, public web search, and backend-only secrets from ENV-025 and ENV-026. Verify a secret is not rendered after save and Chat still sends with no web connection.
 
 ## 2. Lab screens

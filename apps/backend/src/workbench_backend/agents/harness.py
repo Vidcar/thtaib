@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
-from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY
+from deepagents.middleware.summarization import SummarizationMiddleware, SUMMARIZATION_EVENT_KEY, compute_summarization_defaults
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -29,7 +29,6 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from workbench_backend.agents.effective_setup import resolve_effective_setup
-from workbench_backend.agents.file_changes import FileChangeRecorder, ProjectFileChangeView, change_view, reverse_change
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
 from workbench_backend.agents.setup_schemas import ProjectCreateRequest, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.inference.schemas import SettingsBags
@@ -44,7 +43,6 @@ from workbench_backend.agents.memory_skills import (
     official_agent_kwargs,
     materialize_onto_backend,
     plan_knowledge_materialization,
-    KnowledgeRefreshMiddleware,
     clear_derived_knowledge,
     configured_memory_middleware,
 )
@@ -76,7 +74,6 @@ from workbench_backend.agents.schemas import (
     GenerationObservation,
     HostShellFacts,
     InterruptDecisionRequest,
-    UserAnswerRequest,
     PendingInterrupt,
     TaskCriteria,
     ReviewObservation,
@@ -102,13 +99,11 @@ from workbench_backend.agents.tools import (
     KNOWLEDGE_ROUTE_READ_TOOLS,
     enabled_for_project,
     memory_proposal_tool,
-    project_mutation_tools,
     resolve_presented_tools,
     tools_for_names,
 )
-from workbench_backend.errors import HarnessError, KnowledgeError, ReplayError
+from workbench_backend.errors import HarnessError, ReplayError
 from workbench_backend.agents.structured import (
-    StructuredOutputRepairMiddleware,
     mark_structured_failure,
     response_format_for_run,
     update_structured_result_from_state,
@@ -369,8 +364,7 @@ class HarnessService:
             versions = self._load_knowledge_versions(refs)
             knowledge_plan = plan_knowledge_materialization(
                 versions,
-                self._knowledge_display_names(versions),
-                self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
+                resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
             )
             profile = self.manager.get_profile(request.profile_id) if request.profile_id and execution_snapshot is None else None
             project_path = _resolved_project_path(request.project_path)
@@ -800,7 +794,7 @@ class HarnessService:
     def resume_interrupt(
         self,
         run_id: str,
-        request: InterruptDecisionRequest | UserAnswerRequest,
+        request: InterruptDecisionRequest,
         *,
         require_interrupt_identity: bool = False,
     ) -> AgentRun:
@@ -853,28 +847,7 @@ class HarnessService:
                         status_code=409,
                     )
             try:
-                if isinstance(request, UserAnswerRequest):
-                    question = pending.question
-                    if pending.kind != "ask_user" or question is None:
-                        raise ValueError("interrupt_answer_type")
-                    if request.cancelled:
-                        if request.answer:
-                            raise ValueError("Cancelled answers must not include answer text")
-                        payloads = [{"type": "user_answer", "cancelled": True}]
-                    elif not request.answer.strip():
-                        raise ValueError("An answer is required")
-                    else:
-                        if question.answer_type == "choice" and request.answer not in question.choices:
-                            raise ValueError("Choose one of the offered answers")
-                        if question.answer_type in {"file", "folder"}:
-                            chosen = Path(request.answer).expanduser()
-                            if not chosen.is_absolute() or not (chosen.is_file() if question.answer_type == "file" else chosen.is_dir()):
-                                raise ValueError("Select an existing absolute file or folder path")
-                        payloads = [{"type": "user_answer", "answer": request.answer}]
-                else:
-                    if pending.kind != "deepagents_interrupt_on":
-                        raise ValueError("interrupt_answer_type")
-                    payloads = validated_decision_payloads(pending, request.decisions)
+                payloads = validated_decision_payloads(pending, request.decisions)
             except ValueError as exc:
                 code = str(exc)
                 if code not in {"interrupt_decision_count", "interrupt_decision_not_allowed"}:
@@ -886,7 +859,7 @@ class HarnessService:
                 ) from exc
             from workbench_backend.state.preferences import PreferenceStore
             grants = PreferenceStore(self.store)
-            for action, decision in zip(pending.action_requests, getattr(request, "decisions", []), strict=True):
+            for action, decision in zip(pending.action_requests, request.decisions, strict=True):
                 if decision.type != "approve":
                     continue
                 if action.name not in run.enabled_tools or action.name not in run.presented_tools:
@@ -952,6 +925,7 @@ class HarnessService:
                 if input_message_id:
                     user_message["id"] = input_message_id
                 payload = {"messages": [user_message],
+                    "skills_metadata": None,
                     "rubric": (run.review.criteria.strip() or run.task) if run.review.enabled else "",
                     **({"structured_response": None} if run.output_schema is not None else {})}
             run_checkpoint_task(self.manager.paths.checkpoints_db,
@@ -1163,11 +1137,12 @@ class HarnessService:
                 run.context_observation = observed
                 require_context_fit(observed)
             model.set_context_guard(guard)
+        native_summarization = compute_summarization_defaults(model) if usable else None
         summarization = BudgetedSummarizationMiddleware(
             model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
             allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
-            trigger=("tokens", max(1, int(usable * 0.75))) if usable else None,
-            keep=("tokens", max(1, int(usable * 0.15))) if usable else ("messages", 6),
+            trigger=native_summarization["trigger"] if native_summarization else None,
+            keep=native_summarization["keep"] if native_summarization else ("messages", 6),
             token_counter=count_context_tokens,
             trim_tokens_to_summarize=None,
             truncate_args_settings=None,
@@ -1181,8 +1156,6 @@ class HarnessService:
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
         tools = [*tools_for_names(run.presented_tools), *(external_tools or [])]
-        if run.project_path:
-            tools.extend(tool for tool in project_mutation_tools(run.project_path) if tool.name in run.presented_tools)
         if "propose_memory" in run.presented_tools and self._knowledge_provider is not None:
             tools.append(memory_proposal_tool(run.id, self._knowledge_provider()))
         if "read_attachment" in run.presented_tools and run.retained_asset_ids:
@@ -1222,11 +1195,7 @@ class HarnessService:
             system_prompt=run.system_prompt,
             middleware=[
                 summarization,
-                KnowledgeRefreshMiddleware(backend, knowledge_plan),
                 *configured_memory_middleware(backend, knowledge_plan),
-                *([StructuredOutputRepairMiddleware(run.structured_output, on_event=lambda kind, detail: run.events.append(
-                    AgentEvent(at=utc_now(), kind=kind, detail=detail)
-                ))] if run.structured_output is not None else []),
                 *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
                 *([review_middleware(run, model, http_sink, execution_control, self._capture_settings,
                     lambda mutation=None: self._publish_control_update(run, mutation))] if run.review.enabled and not is_child else []),
@@ -1235,7 +1204,6 @@ class HarnessService:
                     http_sink,
                     settings_provider=self._capture_settings,
                     fixture_bank=fixture_bank,
-                    file_changes=FileChangeRecorder(run, lambda mutation: self._record_file_change(run, mutation)),
                     execution_control=execution_control,
                 )
             ],
@@ -1879,20 +1847,6 @@ class HarnessService:
             )
         return [self._knowledge_provider().get_version(version_id) for version_id in refs.all_ids()]
 
-    def _knowledge_display_names(self, versions: list[KnowledgeVersion]) -> dict[str, str | None]:
-        names: dict[str, str | None] = {}
-        if self._knowledge_provider is None:
-            return names
-        service = self._knowledge_provider()
-        for version in versions:
-            if version.kind not in {"memory", "skill"} or version.entry_id in names:
-                continue
-            try:
-                names[version.entry_id] = service.get_entry(version.entry_id).display_name
-            except KnowledgeError:
-                names[version.entry_id] = None
-        return names
-
     def _knowledge_plan_for_run(self, run: AgentRun) -> KnowledgeMaterializePlan:
         refs = KnowledgeRefs(
             memory_version_refs=run.memory_version_refs,
@@ -1900,7 +1854,10 @@ class HarnessService:
             protected_instruction_version_refs=run.protected_instruction_version_refs,
         )
         versions = self._load_knowledge_versions(refs)
-        return plan_knowledge_materialization(versions, self._knowledge_display_names(versions), self._knowledge_provider().resource_bytes if self._knowledge_provider else None)
+        return plan_knowledge_materialization(
+            versions,
+            resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
+        )
 
     async def _alink_run(self, run: AgentRun, agent: object) -> None:
         """Record checkpoint ids and related files in application records only."""
@@ -2034,51 +1991,6 @@ class HarnessService:
             seen.add(key)
             unique.append(item)
         run.related_files = unique
-
-    def _record_file_change(self, run: AgentRun, mutation: Callable[[], None]) -> None:
-        with self._lock:
-            mutation()
-            run.updated_at = utc_now()
-            self._persist_and_notify(run)
-
-    def _project_is_active(self, run: AgentRun) -> bool:
-        if not run.project_path:
-            return False
-        root = Path(run.project_path).resolve()
-        for other in self.list_runs():
-            if not other.project_path or Path(other.project_path).resolve() != root:
-                continue
-            worker = self._threads.get(other.id)
-            if is_run_lifecycle_live(other.status) or worker is not None and worker.is_alive():
-                return True
-        return False
-
-    def file_changes(self, run_id: str) -> list[ProjectFileChangeView]:
-        with self._lock:
-            run = self._require_run(run_id)
-            if not run.project_path:
-                return []
-            active = self._project_is_active(run)
-            return [change_view(Path(run.project_path), change, run_active=active) for change in run.file_changes]
-
-    def reverse_file_change(self, run_id: str, change_id: str) -> ProjectFileChangeView:
-        with self._lock:
-            run = self._require_run(run_id)
-            change = next((item for item in run.file_changes if item.id == change_id), None)
-            if change is None or not run.project_path:
-                raise HarnessError("Unknown project file change.", code="file_change_missing", status_code=404)
-            if self._project_is_active(run):
-                raise HarnessError("Wait for work in this project to stop before reversing a file change.", code="file_reversal_active", status_code=409)
-            try:
-                reverse_change(Path(run.project_path), change)
-            except OSError as exc:
-                raise HarnessError(f"The file could not be restored: {exc}", code="file_reversal_failed", status_code=409) from exc
-            change.reversed_at = utc_now()
-            run.events.append(AgentEvent(at=change.reversed_at, kind="file_change_reversed",
-                detail={"change_id": change.id, "path": change.path, "actor": "human"}))
-            run.updated_at = change.reversed_at
-            self._persist_and_notify(run)
-            return change_view(Path(run.project_path), change, run_active=False)
 
     def wait_after(
         self,
@@ -2408,8 +2320,6 @@ def _fallback_interrupt_id(run: AgentRun) -> str:
 
 
 def _resume_value(decisions: list[dict[str, str]]) -> dict[str, Any]:
-    if len(decisions) == 1 and decisions[0].get("type") == "user_answer":
-        return {key: value for key, value in decisions[0].items() if key != "type"}
     return {"decisions": decisions}
 
 

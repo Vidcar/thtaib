@@ -198,7 +198,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
                 json={
                     "deployment_id": self.deployment_id,
                     "task": "Write replay.md",
-                    "approval_mode": "approve_for_me",
+                    "approval_mode": "full_access",
                     "project_path": str(self.project),
                     "presented_tools": ["write_file"],
                     "tool_mode": "recorded-tool",
@@ -232,7 +232,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
                 json={
                     "deployment_id": self.deployment_id,
                     "task": "Write b.md",
-                    "approval_mode": "approve_for_me",
+                    "approval_mode": "full_access",
                     "project_path": str(self.project),
                     "presented_tools": ["write_file"],
                     "tool_mode": "recorded-tool",
@@ -264,7 +264,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Write a.md",
-                "approval_mode": "approve_for_me",
+                "approval_mode": "full_access",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file"],
                 "tool_mode": "recorded-tool",
@@ -335,7 +335,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
                 json={
                     "deployment_id": self.deployment_id,
                     "task": "Write live.md",
-                    "approval_mode": "approve_for_me",
+                    "approval_mode": "full_access",
                     "project_path": str(self.project),
                     "presented_tools": ["write_file"],
                     "tool_mode": "live-tool",
@@ -407,7 +407,7 @@ class RecordedToolLabTests(unittest.TestCase):
                 json={
                     "deployment_id": self.deployment_id,
                     "task": "Write case.md",
-                    "approval_mode": "approve_for_me",
+                    "approval_mode": "full_access",
                     "workspace_id": workspace["id"],
                     "project_path": workspace["path"],
                     "presented_tools": ["write_file"],
@@ -467,7 +467,7 @@ class RecordedToolLabTests(unittest.TestCase):
                     "deployment_id": self.deployment_id,
                     "task": "Write case.md",
                     "workspace_id": workspace["id"],
-                    "approval_mode": "approve_for_me",
+                    "approval_mode": "full_access",
                     "project_path": workspace["path"],
                     "presented_tools": ["write_file"],
                     "tool_mode": "live-tool",

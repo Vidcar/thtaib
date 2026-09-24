@@ -1,0 +1,28 @@
+# Design
+
+## Context
+
+See [proposal.md](proposal.md). The current backend uses Deep Agents 0.7.15 with a custom Knowledge refresh middleware, an extra structured-output repair call, a separate `ask_user` interrupt, custom single-file rename/delete, and file-change images for automatic editing and reversal. Chat also exposes Approve for me, Changes, and Steer. The app owns durable run records, checkpoints, grants, project confinement, and cancellation; those boundaries remain.
+
+## Goals / Non-Goals
+
+**Goals:** Use Deep Agents 0.7.18 and LangChain's native turn/interrupt behavior where it covers the job, reduce execution paths, and leave a clean working local install with the retained model weights.
+
+**Non-Goals:** Preserve existing application chats, project registrations, settings, Knowledge, or compatibility with their old serialized forms. Replace application-owned authorization, project confinement, durable records, or checkpoint identity. Remove project snapshots used for branching/recovery or add a new agent runtime.
+
+## Decisions
+
+1. **Skill state follows Deep Agents.** New user submissions clear `skills_metadata` to `None`, including empty/deselected skill sets. Approval and question resumes leave the checkpoint state untouched. Remove `KnowledgeRefreshMiddleware`; keep only the official memory and skills middleware with Workbench's backend/trust boundary. This uses the 0.7.16 fix without another reload loop. An absent skill is not represented by stale prior metadata.
+2. **Memory is conversation-bound.** A conversation can change its selected memory before the first submitted turn. The first turn freezes exact version refs; branch continuation inherits the source checkpoint's refs. Later explicit changes, including a queued item with a different selection, fail before dispatch with a clear new-chat instruction. Display the pinned versions, including when a newer version exists. No old-conversation migration is needed because the local data is reset.
+3. **Skills are native packages.** Creation and edit accept a `SKILL.md` body with valid frontmatter/name/description and preserve it unchanged; a starter body helps creation. Import validates the same entrypoint and materializes package files at the matching skill path. Collisions are explicit. Keep archive traversal/link/reserved-name checks and never run imported scripts. Do not synthesize a skill from freeform notes.
+4. **Structured output has one execution and summarization uses native defaults.** Continue choosing the native or tool strategy from actual setup capability and validating the final JSON Schema result. Remove Workbench's extra formatting-repair middleware/attempt field. A failed validation is a failed run with inspectable reason. Deep Agents keeps its model-aware summarization trigger and retention defaults; remove Workbench's separate early threshold. Retain only the narrow input-capacity override because the upstream middleware subtracts output capacity from a profile that already represents usable input.
+5. **One ordered HITL batch.** Present typed `ask_user` as a selected tool and a native human-in-the-loop `respond` action. Persist one pending batch in framework order for both questions and protected tools. Validate answer type and authorized path, grant scope, run/thread/checkpoint/interrupt identity, and decision count before issuing the single resume. Reject stale or duplicate decisions. Stop/restart reconciles the same batch and does not resend user text or effects.
+6. **Two access modes, native file tools.** Ask pauses every shell call and effectful tool unless a saved matching grant applies. Full skips approval only for selected, enabled tools; typed questions and durable memory policy remain separate. Keep native read/write/edit/list/search and exclude recursive `delete` and general-purpose `task` in ordinary Chat. Remove custom rename/delete, the dead read-only command parser, placeholder permission rules, per-edit capture/reverse and associated presentation. Keep actual `/skills/**` write restriction, path confinement, project snapshots, and durable outcome recording. Stop cancels; queue dispatches only after success or explicit continuation, without Steer.
+7. **Clean deployment rather than migration.** Validate in isolated data roots first. Stop application-owned processes, resolve and verify each deletion target and link, and remove the authorized product records and six approved linked project folders. Recheck the list and ask if a new target appears. Keep model bundles, Hugging Face staging/cache, and runtimes. Register the retained Qwen3.8 bundle with fresh settings, then perform a real Chat/tool and desktop approval smoke. Rollback uses code checkout and a fresh configuration; deleted user-designated data is not restored or silently migrated.
+
+## Risks / Trade-offs
+
+- **Prior conversation memory changes are no longer visible in-place** → show the pinned version and direct the person to a new chat; enforce this before queued dispatch and on branch continuation.
+- **No structured-output repair turn** → a format failure is visible, with zero post-failure tool re-execution; supported schema strategies remain available.
+- **No one-click rename/delete or reverse** → files remain editable through native tools and project snapshots remain distinct from an undo promise. Explicit shell operations still require Ask approval or Full access.
+- **Data reset is irreversible for disposable records and selected folders** → verify absolute targets and links immediately before removal; do not include model weights, staging/cache, runtimes, or unrelated source folders.

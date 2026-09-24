@@ -57,17 +57,16 @@ class ChatAccessTests(unittest.TestCase):
             time.sleep(0.02)
         self.fail("Chat did not reach a decision or finish")
 
-    def test_switching_away_from_full_access_uses_resolved_ask_and_blocks_rename(self):
-        full = self.setup(approval_mode="full_access", presented_tools=["rename_file"])
-        ordinary = self.setup(presented_tools=["rename_file"])
+    def test_switching_away_from_full_access_uses_resolved_ask_and_blocks_edit(self):
+        full = self.setup(approval_mode="full_access", presented_tools=["edit_file"])
+        ordinary = self.setup(presented_tools=["edit_file"])
         for replacement in (ordinary["current_version_id"], None):
             with self.subTest(replacement=replacement):
                 source = self.project / f"source-{replacement or 'none'}.txt"
-                destination = source.with_name(f"renamed-{source.name}")
                 source.write_text("keep until approved", encoding="utf-8")
                 self.script = [AIMessage(content="", tool_calls=[{
-                    "name": "rename_file", "id": "rename-test",
-                    "args": {"file_path": source.name, "destination": destination.name},
+                    "name": "edit_file", "id": "edit-test",
+                    "args": {"file_path": source.name, "old_string": "keep until approved", "new_string": "edited"},
                 }]), AIMessage(content="done")]
                 chat = self.post("/v1/chat/conversations", {
                     "project_path": str(self.project), "agent_setup_version_id": full["current_version_id"],
@@ -78,12 +77,11 @@ class ChatAccessTests(unittest.TestCase):
                 })
                 self.assertIsNone(resolved["configuration"]["approval_mode"])
                 self.post(f"/v1/chat/conversations/{chat['id']}/start", {
-                    "task": "Rename this file.", "agent_setup_version_id": replacement,
-                    "deployment_id": self.deployment.id, "presented_tools": ["rename_file"],
+                    "task": "Edit this file.", "agent_setup_version_id": replacement,
+                    "deployment_id": self.deployment.id, "presented_tools": ["edit_file"],
                 })
                 settled = self.settled(chat["id"])
-                self.assertTrue(source.exists(), "A rename ran while the resolved setup showed Ask")
-                self.assertFalse(destination.exists())
+                self.assertEqual(source.read_text(encoding="utf-8"), "keep until approved")
                 self.assertEqual(settled["approval_mode"], "ask")
                 self.assertEqual(settled["current_run"]["approval_mode"], "ask")
                 self.assertIsNotNone(settled["current_run"]["pending_interrupt"])
@@ -112,12 +110,12 @@ class ChatAccessTests(unittest.TestCase):
         source = self.project / "queued.txt"
         source.write_text("queued original", encoding="utf-8")
         self.script = [AIMessage(content="", tool_calls=[{
-            "name": "rename_file", "id": "queued-rename",
-            "args": {"file_path": "queued.txt", "destination": "renamed.txt"},
+            "name": "edit_file", "id": "queued-edit",
+            "args": {"file_path": "queued.txt", "old_string": "queued original", "new_string": "edited"},
         }]), AIMessage(content="done")]
         chat = self.post("/v1/chat/conversations", {
             "project_path": str(self.project), "deployment_id": self.deployment.id,
-            "presented_tools": ["rename_file"],
+            "presented_tools": ["edit_file"],
         })
         queued = self.post(f"/v1/chat/conversations/{chat['id']}/queue", {"task": "Rename it later."})
         self.assertEqual(queued["queue"][0]["intended_config"]["approval_mode"], "ask")
@@ -129,8 +127,7 @@ class ChatAccessTests(unittest.TestCase):
         paused = self.settled(chat["id"])
         self.assertEqual(paused["current_run"]["approval_mode"], "ask")
         self.assertIsNotNone(paused["current_run"]["pending_interrupt"])
-        self.assertTrue(source.exists())
-        self.assertFalse((self.project / "renamed.txt").exists())
+        self.assertEqual(source.read_text(encoding="utf-8"), "queued original")
         self.post(f"/v1/chat/conversations/{chat['id']}/cancel", {})
         wait_for_chat(self.client, chat["id"])
 
@@ -145,14 +142,15 @@ class ChatAccessTests(unittest.TestCase):
         })
         self.post(f"/v1/chat/conversations/{chat['id']}/start", {"task": "Ask for format."})
         paused = self.settled(chat["id"])
-        self.assertEqual(paused["current_run"]["pending_interrupt"]["kind"], "ask_user")
+        self.assertEqual(paused["current_run"]["pending_interrupt"]["kind"], "deepagents_interrupt_on")
+        self.assertEqual(paused["current_run"]["pending_interrupt"]["action_requests"][0]["name"], "ask_user")
         self.post(f"/v1/chat/conversations/{chat['id']}/cancel", {})
         wait_for_chat(self.client, chat["id"])
 
         source = self.project / "disabled.txt"
         source.write_text("keep", encoding="utf-8")
         self.script = [AIMessage(content="", tool_calls=[{
-            "name": "delete_file", "id": "disabled-delete", "args": {"file_path": "disabled.txt"},
+            "name": "write_file", "id": "disabled-write", "args": {"file_path": "disabled.txt", "content": "changed"},
         }]), AIMessage(content="done")]
         tools_off = self.post("/v1/chat/conversations", {
             "deployment_id": self.deployment.id, "project_path": str(self.project),
@@ -164,7 +162,7 @@ class ChatAccessTests(unittest.TestCase):
         self.assertTrue(source.exists())
 
     def test_shell_access_and_model_instructions_follow_the_same_turn_mode(self):
-        for mode, label in (("ask", "Ask"), ("approve_for_me", "Approve for me"), ("full_access", "Full access")):
+        for mode, label in (("ask", "Ask"), ("full_access", "Full access")):
             with self.subTest(mode=mode):
                 reset_received_prompts()
                 filename = f"shell-{mode}.txt"

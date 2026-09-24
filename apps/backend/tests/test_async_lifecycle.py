@@ -20,7 +20,7 @@ from tests.scripted_model import ScriptedChatModel
 from tests.support import wait_for_run
 from tests import test_harness as harness_tests
 from tests.scripted_model import RECEIVED_PROMPTS, reset_received_prompts
-from workbench_backend.agents.schemas import UserAnswerRequest
+from workbench_backend.agents.schemas import InterruptDecisionRequest
 from workbench_backend.inference.telemetry import LatestGenerationPublisher
 from workbench_backend.state.checkpointer import (
     close_sqlite_checkpointer, open_sqlite_checkpointer, run_checkpoint_task,
@@ -100,8 +100,9 @@ class AsyncLifecycleTests(unittest.TestCase):
             pending = self._wait_for_pending_interrupt(run['id'])['pending_interrupt']
             self.assertTrue(entered.is_set())
             self.assertFalse(exited.is_set())
-            harness.resume_interrupt(run['id'], UserAnswerRequest(answer='approved value',
-                interrupt_id=pending['interrupt_id'], namespace=pending['namespace']), require_interrupt_identity=True)
+            harness.resume_interrupt(run['id'], InterruptDecisionRequest(
+                interrupt_id=pending['interrupt_id'], namespace=pending['namespace'],
+                decisions=[{'type': 'respond', 'message': 'approved value'}]), require_interrupt_identity=True)
             final = wait_for_run(self.client, run['id'])
             self.assertEqual(final['status'], 'completed', final.get('error'))
             self.assertTrue(exited.wait(5))

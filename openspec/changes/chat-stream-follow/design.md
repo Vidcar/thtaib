@@ -26,7 +26,7 @@ Opening a chat paints one saved transcript and continues after `interaction_curs
 - A new stream protocol, a second message assembler, or a replacement for `useStream`.
 - Typing animation, syntax-highlighting, or diagram rendering.
 - Changing execution, permission semantics, checkpoints, or the interaction protocol.
-- Virtualizing the Monaco diff or the file tree.
+- Virtualizing the Monaco file editor or the file tree.
 
 ## Decisions
 

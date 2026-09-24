@@ -22,8 +22,6 @@ from workbench_backend.agents.memory_skills import (
     SKILL_NAME_COLLISION,
     official_agent_kwargs,
     plan_knowledge_materialization,
-    skill_slug_from_entry_id,
-    wrap_skill_markdown,
 )
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
 from workbench_backend.agents.tools import resolve_presented_tools
@@ -38,7 +36,7 @@ from tests.support import close_workbench_sqlite, workbench_client, offline_work
 
 HUMAN = {"actor": "human", "note": "memory-skills"}
 MEMORY_TOKEN = "MEM-TOKEN-MS-UNIQUE"
-SKILL_BODY = "Use the review checklist before answering."
+SKILL_BODY = "---\nname: review-checklist\ndescription: Use the review checklist before answering.\n---\n\nUse the review checklist before answering.\n"
 
 
 def wait_for_run(client: TestClient, run_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
@@ -89,33 +87,20 @@ def _run(*, skill_refs: list[str] | None = None, memory_refs: list[str] | None =
 
 
 class MemorySkillsGlueTests(unittest.TestCase):
-    def test_hyphenates_entry_id_and_wraps_frontmatter(self) -> None:
-        self.assertEqual(skill_slug_from_entry_id("kn_abc123"), "kn-abc123")
-        wrapped = wrap_skill_markdown("kn-abc123", SKILL_BODY, "Review skill")
-        self.assertTrue(wrapped.startswith("---\n"))
-        self.assertIn("name: kn-abc123", wrapped)
-        self.assertIn("description: Review skill", wrapped)
-        self.assertIn(SKILL_BODY, wrapped)
-        self.assertGreater(wrapped.index("---", 4), wrapped.index("name: kn-abc123"))
-
-    def test_existing_frontmatter_keeps_extra_and_forces_name(self) -> None:
-        body = "---\nname: wrong-name\ndescription: Already described\nlicense: MIT\n---\n\nBody stays.\n"
-        wrapped = wrap_skill_markdown("kn-forced", body, "Ignored display")
-        self.assertIn("name: kn-forced", wrapped)
-        self.assertNotIn("name: wrong-name", wrapped)
-        self.assertIn("description: Already described", wrapped)
-        self.assertIn("license: MIT", wrapped)
-        self.assertIn("Body stays.", wrapped)
+    def test_materializes_native_skill_verbatim_under_frontmatter_name(self) -> None:
+        markdown = "---\nname: native-skill\ndescription: Already described\nlicense: MIT\n---\n\nBody stays.\n"
+        planned = plan_knowledge_materialization([_version(kind="skill", content=markdown, entry_id="kn_abc123")])
+        self.assertEqual(planned.uploads, [("/skills/native-skill/SKILL.md", markdown.encode("utf-8"))])
 
     def test_invalid_slug_and_collision_fail_closed(self) -> None:
         with self.assertRaises(HarnessError) as invalid:
-            skill_slug_from_entry_id("???")
+            plan_knowledge_materialization([_version(kind="skill", content="no frontmatter", entry_id="kn_bad")])
         self.assertEqual(invalid.exception.code, SKILL_MATERIALIZE_INVALID)
         with self.assertRaises(HarnessError) as collision:
             plan_knowledge_materialization(
                 [
-                    _version(kind="skill", content="one", entry_id="kn_ab", version_id="knv_1"),
-                    _version(kind="skill", content="two", entry_id="kn-ab", version_id="knv_2"),
+                    _version(kind="skill", content=SKILL_BODY, entry_id="kn_ab", version_id="knv_1"),
+                    _version(kind="skill", content=SKILL_BODY, entry_id="kn-other", version_id="knv_2"),
                 ]
             )
         self.assertEqual(collision.exception.code, SKILL_NAME_COLLISION)
@@ -131,7 +116,6 @@ class MemorySkillsGlueTests(unittest.TestCase):
         self.assertNotIn("skills", official_agent_kwargs(memory_only))
         skill_only = plan_knowledge_materialization(
             [_version(kind="skill", content=SKILL_BODY, entry_id="kn_skill", version_id="knv_skill")],
-            {"kn_skill": "Review"},
         )
         kwargs = official_agent_kwargs(skill_only)
         self.assertEqual(kwargs, {"skills": ["/skills/"]})
@@ -285,22 +269,22 @@ class MemorySkillsHarnessTests(unittest.TestCase):
         self.assertNotIn(SKILL_BODY, outbound)
 
     def test_skill_name_collision_fails_closed_before_run(self) -> None:
-        first = self._knowledge("skill", "one")
-        second = self._knowledge("skill", "two")
-        # Force a collision by planning two hyphen-equivalent ids.
+        first = self._knowledge("skill", SKILL_BODY)
+        second = self._knowledge("skill", SKILL_BODY)
+        # Two independently stored skills with the same native name cannot be selected together.
         with self.assertRaises(HarnessError) as raised:
             plan_knowledge_materialization(
                 [
                     _version(
                         kind="skill",
-                        content="one",
+                        content=SKILL_BODY,
                         entry_id=first["id"],
                         version_id=first["current_version_id"],
                     ),
                     _version(
                         kind="skill",
-                        content="two",
-                        entry_id=first["id"].replace("_", "-"),
+                        content=SKILL_BODY,
+                        entry_id=second["id"],
                         version_id=second["current_version_id"],
                     ),
                 ]

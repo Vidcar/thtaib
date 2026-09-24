@@ -36,6 +36,8 @@ export function ConversationSetup(props: {
   deployments: Deployment[];
   knowledgeEntries: KnowledgeEntry[];
   selectedKnowledgeIds: string[];
+  memoryLocked: boolean;
+  pinnedMemoryVersionIds: string[];
   onToggleKnowledge: (versionId: string) => void;
   tools: string[];
   filesystemToolsAvailable: boolean | undefined;
@@ -56,7 +58,7 @@ export function ConversationSetup(props: {
       {props.selectedProfile ? <SettingsNotes unsupported={props.selectedProfile.bags.startup.unsupported} retired={props.selectedProfile.bags.startup.retired} /> : null}
       {props.selectedProfile?.bags.agent.unsupported.length ? <Notice tone="warn">Unsupported agent settings: {props.selectedProfile.bags.agent.unsupported.join(", ")}. These saved values do not govern execution.</Notice> : null}
       <details>
-        <summary>Knowledge <HoverHelp title="About conversation knowledge">Choose memories and instructions for this chat. Document search needs a running embedding model.</HoverHelp></summary>
+        <summary>Knowledge <HoverHelp title="About conversation knowledge">Choose skills and instructions for the next turn. Memory is fixed after the first turn; start a new chat to use changed memories. Document search needs a running embedding model.</HoverHelp></summary>
         <label>
           Document search model
           <select value={props.embeddingDeploymentId} disabled={props.selectionBusy || props.sending} onChange={event => props.onEmbedding(event.target.value)}>
@@ -67,12 +69,16 @@ export function ConversationSetup(props: {
         </label>
         <fieldset className="choice-set">
           <legend>Knowledge versions</legend>
+          {props.memoryLocked ? <p className="hint">Memory is fixed for this conversation. Start a new chat to use another memory or a newer version.</p> : null}
           {props.knowledgeEntries.length === 0 ? <p className="hint">None yet. Create them on Knowledge.</p> : props.knowledgeEntries.map(entry => (
             <label key={entry.id} className="check-row">
-              <input type="checkbox" checked={props.selectedKnowledgeIds.includes(entry.current_version_id)} onChange={() => props.onToggleKnowledge(entry.current_version_id)} />
+              <input type="checkbox" checked={entry.kind === "memory" && props.memoryLocked ? props.pinnedMemoryVersionIds.includes(entry.current_version_id) : props.selectedKnowledgeIds.includes(entry.current_version_id)} disabled={entry.kind === "memory" && props.memoryLocked} onChange={() => props.onToggleKnowledge(entry.current_version_id)} />
               {knowledgeKindLabel(entry.kind)} · {entry.display_name ?? shortId(entry.id)}
             </label>
           ))}
+          {props.memoryLocked ? props.pinnedMemoryVersionIds.filter(versionId => !props.knowledgeEntries.some(entry => entry.kind === "memory" && entry.current_version_id === versionId)).map(versionId => (
+            <p key={versionId} className="hint">Pinned earlier memory version · {shortId(versionId)}</p>
+          )) : null}
         </fieldset>
       </details>
       {props.conversation && props.tools.length > 0 ? <details><summary>{props.tools.length} {props.tools.length === 1 ? "tool available" : "tools available"}</summary><ul className="plain-list">{props.tools.map(id => { const tool = toolDetails.find(item => item.id === id); return <li key={id}>{tool?.name ?? id}<HoverHelp title={tool?.name ?? id}>{tool?.description ?? "Tool details unavailable"}</HoverHelp></li>; })}</ul></details> : <p className="hint">{props.conversation ? "No tools available." : "Available tools depend on the project you choose."}</p>}

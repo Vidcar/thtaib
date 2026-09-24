@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest, UserAnswerRequest
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.app import create_app
@@ -137,7 +137,7 @@ class ChatHarnessTests(unittest.TestCase):
             "project_path": str(self.project),
             # This fixture exercises automatic project edits; Ask is covered by
             # the explicit approval journey and dedicated permission tests.
-            "approval_mode": "approve_for_me",
+            "approval_mode": "full_access",
             **extra,
         }
         response = self.client.post("/v1/chat/conversations", json=payload)
@@ -159,10 +159,10 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(started["current_run"]["approval_mode"], "full_access")
         queued = self.client.post(
             f"/v1/chat/conversations/{created['id']}/queue",
-            json={"task": "Next turn.", "approval_mode": "approve_for_me"},
+            json={"task": "Next turn.", "approval_mode": "ask"},
         )
         self.assertEqual(queued.status_code, 200, queued.text)
-        self.assertEqual(queued.json()["queue"][0]["intended_config"]["approval_mode"], "approve_for_me")
+        self.assertEqual(queued.json()["queue"][0]["intended_config"]["approval_mode"], "ask")
 
     def test_listing_skips_conversation_deleted_after_list_snapshot(self) -> None:
         removed = self._create(title='Deleted during refresh')
@@ -1999,7 +1999,8 @@ class ChatHarnessTests(unittest.TestCase):
         paused = wait_for_chat_interrupt(self.client, conversation["id"])
         first_run_id = paused["current_run_id"]
         pending = paused["current_run"]["pending_interrupt"]
-        self.assertEqual(pending["kind"], "ask_user")
+        self.assertEqual(pending["kind"], "deepagents_interrupt_on")
+        self.assertEqual(pending["action_requests"][0]["name"], "ask_user")
         queued = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/queue",
             json={"task": "Run only after typed answer succeeds.", "input_message_id": "queued-after-answer"},
@@ -2009,15 +2010,12 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(queued.json()["run_ids"], [first_run_id])
         self.assertEqual(len(self.app.state.harness.list_runs()), 1)
 
-        self.app.state.harness.resume_interrupt(
-            first_run_id,
-            UserAnswerRequest(
-                answer="Markdown",
-                interrupt_id=pending["interrupt_id"],
-                namespace=pending.get("namespace", []),
-            ),
-            require_interrupt_identity=True,
+        answered = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/interrupt-decision",
+            json={"interrupt_id": pending["interrupt_id"], "namespace": pending.get("namespace", []),
+                  "decisions": [{"type": "respond", "message": "Markdown"}]},
         )
+        self.assertEqual(answered.status_code, 200, answered.text)
         terminal = wait_for_run(self.client, first_run_id)
         self.assertEqual(terminal["status"], "completed", terminal.get("error"))
         self.app.state.chat.observe_terminal_run(AgentRun.model_validate(terminal))
@@ -2722,12 +2720,12 @@ class ChatHarnessTests(unittest.TestCase):
         remaining = self.client.get("/v1/desktop/attention").json()
         self.assertFalse(any(item["run_id"] == failed.id or item["conversation_id"] == removable["id"] for item in remaining))
 
-    def test_steer_stops_the_live_turn_and_sends_the_queued_message(self) -> None:
+    def test_stop_pauses_queue_until_explicit_resume(self) -> None:
         hold = threading.Event()
         set_generate_hold(hold)
         self.addCleanup(set_generate_hold, None)
         self.addCleanup(hold.set)
-        scripted = ScriptedChatModel([AIMessage(content="held first"), AIMessage(content="steered reply")])
+        scripted = ScriptedChatModel([AIMessage(content="held first"), AIMessage(content="queued reply")])
 
         def factory(_run: AgentRun, _sink: list[dict[str, Any]]) -> ScriptedChatModel:
             return scripted
@@ -2744,23 +2742,28 @@ class ChatHarnessTests(unittest.TestCase):
         wait_for_generate_hold()
         queued = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/queue",
-            json={"task": "Steer toward the fix.", "deployment_id": self.deployment_id},
+            json={"task": "Continue after stop.", "deployment_id": self.deployment_id},
         )
         self.assertEqual(queued.status_code, 200, queued.text)
         item_id = queued.json()["queue"][0]["id"]
-        steered = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/{item_id}/steer")
-        self.assertEqual(steered.status_code, 200, steered.text)
-        self.assertEqual(steered.json()["queue"][0]["id"], item_id)
-        self.assertEqual(steered.json()["queue"][0]["task"], "Steer toward the fix.")
-        self.assertEqual(steered.json()["current_run"]["status"], "cancel_requested")
+        stopped = self.client.post(f"/v1/chat/conversations/{conversation['id']}/cancel", json={})
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(stopped.json()["current_run"]["status"], "cancel_requested")
         hold.set()
-        wait_for_run(self.client, first["current_run"]["id"])
+        self.assertEqual(wait_for_run(self.client, first["current_run"]["id"])["status"], "cancelled")
         terminal = self.app.state.app_store.get_run(first["current_run"]["id"])
         assert terminal is not None
         self.app.state.chat.observe_terminal_run(terminal)
-        followed = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
-        self.assertNotEqual(followed["current_run_id"], first["current_run"]["id"])
-        self.assertTrue(any(item.get("content") == "Steer toward the fix." or item.get("task") == "Steer toward the fix." for item in followed["transcript"] + followed["queue"]))
+        paused = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(paused["queue"][0]["id"], item_id)
+        self.assertEqual(paused["queue"][0]["status"], "paused")
+        self.assertEqual(paused["run_ids"], [first["current_run"]["id"]])
+        resumed = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/resume", json={"resume_paused": True})
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        self.assertNotEqual(resumed.json()["current_run_id"], first["current_run"]["id"])
+        followed = wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(followed["current_run"]["status"], "completed")
+        self.assertTrue(any(item.get("content") == "Continue after stop." for item in followed["transcript"]))
 
 
 class HarnessProjectFilesystemTests(unittest.TestCase):
@@ -2797,7 +2800,7 @@ class HarnessProjectFilesystemTests(unittest.TestCase):
             json={
                 "deployment_id": self.deployment_id,
                 "task": "Write direct.md",
-                "approval_mode": "approve_for_me",
+                "approval_mode": "full_access",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file"],
             },

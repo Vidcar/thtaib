@@ -1,17 +1,8 @@
-/** One-line Chat activity derived from a tool call and its observed file change. */
+/** One-line Chat activity derived from a tool call. */
 
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
-}
-
-export interface ObservedFileChange {
-  id: string;
-  toolCallId: string;
-  path: string;
-  destination?: string | null;
-  addedLines?: number | null;
-  removedLines?: number | null;
 }
 
 export interface ActivityGroup<T> { label: string | null; items: T[]; }
@@ -26,7 +17,7 @@ export function groupActivity<T>(items: T[], describe: (item: T) => { label: str
     if (verb && last?.verb === verb) last.items.push(item);
     else groups.push({ label: null, items: [item], verb });
   }
-  return groups.map(({ items: grouped, verb }) => ({ items: grouped, label: grouped.length < 2 ? null : `${verb} ${grouped.length} ${verb === "Read" ? "files" : verb === "Edited" || verb === "Created" || verb === "Deleted" || verb === "Renamed" ? "changes" : "items"}` }));
+  return groups.map(({ items: grouped, verb }) => ({ items: grouped, label: grouped.length < 2 ? null : `${verb} ${grouped.length} ${verb === "Read" ? "files" : verb === "Edited" || verb === "Created" ? "files" : "items"}` }));
 }
 
 const TODO_STATUSES = new Set(["pending", "in_progress", "completed"]);
@@ -52,26 +43,17 @@ export function activityLine(input: {
   args: unknown;
   finished: boolean;
   failed: boolean;
-  change?: ObservedFileChange | null;
 }): string {
   const path = stringField(input.args, "file_path") || stringField(input.args, "path");
   const done = input.finished;
   const file = path ? displayPath(path) : "";
-  const counts = done && !input.failed ? lineCounts(input.change) : "";
   switch (input.name) {
     case "read_file":
       return joinLabel(done ? "Read" : "Reading", file, lineRange(input.args));
     case "write_file":
-      return joinLabel(done ? "Created" : "Creating", file, counts);
+      return joinLabel(done ? "Created" : "Creating", file);
     case "edit_file":
-      return joinLabel(done ? "Edited" : "Editing", file, counts);
-    case "delete_file":
-      return joinLabel(done ? "Deleted" : "Deleting", file);
-    case "rename_file": {
-      const destination = stringField(input.args, "destination");
-      const pair = file && destination ? `${file} → ${displayPath(destination)}` : file || displayPath(destination);
-      return joinLabel(done ? "Renamed" : "Renaming", pair);
-    }
+      return joinLabel(done ? "Edited" : "Editing", file);
     case "ls":
       return joinLabel(done ? "Listed" : "Listing", file);
     case "glob":
@@ -85,12 +67,6 @@ export function activityLine(input: {
     default:
       return joinLabel(done ? "Called" : "Calling", input.name === "Tool" ? "" : input.name);
   }
-}
-
-export function lineCounts(change: ObservedFileChange | null | undefined): string {
-  if (!change || change.addedLines == null || change.removedLines == null) return "";
-  if (change.addedLines === 0 && change.removedLines === 0) return "";
-  return `+${change.addedLines} -${change.removedLines}`;
 }
 
 function joinLabel(verb: string, detail: string, extra = ""): string {

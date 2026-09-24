@@ -13,7 +13,6 @@ from workbench_backend.agents.schemas import (
     InterruptDecisionRequest,
     PendingInterrupt,
     PendingInterruptAction,
-    UserAnswerRequest,
     UserQuestion,
 )
 from workbench_backend.chat.schemas import ChatConversation
@@ -59,8 +58,10 @@ class InteractionAuthorityBoundaryTests(unittest.TestCase):
         pending = PendingInterrupt(
             interrupt_id=interrupt_id,
             namespace=[],
-            kind='ask_user',
-            question=UserQuestion(prompt='Current question?', answer_type='text'),
+            environment='user_input',
+            action_requests=[PendingInterruptAction(name='ask_user', args={'prompt': 'Current question?', 'answer_type': 'text'},
+                                                    question=UserQuestion(prompt='Current question?', answer_type='text'),
+                                                    allowed_decisions=['respond', 'reject'])],
         )
         if kind == 'approval':
             pending = PendingInterrupt(
@@ -124,7 +125,7 @@ class InteractionAuthorityBoundaryTests(unittest.TestCase):
                         'params': {
                             'namespace': [],
                             'interrupt_id': 'sdk-old',
-                            'response': {'answer': 'answer intended for the old projection'},
+                            'response': {'decisions': [{'type': 'respond', 'message': 'answer intended for the old projection'}]},
                         },
                     },
                 )
@@ -145,34 +146,35 @@ class InteractionAuthorityBoundaryTests(unittest.TestCase):
                     'params': {
                         'namespace': [],
                         'interrupt_id': 'durable-current',
-                        'response': {'answer': 'current answer'},
+                        'response': {'decisions': [{'type': 'respond', 'message': 'current answer'}]},
                     },
                 },
             )
             self.assertEqual(result['run_id'], run.id)
             self.assertEqual(len(harness.resume_calls), 1)
             _run_id, request, kwargs = harness.resume_calls[0]
-            self.assertIsInstance(request, UserAnswerRequest)
+            self.assertIsInstance(request, InterruptDecisionRequest)
             self.assertEqual(request.interrupt_id, 'durable-current')
             self.assertEqual(request.namespace, [])
+            self.assertEqual(request.decisions[0].type, 'respond')
+            self.assertEqual(request.decisions[0].message, 'current answer')
             self.assertTrue(kwargs['require_interrupt_identity'])
         finally:
             store.close()
             temp_root.cleanup()
 
-    def test_sdk_cancelled_question_is_typed_without_answer_text(self) -> None:
+    def test_sdk_question_cancellation_is_native_reject_decision(self) -> None:
         run = self._run()
         service, harness, store, temp_root = self._service_for(run, projected_id='durable-current')
         try:
             service.command('thread-authority', {
                 'id': 'cancel-question', 'method': 'input.respond',
                 'params': {'namespace': [], 'interrupt_id': 'durable-current',
-                           'response': {'cancelled': True}},
+                           'response': {'decisions': [{'type': 'reject'}]}},
             })
             request = harness.resume_calls[0][1]
-            self.assertIsInstance(request, UserAnswerRequest)
-            self.assertTrue(request.cancelled)
-            self.assertEqual(request.answer, '')
+            self.assertIsInstance(request, InterruptDecisionRequest)
+            self.assertEqual(request.decisions[0].type, 'reject')
         finally:
             store.close()
             temp_root.cleanup()
@@ -212,7 +214,7 @@ class InteractionAuthorityBoundaryTests(unittest.TestCase):
                 with self.assertRaises(HarnessError) as raised:
                     harness.resume_interrupt(
                         run.id,
-                        UserAnswerRequest(answer='old answer', interrupt_id='sdk-question-old'),
+                        InterruptDecisionRequest(interrupt_id='sdk-question-old', decisions=[{'type': 'respond', 'message': 'old answer'}]),
                         require_interrupt_identity=True,
                     )
                 self.assertEqual(raised.exception.code, 'stale_interrupt')

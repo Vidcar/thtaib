@@ -18,7 +18,7 @@ Chat falls behind the model while a reply is still being written. Each token red
 
 ### Modified Capabilities
 
-- `backend-desktop`: API-018 and API-026. Live answers, reasoning, and tool bodies stay fully readable and follow the newest line without a character cap. Speed updates stay off the text path. Motion preferences and the existing answer actions stay.
+- `backend-desktop`: API-018 and API-026. Live answers, reasoning, and native tool bodies stay fully readable and follow the newest line without a character cap. Speed updates stay off the text path. Motion preferences and the existing answer actions stay. The later [Deep Agents simplification](../archive/2026-09-24-upgrade-deepagents-simplify-workbench/proposal.md) retired per-edit difference counts; this delta follows the current activity contract.
 
 ## Impact
 

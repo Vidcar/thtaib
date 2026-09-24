@@ -3,6 +3,11 @@
 .chat-dock-pages button[aria-pressed="true"] {background: var(--bg-raised);}
 .chat-dock-body {min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-compact);}
 .chat-dock-editor {min-height: 220px; height: 280px; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); overflow: hidden;}
+.plain-file-content {white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--layout-menu); overflow: auto; padding: var(--pad-compact); font-size: var(--text-small); line-height: var(--leading-body); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); margin: 0;}
+.memory-proposals {display: grid; gap: var(--space-compact); min-width: 0; padding: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border);}
+.memory-proposals-heading {display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-compact);}
+.memory-proposals-heading :is(h4,strong) {margin: 0; overflow-wrap: anywhere;}
+.memory-proposal-detail {display: grid; gap: var(--space-compact); min-width: 0;}
 .project-file-tree {min-height: 180px; height: 240px;}
 .activity-line {background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left;}
 button.activity-line {cursor: pointer; text-decoration: underline; text-underline-offset: 2px;}

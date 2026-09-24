@@ -44,10 +44,8 @@ def matched_permission_snapshot(grant: PermissionGrant, run) -> MatchedPermissio
     if grant.action == "execute":
         command = args.get("command")
         label = "Run " + compact(command) if isinstance(command, str) and command else "Run command"
-    elif grant.action == "rename_file" and isinstance(path, str) and isinstance(args.get("destination"), str):
-        label = f"Rename {compact(path)} → {compact(args['destination'])}"
-    elif grant.action in {"write_file", "edit_file", "delete_file"}:
-        verb = {"write_file": "Write", "edit_file": "Edit", "delete_file": "Delete"}[grant.action]
+    elif grant.action in {"write_file", "edit_file"}:
+        verb = {"write_file": "Write", "edit_file": "Edit"}[grant.action]
         label = f"{verb} {compact(path)}" if isinstance(path, str) and path else f"{verb} file"
     else:
         label = grant.action

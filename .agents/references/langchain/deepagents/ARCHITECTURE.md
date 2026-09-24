@@ -2,7 +2,7 @@
 
 This document explains how a deep agent is put together and where to look when you want to understand or change a behavior. It is primarily for new maintainers and contributors, but it should also be useful to readers who want a practical map of the system without reading the whole implementation first.
 
-For setup and day-to-day commands, see [`DEVELOPMENT.md`](https://github.com/langchain-ai/deepagents/blob/0f5a2b57fa5dbb3a7d8f16dc280cb5b1506ea8c0/libs/DEVELOPMENT.md). For supported user-facing configuration, see the [Deep Agents docs](https://docs.langchain.com/oss/python/deepagents/overview) and the [`create_deep_agent()` API reference](https://reference.langchain.com/python/deepagents/graph/create_deep_agent).
+For setup and day-to-day commands, see [`DEVELOPMENT.md`](https://github.com/langchain-ai/deepagents/blob/c17201847dd65390662a763ddd93ed84bbb8931c/libs/DEVELOPMENT.md). For supported user-facing configuration, see the [Deep Agents docs](https://docs.langchain.com/oss/python/deepagents/overview) and the [`create_deep_agent()` API reference](https://reference.langchain.com/python/deepagents/graph/create_deep_agent).
 
 - [The three layers](#the-three-layers) explains what Deep Agents adds on top of LangChain and LangGraph.
 - [Construction and execution](#construction-and-execution) follows what happens before and during a run.

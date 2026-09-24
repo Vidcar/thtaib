@@ -13,7 +13,7 @@ import httpx
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from deepagents.middleware.summarization import SummarizationMiddleware
+from deepagents.middleware.summarization import SummarizationMiddleware, compute_summarization_defaults
 
 from workbench_backend.agents.context import (
     BudgetedSummarizationMiddleware,
@@ -75,7 +75,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         close_workbench_sqlite(self.app, self.client)
         self.tmp.cleanup()
 
-    def _set_context(self, *, n_ctx: int, vision: bool) -> None:
+    def _set_context(self, *, n_ctx: int | None, vision: bool) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
         props = ServerProperties(
             fetched=utc_now(),
@@ -392,7 +392,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
 
             started = self._start(
                 thread_id=thread_id,
-                task="Now preserve the important details from this later material. " + ("recent detail " * 1100),
+                task="Now preserve the important details from this later material. " + ("recent detail " * 1400),
                 presented_tools=[],
             )
             self.assertEqual(started.status_code, 200, started.text)
@@ -401,6 +401,12 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertEqual(completed["status"], "completed", completed.get("error"))
         self.assertEqual(completed["presented_tools"], [])
         self.assertEqual(middleware_factory.call_count, previous_middleware_count + 1)
+        configured = middleware_factory.call_args.kwargs
+        native_defaults = compute_summarization_defaults(configured["model"])
+        self.assertEqual(native_defaults["trigger"], ("fraction", 0.85))
+        self.assertEqual(native_defaults["keep"], ("fraction", 0.10))
+        self.assertEqual(configured["trigger"], native_defaults["trigger"])
+        self.assertEqual(configured["keep"], native_defaults["keep"])
         self.assertGreaterEqual(len(self.chat_payloads), 3, "both turns and compaction should use the mock endpoint")
         self.assertTrue(all(not payload.get("tools") for payload in self.chat_payloads))
         compacted = [event for event in completed["events"] if event["kind"] == "context_compacted"]
@@ -414,6 +420,26 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertTrue(budgets, "the configured summarizer should measure the input budget")
         self.assertTrue(all(item == usable for item in budgets))
         self.assertNotEqual(budgets[0], max(0, int(usable * 0.95)))
+
+    def test_unknown_capacity_preserves_non_fraction_compaction_policy(self) -> None:
+        self._set_context(n_ctx=None, vision=True)
+        with patch(
+            "workbench_backend.agents.harness.BudgetedSummarizationMiddleware",
+            wraps=BudgetedSummarizationMiddleware,
+        ) as middleware_factory:
+            started = self._start(
+                thread_id="thread-unknown-context",
+                task="Reply briefly.",
+                presented_tools=[],
+            )
+            self.assertEqual(started.status_code, 200, started.text)
+            completed = self._complete(started.json())
+
+        self.assertEqual(completed["status"], "completed", completed.get("error"))
+        configured = middleware_factory.call_args.kwargs
+        self.assertEqual(configured["model"].profile, {})
+        self.assertIsNone(configured["trigger"])
+        self.assertEqual(configured["keep"], ("messages", 6))
 
 
 if __name__ == "__main__":

@@ -139,13 +139,17 @@ export async function checkKnowledgeSavedActions(Component) {
     assert.match(text(renderer.root), /Package unavailable/); assert.equal(field(importForm, "Package path", "input").props.value, "D:/isolated-skill/SKILL.md");
     rejectImport = false; await submit(importForm);
     const imported = records.find(item => item.id === "skill"); assert.equal(imported.scope_id, "project-real");
-    assert.equal(field(renderer.root, "Content", "textarea").props.value, "Imported skill body");
+    assert.equal(field(renderer.root, "SKILL.md content", "textarea").props.value, "Imported skill body");
     const updateForm = renderer.root.findAllByType("form").find(form => text(form).includes("Import as new version"));
     await change(updateForm, "Package path", "input", "D:/isolated-skill/updated.zip"); await submit(updateForm);
     const request = calls.filter(call => call.path.endsWith("/skills/import")).at(-1).body;
     assert.deepEqual(request, { source_path: "D:/isolated-skill/updated.zip", scope: "project", scope_id: "project-real", entry_id: "skill", base_version: "skill-v1" });
-    assert.equal(field(renderer.root, "Content", "textarea").props.value, "Updated skill body");
+    assert.equal(field(renderer.root, "SKILL.md content", "textarea").props.value, "Updated skill body");
     await click(renderer.root, "Remove"); assert.equal(calls.some(call => call.method === "DELETE"), false); await click(renderer.root, "Remove entry");
     assert.equal(records.some(item => item.id === "skill"), false); assert.equal(records[0].content, "Original fact");
+    await click(renderer.root, "New skill");
+    assert.match(field(renderer.root, "SKILL.md content", "textarea").props.value, /^---\nname: my-skill\ndescription: /, "new skills start as native SKILL.md documents");
+    await change(renderer.root, "SKILL.md content", "textarea", "Plain text is not a skill document");
+    assert.match(text(renderer.root), /A skill needs SKILL.md frontmatter/, "the editor explains the required native format");
   } finally { if (renderer) await settle(() => renderer.unmount()); }
 }

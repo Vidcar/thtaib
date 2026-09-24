@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from deepagents import GeneralPurposeSubagentProfile, HarnessProfile, register_harness_profile
 from langchain_core.language_models.chat_models import BaseChatModel
 
-# Upstream filesystem tool. ``delete_file`` is the one-file replacement.
+# Upstream recursive filesystem deletion is outside the selected Chat tools.
 RECURSIVE_DELETE_TOOL = "delete"
 
 _registered_providers: set[str] = set()

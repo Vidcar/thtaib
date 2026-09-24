@@ -194,7 +194,7 @@ class RunLinkageRestartTests(unittest.TestCase):
                 "task": "Edit edited.md in the project.",
                 "project_path": str(self.project),
                 "presented_tools": ["write_file"],
-                "approval_mode": "approve_for_me",
+                "approval_mode": "full_access",
             },
         )
         self.assertEqual(started.status_code, 200, started.text)

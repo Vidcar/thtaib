@@ -46,6 +46,13 @@ from tests.support import close_workbench_sqlite, workbench_client, offline_work
 
 MEMORY_TOKEN = "MEM-TOKEN-57-QWERTY-UNIQUE"
 SKILL_TOKEN = "SKILL-TOKEN-57-ZXCVB-UNIQUE"
+SKILL_CONTENT = (
+    "---\n"
+    "name: effective-live-skill\n"
+    "description: Exercise native Deep Agents skill loading.\n"
+    "---\n"
+    f"Use {SKILL_TOKEN} when the user asks for this skill.\n"
+)
 PROTECTED_TOKEN = "PROT-TOKEN-57-KEEP-ME"
 HUMAN = {"actor": "human", "note": "effective-setup"}
 AGENT = {"actor": "agent", "run_id": "agent_fixture"}
@@ -483,7 +490,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
 
     def test_knowledge_content_is_available_not_id_only(self) -> None:
         memory = self._knowledge("memory", MEMORY_TOKEN)
-        skill = self._knowledge("skill", SKILL_TOKEN)
+        skill = self._knowledge("skill", SKILL_CONTENT)
         started = self.client.post(
             "/v1/agent-runs",
             json={
@@ -504,14 +511,14 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertTrue(all(item["content_available"] for item in setup["loaded_knowledge"]))
         digests = {item["kind"]: item["content_digest"] for item in setup["loaded_knowledge"]}
         self.assertEqual(digests["memory"], content_digest(MEMORY_TOKEN))
-        self.assertEqual(digests["skill"], content_digest(SKILL_TOKEN))
+        self.assertEqual(digests["skill"], content_digest(SKILL_CONTENT))
         prompt = setup["system_prompt"]
         self.assertNotIn(MEMORY_TOKEN, prompt)
         self.assertNotIn(SKILL_TOKEN, prompt)
         self.assertNotIn(KNOWLEDGE_PREAMBLE, prompt)
         paths = {item["path"] for item in setup["materialized_knowledge"]}
         self.assertTrue(any(path.startswith("/memories/") for path in paths))
-        self.assertTrue(any(path.startswith("/skills/") and path.endswith("/SKILL.md") for path in paths))
+        self.assertIn("/skills/effective-live-skill/SKILL.md", paths)
         capture = body["model_requests"][0]
         instructions = capture["instructions"] or ""
         self.assertIn(MEMORY_TOKEN, instructions)

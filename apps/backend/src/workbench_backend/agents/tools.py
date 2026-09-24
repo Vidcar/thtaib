@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from workbench_backend.inference.ids import utc_now
 
 VISIBILITY_TOOL_NAMES = ("echo", "time_now")
-FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "rename_file", "delete_file")
+FILESYSTEM_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
 KNOWLEDGE_ROUTE_READ_TOOLS = ("ls", "read_file")
 SHELL_TOOL_NAMES = ("execute",)
 PLANNING_TOOL_NAMES = ("write_todos",)
@@ -40,15 +40,11 @@ def time_now_tool() -> str:
 @tool("ask_user")
 def ask_user_tool(prompt: str, answer_type: str = "text", choices: list[str] | None = None) -> str:
     """Ask the user for text, a choice, or an explicitly selected file/folder. Never request credentials. A path answer does not grant tools new access."""
-    from langgraph.types import interrupt
     from workbench_backend.agents.schemas import UserQuestion
     question = UserQuestion(prompt=prompt, answer_type=answer_type, choices=choices or [])
     if question.answer_type == "choice" and not question.choices:
         return "A choice question requires choices."
-    response = interrupt({"kind": "ask_user", "question": question.model_dump(mode="json")})
-    if isinstance(response, dict) and response.get("cancelled"):
-        return "The user cancelled this question. Do not repeat it unless asked."
-    return str(response.get("answer", "")) if isinstance(response, dict) else str(response)
+    return "This question requires user input."
 
 
 ENABLED_TOOLS: dict[str, BaseTool] = {
@@ -71,11 +67,9 @@ def tool_descriptions() -> list[dict[str, str]]:
         "ls": ("List files", "List files in the authorized project or selected knowledge."),
         "read_file": ("Read files", "Read authorized text files with line ranges."),
         "write_file": ("Create files", "Write a project file; Access determines approval."),
-        "edit_file": ("Edit files", "Replace matching text and retain a captured change."),
+        "edit_file": ("Edit files", "Replace matching text in an authorized project file."),
         "glob": ("Find files", "Find file paths matching a pattern."),
         "grep": ("Search files", "Find matching text inside authorized files."),
-        "rename_file": ("Rename files", "Rename one project file without replacing an existing destination."),
-        "delete_file": ("Delete files", "Remove one project file; folders and recursive deletion are unsupported."),
         "execute": ("Run commands", "Execute a command on this computer in the bound project folder."),
         "write_todos": ("Checklist", "Maintain the visible task checklist."),
         "ask_user": ("Ask questions", "Pause for your answer to a task question."),
@@ -175,49 +169,6 @@ def memory_proposal_tool(run_id: str, knowledge: Any) -> BaseTool:
             raise ToolException(f"{exc.code}: {exc.message}") from exc
     propose_memory.handle_tool_error = True
     return propose_memory
-
-
-def project_mutation_tools(project_path: str) -> list[BaseTool]:
-    from pathlib import Path
-    from deepagents.backends import FilesystemBackend
-    from workbench_backend.agents.file_changes import project_file
-    from workbench_backend.errors import HarnessError
-    root = Path(project_path).resolve()
-    backend = FilesystemBackend(root_dir=root, virtual_mode=True)
-
-    @tool("rename_file")
-    def rename_file(file_path: str, destination: str) -> str:
-        """Rename one regular project file to a new, unused project path. The application applies the current Access approval policy. Does not move folders or overwrite an existing destination."""
-        try:
-            source, target = project_file(root, file_path), project_file(root, destination)
-            if not source.is_file():
-                raise ToolException("The source file does not exist.")
-            if target.exists():
-                raise ToolException("The destination already exists; nothing was overwritten.")
-            if not target.parent.is_dir():
-                raise ToolException("The destination folder does not exist.")
-            source.rename(target)
-            return f"Renamed {file_path} to {destination}."
-        except (HarnessError, OSError) as exc:
-            raise ToolException(str(exc)) from exc
-
-    @tool("delete_file")
-    def delete_file(file_path: str) -> str:
-        """Delete one regular project file under the current Access approval policy. Folder and recursive deletion are unsupported. Complete small UTF-8 preimages can be reviewed and restored."""
-        try:
-            path = project_file(root, file_path)
-            if not path.is_file():
-                raise ToolException("The selected file does not exist.")
-            result = backend.delete('/' + path.relative_to(root).as_posix())
-            if result.error:
-                raise ToolException(result.error)
-            return f"Deleted {file_path}."
-        except (HarnessError, OSError) as exc:
-            raise ToolException(str(exc)) from exc
-
-    rename_file.handle_tool_error = True
-    delete_file.handle_tool_error = True
-    return [rename_file, delete_file]
 
 
 def tool_name(tool_obj: object) -> str | None:

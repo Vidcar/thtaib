@@ -96,20 +96,6 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
     }
   }
 
-  async function steerQueueItem(item: ChatQueueItem): Promise<void> {
-    if (isQueueItemLocked(item) || disabled || itemBusy || item.pause_reason === "dispatch_uncertain") {
-      return;
-    }
-    setBusyItemId(item.id);
-    try {
-      onUpdated(await packet03Request<ChatConversation>(`${queueItemPath(conversation.id, item.id)}/steer`, { method: "POST" }));
-    } catch (error) {
-      onError(errorMessage(error));
-    } finally {
-      setBusyItemId(null);
-    }
-  }
-
   async function continueQueue(): Promise<void> {
     if (disabled || continueBusy || runActive || (hasDispatchUncertain && !ackUncertain)) {
       return;
@@ -201,9 +187,6 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                 </button>
                 <button type="button" className="icon-button" aria-label="Remove queued turn" title="Remove from queue" disabled={itemDisabled} onClick={() => void removeQueueItem(item)}>
                   <Icon name="close" size={14} />
-                </button>
-                <button type="button" className="icon-button" aria-label="Steer the conversation" title="Steer the live reply with this message" disabled={itemDisabled || item.pause_reason === "dispatch_uncertain"} onClick={() => void steerQueueItem(item)}>
-                  <Icon name="steer" size={14} />
                 </button>
               </div>
             </li>

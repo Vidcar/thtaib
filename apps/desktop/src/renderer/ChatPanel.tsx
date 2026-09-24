@@ -6,7 +6,7 @@ import { MenuPopover } from "./MenuPopover";
 import { CompactSwitch } from "./CompactControls";
 import { HoverHelp } from "./HoverHelp";
 
-import { api, ApiError, request } from "./api";
+import { api, ApiError } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
 import { setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
@@ -21,13 +21,11 @@ type RailPage = "setup" | DockPage | "actions";
 function readRailPage(): RailPage {
   try {
     const saved = sessionStorage.getItem("workbench.chat.rail.page");
-    if (saved === "setup" || saved === "changes" || saved === "files" || saved === "library" || saved === "actions") return saved;
+    if (saved === "setup" || saved === "files" || saved === "library" || saved === "actions") return saved;
   } catch { /* Keep the default page. */ }
-  return "changes";
+  return "files";
 }
 import { ChatDockContext } from "./chatDockContext";
-import type { ObservedFileChange } from "./activityLine";
-import type { SchemaProjectFileChangeView } from "../generated/shared-contracts/openapi";
 import { packet03Api } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
@@ -444,20 +442,27 @@ function ChatInteractionStreamContent(props: {
   );
 }
 
-function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[]) {
+function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[], pinnedMemoryRefs?: string[]) {
   const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
+  const memoryVersionRefs = pinnedMemoryRefs ?? selected
+    .filter((entry) => entry.kind === "memory")
+    .map((entry) => entry.current_version_id);
+  const skillVersionRefs = selected
+    .filter((entry) => entry.kind === "skill")
+    .map((entry) => entry.current_version_id);
+  const protectedInstructionVersionRefs = selected
+    .filter((entry) => entry.kind === "protected_instruction")
+    .map((entry) => entry.current_version_id);
   return {
-    knowledge_version_refs: selectedVersionIds,
-    memory_version_refs: selected
-      .filter((entry) => entry.kind === "memory")
-      .map((entry) => entry.current_version_id),
-    skill_version_refs: selected
-      .filter((entry) => entry.kind === "skill")
-      .map((entry) => entry.current_version_id),
-    protected_instruction_version_refs: selected
-      .filter((entry) => entry.kind === "protected_instruction")
-      .map((entry) => entry.current_version_id),
+    knowledge_version_refs: [...memoryVersionRefs, ...skillVersionRefs, ...protectedInstructionVersionRefs],
+    memory_version_refs: memoryVersionRefs,
+    skill_version_refs: skillVersionRefs,
+    protected_instruction_version_refs: protectedInstructionVersionRefs,
   };
+}
+
+function hasFixedMemory(conversation: ChatConversation | null): boolean {
+  return Boolean(conversation && (conversation.source_checkpoint_id || conversation.current_run_id || conversation.run_ids.length));
 }
 
 function messageRoleLabel(role: ChatMessage["role"]): string {
@@ -595,9 +600,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [railOpen, setRailOpen] = useState(() => {
     try { return sessionStorage.getItem("workbench.chat.rail") === "open"; } catch { return false; }
   });
-  const [selectedChangeId, setSelectedChangeId] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
-  const [fileChanges, setFileChanges] = useState<ObservedFileChange[]>([]);
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentsLoaded, setDeploymentsLoaded] = useState(false);
@@ -645,35 +648,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       sessionStorage.setItem("workbench.chat.rail.page", page);
     } catch { /* The rail still opens for this view. */ }
   }, []);
-  const openChange = useCallback((id: string) => {
-    openRail("changes");
-    setSelectedChangeId(id);
-  }, [openRail]);
   const openFile = useCallback((path: string) => {
     openRail("files");
     setSelectedPath(path);
   }, [openRail]);
-  const runIdsKey = conversation?.run_ids.join("|") ?? "";
-  useEffect(() => {
-    const ids = conversation?.run_ids ?? [];
-    if (!ids.length) {
-      setFileChanges([]);
-      return;
-    }
-    let cancelled = false;
-    void Promise.all(ids.map(id => request<SchemaProjectFileChangeView[]>(`/v1/agent-runs/${id}/file-changes`).catch(() => [] as SchemaProjectFileChangeView[]))).then(groups => {
-      if (cancelled) return;
-      setFileChanges(groups.flat().map(item => ({
-        id: item.change.id,
-        toolCallId: item.change.tool_call_id,
-        path: item.change.path,
-        destination: item.change.destination,
-        addedLines: item.added_lines,
-        removedLines: item.removed_lines,
-      })));
-    });
-    return () => { cancelled = true; };
-  }, [conversation?.id, conversation?.current_run?.status, runIdsKey]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
@@ -841,6 +819,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function chatConfiguration(): Record<string, unknown> {
     const layered = Boolean(hasApplicationDefaults || projectId || agentSetupVersionId || conversation?.agent_setup_version_id || conversation?.project_id);
+    const pinnedMemory = hasFixedMemory(conversation) ? conversation?.memory_version_refs ?? [] : undefined;
+    const selectedKnowledge = knowledgePayload(knowledgeEntries, selectedKnowledgeIds, pinnedMemory);
     const values = sparseChatSetup({
       deployment_id: deploymentId,
       model_configuration_id: profileId || null,
@@ -849,15 +829,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: conversation?.draft?.intended_config?.presented_tools ?? conversation?.setup_overrides?.presented_tools ?? null } : {}),
       ...(setupEditedFields.current.has("approval_mode") ? { approval_mode: approvalMode } : {}),
       per_request_overrides: perRequestOverrides,
-      ...knowledgePayload(knowledgeEntries, selectedKnowledgeIds),
+      ...selectedKnowledge,
     }, setupEditedFields.current, layered);
+    if (pinnedMemory) Object.assign(values, selectedKnowledge);
     return { ...values, work_mode: workMode, helper_agent_ids: helperAgentIds, review, ...(projectId ? { project_id: projectId } : {}),
       ...(agentSetupVersionId || conversation?.agent_setup_version_id ? { agent_setup_version_id: agentSetupVersionId } : {}),
       ...(!projectId ? { project_path: projectPath.trim() || null } : {}),
       ...(!projectId || conversation?.workspace_id ? { workspace_id: conversation?.workspace_id ?? null } : {}) };
   }
 
-  function applyResolvedSetup(selection: ResolvedSetupSelection) {
+  function applyResolvedSetup(selection: ResolvedSetupSelection, memoryRefs = hasFixedMemory(conversation) ? conversation?.memory_version_refs ?? [] : null) {
     const config = selection.configuration;
     if (config.deployment_id) setDeploymentId(config.deployment_id);
     else if (config.model_configuration_id) setDeploymentId("");
@@ -867,7 +848,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setEmbeddingDeploymentId(config.embedding_deployment_id ?? "");
     if (!setupEditedFields.current.has("approval_mode")) setApprovalMode(approvalModeOf(config.approval_mode));
     setPerRequestOverrides(config.per_request_overrides ?? {});
-    setSelectedKnowledgeIds([...(config.memory_version_refs ?? []), ...(config.skill_version_refs ?? []), ...(config.protected_instruction_version_refs ?? [])]);
+    setSelectedKnowledgeIds([...(memoryRefs ?? config.memory_version_refs ?? []), ...(config.skill_version_refs ?? []), ...(config.protected_instruction_version_refs ?? [])]);
     setInstructionLayers(selection.instruction_layers ?? []);
     applyExecutionPreferences(config as ExecutionPreferences);
   }
@@ -1142,7 +1123,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           ...(next.skill_version_refs ?? []),
           ...(next.protected_instruction_version_refs ?? []),
         ]);
-        if (resolved) applyResolvedSetup(resolved);
+        if (resolved) applyResolvedSetup(resolved, hasFixedMemory(next) ? next.memory_version_refs ?? [] : null);
         else setInstructionLayers([]);
         serverDraftRevision.current = next.draft?.revision ?? 0;
         draftRevision.current += 1;
@@ -1519,7 +1500,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.reuseAssetId, props.reuseAssetIds, conversation?.id, selectedDeployment?.id, sending, selectionBusy]);
 
   return (
-    <ChatDockContext.Provider value={{ fileChanges, openChange, openFile }}>
+    <ChatDockContext.Provider value={{ openFile }}>
     <section className="chat-layout" style={{ "--inspector-width": `${filesWidth}px` } as CSSProperties}>
       <div className="chat-main"
         onDragEnter={event => {
@@ -1556,7 +1537,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : props.restoringSelection ? "Opening conversation…" : "New conversation"}</h2>
           </div>
           <div className="chat-header-actions"><MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show the model's reasoning and detailed tool activity. This does not change how the model thinks." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
-          <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, changes, files, and actions"} onClick={() => {
+          <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, files, library, and actions"} onClick={() => {
             const next = !railOpen;
             setRailOpen(next);
             try { sessionStorage.setItem("workbench.chat.rail", next ? "open" : "closed"); } catch { /* The toggle still applies. */ }
@@ -1652,8 +1633,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         <aside className="chat-files-panel chat-rail" aria-label="Conversation rail" hidden={!railOpen}>
           <PanelResize label="Resize conversation rail" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={320} reverse />
           <div className="chat-rail-tabs" role="tablist" aria-label="Conversation rail pages">
-            {(["setup", "changes", "files", "library", "actions"] as const).map(page => (
-              <button key={page} type="button" role="tab" aria-selected={railPage === page} onClick={() => openRail(page)}>{page === "setup" ? "Setup" : page === "changes" ? "Changes" : page === "files" ? "Files" : page === "library" ? "Library" : "Actions"}</button>
+            {(["setup", "files", "library", "actions"] as const).map(page => (
+              <button key={page} type="button" role="tab" aria-selected={railPage === page} onClick={() => openRail(page)}>{page === "setup" ? "Setup" : page === "files" ? "Files" : page === "library" ? "Library" : "Actions"}</button>
             ))}
             <button type="button" className="icon-button chat-rail-close" aria-label="Close conversation rail" title="Close" onClick={() => { setRailOpen(false); try { sessionStorage.setItem("workbench.chat.rail", "closed"); } catch { /* Closed for this view. */ } }}><Icon name="close" size={14} /></button>
           </div>
@@ -1679,7 +1660,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               deployments={deployments}
               knowledgeEntries={knowledgeEntries}
               selectedKnowledgeIds={selectedKnowledgeIds}
+              memoryLocked={hasFixedMemory(conversation) || Boolean(pendingSubmit && pendingSubmit.conversation_id === conversation?.id)}
+              pinnedMemoryVersionIds={conversation?.memory_version_refs ?? []}
               onToggleKnowledge={versionId => {
+                if (hasFixedMemory(conversation) && knowledgeEntries.some(entry => entry.kind === "memory" && entry.current_version_id === versionId)) return;
                 markSetupEdited("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs");
                 setSelectedKnowledgeIds(current => current.includes(versionId) ? current.filter(item => item !== versionId) : [...current, versionId]);
               }}
@@ -1698,7 +1682,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               onDeleted={removeConversation}
               onError={setMessage}
             /> : <p className="hint">Start a chat to rename, export, or delete it.</p> : null}
-            {railPage === "changes" || railPage === "files" || railPage === "library" ? <ChatDock
+            {railPage === "files" || railPage === "library" ? <ChatDock
               page={railPage}
               showPages={false}
               onPage={page => openRail(page)}
@@ -1706,13 +1690,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               runIds={conversation?.run_ids ?? []}
               currentRunId={conversation?.current_run_id}
               currentRunStatus={conversation?.current_run?.status}
-              selectedChangeId={selectedChangeId}
               selectedPath={selectedPath}
-              onSelectChange={setSelectedChangeId}
               onSelectPath={setSelectedPath}
               conversationId={conversation?.id}
               projectPath={conversation?.project_path}
-              width={filesWidth}
               onOpenKnowledge={() => navigateAway("knowledge")}
               onReuseAssets={assets => {
                 draftRevision.current += 1;

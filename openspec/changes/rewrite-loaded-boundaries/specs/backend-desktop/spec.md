@@ -8,7 +8,7 @@ The desktop SHALL provide one collapsible sidebar on every page. Destinations SH
 
 Adding a project SHALL ask for a name and one existing folder. It SHALL NOT choose memory or grant edit permission beyond the selected folder. Creating a project SHALL NOT start or move a chat.
 
-Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files, previews, and changes open in the dock in API-023, API-024, and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stays a side column or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
+Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files and previews open in the dock through API-023 and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stays a side column or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
 
 Light and dark themes SHALL follow Windows by default with a user override. Settings appearance SHALL expose one shared control for each visual role, including the settings surface itself. Roles cover the colour palette, the type scale, corner styles, inset, the space between items, line thickness, and layout sizes such as page width, reading width, message width, dialog width, side columns, and control height. Near-identical values SHALL share a control. Inset, the padding inside a surface, stays separate from the space between items. Those scales keep only the steps a person can tell apart: tight, row, card, section, and page insets, and tight, item, block, and section gaps. Reading text stays separate from interface text. The file editor text size and chat code size stay separate from both. Each numeric control SHALL offer a slider and a typeable value. The typeable value SHALL accept any valid measurement and SHALL NOT impose an upper bound chosen for an assumed screen size. Colour controls SHALL include transparency. Font weight, opacity, and colour-mix strength stay inside their valid ranges. Applying SHALL store overrides in appearance.json in the product data root. A draft SHALL be visible in the open window, including Settings, before it is applied. A separate preview window SHALL show a representative window of that draft, and the person SHALL be able to move and resize that window beside Settings. While a control is pointed at or changed, that preview SHALL mark the parts the control changes. Cancelling SHALL restore the last applied values. Resetting one row SHALL restore its shipped value. Media and container breakpoints, viewport-tied layout, and one-off positions stay fixed. Compact controls SHALL retain readable labels, accessible names, visible keyboard focus and usable click targets. Reduced motion SHALL be respected. Settings SHALL expose appearance, notifications, saved grants and manual backup/restore; connection management is added by Packet 04 using the same surface.
 
@@ -45,9 +45,9 @@ Light and dark themes SHALL follow Windows by default with a user override. Sett
 
 ### Requirement: API-017 - Expose compact effective model controls and measurements
 
-Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. When a setup leaves access unspecified, the backend SHALL resolve the current application, project, agent and conversation layers and show the effective value with its named source. Ask is the fallback when no selected layer supplies a value. An explicit conversation override, including Ask, takes precedence; choosing inherited access removes that override and uses the current resolved source. Access MUST NOT leak from the previously viewed setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask, Approve for me, or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
+Opening a conversation SHALL restore that conversation's effective Access choice, including an explicit Ask override. When a setup leaves access unspecified, the backend SHALL resolve the current application, project, agent and conversation layers and show the effective value with its named source. Ask is the fallback when no selected layer supplies a value. An explicit conversation override, including Ask, takes precedence; choosing inherited access removes that override and uses the current resolved source. Access MUST NOT leak from the previously viewed setup or conversation. A user's explicit choice SHALL survive unrelated default changes. Access labels SHALL show Ask or Full access in full and explain that running and already queued messages keep their selected policy. Descriptions and model instructions SHALL reflect saved permission grants and the actual selected mode, while explicit questions and disabled-tool boundaries remain enforced.
 
-The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment and permission controls beside the composer and focused popovers for details. The shield selects Ask, Approve for me, or Full access for later messages in that chat. It does not turn the agent's tool list on or off. Project, agent, and knowledge setup SHALL live on the Setup page of the conversation rail. The rail starts closed and MUST NOT take height from the transcript while it is closed. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
+The conversation window SHALL visibly expose selectable model, supported reasoning effort or Thinking off, and the active setup, with compact attachment and permission controls beside the composer and focused popovers for details. The shield selects Ask or Full access for later messages in that chat. It does not turn the agent's tool list on or off. Project, agent, and knowledge setup SHALL live on the Setup page of the conversation rail. The rail starts closed and MUST NOT take height from the transcript while it is closed. Existing profiles SHALL remain usable before Packet 04 delivers reusable agent setups. Changes SHALL affect future submissions without rewriting active turns or queued intended configuration. Unsupported/overridden/unverified reasoning controls SHALL be labelled truthfully; hiding returned thinking MUST NOT be represented as disabling model reasoning.
 
 Compact status elements SHALL expose current context fill and generation speed in tok/s, with capacity, counting/measurement basis and relevant interval available on expansion. Observed measurements, labelled estimates and unavailable values SHALL remain distinguishable. Stream chunks MUST NOT be counted as tokens; absent usage MUST NOT appear as zero. Context changes/compaction and current versus completed-turn measurements SHALL remain attributable rather than silently showing stale values as current.
 
@@ -84,7 +84,7 @@ While a reply is running and the person is already at the bottom, the transcript
 
 A speed or context measurement SHALL update its readout only. It MUST NOT rebuild the transcript, move the scroll position, delay the next tokens, or change execution.
 
-Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input, tool output and file differences SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain on the Actions page of the conversation rail. That page MUST NOT cover the transcript. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
+Each output section SHALL independently expand/collapse through a heading or chevron, overriding the global presentation for that section without disrupting text selection or links. Approvals, typed questions and errors SHALL remain visible in both modes. Toggling presentation MUST NOT change execution, permission, saved content or the user's scroll position. Copy, Regenerate answer and Branch SHALL appear on each saved assistant answer and SHALL NOT appear while that answer is still streaming. Copy on an answer SHALL copy that answer's text. Chat code blocks, tool input and tool output SHALL each provide a copy icon. Unavailable Regenerate answer or Branch SHALL stay disabled with the truthful reason rather than retrying the task. Retry task, edit-the-task, export and delete SHALL remain on the Actions page of the conversation rail. That page MUST NOT cover the transcript. Retry task SHALL disclose possible repeated effects before it runs. Branch, Retry task and Regenerate answer SHALL remain visibly distinct and obey AGT-012.
 
 #### Scenario: Hide details while an answer streams
 
@@ -103,7 +103,7 @@ Each output section SHALL independently expand/collapse through a heading or che
 
 #### Scenario: Copy a presented chat block
 
-- **WHEN** a user copies a chat code block, tool input, tool output or file difference
+- **WHEN** a user copies a chat code block, tool input or tool output
 - **THEN** that block's text is copied without changing the conversation.
 
 #### Scenario: Planning stays visible while details are hidden
@@ -137,11 +137,11 @@ Each output section SHALL independently expand/collapse through a heading or che
 
 ### Requirement: API-023 - Keep one dock beside the conversation
 
-Chat SHALL use one right-hand rail. It starts closed. One header control opens and closes it, and that choice stays while the person moves between chats. Opening it adds a column and narrows the transcript. Closing it returns that width. A splitter SHALL resize the rail within bounds. Exactly one page is open at a time; switching pages replaces the rail and MUST NOT open a second card. The pages are Setup, Changes, Files, Library, and Actions. Choosing a file or a change in the transcript opens the rail on that item. That is the only automatic open. Widening the rail SHALL keep a readable conversation column. The rail stays beside the transcript and composer at every window width, including about half a screen. It MUST NOT move above the composer. The rail MUST NOT be painted over the transcript or the composer, and it MUST NOT hide the conversation in order to grow. Navigation and the rail keep bounded resize, collapse, and reopen without losing content or run state. Light and dark follow the application theme.
+Chat SHALL use one right-hand rail. It starts closed. One header control opens and closes it, and that choice stays while the person moves between chats. Opening it adds a column and narrows the transcript. Closing it returns that width. A splitter SHALL resize the rail within bounds. Exactly one page is open at a time; switching pages replaces the rail and MUST NOT open a second card. The pages are Setup, Files, Library, and Actions. Choosing a file in the transcript opens the rail on that item. That is the only automatic open. Widening the rail SHALL keep a readable conversation column. The rail stays beside the transcript and composer at every window width, including about half a screen. It MUST NOT move above the composer. The rail MUST NOT be painted over the transcript or the composer, and it MUST NOT hide the conversation in order to grow. Navigation and the rail keep bounded resize, collapse, and reopen without losing content or run state. Light and dark follow the application theme.
 
 #### Scenario: Open, resize, and close
 
-- **WHEN** a person opens the rail to Files, drags the splitter, switches to Changes, and then closes the rail
+- **WHEN** a person opens the rail to Files, drags the splitter, switches to Setup, and then closes the rail
 - **THEN** the transcript narrows and widens with the rail, only one page is showing, and closing restores the conversation width
 - **AND** the answer text is never covered.
 
@@ -150,22 +150,6 @@ Chat SHALL use one right-hand rail. It starts closed. One header control opens a
 - **WHEN** the conversation column is about half a screen wide and the rail is open
 - **THEN** the rail remains a column on the right of the transcript and composer
 - **AND** the transcript and composer remain usable.
-
-### Requirement: API-024 - Review changes in the loaded diff editor
-
-The Changes page SHALL list recorded project-file changes for the selected turn and open the selected change in the loaded Monaco diff editor. The editor shows the stored before text and after text, side by side when the dock is wide enough and inline when it is narrow. The editor is read-only. Its assets ship inside the desktop package. The application theme applies. When the text difference is unavailable, the page says why and does not invent a diff. Reverse remains the existing confirmed reverse of that one change. A pending change SHALL be shown when the before text and the proposed result text are both already known. Approval buttons stay on the transcript card. The page MUST NOT implement its own diff algorithm.
-
-#### Scenario: Review an edit
-
-- **WHEN** a turn has a recorded text edit and the person selects it
-- **THEN** Monaco shows the stored before and after text
-- **AND** reverse still requires the existing confirmation that the file matches the recorded result.
-
-#### Scenario: Binary change
-
-- **WHEN** a recorded change has no text difference
-- **THEN** the page says the difference is unavailable
-- **AND** it does not show an empty or invented diff.
 
 ### Requirement: API-025 - Browse project files in the loaded editor
 
@@ -188,7 +172,7 @@ The Files page SHALL show the bound project's files in a loaded virtualized tree
 - **WHEN** a retained attachment and a live project file are both on the Files page
 - **THEN** the retained copy is labelled as retained and the project file is labelled as the live file.
 
-### Requirement: API-026 - Show planning and file activity as it happens
+### Requirement: API-026 - Show planning and native tool activity as it happens
 
 While an assistant turn runs, and when that turn is reopened, Chat SHALL show planning and tool activity from the projected tool calls. This is visible with detailed streams on or off.
 
@@ -197,18 +181,18 @@ While an assistant turn runs, and when that turn is reopened, Chat SHALL show pl
 Each other filesystem, search, shell, MCP, and memory tool keeps one identity line, one per call identity, in order, without a duplicate when live and retained records join:
 
 - Reading or Read, plus the path. When the call includes an offset and limit, the line includes that line range.
-- Creating or Created, Editing or Edited, Deleting or Deleted, Renaming or Renamed, using the recorded operation. A rename shows the source and destination.
+- Creating or Created, Editing or Edited, using the recorded operation.
 - Listing or Listed, Finding or Found files matching, Searching or Searched for, Running or Ran, Calling or Called, Proposing or Proposed a memory.
 
-An actively running unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. Retained incomplete arguments from a stopped or failed turn SHALL be labelled as partial input, never as ongoing work or a completed file. Starting a later turn MUST NOT reactivate that label. `+N -M` SHALL appear only from the observed before/after difference for that same call, counting added and removed content lines and excluding diff headers. Missing text omits the counts. The product MUST NOT scrape a number out of tool prose or invent a count. A shell line shows the command truncated to one line.
+An actively running unfinished call uses the present-tense verb. The finished call uses the past tense. A failure shows on that line. Retained incomplete arguments from a stopped or failed turn SHALL be labelled as partial input, never as ongoing work or a completed file. Starting a later turn MUST NOT reactivate that label. Tool activity MUST NOT claim a file difference or line count that was not recorded. A shell line shows the command truncated to one line.
 
-A single finished call stays as that identity line. Two or more consecutive finished successful calls that share the same verb, and that are not waiting for a person, collapse into one summary line. The summary names the verb and how many calls it covers, for example "Read 6 files" or "Ran 3 commands". It does not add those calls' `+N -M` figures into a new total. Opening the summary shows the identity lines in their original order. A call that is still running, a call that failed, and a call that is waiting for approval or a typed answer each stay on their own line and are not folded into a summary. Closing the summary does not discard the calls.
+A single finished call stays as that identity line. Two or more consecutive finished successful calls that share the same verb, and that are not waiting for a person, collapse into one summary line. The summary names the verb and how many calls it covers, for example "Read 6 files" or "Ran 3 commands". It does not invent a combined file result. Opening the summary shows the identity lines in their original order. A call that is still running, a call that failed, and a call that is waiting for approval or a typed answer each stay on their own line and are not folded into a summary. Closing the summary does not discard the calls.
 
 The first opening of an identity line shows the plain result: the path, the command, the output, or the short description of the change. The internal tool name and the raw arguments stay on a further disclosure. They MUST NOT be the first thing that opening shows.
 
 While a call is unfinished and its body is open, that body follows the newest line until the person scrolls inside it. The open body shows the full text produced so far. Every line stays reachable by scrolling, and copy copies that full text. The product MUST NOT drop earlier text to keep the view small. Completed file content SHALL remain readable with its original line breaks; raw arguments remain available separately.
 
-Choosing a file identity line opens the dock on that change, or on the file when no change record exists. Choosing a summary line does not open the dock. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
+Choosing a file identity line opens the Files page on that file when available. Choosing a summary line does not open the dock. The choice MUST NOT send a chat message or call the model. Approvals and typed questions keep their existing cards. The activity line MUST NOT offer a second set of approval buttons.
 
 #### Scenario: Todo list updates in place
 
@@ -222,23 +206,23 @@ Choosing a file identity line opens the dock on that change, or on the file when
 - **THEN** the row shows that content as the sentence and shows pending as a separate mark
 - **AND** the sentence does not begin with the word pending.
 
-#### Scenario: File line with counts
+#### Scenario: Native file edit line
 
-- **WHEN** an edit of `thistest.md` finishes and the observed difference is five added lines and four removed lines
-- **THEN** the transcript shows a line equivalent to "Edited thistest.md +5 -4"
-- **AND** choosing it opens that change in the dock.
+- **WHEN** an edit of `thistest.md` finishes
+- **THEN** the transcript shows one line equivalent to "Edited thistest.md"
+- **AND** choosing it opens the live file when available, without claiming an undoable difference.
 
-#### Scenario: Read without a diff
+#### Scenario: Read activity
 
 - **WHEN** the agent reads `SKILL.md`
 - **THEN** the transcript shows a line equivalent to "Read SKILL.md"
-- **AND** no added or removed count is shown.
+- **AND** no invented change count is shown.
 
-#### Scenario: Counts wait for the observation
+#### Scenario: Incomplete file call stays partial
 
-- **WHEN** an edit has started and the before/after text is not available yet
+- **WHEN** an edit has started and its result is not yet available
 - **THEN** the line shows that the file is being edited
-- **AND** the counts appear only after the observed difference exists.
+- **AND** a stopped call is labelled as partial input, without an invented result or line count.
 
 #### Scenario: Failed todo does not wipe the list
 

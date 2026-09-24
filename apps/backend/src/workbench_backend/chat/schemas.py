@@ -37,7 +37,7 @@ class ChatConversationCreateRequest(BaseModel):
     project_id: str | None = None
     agent_setup_version_id: str | None = None
     presented_tools: list[str] | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] | None = None
+    approval_mode: Literal["ask", "full_access"] | None = None
     per_request_overrides: dict[str, Any] | None = None
     connection_ids: list[str] | None = None
     instructions: str | None = None
@@ -78,7 +78,7 @@ class ChatStartRequest(BaseModel):
     project_path: str | None = None
     workspace_id: str | None = None
     presented_tools: list[str] | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] | None = None
+    approval_mode: Literal["ask", "full_access"] | None = None
     memory_version_refs: list[str] | None = None
     skill_version_refs: list[str] | None = None
     protected_instruction_version_refs: list[str] | None = None
@@ -220,7 +220,7 @@ class ChatConversation(BaseModel):
     setup_overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
     setup_cleared_fields: list[str] = Field(default_factory=list)
     presented_tools: list[str] | None = None
-    approval_mode: Literal["ask", "approve_for_me", "full_access"] = "ask"
+    approval_mode: Literal["ask", "full_access"] = "ask"
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] = "work"

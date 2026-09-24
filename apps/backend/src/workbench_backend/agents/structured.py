@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.agents.structured_output import ProviderStrategy, ToolStrategy
-from langchain.agents.structured_output import (
-    MultipleStructuredOutputsError,
-    StructuredOutputValidationError,
-)
-from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from workbench_backend.errors import HarnessError
@@ -22,7 +15,6 @@ from workbench_backend.inference.capabilities import capability_support
 from workbench_backend.inference.schemas import Deployment, SettingsBag
 
 StructuredStrategyName = Literal["provider", "tool"]
-StructuredRepairEvent = Callable[[str, dict[str, Any]], None]
 SCHEMA_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,119}$")
 
 
@@ -57,7 +49,6 @@ class StructuredOutputResult(BaseModel):
     validation_status: Literal["not_requested", "valid", "missing", "invalid"] = "not_requested"
     result: Any = None
     error: str | None = None
-    repair_attempts: int = 0
     note: str = (
         "Structured output is the agent structured_response, not JSON-looking answer text. "
         "Schema validity is not factual correctness."
@@ -240,131 +231,6 @@ def _validate_value(value: Any, *, current_schema: Any) -> str | None:
     except ValidationError as exc:
         return exc.message
     return None
-
-
-class StructuredOutputRepairMiddleware(AgentMiddleware):
-    """Retry one structured-formatting model call without granting tool authority.
-
-    The retry is the same model call path with ``tools=[]`` and the same
-    response_format. It does not rerun the whole agent and cannot dispatch
-    executable tools.
-    """
-
-    def __init__(
-        self,
-        result: StructuredOutputResult,
-        *,
-        on_event: StructuredRepairEvent | None = None,
-    ) -> None:
-        super().__init__()
-        self.result = result
-        self.on_event = on_event
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
-    ) -> ModelResponse:
-        try:
-            return handler(request)
-        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as exc:
-            return self._repair_once(request, handler, exc)
-
-    def _repair_once(
-        self,
-        request: ModelRequest,
-        handler: Callable[[ModelRequest], ModelResponse],
-        exc: StructuredOutputValidationError | MultipleStructuredOutputsError,
-    ) -> ModelResponse:
-        retry = self._repair_request(request, exc)
-        try:
-            return self._validate_repair_response(handler(retry))
-        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as retry_exc:
-            self._repair_failed(retry_exc)
-            raise
-
-    async def awrap_model_call(self, request: ModelRequest, handler: Any) -> ModelResponse:
-        try:
-            return await handler(request)
-        except (StructuredOutputValidationError, MultipleStructuredOutputsError) as exc:
-            retry = self._repair_request(request, exc)
-            try:
-                return self._validate_repair_response(await handler(retry))
-            except (StructuredOutputValidationError, MultipleStructuredOutputsError) as retry_exc:
-                self._repair_failed(retry_exc)
-                raise
-
-    def _repair_request(self, request: ModelRequest, exc: Any) -> ModelRequest:
-        if self.result.repair_attempts >= 1:
-            self._record_event(
-                "structured_output_repair_failed",
-                {"error": str(exc), "attempts": self.result.repair_attempts},
-            )
-            raise exc
-        self.result.repair_attempts += 1
-        self._record_event(
-            "structured_output_repair_attempted",
-            {
-                "attempt": self.result.repair_attempts,
-                "error": str(exc),
-                "tools_presented_on_retry": [],
-            },
-        )
-        return request.override(
-            messages=[
-                *request.messages,
-                exc.ai_message,
-                *_repair_tool_messages(exc.ai_message),
-            ],
-            tools=[],
-            response_format=request.response_format,
-        )
-
-    def _validate_repair_response(self, response: ModelResponse) -> ModelResponse:
-        for message in response.result:
-            for call in getattr(message, "tool_calls", []):
-                if call.get("name") != self.result.schema_name:
-                    raise HarnessError("Formatting recovery cannot execute task tools or repeat effects.", code="structured_repair_tool_forbidden", status_code=409)
-        return response
-
-    def _repair_failed(self, exc: Any) -> None:
-        self._record_event("structured_output_repair_failed",
-            {"error": str(exc), "attempts": self.result.repair_attempts})
-
-    def _record_event(self, kind: str, detail: dict[str, Any]) -> None:
-        if self.on_event is not None:
-            self.on_event(kind, detail)
-
-
-def _repair_tool_messages(ai_message: AIMessage) -> list[ToolMessage]:
-    calls = _message_tool_calls(ai_message)
-    messages: list[ToolMessage] = []
-    for index, call in enumerate(calls):
-        name = str(call.get("name") or "structured_output")
-        call_id = str(call.get("id") or f"structured_repair_{index}")
-        messages.append(
-            ToolMessage(
-                content=(
-                    "Structured output failed validation. Retry formatting only; "
-                    "do not call external tools or repeat side effects."
-                ),
-                name=name,
-                tool_call_id=call_id,
-                status="error",
-            )
-        )
-    return messages
-
-
-def _message_tool_calls(ai_message: AIMessage) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    for item in getattr(ai_message, "tool_calls", None) or []:
-        if isinstance(item, dict):
-            calls.append(item)
-    for item in getattr(ai_message, "invalid_tool_calls", None) or []:
-        if isinstance(item, dict):
-            calls.append(item)
-    return calls
 
 
 def _validate_schema_document(schema: dict[str, Any]) -> None:

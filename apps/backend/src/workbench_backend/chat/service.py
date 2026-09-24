@@ -98,7 +98,6 @@ class ChatService:
         self._asset_service: RetainedAssetService | None = None
         self._submission_cancel_lock = threading.RLock()
         self._submission_cancel_events: dict[tuple[str, str | None, str], threading.Event] = {}
-        self._pending_steer: dict[str, str] = {}
 
     @property
     def manager(self) -> ModelManager:
@@ -384,55 +383,6 @@ class ChatService:
                     updated = self.app_store.update_conversation(conversation)
             return self._view(updated)
 
-    def steer_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
-        """Course-correct the live turn with one queued message.
-
-        Deep Agents 0.7 has no mid-stream inject. Stop the current model or
-        tool step, keep the transcript, and send this message on the same thread.
-        """
-
-        cancel_run_id: str | None = None
-        with self.store.conversation_lock(conversation_id):
-            conversation = self._require(conversation_id).model_copy(deep=True)
-            item = next((entry for entry in conversation.queue if entry.id == item_id), None)
-            if item is None:
-                raise ChatError("Unknown queued Chat turn.", code="queue_item_missing", status_code=404)
-            if item.status == "dispatching":
-                raise ChatError("A dispatching Chat turn cannot be steered.", code="queue_item_dispatching", status_code=409)
-            if item.pause_reason == "dispatch_uncertain":
-                raise ChatError(
-                    "Review the uncertain dispatch before steering this turn.",
-                    code="steer_needs_review",
-                    status_code=409,
-                )
-            now = utc_now()
-            item.status = "queued"
-            item.pause_reason = None
-            item.pause_error = None
-            item.pause_error_code = None
-            item.updated_at = now
-            conversation.queue = [item, *[entry for entry in conversation.queue if entry.id != item.id]]
-            conversation.updated_at = now
-            live = False
-            if conversation.current_run_id:
-                try:
-                    current = self.harness.get_run(conversation.current_run_id)
-                except HarnessError:
-                    current = None
-                live = current is not None and is_run_lifecycle_live(current.status)
-            saved = self.store.put(conversation)
-            if live:
-                self._pending_steer[conversation.id] = item.id
-                cancel_run_id = conversation.current_run_id
-            else:
-                self._pending_steer.pop(conversation.id, None)
-                saved = self._dispatch_next_queued(saved)
-        if cancel_run_id:
-            self.harness.cancel(cancel_run_id)
-            with self.store.conversation_lock(conversation_id):
-                return self._view(self._require(conversation_id))
-        return self._view(saved)
-
     def remove_queue_item(self, conversation_id: str, item_id: str) -> ChatConversationView:
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id).model_copy(deep=True)
@@ -461,16 +411,11 @@ class ChatService:
                 conversation = self._accept_dispatching_run(conversation, run)
                 conversation, terminal = self._reconcile_terminal_assistant(conversation, run)
                 if terminal == "completed":
-                    self._pending_steer.pop(conversation.id, None)
                     conversation = self._complete_queue_item(conversation, run.id)
                     self._dispatch_next_queued(conversation)
                 elif terminal in {"failed", "cancelled"}:
-                    steer_id = self._pending_steer.pop(conversation.id, None)
                     conversation = self._complete_queue_item(conversation, run.id)
-                    if steer_id:
-                        self._dispatch_steered(conversation, steer_id)
-                    else:
-                        self._pause_queue(conversation, terminal)
+                    self._pause_queue(conversation, terminal)
             return
 
     def reconcile_saved_queue_on_startup(self, *, pending_only: bool = False) -> int:
@@ -661,6 +606,12 @@ class ChatService:
                     if key == "review":
                         value = ReviewConfiguration.model_validate(value)
                     setattr(next_conversation, key, value)
+            if (conversation.run_ids or conversation.source_checkpoint_id) and next_conversation.memory_version_refs != conversation.memory_version_refs:
+                raise ChatError(
+                    "This chat's memory is fixed. Start a new chat to use a different memory version.",
+                    code="memory_selection_locked",
+                    status_code=409,
+                )
         self._preflight_start_request(next_conversation, request)
         self._ensure_thread(next_conversation)
         now = utc_now()
@@ -894,21 +845,6 @@ class ChatService:
                     if deployment_id:
                         reservations.enter_context(self.manager.reserve_deployment(deployment_id, profile_id=profile_id))
                 return self.store.put(queued)
-
-    def _dispatch_steered(self, conversation: ChatConversation, item_id: str) -> ChatConversation:
-        steered = conversation.model_copy(deep=True)
-        item = next((entry for entry in steered.queue if entry.id == item_id), None)
-        if item is None or item.status == "dispatching":
-            return self._pause_queue(conversation, "cancelled")
-        now = utc_now()
-        item.status = "queued"
-        item.pause_reason = None
-        item.pause_error = None
-        item.pause_error_code = None
-        item.updated_at = now
-        steered.queue = [item, *[entry for entry in steered.queue if entry.id != item.id]]
-        steered.updated_at = now
-        return self._dispatch_next_queued(self.store.put(steered))
 
     def _dispatch_next_queued(self, conversation: ChatConversation) -> ChatConversation:
         if not conversation.queue or conversation.queue[0].status != "queued":
@@ -1253,6 +1189,15 @@ class ChatService:
         conversation: ChatConversation,
         request: ChatStartRequest,
     ) -> None:
+        frozen_memory = (
+            list(conversation.memory_version_refs)
+            if conversation.run_ids or conversation.source_checkpoint_id
+            else None
+        )
+        explicit_memory_selection = bool(
+            request.model_fields_set
+            & {"memory_version_refs", "knowledge_version_refs", "agent_setup_version_id"}
+        )
         fields_set = request.model_fields_set
         if request.profile_id:
             self._bind_profile(request.profile_id)
@@ -1352,6 +1297,14 @@ class ChatService:
             conversation.memory_version_refs = refs.memory_version_refs
             conversation.skill_version_refs = refs.skill_version_refs
             conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
+        if frozen_memory is not None and conversation.memory_version_refs != frozen_memory:
+            if explicit_memory_selection:
+                raise ChatError(
+                    "This chat's memory is fixed. Start a new chat to use a different memory version.",
+                    code="memory_selection_locked",
+                    status_code=409,
+                )
+            conversation.memory_version_refs = frozen_memory
         if "embedding_deployment_id" in fields_set:
             conversation.embedding_deployment_id = request.embedding_deployment_id
         if "retrieval_project_paths" in fields_set:
