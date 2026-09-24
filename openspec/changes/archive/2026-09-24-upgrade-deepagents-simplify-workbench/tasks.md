@@ -27,4 +27,4 @@
 - [x] 4.2 Verify each authorized deletion target and link, stop the established app, clean-reset disposable app data and the six approved linked project folders while retaining weights/staging/cache/runtimes, then register a fresh Qwen3.8 setup; verify a clean first launch.
 - [x] 4.3 Run the full backend and integration suites, contract freshness check and desktop build; verify clipped-result notices, supported attachment MIME and UTF-8 byte sizes without an unplanned compatibility path.
 - [x] 4.4 Run a real Windows Qwen3.8 model/tool turn and desktop mixed question/approval flow; verify skill reload, fixed memory, invalid structured output, Ask/Full and Stop/queue behavior with focused Windows integration tests.
-- [ ] 4.5 Refresh the handover, review the complete diff, prepare Git delivery and update the local app; verify the resulting installation is usable.
+- [x] 4.5 Refresh the handover, review the complete diff, prepare Git delivery and update the local app; verify the resulting installation is usable.
