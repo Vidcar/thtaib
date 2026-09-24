@@ -252,7 +252,8 @@ export function DeploymentsPanel({
     return <li key={d.id} className="running-model">
       <div className="section-heading"><div><strong>{name}</strong><p className="hint">{d.scope === "managed" ? "On this computer" : "External server"}{ctx ? ` · ${tokenLabel(ctx)} context` : ""}{d.resource_usage?.available ? ` · ${formatBytes(d.resource_usage.rss_bytes)} RAM` : ""}</p></div><StatusBadge label={state.label} tone={state.tone} /></div>
       {d.error && d.status !== "stopped" ? <Notice tone="error">{d.error}</Notice> : null}
-      {gpuLayers != null || hasSpeculation || hasThinkingOverride ? <dl className="model-applied-facts" aria-label="Applied model settings">
+      {gpuLayers != null || hasSpeculation || hasThinkingOverride || d.loaded_chat_template_origin ? <dl className="model-applied-facts" aria-label="Applied model settings">
+        {d.loaded_chat_template_origin ? <div title="The running server reported the selected Hugging Face chat template"><dt>Chat template</dt><dd>{d.loaded_chat_template_origin === "publisher" ? "Publisher" : "GGUF repository"} · confirmed</dd></div> : null}
         {gpuLayers != null ? <div title="GPU layers requested at launch; memory fitting may adjust this"><dt>GPU layers</dt><dd>{gpuLayers === -1 ? "All requested" : String(gpuLayers)}</dd></div> : null}
         {hasSpeculation ? <div title="Speculative decoding launch setting"><dt>Speculation</dt><dd>{String(speculation)}{String(speculation).startsWith("draft-") ? ` · ${d.applied_startup.spec_draft_n_max ?? 3} tokens` : ""}</dd></div> : null}
         {hasThinkingOverride ? <div title="Thinking launch setting. Per-message controls can override it."><dt>Thinking</dt><dd>{String(thinking)}</dd></div> : null}

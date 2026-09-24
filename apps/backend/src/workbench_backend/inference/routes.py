@@ -27,6 +27,7 @@ from workbench_backend.inference.schemas import (
     ModelBundle,
     BundleProjectors,
     ProjectorSelectionRequest,
+    ChatTemplateSelectionRequest,
     RunProfile,
     Deployment,
     InspectReport,
@@ -148,6 +149,11 @@ def bundle_projectors(request: Request, bundle_id: str) -> BundleProjectors:
 @router.put("/bundles/{bundle_id}/projector", response_model=ModelBundle)
 def select_bundle_projector(request: Request, bundle_id: str, body: ProjectorSelectionRequest) -> ModelBundle:
     return get_manager(request).select_bundle_projector(bundle_id, body.path)
+
+
+@router.put("/bundles/{bundle_id}/chat-template", response_model=ModelBundle)
+def select_bundle_chat_template(request: Request, bundle_id: str, body: ChatTemplateSelectionRequest) -> ModelBundle:
+    return get_manager(request).select_bundle_chat_template(bundle_id, body.origin)
 
 
 @router.get("/bundles/{bundle_id}/inspect", response_model=InspectReport)

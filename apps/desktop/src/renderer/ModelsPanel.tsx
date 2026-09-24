@@ -64,6 +64,8 @@ export function ModelsPanel() {
   }, []);
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
+  const publisherTemplateFound = Boolean(selected?.huggingface_configuration?.source_verified && selected.files.some(file =>
+    file.name === ".workbench-publisher/chat_template.jinja" || file.name === ".workbench-publisher/chat_template.from-tokenizer.jinja"));
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
   }
@@ -179,6 +181,17 @@ export function ModelsPanel() {
       <div className="model-detail">
       {selected ? <header className="model-selected-heading" aria-label="Selected model"><h3>{selected.display_name}</h3><div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div></header> : null}
       <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} />
+      {selected?.huggingface_configuration ? <section className="card" aria-label="Hugging Face model settings">
+        <div className="section-heading"><strong>Model settings from Hugging Face</strong><span className="hint">{selected.huggingface_configuration.source_verified ? "Verified publisher source" : "GGUF repository only"}</span></div>
+        {selected.huggingface_configuration.source_repo_id ? <p className="hint">{selected.huggingface_configuration.source_repo_id} @ {selected.huggingface_configuration.source_revision?.slice(0, 8) ?? "unverified"}</p> : null}
+        <p>Chat template for next load: <strong>{selected.huggingface_configuration.template_origin === "gguf" ? "GGUF embedded" : selected.huggingface_configuration.template_origin === "none" ? "Unavailable" : selected.huggingface_configuration.template_origin === "publisher" ? "Publisher file" : "GGUF repository file"}</strong>{selected.huggingface_configuration.template_differs ? " · publisher file differs" : ""}</p>
+        {publisherTemplateFound ? <div className="actions">
+          {selected.huggingface_configuration.template_compatible ? <span className="hint">Publisher template passed the runtime check.</span> : <button type="button" disabled={verifyBusy} onClick={() => { setVerifyBusy(true); setMessage("Testing publisher template with this model…"); void api.selectModelChatTemplate(selected.id, "publisher").then(() => { setMessage("Publisher template passed the runtime check and is selected for the next load."); return refresh(); }).catch(fail).finally(() => setVerifyBusy(false)); }}>{selected.huggingface_configuration.template_origin === "publisher" ? "Test publisher template" : "Test and use publisher template"}</button>}
+          {selected.huggingface_configuration.template_differs && selected.huggingface_configuration.template_origin !== "gguf" ? <button type="button" disabled={verifyBusy} onClick={() => { setVerifyBusy(true); void api.selectModelChatTemplate(selected.id, "gguf").then(() => { setMessage("GGUF embedded template selected for the next load."); return refresh(); }).catch(fail).finally(() => setVerifyBusy(false)); }}>Use GGUF template</button> : null}
+        </div> : null}
+        {Object.keys(selected.huggingface_configuration.generation_defaults).length ? <dl className="meta compact">{Object.entries(selected.huggingface_configuration.generation_defaults).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{key === "logit_bias" ? "Source token suppression" : String(value)}</dd></div>)}</dl> : <p className="hint">No verified publisher generation settings were found.</p>}
+        {Object.keys(selected.huggingface_configuration.unsupported).length ? <details className="technical-details"><summary>Settings not applied ({Object.keys(selected.huggingface_configuration.unsupported).length})</summary><dl className="meta compact">{Object.entries(selected.huggingface_configuration.unsupported).map(([key, reason]) => <div key={key}><dt>{key}</dt><dd>{reason}</dd></div>)}</dl></details> : null}
+      </section> : null}
       {selected ? (
           <details className="card technical-details"><summary>Files &amp; metadata</summary>
             <p className="hint">Model ID: <code>{selected.id}</code></p>

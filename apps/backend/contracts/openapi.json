@@ -3893,6 +3893,24 @@
         "title": "ChatStartRequest",
         "type": "object"
       },
+      "ChatTemplateSelectionRequest": {
+        "properties": {
+          "origin": {
+            "enum": [
+              "gguf",
+              "repository",
+              "publisher"
+            ],
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "title": "ChatTemplateSelectionRequest",
+        "type": "object"
+      },
       "ChatTranscriptReplaceRequest": {
         "properties": {
           "messages": {
@@ -4819,6 +4837,21 @@
             "title": "Inference Identity",
             "type": "object"
           },
+          "loaded_chat_template_origin": {
+            "anyOf": [
+              {
+                "enum": [
+                  "repository",
+                  "publisher"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Chat Template Origin"
+          },
           "pid": {
             "anyOf": [
               {
@@ -4860,6 +4893,11 @@
                 "type": "null"
               }
             ]
+          },
+          "publisher_request_defaults": {
+            "additionalProperties": true,
+            "title": "Publisher Request Defaults",
+            "type": "object"
           },
           "reconfiguration": {
             "anyOf": [
@@ -5639,6 +5677,13 @@
             "title": "File Sizes",
             "type": "object"
           },
+          "gguf_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/HubSearchResult"
+            },
+            "title": "Gguf Candidates",
+            "type": "array"
+          },
           "guidance_files": {
             "items": {
               "type": "string"
@@ -5660,6 +5705,16 @@
           "resolved_revision": {
             "title": "Resolved Revision",
             "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HubSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "variants": {
             "items": {
@@ -5722,6 +5777,53 @@
         "title": "HubSearchResult",
         "type": "object"
       },
+      "HubSource": {
+        "properties": {
+          "guidance_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Guidance Files",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "repo_id": {
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "resolved_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Revision"
+          },
+          "verified": {
+            "default": false,
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "repo_id"
+        ],
+        "title": "HubSource",
+        "type": "object"
+      },
       "HubVariant": {
         "properties": {
           "complete": {
@@ -5757,6 +5859,100 @@
           "files"
         ],
         "title": "HubVariant",
+        "type": "object"
+      },
+      "HuggingFaceConfiguration": {
+        "properties": {
+          "generation_defaults": {
+            "additionalProperties": true,
+            "title": "Generation Defaults",
+            "type": "object"
+          },
+          "source_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Note"
+          },
+          "source_repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Repo Id"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "source_verified": {
+            "default": false,
+            "title": "Source Verified",
+            "type": "boolean"
+          },
+          "template_compatible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Compatible"
+          },
+          "template_differs": {
+            "default": false,
+            "title": "Template Differs",
+            "type": "boolean"
+          },
+          "template_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template File"
+          },
+          "template_origin": {
+            "default": "none",
+            "enum": [
+              "gguf",
+              "repository",
+              "publisher",
+              "none"
+            ],
+            "title": "Template Origin",
+            "type": "string"
+          },
+          "unsupported": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Unsupported",
+            "type": "object"
+          }
+        },
+        "title": "HuggingFaceConfiguration",
         "type": "object"
       },
       "HuggingFaceImportRequest": {
@@ -7702,6 +7898,16 @@
             "default": "gguf",
             "title": "Format",
             "type": "string"
+          },
+          "huggingface_configuration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HuggingFaceConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -13074,6 +13280,55 @@
           }
         },
         "summary": "Get Bundle"
+      }
+    },
+    "/v1/bundles/{bundle_id}/chat-template": {
+      "put": {
+        "operationId": "select_bundle_chat_template_v1_bundles__bundle_id__chat_template_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatTemplateSelectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Bundle Chat Template"
       }
     },
     "/v1/bundles/{bundle_id}/compatibility": {

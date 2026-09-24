@@ -36,6 +36,7 @@ from workbench_backend.inference.schemas import (
     ModelBundle,
     ProcessIdentity,
     ResourceUsage,
+    ServerProperties,
     SettingsBags,
     SmokeResult,
 )
@@ -130,10 +131,13 @@ class DeploymentService:
                 requested_startup[key] = value
         per_request = profile.bags.per_request.requested if profile else {}
         agent = profile.bags.agent.requested if profile else {}
+        publisher_defaults = (bundle.huggingface_configuration.generation_defaults
+            if bundle.huggingface_configuration else {})
         bags = resolve_bags(
             startup=requested_startup,
             per_request=per_request,
             agent=agent,
+            per_request_defaults=publisher_defaults,
         )
         _require_valid_managed_startup(bags.startup)
         # A stopped record does not reserve an OS port. Recheck at launch.
@@ -145,6 +149,7 @@ class DeploymentService:
             per_request=per_request,
             agent=agent,
             startup_overrides=overrides,
+            per_request_defaults=publisher_defaults,
         )
         _require_valid_managed_startup(bags.startup)
         deployment = Deployment(
@@ -159,6 +164,7 @@ class DeploymentService:
             applied_startup=bags.startup.applied,
             startup_overrides=dict(request.startup or {}),
             profile_snapshot=profile.bags.model_copy(deep=True) if profile else None,
+            publisher_request_defaults=dict(publisher_defaults),
             configuration_revision=profile.revision if profile else None,
             settings=bags,
             created_at=utc_now(),
@@ -332,15 +338,18 @@ class DeploymentService:
             per_request=deployment.settings.per_request.requested,
             agent=deployment.settings.agent.requested,
             startup_overrides=startup_overrides,
+            per_request_defaults=deployment.publisher_request_defaults,
         )
         _require_valid_managed_startup(bags.startup)
-        if bags.startup.applied != deployment.applied_startup or bags != deployment.settings:
+        endpoint = f"http://{host}:{port}/v1"
+        if (bags.startup.applied != deployment.applied_startup or bags != deployment.settings
+            or deployment.endpoint != endpoint):
             deployment = self.store.put_deployment(
                 deployment.model_copy(
                     update={
                         "applied_startup": bags.startup.applied,
                         "settings": bags,
-                        "endpoint": f"http://{host}:{port}/v1",
+                        "endpoint": endpoint,
                         "updated_at": utc_now(),
                     }
                 )
@@ -354,6 +363,7 @@ class DeploymentService:
                 "error": None,
                 "pid": None,
                 "process_identity": None,
+                "loaded_chat_template_origin": None,
             }
         )
         self.store.put_deployment(starting)
@@ -405,6 +415,7 @@ class DeploymentService:
             usage = self.processes.resource_usage(identity)
             status = DeploymentStatus.running if health.healthy else DeploymentStatus.unhealthy
             props = self.probe.props(recorded.endpoint or "") if health.healthy else None
+            template_origin = _verified_loaded_template(bundle, recorded.applied_startup, props)
             return self.store.put_deployment(
                 recorded.model_copy(
                     update={
@@ -414,6 +425,7 @@ class DeploymentService:
                         "health": health,
                         "resource_usage": usage,
                         "server_props": props,
+                        "loaded_chat_template_origin": template_origin,
                         "error": None,
                         "updated_at": utc_now(),
                     }
@@ -663,6 +675,7 @@ class DeploymentService:
                     "process_identity": None,
                     "health": None,
                     "server_props": None,
+                    "loaded_chat_template_origin": None,
                     "resource_usage": ResourceUsage(available=False, reason=usage_reason),
                     "error": error,
                     "updated_at": utc_now(),
@@ -740,8 +753,35 @@ def managed_argv(executable: Path | str, bundle: ModelBundle, applied_startup: d
                 status_code=409,
             )
         argv.extend(["--mmproj", projector.path])
+    configuration = bundle.huggingface_configuration
+    if configuration and configuration.template_file and not any(
+        applied_startup.get(key) for key in ("chat_template", "chat_template_file")
+    ):
+        from workbench_backend.inference.hashes import sha256_file
+        selected = next((item for item in bundle.files if item.path == configuration.template_file), None)
+        if selected is None or not Path(selected.path).is_file() or sha256_file(Path(selected.path)) != selected.sha256:
+            raise ManagerError("The selected Hugging Face chat template is missing or changed.",
+                code="bundle_template_invalid", status_code=409)
+        argv.extend(["--jinja", "--chat-template-file", selected.path])
     argv.extend(startup_cli_args(applied_startup))
     return argv
+
+
+def _verified_loaded_template(bundle: ModelBundle, applied_startup: dict[str, Any], props: ServerProperties | None) -> str | None:
+    """Require the owned server to report the selected external template."""
+    configuration = bundle.huggingface_configuration
+    if (configuration is None or configuration.template_origin not in {"publisher", "repository"}
+        or not configuration.template_file or any(
+            applied_startup.get(key) for key in ("chat_template", "chat_template_file")
+        )):
+        return None
+    expected = Path(configuration.template_file).read_text(encoding="utf-8").rstrip("\r\n")
+    if props is None or props.chat_template is None or props.chat_template.rstrip("\r\n") != expected:
+        raise ManagerError(
+            "The running model did not report the selected Hugging Face chat template. Model loading was stopped.",
+            code="bundle_template_not_loaded", status_code=409,
+        )
+    return configuration.template_origin
 
 
 def _require_valid_managed_startup(startup: Any) -> None:

@@ -82,6 +82,7 @@ EXTRA_BODY_KEYS = (
     "typical_p",
     "repeat_penalty",
     "reasoning_format",
+    "logit_bias",
 )
 
 

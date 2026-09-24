@@ -71,6 +71,19 @@ class BundleFile(BaseModel):
     ownership: Literal["managed", "external"] = "managed"
 
 
+class HuggingFaceConfiguration(BaseModel):
+    source_repo_id: str | None = None
+    source_revision: str | None = None
+    source_verified: bool = False
+    source_note: str | None = None
+    template_origin: Literal["gguf", "repository", "publisher", "none"] = "none"
+    template_file: str | None = None
+    template_differs: bool = False
+    template_compatible: bool | None = None
+    generation_defaults: dict[str, Any] = Field(default_factory=dict)
+    unsupported: dict[str, str] = Field(default_factory=dict)
+
+
 class ModelBundle(BaseModel):
     id: str
     display_name: str
@@ -86,6 +99,7 @@ class ModelBundle(BaseModel):
     status: ImportStatus = ImportStatus.complete
     disk_matches: bool = True
     default_configuration_id: str | None = None
+    huggingface_configuration: HuggingFaceConfiguration | None = None
 
 
 class ProjectorSelectionRequest(BaseModel):
@@ -175,6 +189,10 @@ class HuggingFaceImportRequest(BaseModel):
     display_name: str | None = None
 
 
+class ChatTemplateSelectionRequest(BaseModel):
+    origin: Literal["gguf", "repository", "publisher"]
+
+
 class HuggingFaceInspectRequest(BaseModel):
     repo_id: str
     revision: str = "main"
@@ -187,6 +205,20 @@ class HubVariant(BaseModel):
     complete: bool = True
 
 
+class HubSearchResult(BaseModel):
+    repo_id: str
+    downloads: int | None = None
+    likes: int | None = None
+
+
+class HubSource(BaseModel):
+    repo_id: str
+    resolved_revision: str | None = None
+    verified: bool = False
+    note: str | None = None
+    guidance_files: list[str] = Field(default_factory=list)
+
+
 class HubRepository(BaseModel):
     repo_id: str
     resolved_revision: str
@@ -196,12 +228,8 @@ class HubRepository(BaseModel):
     warnings: list[str]
     file_sha256: dict[str, str | None] = Field(default_factory=dict)
     file_sizes: dict[str, int | None] = Field(default_factory=dict)
-
-
-class HubSearchResult(BaseModel):
-    repo_id: str
-    downloads: int | None = None
-    likes: int | None = None
+    source: HubSource | None = None
+    gguf_candidates: list[HubSearchResult] = Field(default_factory=list)
 
 
 class LocalImportRequest(BaseModel):
@@ -475,6 +503,8 @@ class Deployment(BaseModel):
     applied_startup: dict[str, Any] = Field(default_factory=dict)
     startup_overrides: dict[str, Any] = Field(default_factory=dict)
     profile_snapshot: SettingsBags | None = None
+    publisher_request_defaults: dict[str, Any] = Field(default_factory=dict)
+    loaded_chat_template_origin: Literal["repository", "publisher"] | None = None
     settings: SettingsBags = Field(default_factory=SettingsBags)
     pid: int | None = None
     process_identity: ProcessIdentity | None = None

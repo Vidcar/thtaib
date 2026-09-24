@@ -468,6 +468,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bundles/{bundle_id}/chat-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Select Bundle Chat Template */
+        put: operations["select_bundle_chat_template_v1_bundles__bundle_id__chat_template_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bundles/{bundle_id}/compatibility": {
         parameters: {
             query?: never;
@@ -3269,6 +3286,14 @@ export interface components {
             /** Workspace Id */
             workspace_id?: string | null;
         };
+        /** ChatTemplateSelectionRequest */
+        ChatTemplateSelectionRequest: {
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "gguf" | "repository" | "publisher";
+        };
         /** ChatTranscriptReplaceRequest */
         ChatTranscriptReplaceRequest: {
             /** Messages */
@@ -3615,12 +3640,18 @@ export interface components {
             inference_identity?: {
                 [key: string]: unknown;
             };
+            /** Loaded Chat Template Origin */
+            loaded_chat_template_origin?: ("repository" | "publisher") | null;
             /** Pid */
             pid?: number | null;
             process_identity?: components["schemas"]["ProcessIdentity"] | null;
             /** Profile Id */
             profile_id?: string | null;
             profile_snapshot?: components["schemas"]["SettingsBags"] | null;
+            /** Publisher Request Defaults */
+            publisher_request_defaults?: {
+                [key: string]: unknown;
+            };
             /** Reconfiguration */
             reconfiguration?: {
                 [key: string]: unknown;
@@ -3927,6 +3958,8 @@ export interface components {
             file_sizes?: {
                 [key: string]: number | null;
             };
+            /** Gguf Candidates */
+            gguf_candidates?: components["schemas"]["HubSearchResult"][];
             /** Guidance Files */
             guidance_files: string[];
             /** Projectors */
@@ -3935,6 +3968,7 @@ export interface components {
             repo_id: string;
             /** Resolved Revision */
             resolved_revision: string;
+            source?: components["schemas"]["HubSource"] | null;
             /** Variants */
             variants: components["schemas"]["HubVariant"][];
             /** Warnings */
@@ -3949,6 +3983,22 @@ export interface components {
             /** Repo Id */
             repo_id: string;
         };
+        /** HubSource */
+        HubSource: {
+            /** Guidance Files */
+            guidance_files?: string[];
+            /** Note */
+            note?: string | null;
+            /** Repo Id */
+            repo_id: string;
+            /** Resolved Revision */
+            resolved_revision?: string | null;
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+        };
         /** HubVariant */
         HubVariant: {
             /**
@@ -3962,6 +4012,43 @@ export interface components {
             name: string;
             /** Size Bytes */
             size_bytes?: number | null;
+        };
+        /** HuggingFaceConfiguration */
+        HuggingFaceConfiguration: {
+            /** Generation Defaults */
+            generation_defaults?: {
+                [key: string]: unknown;
+            };
+            /** Source Note */
+            source_note?: string | null;
+            /** Source Repo Id */
+            source_repo_id?: string | null;
+            /** Source Revision */
+            source_revision?: string | null;
+            /**
+             * Source Verified
+             * @default false
+             */
+            source_verified: boolean;
+            /** Template Compatible */
+            template_compatible?: boolean | null;
+            /**
+             * Template Differs
+             * @default false
+             */
+            template_differs: boolean;
+            /** Template File */
+            template_file?: string | null;
+            /**
+             * Template Origin
+             * @default none
+             * @enum {string}
+             */
+            template_origin: "gguf" | "repository" | "publisher" | "none";
+            /** Unsupported */
+            unsupported?: {
+                [key: string]: string;
+            };
         };
         /** HuggingFaceImportRequest */
         HuggingFaceImportRequest: {
@@ -4688,6 +4775,7 @@ export interface components {
              * @constant
              */
             format: "gguf";
+            huggingface_configuration?: components["schemas"]["HuggingFaceConfiguration"] | null;
             /** Id */
             id: string;
             /** Managed Root */
@@ -6219,6 +6307,7 @@ export type SchemaChatQueueItemUpdateRequest = components['schemas']['ChatQueueI
 export type SchemaChatQueueResumeRequest = components['schemas']['ChatQueueResumeRequest'];
 export type SchemaChatSearchResult = components['schemas']['ChatSearchResult'];
 export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
+export type SchemaChatTemplateSelectionRequest = components['schemas']['ChatTemplateSelectionRequest'];
 export type SchemaChatTranscriptReplaceRequest = components['schemas']['ChatTranscriptReplaceRequest'];
 export type SchemaChildRunActivity = components['schemas']['ChildRunActivity'];
 export type SchemaCompatibilityAssessRequest = components['schemas']['CompatibilityAssessRequest'];
@@ -6252,7 +6341,9 @@ export type SchemaHealthReport = components['schemas']['HealthReport'];
 export type SchemaHostShellFacts = components['schemas']['HostShellFacts'];
 export type SchemaHubRepository = components['schemas']['HubRepository'];
 export type SchemaHubSearchResult = components['schemas']['HubSearchResult'];
+export type SchemaHubSource = components['schemas']['HubSource'];
 export type SchemaHubVariant = components['schemas']['HubVariant'];
+export type SchemaHuggingFaceConfiguration = components['schemas']['HuggingFaceConfiguration'];
 export type SchemaHuggingFaceImportRequest = components['schemas']['HuggingFaceImportRequest'];
 export type SchemaHuggingFaceInspectRequest = components['schemas']['HuggingFaceInspectRequest'];
 export type SchemaImageContent = components['schemas']['ImageContent'];
@@ -7377,6 +7468,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeletePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_bundle_chat_template_v1_bundles__bundle_id__chat_template_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatTemplateSelectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBundle"];
                 };
             };
             /** @description Validation Error */

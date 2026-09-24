@@ -91,6 +91,7 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
     {error ? <Notice tone="error" action={selectedRepo && !hub ? <button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(selectedRepo)}>Retry loading files</button> : undefined}>{error}</Notice> : null}
     {hub ? <section className="model-download-selection" aria-label="Repository files">
       <div className="section-heading"><strong>{hub.repo_id}</strong><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide ↗</a></div>
+      {hub.source ? <p className="hint">Publisher settings: {hub.source.repo_id}{hub.source.resolved_revision ? ` @ ${hub.source.resolved_revision.slice(0, 8)}` : ""} · {hub.source.verified ? "source commit verified" : "source unverified; publisher settings will not be applied"}</p> : null}
       {hub.variants.length ? <div className="model-download-options">
         <label>Model variant<select value={variant} disabled={Boolean(busy)} onChange={event => setVariant(event.target.value)}>
           <option value="">Choose a GGUF variant</option>
@@ -100,10 +101,13 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
           <option value="">Choose vision file or text only</option><option value="text-only">Text only</option>
           {hub.projectors.map(item => <option key={item.name} value={item.name} disabled={!item.complete}>{item.name}{item.size_bytes == null ? "" : ` · ${formatBytes(item.size_bytes)}`}{item.complete ? "" : " · missing files"}</option>)}
         </select></label> : null}
-      </div> : <Notice tone="warn">No complete GGUF model variants were found. Search for a GGUF version of this model.</Notice>}
+      </div> : <><Notice tone="warn">This publisher repository has no GGUF weights. Choose a GGUF conversion to download.</Notice>
+        {hub.gguf_candidates?.length ? <ul className="model-search-results" aria-label="GGUF conversions">{hub.gguf_candidates.map(candidate => <li key={candidate.repo_id}>
+          <strong>{candidate.repo_id}</strong><button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(candidate.repo_id)}>Inspect GGUF</button>
+        </li>)}</ul> : <p className="hint">No GGUF conversion declared this exact publisher model. Search by model name to inspect other repositories.</p>}</>}
       {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
       {selectedVariant ? <><div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !selectedVariant.complete || !projector} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
-        <details className="technical-details"><summary>Selected files · revision {hub.resolved_revision.slice(0, 8)}</summary><ul>{files.map(file => <li key={file}>{file}</li>)}</ul></details></> : null}
+        <details className="technical-details"><summary>Selected files · revision {hub.resolved_revision.slice(0, 8)}</summary><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul></details></> : null}
     </section> : null}
     {message ? <p role="status">{message}</p> : null}
   </section>;

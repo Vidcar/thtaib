@@ -157,6 +157,7 @@ PER_REQUEST_KEYS: frozenset[str] = frozenset(
         "presence_penalty",
         "frequency_penalty",
         "max_tokens",
+        "logit_bias",
         "stop",
         "seed",
         "reasoning",
@@ -555,6 +556,7 @@ def resolve_bags(
     per_request: dict[str, Any] | None = None,
     agent: dict[str, Any] | None = None,
     startup_overrides: dict[str, Any] | None = None,
+    per_request_defaults: dict[str, Any] | None = None,
 ) -> SettingsBags:
     startup_requested, invalid_enums = normalize_startup_requested(startup or {})
     startup_bag = resolve_bag(
@@ -572,7 +574,7 @@ def resolve_bags(
     )
     return SettingsBags(
         startup=startup_bag,
-        per_request=resolve_bag(per_request or {}, PER_REQUEST_KEYS),
+        per_request=resolve_bag(per_request or {}, PER_REQUEST_KEYS, defaults=per_request_defaults),
         agent=resolve_bag(
             agent or {},
             AGENT_KEYS,

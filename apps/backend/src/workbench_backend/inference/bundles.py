@@ -212,7 +212,8 @@ def collect_bundle_files(source: Path) -> list[Path]:
         return [
             path
             for path in files
-            if not path.relative_to(source).parts[:2] == (".cache", "huggingface")
+            if not any(path.relative_to(source).parts[index:index + 2] == (".cache", "huggingface")
+                for index in range(len(path.relative_to(source).parts) - 1))
         ]
     return files
 
@@ -466,6 +467,8 @@ class BundleService:
         cancel_check: CancelCheck | None = None,
     ) -> ModelBundle:
         files = collect_bundle_files(download.local_dir)
+        if download.expected_sizes:
+            files = [path for path in files if path.relative_to(download.local_dir).as_posix() in download.expected_sizes]
         if not files:
             raise ManagerError(
                 "Hugging Face download produced no files",
@@ -476,7 +479,7 @@ class BundleService:
         self._verify_expected_hashes(files, download.local_dir, download.expected_sha256, cancel_check=cancel_check)
         source = BundleSource(
             kind=BundleSourceKind.huggingface,
-            repo_id=request.repo_id,
+            repo_id=download.repo_id,
             requested_revision=request.revision,
             resolved_revision=download.resolved_revision,
         )
@@ -487,17 +490,22 @@ class BundleService:
             cancel_check=cancel_check,
         )
         if bundle is not None:
-            return bundle
-        return self._record_files(
-            files,
-            display_name=request.display_name or request.repo_id,
-            source=source,
-            reuse_root=download.local_dir,
-            install_root=install_root,
-            job_id=job_id,
-            progress=progress,
-            cancel_check=cancel_check,
-        )
+            if bundle.huggingface_configuration is not None:
+                return bundle
+        else:
+            bundle = self._record_files(
+                files,
+                display_name=request.display_name or download.repo_id,
+                source=source,
+                reuse_root=download.local_dir,
+                install_root=install_root,
+                job_id=job_id,
+                progress=progress,
+                cancel_check=cancel_check,
+            )
+        from workbench_backend.inference.hf_configuration import configuration_from_download
+        configured = bundle.model_copy(update={"huggingface_configuration": configuration_from_download(bundle, download)})
+        return self.store.put_bundle(configured)
 
     def verify_bundle(self, bundle: ModelBundle, *, use_cache: bool = False) -> ModelBundle:
         cache_key = f"model-verification:{bundle.id}"
