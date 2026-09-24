@@ -55,6 +55,7 @@ def describe_repository(repo_id: str, info: object) -> HubRepository:
     siblings = {item.rfilename: item for item in getattr(info, "siblings", [])}
     files = {name: getattr(item, "size", None) for name, item in siblings.items()}
     groups: dict[str, list[str]] = {}
+    auxiliary_groups: dict[str, list[str]] = {}
     projectors: list[HubVariant] = []
     guidance: list[str] = []
     for name, size in sorted(files.items()):
@@ -66,24 +67,33 @@ def describe_repository(repo_id: str, info: object) -> HubRepository:
                 projectors.append(HubVariant(name=name, files=[name], size_bytes=size))
             else:
                 group = re.sub(r"-\d{5}-of-\d{5}\.gguf$", ".gguf", name, flags=re.I)
-                groups.setdefault(group, []).append(name)
+                auxiliary = (path.parts[0].casefold() == "mtp" or path.name.casefold().startswith("mtp-")
+                             or re.match(r"(?i)^imatrix(?:[-_.]|$)", path.name) is not None)
+                (auxiliary_groups if auxiliary else groups).setdefault(group, []).append(name)
         elif path.name.lower() in {"readme.md", ".src_sha", *CONFIG_NAMES}:
             guidance.append(name)
-    variants = []
-    for name, names in groups.items():
-        matches = [re.search(r"-(\d{5})-of-(\d{5})\.gguf$", f, re.I) for f in names]
-        complete = True
-        if any(matches):
-            totals = {int(m[2]) for m in matches if m}
-            complete = len(totals) == 1 and all(matches)
-            if complete:
-                total = next(iter(totals))
-                complete = {int(m[1]) for m in matches if m} == set(range(1, total + 1))
-        size = sum(files[f] for f in names) if all(files[f] is not None for f in names) else None
-        variants.append(HubVariant(name=name, files=names, size_bytes=size, complete=complete))
+    def grouped_variants(grouped: dict[str, list[str]]) -> list[HubVariant]:
+        result = []
+        for name, names in grouped.items():
+            matches = [re.search(r"-(\d{5})-of-(\d{5})\.gguf$", f, re.I) for f in names]
+            complete = True
+            if any(matches):
+                totals = {int(m[2]) for m in matches if m}
+                complete = len(totals) == 1 and all(matches)
+                if complete:
+                    total = next(iter(totals))
+                    complete = {int(m[1]) for m in matches if m} == set(range(1, total + 1))
+            size = sum(files[f] for f in names) if all(files[f] is not None for f in names) else None
+            result.append(HubVariant(name=name, files=names, size_bytes=size, complete=complete))
+        return result
+
+    variants = grouped_variants(groups)
+    auxiliary_ggufs = grouped_variants(auxiliary_groups)
     warnings = ["File size is disk usage, not a RAM/VRAM estimate. Runtime support depends on architecture, template and configuration."]
     if projectors:
         warnings.append("Projector compatibility is not established by its filename. Check publisher guidance and select explicitly, or choose text-only.")
+    if auxiliary_ggufs:
+        warnings.append("MTP and imatrix GGUF files are listed separately; they are not selectable primary model weights.")
     if not variants:
         warnings.append("No GGUF weights found. This execution path uses llama.cpp; other formats need a separate adapter.")
     return HubRepository(
@@ -91,6 +101,7 @@ def describe_repository(repo_id: str, info: object) -> HubRepository:
         resolved_revision=str(sha),
         variants=variants,
         projectors=projectors,
+        auxiliary_ggufs=auxiliary_ggufs,
         guidance_files=guidance,
         warnings=warnings,
         file_sha256={name: _sibling_sha256(item) for name, item in siblings.items()},
@@ -203,6 +214,10 @@ class HuggingFaceFetcher:
         available = [f for v in listing.variants + listing.projectors for f in v.files] + listing.guidance_files
         files = listing.file_sizes
         selected = {f for f in available if allow_patterns is None or any(fnmatch.fnmatchcase(f, p) for p in allow_patterns)}
+        auxiliary_selected = {f for variant in listing.auxiliary_ggufs for f in variant.files
+                              if allow_patterns is None or any(fnmatch.fnmatchcase(f, p) for p in allow_patterns)}
+        if auxiliary_selected:
+            raise ManagerError("Selected auxiliary GGUF files cannot be used as primary weights.", code="hf_auxiliary_selection", status_code=400)
         if len({f.lower() for f in selected}) != len(selected):
             raise ManagerError(
                 "Selected files include paths that differ only by case, which is unsafe on this platform.",

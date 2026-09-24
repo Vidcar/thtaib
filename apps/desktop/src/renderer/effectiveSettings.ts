@@ -23,6 +23,7 @@ export function settingValue(value: unknown): string {
   if (value == null) return "Not reported";
   if (Array.isArray(value)) return value.length ? `${value.length} selected` : "None";
   if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "number" && Number.isFinite(value)) return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
   const labels: Record<string, string> = { ask: "Ask for approval", approve_for_me: "Approve for me", full_access: "Full access", on: "On", off: "Off", low: "Low", medium: "Medium", high: "High", xhigh: "Xhigh", auto: "Automatic" };
   return labels[String(value)] ?? String(value);
 }

@@ -236,8 +236,18 @@ export function DeploymentsPanel({
     await preview(payload.startup, payload.per_request, owner);
     return persistConfiguration(payload, asVariant, owner);
   }
-  const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number) =>
-    <Choice key={key} id={`model-${key}`} label={label} help={help} flag={`--${key.replaceAll("_", "-")}`} value={settings[key]} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} />;
+  const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number) => {
+    const requested = settings[key];
+    const selectedLabel = options.find(option => option.value === requested)?.label ?? requested;
+    const savedValue = selectedProfile?.bags.startup.requested[key];
+    const source = changedStartup.current.has(key) ? "Unsaved edit"
+      : savedValue !== undefined ? "Saved configuration"
+      : selectedRunning?.applied_startup[key] !== undefined ? "Loaded model"
+      : configuration?.startup_defaults[key]?.default_source ?? "Automatic engine choice";
+    const observed = key === "ctx_size" ? selectedRunning?.server_props?.n_ctx : configuration?.startup_defaults[key]?.observed;
+    return <div key={key} className="model-setting-wrap"><Choice id={`model-${key}`} label={label} help={help} flag={`--${key.replaceAll("_", "-")}`} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} />
+      <span className="hint model-effective-hint">{requested === "" || requested === "auto" ? "Automatic" : selectedLabel} · {source}{observed != null ? ` · Running: ${key === "ctx_size" ? `${tokenLabel(Number(observed))} tokens` : String(observed)}` : ""}</span></div>;
+  };
   const readout = (values: Record<string, unknown>) => <dl className="settings-readout">{Object.entries(values).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>)}</dl>;
 
   function renderDeployment(d: Deployment) {
@@ -285,7 +295,7 @@ export function DeploymentsPanel({
     {otherCurrent.length ? <aside className="other-active-models" aria-label="Other active models"><span className="hint">Also active</span>{otherCurrent.map(d => <button type="button" key={d.id} disabled={!onSelectBundle} onClick={() => onSelectBundle?.(d.bundle_id!)}><span>{bundles.find(bundle => bundle.id === d.bundle_id)?.display_name}</span><StatusBadge {...stateOf(d)} /></button>)}</aside> : null}
     {selectedCurrent.length ? <section className="card running-section"><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <details className="technical-details"><summary>Additional connections <span>{selectedConnections.length}</span></summary><ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul></details> : null}</section> : null}
     {selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}
-    {selected ? <section className="card model-setup"><h3>Configuration</h3><form ref={formRef} className="model-settings" onSubmit={event => {
+    {selected ? <section className="card model-setup"><div className="section-heading"><h3>Configuration</h3><span className="model-edit-state" data-dirty={dirty.current}>{dirty.current ? "Edits to save" : "Saved configuration"}</span></div><form ref={formRef} className="model-settings" onSubmit={event => {
       event.preventDefault(); void action("start", async () => {
         const payload = configurationPayload(), overrides = startup(), owner = selectionOwner.current;
         await preview(payload.startup, payload.per_request, owner);
@@ -310,18 +320,18 @@ export function DeploymentsPanel({
       <div className="section-heading"><span className="hint model-capacity">{modelInfo}</span><button type="button" className="icon-button" aria-label="Refresh model details" title="Re-read model metadata and supported controls" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true)); })}><Icon name="refresh" size={16} /></button></div>
       <div className="setup-form-grid"><label>Configuration<select value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">Default</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id && profile.display_name.trim().toLowerCase() !== "default" ? " · default" : ""}</option>)}</select></label><label>Name<input value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label></div>
       {selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" className="quiet-button" disabled={Boolean(busy)} onClick={() => void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); })}>Use as model default</button> : null}
-      {selectedActive ? <div className="inline-note">{selectedRunning ? `Running with ${selectedRunning.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context` : "the settings shown in Details"}.` : "This model is loading or waiting for a connection."} Changes apply after a safe reload.</div> : null}
+      {selectedActive ? <div className="inline-note">{selectedRunning ? `Loaded model: ${selectedRunning.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context reported by the engine` : "see runtime details for reported settings"}.` : "This model is loading or waiting for a connection."} Save changes for future use; choose Apply &amp; reload to change this loaded model.</div> : <p className="hint">Changes to this saved configuration will be used by future Chat, Lab and Workflows sessions. Loading applies startup settings.</p>}
       <div className="model-settings-grid">
         {field("ctx_size", "Context size", "Space for the conversation, instructions and replies, measured in tokens. Larger contexts use more memory. Automatic fitting chooses a size at startup; the running value is shown above.", [{ value: "", label: maximumContext ? `Automatic · up to ${tokenLabel(maximumContext)}` : "Automatic · fit available memory" }, ...contextChoices], true, 1, maximumContext ?? undefined)}
         {field("n_gpu_layers", "GPU layers", "Move model layers to your graphics card for faster responses. All layers requests full offload; memory fitting can adjust this. Zero uses the CPU. The output layer is included in the available count.", [{ value: "-1", label: `All layers (−1)${layers ? ` · ${layers} available` : ""}` }, { value: "auto", label: "Automatic · fit GPU memory" }, { value: "0", label: "0 · CPU only" }, ...numberChoices([...new Set([...(layers ? Array.from({ length: 7 }, (_, i) => Math.max(1, Math.round(layers * (i + 1) / 8))) : [8, 16, 24, 32, 48, 64, 80]), layers ?? 99])])], true, -1, layers ?? undefined)}
         {field("fit", "Memory fitting", "Adjust settings that have not been fixed explicitly to fit GPU memory. Large explicit settings can still exceed available memory.", switches)}
         {field("flash_attn", "Flash attention", "Faster, more memory-efficient attention when supported by your GPU and model. Auto lets the engine choose.", [...switches, { value: "auto", label: "Automatic" }])}
       </div>
-      <details className="settings-group"><summary>Speculative decoding <span>{settings.spec_type === "none" ? "Off" : settings.spec_type}</span></summary><div className="setting-title"><Help label="Speculative decoding">MTP is available when the file contains a compatible draft head. Other compatible draft models can be configured in additional settings. Runtime support does not guarantee a speed increase.</Help></div><div className="model-settings-grid">
-        {field("spec_type", "Speculative decoding", configuration?.startup_defaults.spec_type?.description ?? "Loading supported modes…", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
+      <section className="settings-group visible-settings-group"><h4>Speculative decoding</h4><div className="model-settings-grid">
+        {field("spec_type", "Mode", configuration?.startup_defaults.spec_type?.description ?? "Select a speculative decoding mode. MTP needs a compatible draft head, and runtime support does not guarantee a speed increase.", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
         {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens to draft per step. The runtime default is 3.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
-      </div></details>
-      <details className="settings-group"><summary>Memory &amp; processing</summary><div className="model-settings-grid">
+      </div></section>
+      <details className="settings-group technical-settings"><summary>Technical settings <span>Cache, processing, templates and port</span></summary><section><h4>Memory &amp; processing</h4><div className="model-settings-grid">
         {field("cache_type_k", "Key cache precision", "Stores attention keys. f16 uses half precision; q8_0 and q4_0 reduce memory use with a possible quality trade-off.", choices(cacheTypes))}
         {field("cache_type_v", "Value cache precision", "Stores attention values. Lower precision saves memory; some combinations require Flash attention.", choices(cacheTypes))}
         {field("threads", "CPU threads", "CPU threads used to generate responses. For a new model, the suggested count uses your physical CPU cores. Automatic lets the engine decide; it may not report the resolved count.", [{ value: "", label: "Automatic · count not reported" }, ...threadChoices], true, 1)}
@@ -330,18 +340,18 @@ export function DeploymentsPanel({
         {field("parallel", "Concurrent requests", "Requests processed at once. Multiple slots share the configured context and use more memory.", numberChoices([1, 2, 4, 8]), true, 1)}
         {field("batch_size", "Prompt batch size", "Maximum tokens processed together when reading a prompt. Larger batches can improve speed but use more memory.", numberChoices([128, 256, 512, 1024, 2048, 4096, 8192]), true, 1)}
         {field("ubatch_size", "Physical batch size", "Tokens handled in one computation batch. Usually smaller than the prompt batch size; reduce it if prompt processing runs out of memory.", numberChoices([64, 128, 256, 512, 1024, 2048]), true, 1)}
-      </div></details>
-      <details className="settings-group"><summary>Model behaviour</summary><div className="model-settings-grid">
+      </div></section>
+      <section><h4>Model behaviour</h4><div className="model-settings-grid">
         {thinkingAvailable ? field("reasoning_budget", "Thinking budget", "Maximum thinking tokens when the template supports a budget. Unrestricted lets the model decide.", [{ value: "-1", label: "Unrestricted" }, ...numberChoices([0, 512, 1024, 2048, 4096, 8192, 16384])], true, -1) : null}
         {thinkingAvailable ? field("reasoning_format", "Thinking format", "How thinking is separated from the answer. No separation keeps raw output; it does not disable thinking.", [{ value: "auto", label: "Automatic" }, { value: "none", label: "No separation" }, { value: "deepseek", label: "DeepSeek" }, { value: "deepseek-legacy", label: "DeepSeek legacy" }]) : null}
         {field("embedding", "Model purpose", "Chat generates responses. Embeddings turn text into vectors for document search and require an embedding model.", [{ value: "off", label: "Chat" }, { value: "on", label: "Document search (embeddings)" }])}
         {settings.embedding === "on" ? field("pooling", "Embedding pooling", "Combines tokens into one vector. Choose the method recommended by the model publisher.", choices(["last", "mean", "cls"])) : null}
-      </div></details>
-      <details className="settings-group"><summary>Advanced settings <span>Server port and additional flags</span></summary>
+      </div></section>
+      <section><h4>Advanced settings</h4>
         <div className="model-settings-grid">{field("port", "Server port", "Automatic chooses a free port when the model loads. Fixed ports are checked before starting.", [{ value: "", label: "Automatic · free port" }, ...numberChoices([8080, 8081, 8082, 8090])], true, 1, 65535)}</div>
         <div className="setting-title"><label htmlFor="additional-startup">Additional settings</label><Help label="Additional settings">JSON for supported template and draft-model controls. Use the named controls above for settings already shown.</Help></div>
         <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder="{}" />
-      </details>
+      </section></details>
       <section className="settings-group"><h4>Responses</h4><ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" />{responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}</section>
       <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
         <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { const owner = selectionOwner.current; await preview(); if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); } }); }}>Check settings</button>

@@ -20,6 +20,9 @@ globalThis.window = {
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { ModelsPanel } = await vite.ssrLoadModule("/src/renderer/ModelsPanel.tsx");
+  await checkVariantPresentation(await vite.ssrLoadModule("/src/renderer/modelVariantPresentation.ts"));
+  const { settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
+  assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
   await checkSelectedModelOwnsDetails(ModelsPanel);
   await checkRepositorySelectionLoadsFiles(ModelsPanel);
@@ -161,7 +164,7 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Repository files" })).includes("org/second"), "late first selection cannot replace the latest repository files");
     let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     assert.equal(download.props.disabled, true, "a repository offering vision requires an explicit vision or text-only choice");
-    await act(async () => renderer.root.findAllByType("select")[1].props.onChange({ target: { value: "vision" } }));
+    await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "image-input" && node.props.value === "vision").props.onChange());
     download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
     assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"] }], "download pins the inspected revision and exact files, escaping glob syntax and deduplicating clicks");
@@ -261,7 +264,7 @@ async function checkRepositorySelectionLoadsFiles(ModelsPanel) {
   let renderer;
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
-    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Add model").props.onClick());
+    await act(async () => renderer.root.findByProps({ id: "models-tab-add" }).props.onClick());
     const query = renderer.root.findAllByType("input").find(node => node.props.maxLength === 200);
     await act(async () => query.props.onChange({ target: { value: "model" } }));
     const searchForm = renderer.root.findAllByType("form").find(node => node.findAllByType("input").some(input => input.props.maxLength === 200));
@@ -275,10 +278,27 @@ async function checkRepositorySelectionLoadsFiles(ModelsPanel) {
     });
     assert.ok(textOf(renderer.root).includes("Q4_K_M"), "selected repository reveals the actual model variant");
     assert.ok(renderer.root.findAllByType("button").some(node => textOf(node).startsWith("Download") && node.props.disabled === false), "one complete text variant is ready to download after inspection");
+    await act(async () => renderer.root.findByProps({ id: "models-tab-downloads" }).props.onClick());
+    await act(async () => renderer.root.findByProps({ id: "models-tab-add" }).props.onClick());
+    assert.equal(renderer.root.findByProps({ id: "model-search-query" }).props.value, "model", "search text survives tab changes");
+    assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Repository files" })).includes("Q4_K_M"), "inspected selection survives tab changes");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
   }
+}
+
+async function checkVariantPresentation({ presentVariant, variantFamilies }) {
+  const variants = [
+    { name: "Qwen3.8-27B-UD-IQ2_S.gguf", files: ["a"], size_bytes: 6, complete: true },
+    { name: "Qwen3.8-27B-Q4_K_M.gguf", files: ["b", "c"], size_bytes: 15, complete: true },
+    { name: "Qwen3.8-27B-BF16.gguf", files: ["d"], size_bytes: 50, complete: true },
+    { name: "qwen2.5-0.5b-instruct-fp16.gguf", files: ["f"], size_bytes: 40, complete: true },
+    { name: "Qwen3.8-27B-custom.gguf", files: ["e"], size_bytes: null, complete: false },
+  ];
+  assert.deepEqual(variants.map(presentVariant).map(item => [item.quant, item.family]), [["UD-IQ2_S", "2-bit"], ["Q4_K_M", "4-bit"], ["BF16", "16-bit"], ["FP16", "16-bit"], ["Unknown", "Unknown"]]);
+  assert.deepEqual(variantFamilies(variants, "all", "asc").map(group => group.family), ["2-bit", "4-bit", "16-bit", "Unknown"]);
+  assert.deepEqual(variantFamilies(variants, 4, "desc").flatMap(group => group.items.map(item => item.quant)), ["Q4_K_M"]);
 }
 
 function bundle(id, displayName) {

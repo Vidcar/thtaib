@@ -24,8 +24,8 @@
 .models-surface .local-model-form > :is(label, .actions, .setting-title) {margin: 0;}
 .models-surface .local-model-form > button {justify-self: start;}
 .models-surface .models-workspace {gap: var(--space-stack);}
-.models-surface .model-detail {width: 100%; min-width: 0; max-width: 760px;}
-.models-surface > .card {width: 100%; max-width: 760px;}
+.models-surface .model-detail {width: 100%; min-width: 0;}
+.models-surface > .card {width: 100%;}
 .models-surface .model-library {padding: var(--pad-compact);}
 .models-surface .model-tile {padding: var(--pad-compact) var(--pad-compact);}
 .models-surface .model-tile .nav-item-title {font-size: var(--text-body);}
@@ -73,6 +73,96 @@
 .models-surface .storage-breakdown dd {margin: var(--space-tight) 0 0; font-size: var(--text-body);}
 .models-surface .model-deletion .inline-note {display: grid; gap: var(--space-compact); padding: var(--pad-compact);}
 .models-surface .model-deletion .inline-note :is(h4, p, ul) {margin: 0;}
+.models-surface :is(.models-tab-panel, .models-workspace)[hidden] {display: none !important;}
+.models-surface .model-tabs {overflow-x: auto; gap: var(--space-section); flex-shrink: 0;}
+.models-surface .model-tabs button {white-space: nowrap;}
+.models-surface .models-add-panel, .models-surface .models-downloads-panel {display: grid; align-content: start; gap: var(--space-stack); min-width: 0;}
+.models-surface .models-add-panel {max-width: 1120px;}
+.models-surface .models-downloads-panel {max-width: 1120px;}
+.models-surface .model-finder {display: grid; gap: var(--space-compact);}
+.models-surface .model-finder .setting-title {margin: 0;}
+.models-surface .variant-picker {display: grid; gap: var(--space-compact); min-width: 0;}
+.models-surface .variant-picker-heading {display: flex; justify-content: space-between; align-items: end; gap: var(--space-stack);}
+.models-surface .variant-picker-heading h4 {margin: 0 0 var(--space-tight); font-size: var(--text-body);}
+.models-surface .variant-picker-heading p {margin: 0;}
+.models-surface .variant-picker-heading label {flex: 0 0 160px; font-size: var(--text-small); margin: 0;}
+.models-surface .variant-picker-heading select {width: 100%; margin-top: var(--space-tight);}
+.models-surface .variant-filters {display: flex; flex-wrap: wrap; gap: var(--space-tight);}
+.models-surface .variant-filters button {min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small);}
+.models-surface .variant-filters button[aria-pressed="true"] {color: var(--text); background: var(--hover); border-color: var(--accent);}
+.models-surface .variant-filters span {color: var(--muted); margin-left: var(--space-tight);}
+.models-surface .variant-table-scroll {max-height: min(460px, 58vh); overflow: auto; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control);}
+.models-surface .variant-table {width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--text-small);}
+.models-surface .variant-table :is(th, td) {text-align: left; padding: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border);}
+.models-surface .variant-table thead th {position: sticky; top: 0; z-index: 2; background: var(--bg-raised); color: var(--muted); font-weight: var(--weight-medium);}
+.models-surface .variant-table thead th:first-child {width: 42px;}
+.models-surface .variant-table thead th:nth-child(2) {width: 43%;}
+.models-surface .variant-table thead th:nth-child(3) {width: 19%;}
+.models-surface .variant-table thead th:nth-child(4) {width: 9%;}
+.models-surface .variant-table thead th:nth-child(5) {width: 20%;}
+.models-surface .variant-table .variant-family th {background: var(--bg-panel); color: var(--muted); font-weight: var(--weight-semibold); padding: var(--pad-tight) var(--pad-compact);}
+.models-surface .variant-table tr.is-selected {background: var(--hover);}
+.models-surface .variant-table tbody tr:not(.variant-family):hover {background: var(--hover);}
+.models-surface .variant-table input[type="radio"] {min-height: auto; accent-color: var(--accent);}
+.models-surface .variant-table td:nth-child(2) {min-width: 0;}
+.models-surface .variant-table td:nth-child(2) label {display: grid; gap: 2px; min-width: 0; cursor: pointer;}
+.models-surface .variant-table td:nth-child(2) strong {font-weight: var(--weight-semibold); font-size: var(--text-body);}
+.models-surface .variant-table td:nth-child(2) small {font-size: var(--text-small); color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis;}
+.models-surface .variant-table td:nth-child(3) {font-variant-numeric: tabular-nums; white-space: nowrap;}
+.models-surface .variant-ready {color: var(--ok);}
+.models-surface .variant-missing {color: var(--warn);}
+.models-surface .projector-choices {display: grid; gap: var(--space-tight); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact);}
+.models-surface .projector-choices legend {font-weight: var(--weight-semibold);}
+.models-surface .projector-choices p {margin: 0;}
+.models-surface .projector-choices label {display: flex; align-items: center; gap: var(--space-tight); min-width: 0; margin: 0; font-size: var(--text-small);}
+.models-surface .projector-choices label span {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.models-surface .projector-choices input {min-height: auto; accent-color: var(--accent);}
+.models-surface .projector-choices small {color: var(--muted); margin-left: auto; white-space: nowrap;}
+.models-surface .selected-download-files {display: grid; grid-template-columns: 1fr auto; gap: var(--space-tight); padding: var(--pad-compact); background: var(--bg-panel); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control);}
+.models-surface .selected-download-files ul {grid-column: 1 / -1; max-height: 130px; overflow: auto; margin: 0; padding-left: var(--pad-section); font-size: var(--text-small); overflow-wrap: anywhere;}
+.models-surface .auxiliary-files li {overflow-wrap: anywhere; font-size: var(--text-small);}
+.models-surface .visible-settings-group h4, .models-surface .response-settings-editor h4 {margin: 0;}
+.models-surface .model-setting-wrap {display: grid; gap: var(--space-tight); align-content: start; min-width: 0;}
+.models-surface .model-effective-hint {display: block; font-size: var(--text-small); line-height: var(--leading-body); overflow-wrap: anywhere;}
+.models-surface .model-edit-state {padding: var(--pad-tight) var(--pad-compact); border-radius: var(--radius-control); background: var(--bg-panel); border: var(--line-hairline) solid var(--border); color: var(--muted); font-size: var(--text-small); white-space: nowrap;}
+.models-surface .model-edit-state[data-dirty="true"] {border-color: var(--accent); color: var(--text);}
+.models-surface .model-facts-details > section {padding-top: var(--space-stack); margin-top: var(--space-stack); border-top: var(--line-hairline) solid var(--border);}
+.models-surface .model-facts-details h4 {margin: 0 0 var(--space-compact); font-size: var(--text-body);}
+.models-surface .model-facts-details h4 .hint {margin-left: var(--space-tight); font-weight: var(--weight-regular);}
+.models-surface .response-numeric-grid {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-compact);}
+.models-surface .response-numeric-grid > label {min-width: 0; margin: 0; display: grid; gap: var(--space-tight); align-content: start;}
+.models-surface .response-numeric-grid .setting-title {margin: 0;}
+.models-surface .response-numeric-grid input {width: 100%;}
+.models-surface .response-numeric-grid .hint {font-size: var(--text-small); overflow-wrap: anywhere;}
+.models-surface .import-row-head {display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-compact);}
+.models-surface .import-row-head > strong {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-semibold);}
+.models-surface .import-row-status {white-space: nowrap;}
+.models-surface .import-row-actions {display: flex; gap: var(--space-tight);}
+.models-surface .import-row-actions button {white-space: nowrap; min-height: var(--control-height); font-size: var(--text-small);}
+.models-surface .import-jobs h4 {margin: var(--space-stack) 0 var(--space-tight); font-size: var(--text-body);}
+@container workbench-surface (max-width: 850px) {
+  .models-surface .response-numeric-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+}
+@container workbench-surface (max-width: 620px) {
+  .models-surface .variant-table thead {display: none;}
+  .models-surface .variant-table, .models-surface .variant-table tbody {display: block; width: 100%;}
+  .models-surface .variant-table tr.variant-family {display: block;}
+  .models-surface .variant-table tr.variant-family th {display: block;}
+  .models-surface .variant-table tr:not(.variant-family) {display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: var(--space-tight); padding: var(--pad-compact);}
+  .models-surface .variant-table tr:not(.variant-family) td {padding: 0; border: 0;}
+  .models-surface .variant-table tr:not(.variant-family) td:nth-child(4) {grid-column: 2; color: var(--muted);}
+  .models-surface .variant-table tr:not(.variant-family) td:nth-child(5) {grid-column: 3; white-space: nowrap;}
+  .models-surface .variant-picker-heading {align-items: start; flex-wrap: wrap;}
+  .models-surface .variant-picker-heading label {flex-basis: 100%;}
+  .models-surface .import-row-head {grid-template-columns: minmax(0, 1fr) auto;}
+  .models-surface .import-row-head > strong {grid-column: 1 / -1;}
+  .models-surface .import-row-actions {grid-column: 2;}
+}
+@container workbench-surface (max-width: 460px) {
+  .models-surface .response-numeric-grid {grid-template-columns: 1fr;}
+  .models-surface .selected-download-files {grid-template-columns: 1fr;}
+  .models-surface .selected-download-files ul {grid-column: 1;}
+}
 @container workbench-surface (max-width: 720px) {
   .models-surface .models-workspace {grid-template-columns: minmax(0, 1fr) !important;}
   .models-surface .model-library {max-height: 210px; overflow: auto;}

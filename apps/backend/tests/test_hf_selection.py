@@ -30,6 +30,22 @@ class HubSelectionTests(unittest.TestCase):
         self.assertEqual(len(result.projectors), 2)
         self.assertEqual(result.guidance_files, ["README.md", "config.json"])
 
+    def test_mtp_and_imatrix_files_are_auxiliary_and_not_primary_weights(self):
+        listing = describe_repository("org/model", info(
+            "Q4/model-Q4_K_M-00001-of-00002.gguf", "Q4/model-Q4_K_M-00002-of-00002.gguf",
+            "MTP/mtp-model-Q4_0.gguf", "imatrix_unsloth.gguf", "BF16/model-BF16.gguf",
+        ))
+        self.assertEqual(len(listing.variants), 2)
+        sharded = next(variant for variant in listing.variants if variant.name.startswith("Q4/"))
+        self.assertEqual(sharded.size_bytes, 20)
+        self.assertTrue(sharded.complete)
+        self.assertEqual([variant.name for variant in listing.auxiliary_ggufs], ["MTP/mtp-model-Q4_0.gguf", "imatrix_unsloth.gguf"])
+        with tempfile.TemporaryDirectory() as tmp, patch.object(HuggingFaceFetcher, "inspect", return_value=listing), patch("workbench_backend.inference.hf_fetch.snapshot_download") as download:
+            for patterns in (["MTP/mtp-model-Q4_0.gguf"], ["imatrix_unsloth.gguf"], ["Q4/*.gguf", "MTP/*.gguf"]):
+                with self.assertRaisesRegex(ManagerError, "auxiliary"):
+                    HuggingFaceFetcher().download(repo_id="org/model", revision="main", dest=Path(tmp), allow_patterns=patterns)
+            download.assert_not_called()
+
     def test_missing_immutable_revision_is_rejected(self):
         with self.assertRaises(ManagerError):
             describe_repository("org/model", SimpleNamespace(sha="main", siblings=[]))

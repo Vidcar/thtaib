@@ -3950,6 +3950,8 @@ export interface components {
         };
         /** HubRepository */
         HubRepository: {
+            /** Auxiliary Ggufs */
+            auxiliary_ggufs?: components["schemas"]["HubVariant"][];
             /** File Sha256 */
             file_sha256?: {
                 [key: string]: string | null;
