@@ -16,4 +16,4 @@
 
 - [x] 3.1 Run desktop build, backend default and integration suites, shared-contract check if interfaces change, and strict OpenSpec validation; repair failures.
 - [x] 3.2 Verify Windows app picker, saving, safe reload and thinking-history behavior with an isolated model setup; preserve everyday data.
-- [ ] 3.3 Update Models OpenSpec contract and handover, deliver with Git and update established local app; verify final Git and app state.
+- [x] 3.3 Update Models OpenSpec contract and handover, deliver with Git and update established local app; verify final Git and app state.
