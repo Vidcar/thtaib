@@ -324,9 +324,6 @@
 .todo-checklist .todo-status {display: inline-flex; align-items: center; justify-content: center; width: 18px; font-size: var(--text-ui); color: var(--muted);}
 .todo-checklist li[data-status="completed"] .todo-status {color: var(--ok);}
 .todo-checklist li[data-status="in_progress"] .todo-status {color: var(--accent);}
-.chat-context-control {display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: var(--space-compact); align-items: center; border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
-.chat-context-control > .hint {grid-column: 1 / -1;}
-.chat-context-control > input {min-width: 0; width: 100%; font-size: var(--text-small); padding: var(--pad-tight);}
 .run-activity-summary {display: grid; gap: var(--space-compact); margin: var(--space-compact) 0; font-size: var(--text-small);}
 .helper-activity {list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-tight);}
 .helper-activity li {display: flex; gap: var(--space-compact); align-items: center; flex-wrap: wrap;}

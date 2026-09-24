@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
-import { CompactSlider } from "./CompactControls";
+import { CompactSlider, SettingRow } from "./CompactControls";
 import { tokenLabel } from "./ModelControls";
 import { Notice } from "./Notice";
-import { HoverHelp } from "./HoverHelp";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { mergedStartup } from "./deploymentSettings";
 import { errorMessage } from "./errors";
@@ -98,7 +97,8 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
     try { await operation(); } catch (failure) { if (currentOwner.current === owner) setError(errorMessage(failure)); } finally { pending.current = false; setBusy(false); }
   }
   return <MenuPopover label={`Chat model settings: ${modelName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{modelName}</span></>} disabled={disabled}>
-    {close => <><div className="chat-model-controls-grid"><label>Model<select aria-label="Model" value={modelChoice} disabled={busy} onChange={event => {
+    {close => <><div className="setting-rows chat-model-controls-rows">
+      <SettingRow stacked label="Model" provenance={!modelChoice && typeof facts.model_selection?.value === "string" ? `${facts.model_selection.value} · ${facts.model_selection.source}` : undefined}><select aria-label="Model" value={modelChoice} disabled={busy} onChange={event => {
       const choice = event.target.value;
       if (choice === modelChoice) return;
       setDraft(current => {
@@ -106,15 +106,13 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
         for (const key of ["reasoning", "reasoning_effort", "reasoning_format"]) delete request[key];
         return { ...current, model_configuration_id: choice.startsWith("configuration:") ? choice.slice(14) : null, deployment_id: choice.startsWith("deployment:") ? choice.slice(11) : null, profile_id: null, bundle_id: null, inherit_deployment_settings: null, per_request_overrides: request, startup_overrides: {} };
       });
-    }}><option value="">{automaticLabel}</option>{profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{configurationLabel(item)}</option>)}{deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</select></label></div>
-      {!modelChoice && typeof facts.model_selection?.value === "string" ? <span className="hint">{facts.model_selection.value} · {facts.model_selection.source}</span> : null}
-      <div className="chat-context-control"><div className="setting-title"><span>Context {loadedContext ? `${tokenLabel(loadedContext)} loaded` : "not reported"}</span><HoverHelp title="Context">Larger context uses more memory. Apply reloads an idle managed model and preserves this conversation. Running work and other consumers can block a reload.</HoverHelp></div>
-        {desiredContext ? <><CompactSlider label="Context size" value={desiredContext} values={contextChoices} formatValue={tokenLabel} onChange={stageContext} disabled={busy || !!contextReason} /><input aria-label="Exact context size" type="number" min={1} max={options?.context_size.maximum ?? undefined} value={desiredContext} disabled={busy || !!contextReason} onChange={event => { const value = Number(event.target.value); if (value > 0) stageContext(value); }} /></> : null}
-        {contextReason ? <span className="hint">{contextReason}</span> : null}
-      </div>
-      <ResponseSettingsEditor compact value={draft.per_request_overrides ?? {}} onChange={per_request_overrides => setDraft(current => ({ ...current, per_request_overrides }))} options={options} facts={facts} disabled={busy || preview.loading} />
+    }}><option value="">{automaticLabel}</option>{profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{configurationLabel(item)}</option>)}{deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</select></SettingRow>
+      <SettingRow stacked className="chat-context-control" label="Context" help="Larger context uses more memory. Apply reloads an idle managed model and preserves this conversation. Running work and other consumers can block a reload." provenance={loadedContext ? `${tokenLabel(loadedContext)} loaded` : "Not reported"} hint={contextReason}>
+        {desiredContext ? <div className="slider-field"><CompactSlider hideHeading label="Context size" value={desiredContext} values={contextChoices} formatValue={tokenLabel} onChange={stageContext} disabled={busy || !!contextReason} /><span className="number-field"><input aria-label="Exact context size" type="number" min={1} max={options?.context_size.maximum ?? undefined} value={desiredContext} disabled={busy || !!contextReason} onChange={event => { const value = Number(event.target.value); if (value > 0) stageContext(value); }} /></span></div> : null}
+      </SettingRow></div>
+      <ResponseSettingsEditor value={draft.per_request_overrides ?? {}} onChange={per_request_overrides => setDraft(current => ({ ...current, per_request_overrides }))} options={options} facts={facts} disabled={busy || preview.loading} />
       {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}{notice ? <Notice tone="info">{notice}</Notice> : null}
-      <div className="actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(lifecycleNeeded && runtimeBusy) || connectedStartupChange} onClick={() => void act(async () => {
+      <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(lifecycleNeeded && runtimeBusy) || connectedStartupChange} onClick={() => void act(async () => {
         let loaded: Deployment | null = null;
         if (lifecycleNeeded) {
           try {

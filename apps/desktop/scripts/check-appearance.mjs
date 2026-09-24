@@ -25,6 +25,8 @@ const missingPreview = ids.filter(id => !preview.includes(`"${id}"`));
 assert.deepEqual(missingPreview, [], `every appearance control is marked in the preview:\n${missingPreview.join("\n")}`);
 
 const aliases = new Set(["--bg", "--bg-nav", "--bg-panel", "--bg-raised", "--bg-input", "--border", "--text", "--muted", "--accent", "--warn", "--danger", "--ok", "--live", "--hover", "--shadow", "--navigation-width", "--inspector-width"]);
+// Per-element state written inline by shared controls, not appearance settings.
+const componentState = new Set(["--range-fill", "--segments"]);
 const lengthRe = /(?<![\w-])(?!0(?:px|rem|em)\b)(?:\d+\.?\d*|\.\d+)(?:px|rem|em)\b/g;
 const hexRe = /#[0-9a-fA-F]{3,8}\b/g;
 const leftovers = [];
@@ -37,7 +39,7 @@ for (const name of readdirSync(renderer).filter(item => item.endsWith(".css") &&
   for (const match of stripped.matchAll(lengthRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
   for (const match of stripped.matchAll(hexRe)) leftovers.push(`${name}: ${match[0]} in ${lineOf(stripped, match.index).trim()}`);
   for (const match of text.matchAll(/var\((--[a-z0-9-]+)/g)) {
-    if (!cssVars.has(match[1]) && !aliases.has(match[1])) unknownVars.push(`${name}: ${match[1]}`);
+    if (!cssVars.has(match[1]) && !aliases.has(match[1]) && !componentState.has(match[1])) unknownVars.push(`${name}: ${match[1]}`);
   }
 }
 

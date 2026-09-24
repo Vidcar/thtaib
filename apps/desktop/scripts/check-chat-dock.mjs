@@ -12,7 +12,7 @@ import { createServer as createViteServer } from "vite";
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const css = readFileSync(path.join(desktopRoot, "src/renderer/surfacePolish.css"), "utf8");
+const css = readFileSync(path.join(desktopRoot, "src/renderer/ChatPanel.css"), "utf8");
 const dockSource = readFileSync(path.join(desktopRoot, "src/renderer/ChatDock.tsx"), "utf8");
 const monacoSource = readFileSync(path.join(desktopRoot, "src/renderer/monacoSetup.ts"), "utf8");
 

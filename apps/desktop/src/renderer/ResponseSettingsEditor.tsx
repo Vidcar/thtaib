@@ -3,9 +3,9 @@ import { HoverHelp } from "./HoverHelp";
 import { effectiveSettingDisplay, settingSource, settingValue, type EffectiveSetting } from "./effectiveSettings";
 import type { BundleConfigurationOptions } from "./types";
 
-export function ResponseSettingsEditor({ value, onChange, facts, options, disabled = false, compact = false, inheritance = "layer", loading = false, part = "thinking" }: {
+export function ResponseSettingsEditor({ value, onChange, facts, options, disabled = false, inheritance = "layer", loading = false, part = "thinking" }: {
   value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void;
-  facts: Record<string, EffectiveSetting>; options: BundleConfigurationOptions | null; disabled?: boolean; compact?: boolean; inheritance?: "layer" | "model"; loading?: boolean;
+  facts: Record<string, EffectiveSetting>; options: BundleConfigurationOptions | null; disabled?: boolean; inheritance?: "layer" | "model"; loading?: boolean;
   part?: "thinking" | "sampling";
 }) {
   const patch = (key: string, next: unknown) => onChange({ ...value, [key]: next });
@@ -59,22 +59,17 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
       <SliderField id={`model-response-${item.key}`} label={item.label} value={numberValue(item.key)} resolved={resolvedNumber(item.key)} min={item.min} max={item.max} step={item.step} disabled={disabled} onChange={commit(item.key)} />
     </SettingRow>)}</>;
   }
-  return <div className="response-settings-editor">
-    {modes?.supported ? <div className="setting-row"><CompactSwitch label="Thinking" checked={effectiveMode === "on" || effectiveMode === true} onChange={enabled => patch("reasoning", enabled ? "on" : "off")} disabled={disabled || effectiveMode == null} description={effectiveMode == null ? "Default not reported. Choose an explicit value below." : source("reasoning")} />
-      {effectiveMode == null ? <select className="thinking-explicit-choice" aria-label="Thinking" value={String(value.reasoning ?? "auto")} disabled={disabled} onChange={event => patch("reasoning", event.target.value)}><option value="auto">Model default · unknown</option><option value="on">On</option><option value="off">Off</option></select> : null}
-      <div className="setting-reset-actions">{effectiveMode != null ? <span className="hint">{`${settingValue(effectiveMode)} · ${source("reasoning")}`}</span> : null}<button type="button" className="quiet-button" disabled={disabled} onClick={() => patch("reasoning", "auto")}>Model default</button>{"reasoning" in value ? <button type="button" className="quiet-button" disabled={disabled} onClick={() => inherit("reasoning")}>Use inherited</button> : null}</div></div> : null}
-    {efforts?.supported && effectiveMode !== "off" ? <div className="setting-row"><label>Thinking level <strong>{effectiveEffort == null ? "Default not reported" : `${settingValue(effectiveEffort)} · ${source("reasoning_effort")}`}</strong><HoverHelp title="Thinking level">{source("reasoning_effort")}. Active and queued turns retain their resolved settings.</HoverHelp></label>
+  const resets = (key: string) => <span className="setting-reset-actions">
+    <button type="button" className="text-button" disabled={disabled} onClick={() => patch(key, key === "reasoning" ? "auto" : "default")}>Model default</button>
+    {key in value ? <button type="button" className="text-button" disabled={disabled} onClick={() => inherit(key)}>Reset to inherited</button> : null}
+  </span>;
+  return <div className="response-settings-editor setting-rows">
+    {modes?.supported ? <CompactSwitch label="Thinking" checked={effectiveMode === "on" || effectiveMode === true} onChange={enabled => patch("reasoning", enabled ? "on" : "off")} disabled={disabled || effectiveMode == null}
+      description={effectiveMode == null ? "Default not reported. Choose a value below." : `${settingValue(effectiveMode)} · ${source("reasoning")}`}
+      hint={<>{effectiveMode == null ? <SegmentedChoice bare label="Thinking choice" value={String(value.reasoning ?? "auto")} disabled={disabled} onChange={next => patch("reasoning", next)} options={[{ value: "auto", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} /> : null}{resets("reasoning")}</>} /> : null}
+    {efforts?.supported && effectiveMode !== "off" ? <SettingRow stacked label="Thinking level" help={`${source("reasoning_effort")}. Active and queued turns retain their resolved settings.`} provenance={effectiveEffort == null ? "Default not reported" : `${settingValue(effectiveEffort)} · ${source("reasoning_effort")}`} hint={resets("reasoning_effort")}>
       {effortOptions.some(item => item.value === effectiveEffort) ? <CompactSlider hideHeading label="Thinking level" values={effortOptions.map((_, index) => index)} value={effortOptions.findIndex(item => item.value === effectiveEffort)} onChange={index => patch("reasoning_effort", effortOptions[index]?.value)} formatValue={index => effortOptions[index]?.label ?? "Unknown"} disabled={disabled || !effortOptions.length} /> : <select aria-label="Thinking level" value="" disabled={disabled || !effortOptions.length} onChange={event => { if (event.target.value) patch("reasoning_effort", event.target.value); }}><option value="">{effectiveEffort == null ? "Model default · unknown" : `${settingValue(effectiveEffort)} · unavailable`}</option>{effortOptions.map(item => <option key={String(item.value)} value={String(item.value)}>{item.label}</option>)}</select>}
-      <div className="setting-reset-actions"><button type="button" className="quiet-button" disabled={disabled} onClick={() => patch("reasoning_effort", "default")}>Model default</button>{"reasoning_effort" in value ? <button type="button" className="quiet-button" disabled={disabled} onClick={() => inherit("reasoning_effort")}>Use inherited</button> : null}</div></div> : null}
-    {!compact ? <div className="response-numeric-grid">{([
-      { key: "temperature", label: "Temperature", min: 0, step: 0.05 },
-      { key: "top_p", label: "Top P", min: 0, max: 1, step: 0.05 },
-      { key: "top_k", label: "Top K", min: 0, step: 1 },
-      { key: "min_p", label: "Min P", min: 0, max: 1, step: 0.01 },
-      { key: "presence_penalty", label: "Presence penalty", step: 0.05 },
-      { key: "repeat_penalty", label: "Repetition penalty", min: 0, step: 0.05 },
-      { key: "max_tokens", label: "Reply limit", min: 1, step: 1 },
-    ] as const).map(item => <label key={item.key}><span className="setting-title">{item.label}<HoverHelp title={item.label}>{source(item.key)}. Empty uses the inherited setting.</HoverHelp></span><input type="number" min={"min" in item ? item.min : undefined} max={"max" in item ? item.max : undefined} step={item.step} disabled={disabled} value={typeof value[item.key] === "number" ? Number(value[item.key]) : ""} placeholder={current(item.key) == null ? "Default not reported" : String(current(item.key))} onChange={event => event.target.value === "" ? inherit(item.key) : patch(item.key, Number(event.target.value))} /><span className="hint">{current(item.key) == null ? "Default not reported" : `${settingValue(current(item.key))} · ${source(item.key)}`}</span></label>)}</div> : null}
+    </SettingRow> : null}
     {!modes?.supported && !efforts?.supported ? <span className="hint">Thinking controls unavailable<HoverHelp title="Thinking availability">This model does not report configurable thinking. Its template controls reasoning.</HoverHelp></span> : null}
   </div>;
 }

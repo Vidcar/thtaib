@@ -40,7 +40,7 @@ export function ChoiceControl({ id, label, value, options, onChange, custom = tr
   const inList = value === "" || options.some(option => option.value === value);
   const useSegments = segmented ?? (explicit.length <= 4 && labelLength <= SEGMENT_LABEL_BUDGET && numeric.length < 3);
   if (useSegments && inList) {
-    return <SegmentedChoice bare label={label} value={value} options={[{ value: "", label: "Inherited" }, ...explicit]} onChange={onChange} disabled={disabled} />;
+    return <SegmentedChoice bare id={id} label={label} value={value} options={[{ value: "", label: "Inherited" }, ...explicit]} onChange={onChange} disabled={disabled} />;
   }
   if (custom && numeric.length >= 3 && (value === "" || value === "custom" || Number.isFinite(Number(value)))) {
     const resolved = typeof resolvedValue === "number" ? resolvedValue : Number.isFinite(Number(resolvedValue)) && resolvedValue !== null && resolvedValue !== "" ? Number(resolvedValue) : null;

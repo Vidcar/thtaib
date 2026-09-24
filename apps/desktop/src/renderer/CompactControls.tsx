@@ -42,14 +42,14 @@ export function CompactSwitch(props: { label: string; checked: boolean; onChange
   return <SettingRow inline label={props.label} help={props.description} provenance={props.meta} hint={props.hint}>{control}</SettingRow>;
 }
 
-export function SegmentedChoice({ label, value, options, onChange, disabled = false, description, meta, bare = false, onReset, hint, inheritedValue }: {
-  label: string; value: string; options: Array<{ value: string; label: string; disabled?: boolean }>;
+export function SegmentedChoice({ id: groupId, label, value, options, onChange, disabled = false, description, meta, bare = false, onReset, hint, inheritedValue }: {
+  id?: string; label: string; value: string; options: Array<{ value: string; label: string; disabled?: boolean }>;
   onChange: (value: string) => void; disabled?: boolean; description?: ReactNode; meta?: ReactNode; bare?: boolean; onReset?: () => void; hint?: ReactNode;
   /** Marks the option an empty value resolves to, without selecting it. */
   inheritedValue?: string;
 }) {
   const id = useId();
-  const group = <div className="segmented-options" role="radiogroup" aria-label={bare ? label : undefined} aria-labelledby={bare ? undefined : `${id}-label`} aria-disabled={disabled || undefined} style={{ "--segments": options.length } as CSSProperties}>
+  const group = <div id={groupId} className="segmented-options" role="radiogroup" aria-label={bare ? label : undefined} aria-labelledby={bare ? undefined : `${id}-label`} aria-disabled={disabled || undefined} style={{ "--segments": options.length } as CSSProperties}>
     {options.map(option => <label key={option.value} data-inherited={value === "" && option.value === inheritedValue ? "" : undefined}><input type="radio" name={id} value={option.value} checked={value === option.value} disabled={disabled || option.disabled} onChange={() => onChange(option.value)} /><span>{option.label}</span></label>)}
   </div>;
   if (bare) return group;

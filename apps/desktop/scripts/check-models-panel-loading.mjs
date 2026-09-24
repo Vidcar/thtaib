@@ -167,9 +167,11 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
-    const speculation = renderer.root.findAllByType("select").find(select => select.props.id === "model-spec_type");
-    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct inherited choice");
-    await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
+    const speculation = renderer.root.find(node => node.type === "div" && node.props.id === "model-spec_type" && node.props.role === "radiogroup");
+    const speculationChoices = speculation.findAll(node => node.type === "input" && node.props.type === "radio");
+    assert.deepEqual(speculationChoices.map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct inherited choice");
+    assert.equal(speculationChoices.find(option => option.props.checked)?.props.value, "", "an unset startup control shows its inherited choice");
+    await act(async () => { speculationChoices.find(option => option.props.value === "draft-mtp").props.onChange(); });
     assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "", "MTP draft count stays inherited until explicitly selected");
     const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
     assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");

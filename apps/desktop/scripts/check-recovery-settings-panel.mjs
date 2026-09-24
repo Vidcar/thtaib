@@ -12,9 +12,11 @@ globalThis.window = { workbench: { backendUrl: "http://127.0.0.1:8000" } };
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const desktopRoot = path.join(repoRoot, "apps/desktop");
 
+let appearanceTokens = [];
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { RecoverySettingsPanel } = await vite.ssrLoadModule("/src/renderer/RecoverySettingsPanel.tsx");
+  ({ appearanceTokens } = await vite.ssrLoadModule("/src/renderer/appearanceCatalog.ts"));
   await checkPreferencesWaitForHydrationAndSave(RecoverySettingsPanel);
   await checkLateInitialRefreshCannotReplaceSavedPreferences(RecoverySettingsPanel);
   await checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettingsPanel);
@@ -79,7 +81,7 @@ async function checkPreferencesWaitForHydrationAndSave(RecoverySettingsPanel) {
   assert.equal(advancedRows().length, 0, "advanced token editors stay closed during ordinary Settings use");
   assert.ok(renderer.root.findByProps({ "aria-label": "Density" }), "basic density choice remains directly available");
   await act(async () => button(renderer, "Customize appearance").props.onClick());
-  assert.equal(advancedRows().length, 74, "explicit customization retains the complete appearance catalogue");
+  assert.equal(advancedRows().length, appearanceTokens.length, "explicit customization retains the complete appearance catalogue");
   await act(async () => button(renderer, "Hide advanced controls").props.onClick());
   assert.equal(advancedRows().length, 0);
 
@@ -290,7 +292,16 @@ function inputByPlaceholder(renderer, placeholder) {
 }
 
 function themeSelect(renderer) {
-  return renderer.root.findByProps({ "aria-label": "Theme" });
+  const group = renderer.root.find((node) => node.type === "div" && node.props.role === "radiogroup" && textOf(node).includes("System") && textOf(node).includes("Light"));
+  const radios = group.findAll((node) => node.type === "input" && node.props.type === "radio");
+  assert.deepEqual(radios.map((radio) => radio.props.value), ["system", "dark", "light"], "theme is a three-way segmented choice");
+  const disabled = Boolean(group.props["aria-disabled"]);
+  assert.ok(radios.every((radio) => Boolean(radio.props.disabled) === disabled), "every theme option shares the group's disabled state");
+  return { props: {
+    value: radios.find((radio) => radio.props.checked)?.props.value,
+    disabled,
+    onChange: (event) => radios.find((radio) => radio.props.value === event.target.value).props.onChange(event),
+  } };
 }
 
 function preferenceCheckboxes(renderer) {
