@@ -51,6 +51,7 @@ class InteractionService:
         self._pending: dict[str, list[tuple[AgentRun, dict[str, Any]]]] = {}
         self._pending_at: dict[str, float] = {}
         self._flushing = False
+        self._flushing_threads: set[str] = set()
         self.store.before_interaction_read = self.flush_pending
 
     @property
@@ -466,8 +467,6 @@ class InteractionService:
 
     def flush_pending(self, thread_id: str | None = None) -> None:
         """Commit buffered tokens before a read, a snapshot, or the end of a turn."""
-        if self._flushing:
-            return
         with self._projection_lock:
             if self._flushing:
                 return
@@ -489,23 +488,34 @@ class InteractionService:
             self._flush_thread(thread_id)
 
     def _flush_thread(self, thread_id: str) -> None:
-        bucket = self._pending.pop(thread_id, [])
-        self._pending_at.pop(thread_id, None)
-        if not bucket:
+        bucket = self._pending.get(thread_id)
+        if not bucket or thread_id in self._flushing_threads:
             return
-        outgoing: list[dict[str, Any]] = []
-        snapshot: dict[str, Any] | None = None
-        run_id = bucket[-1][0].id
-        binding = self.binding(thread_id)
-        for run, raw in bucket:
-            events, snap = self._project_native(binding, run, raw)
-            outgoing.extend(events)
-            if snap is not None:
-                snapshot = snap
-                binding = {**binding, "snapshot": snap}
-            run_id = run.id
-        if outgoing or snapshot is not None:
-            self.store.append_interaction(thread_id, outgoing, snapshot=snapshot, run_id=run_id)
+        # A binding read itself asks us to flush. Keep this batch owned until
+        # append succeeds, while preventing that nested read from replaying it.
+        self._flushing_threads.add(thread_id)
+        try:
+            outgoing: list[dict[str, Any]] = []
+            snapshot: dict[str, Any] | None = None
+            run_id = bucket[-1][0].id
+            binding = self.binding(thread_id)
+            for run, raw in bucket:
+                events, snap = self._project_native(binding, run, raw)
+                outgoing.extend(events)
+                if snap is not None:
+                    snapshot = snap
+                    binding = {**binding, "snapshot": snap}
+                run_id = run.id
+            if outgoing or snapshot is not None:
+                self.store.append_interaction(thread_id, outgoing, snapshot=snapshot, run_id=run_id)
+            self._pending.pop(thread_id, None)
+            self._pending_at.pop(thread_id, None)
+        except InteractionPersistenceError:
+            raise
+        except Exception as exc:
+            raise InteractionPersistenceError() from exc
+        finally:
+            self._flushing_threads.remove(thread_id)
 
     def _speed_only(self, snapshot: dict[str, Any], run: AgentRun) -> bool:
         stored = (snapshot.get("workbench") or {}).get("run") or {}
@@ -686,7 +696,19 @@ class InteractionService:
                     resume: ResumeProjection) -> tuple[list[dict[str, Any]], int, bool, str | None]:
         """Read one page and its scalar display metadata in a consistent boundary."""
         with self._projection_lock:
-            _high_water, cutover, status = self.store.interaction_stream_metadata(thread_id)
+            _high_water, cutover, status, durable_status = self.store.interaction_stream_metadata(thread_id)
+            if not (durable_status and not is_run_lifecycle_live(durable_status) and durable_status != status):
+                since = max(since, cutover - 1)
+                wires, cursor, gap = self._stream_page_locked(thread_id, since, options, resume)
+                return wires, cursor, gap, status
+        # The terminal record was saved but its display write failed. Repair
+        # with the run owner's lock order; a failed repair closes this stream
+        # instead of polling forever with a false "running" state.
+        self.state(thread_id)
+        with self._projection_lock:
+            _high_water, cutover, status, durable_status = self.store.interaction_stream_metadata(thread_id)
+            if durable_status and not is_run_lifecycle_live(durable_status) and durable_status != status:
+                raise InteractionPersistenceError()
             since = max(since, cutover - 1)
             wires, cursor, gap = self._stream_page_locked(thread_id, since, options, resume)
             return wires, cursor, gap, status

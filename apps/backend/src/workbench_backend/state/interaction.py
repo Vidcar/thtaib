@@ -132,17 +132,18 @@ class InteractionStoreMixin:
         valid_cutover = cutover if isinstance(cutover, int) and not isinstance(cutover, bool) and cutover >= 0 else 0
         return valid_cutover, status if isinstance(status, str) else None
 
-    def interaction_stream_metadata(self, thread_id: str) -> tuple[int, int, str | None]:
-        """Read the polling cursor and display state without decoding the transcript."""
+    def interaction_stream_metadata(self, thread_id: str) -> tuple[int, int, str | None, str | None]:
+        """Read display and durable run state without decoding the transcript."""
         self._flush_interaction(thread_id)
         with self._lock:
             row = self._conn.execute(
-                "SELECT seq,display_cutover_seq,projected_status FROM interaction_threads WHERE id=?",
+                """SELECT i.seq,i.display_cutover_seq,i.projected_status,r.status AS durable_status
+                   FROM interaction_threads AS i LEFT JOIN runs AS r ON r.id=i.run_id WHERE i.id=?""",
                 (thread_id,),
             ).fetchone()
         if row is None:
             raise KeyError(thread_id)
-        return int(row["seq"]), int(row["display_cutover_seq"]), row["projected_status"]
+        return int(row["seq"]), int(row["display_cutover_seq"]), row["projected_status"], row["durable_status"]
 
     def interaction_history_unavailable(self, thread_id: str) -> bool:
         with self._lock:

@@ -252,6 +252,81 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertEqual(len(stored), 40)
         self.assertEqual("".join(item["params"]["data"]["delta"]["text"] for item in stored), "x" * 40)
 
+    def _buffer_partial_answer_and_tool(self) -> list[dict]:
+        native = [
+            event("messages", {"event": "message-start", "id": "answer", "role": "ai"}),
+            event("messages", {"event": "content-block-start", "index": 0,
+                               "content": {"type": "text", "text": ""}}),
+            event("messages", {"event": "content-block-delta", "index": 0,
+                               "delta": {"type": "text-delta", "text": "kept answer"}}),
+            event("tools", {"event": "tool-started", "tool_call_id": "call", "tool_name": "search"}),
+            event("tools", {"event": "tool-finished", "tool_call_id": "call", "output": "kept result"}),
+        ]
+        # A fixed clock keeps these below the age-triggered flush threshold.
+        with patch("workbench_backend.interaction.service.time.monotonic", return_value=10.0):
+            for raw in native:
+                self.service.observe(self.run, raw)
+        self.assertEqual(len(self.service._pending["display"]), len(native))
+        return native
+
+    def _fail_next_interaction_insert(self) -> None:
+        self.store._conn.execute("""CREATE TRIGGER fail_buffered_native BEFORE INSERT ON interaction_events
+            BEGIN SELECT RAISE(ABORT, 'injected native write failure'); END""")
+        self.store._conn.commit()
+
+    def test_subscriber_flush_retries_buffered_answer_and_tool_after_write_failure(self) -> None:
+        before = self.store.interaction_for_graph("graph")["seq"]
+        native = self._buffer_partial_answer_and_tool()
+        self._fail_next_interaction_insert()
+        subscriber = ResumeProjection(self.service, "display", before)
+        options = {"channels": ["messages", "tools"]}
+        try:
+            with self.assertRaises(InteractionPersistenceError) as failure:
+                self.service.stream_poll("display", before, options, subscriber)
+            self.assertIsInstance(failure.exception.__cause__, sqlite3.IntegrityError)
+            self.assertEqual(self.store.interaction_for_graph("graph")["seq"], before)
+            self.assertEqual(len(self.service._pending["display"]), len(native))
+        finally:
+            self.store._conn.execute("DROP TRIGGER fail_buffered_native")
+            self.store._conn.commit()
+
+        wires, cursor, gap, status = self.service.stream_poll("display", before, options, subscriber)
+        self.assertFalse(gap)
+        self.assertEqual(status, "running")
+        self.assertEqual(cursor, before + len(native))
+        self.assertEqual([item["method"] for item in wires], [item["method"] for item in native])
+        saved = self.store.interaction_page("display", before)[0]
+        self.assertEqual([item["params"]["data"] for item in saved if item["method"] == "tools"],
+                         [item["params"]["data"] for item in native if item["method"] == "tools"])
+        partials, incomplete = partial_archive(saved)
+        self.assertEqual(partials[0]["content"], [{"type": "text", "text": "kept answer"}])
+        self.assertEqual(incomplete, ["answer"])
+        self.assertEqual(self.store.interaction_page("display", cursor)[0], [])
+
+    def test_suppressed_telemetry_flush_failure_keeps_native_batch_for_retry(self) -> None:
+        before = self.store.interaction_for_graph("graph")["seq"]
+        native = self._buffer_partial_answer_and_tool()
+        self._fail_next_interaction_insert()
+        try:
+            # The measurement publisher may suppress this exception. The
+            # interaction service must still retain the essential native batch.
+            with self.assertRaises(InteractionPersistenceError):
+                self.measure(1)
+            self.assertEqual(self.store.interaction_for_graph("graph")["seq"], before)
+            self.assertEqual(len(self.service._pending["display"]), len(native))
+        finally:
+            self.store._conn.execute("DROP TRIGGER fail_buffered_native")
+            self.store._conn.commit()
+
+        self.measure(2)
+        page = self.store.interaction_page("display", before)[0]
+        retained = [item for item in page if item["method"] in {"messages", "tools"}]
+        self.assertEqual([item["method"] for item in retained], [item["method"] for item in native])
+        self.assertEqual(len([item for item in retained if item["method"] == "tools"]), 2)
+        self.assertEqual(partial_archive(retained)[0][0]["content"],
+                         [{"type": "text", "text": "kept answer"}])
+        self.assertNotIn("display", self.service._pending)
+
     def test_native_token_batch_decodes_binding_once(self) -> None:
         with patch.object(self.store, "interaction_for_graph", side_effect=AssertionError("full binding read")), \
                 patch.object(self.service, "binding", wraps=self.service.binding) as binding:
@@ -267,10 +342,11 @@ class MeasurementReplayTests(unittest.TestCase):
         }}
         self.store.append_interaction("display", [event("lifecycle", {"event": "running"})], snapshot=snapshot)
         with patch.object(self.store, "get_interaction", side_effect=AssertionError("snapshot read")):
-            latest, cutover, status = self.store.interaction_stream_metadata("display")
+            latest, cutover, status, durable = self.store.interaction_stream_metadata("display")
             page, high_water, gap = self.store.interaction_page("display", before["seq"])
             appended = self.store.append_interaction("display", [event("tools", {"event": "tool-started", "tool_call_id": "a"})])
         self.assertEqual((latest, cutover, status), (before["seq"] + 1, before["seq"] + 1, "running"))
+        self.assertIsNone(durable)
         self.assertEqual((len(page), high_water, gap), (1, latest, False))
         self.assertEqual(appended, latest + 1)
 

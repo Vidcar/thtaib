@@ -7,6 +7,7 @@ returned by create_deep_agent — not a second Builder workflow editor.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import threading
 import time
@@ -152,6 +153,7 @@ DEFAULT_SYSTEM_PROMPT = (
 ModelFactory = Callable[[AgentRun, list[dict[str, Any]]], BaseChatModel]
 EmbeddingsFactory = Callable[[Deployment], Embeddings]
 InteractionObserver = Callable[..., None]
+log = logging.getLogger(__name__)
 
 
 class HarnessService:
@@ -178,6 +180,7 @@ class HarnessService:
         self._threads: dict[str, threading.Thread] = {}
         self._native_streams: dict[str, Any] = {}
         self._interaction_failure_runs: set[str] = set()
+        self._terminal_retries: dict[str, tuple[AgentRunStatus, str]] = {}
         self._decision_ready: dict[str, threading.Event] = {}
         self._pending_decisions: dict[str, list[dict[str, str]] | None] = {}
         self._model_clients: dict[str, httpx.Client] = {}
@@ -251,6 +254,8 @@ class HarnessService:
                 self._cancels.pop(run_id, None)
                 self._decision_ready.pop(run_id, None)
                 self._pending_decisions.pop(run_id, None)
+                self._terminal_retries.pop(run_id, None)
+                self._interaction_failure_runs.discard(run_id)
 
     def active_workspace_run_ids(self, workspace_id: str) -> list[str]:
         """Runs still writing or executing against a workspace (quiescent check).
@@ -1594,9 +1599,18 @@ class HarnessService:
             except Exception:  # noqa: BLE001 - keep the original persistence error
                 saved = None
             if saved is None or is_run_lifecycle_live(saved.status):
-                self._runs[run.id] = saved or settled_copy
+                self._runs[run.id] = settled_copy
+                self._terminal_retries[run.id] = (status, stop_reason)
                 self._startup_reconciled = False
-            raise
+                raise
+            # The run is durably terminal. A display write may still be down;
+            # the subscriber repairs from this record or receives a stream error.
+            if saved.status is not status:
+                raise
+            log.exception("Terminal interaction projection failed for %s", run.id)
+            self._updates.notify_all()
+        self._terminal_retries.pop(run.id, None)
+        self._interaction_failure_runs.discard(run.id)
 
     async def _seed_native_audit_seen(self, agent: Any, config: dict[str, Any]) -> set[tuple[str, str]]:
         try:
@@ -2101,11 +2115,27 @@ class HarnessService:
 
     def _reconcile_startup_once(self) -> None:
         settled: list[AgentRun] = []
+        retries: list[tuple[AgentRun, AgentRunStatus, str]] = []
         with self._lock:
             if self._startup_reconciled:
                 return
             for run in self.store.list_runs():
                 if not is_run_lifecycle_live(run.status):
+                    if run.id in self._terminal_retries:
+                        # A failed follow-up read may have hidden a successful
+                        # terminal write. The durable record wins on retry.
+                        self._runs[run.id] = run
+                        self._terminal_retries.pop(run.id, None)
+                        self._interaction_failure_runs.discard(run.id)
+                    continue
+                retry = self._terminal_retries.get(run.id)
+                if retry is not None:
+                    retries.append((self._runs[run.id], *retry))
+                    continue
+                worker = self._threads.get(run.id)
+                if worker is not None and (worker.ident is None or worker.is_alive()):
+                    # This service still owns the graph. Reconciliation can be
+                    # retried after another run's failed terminal write.
                     continue
                 if run.finalization_phase == "saving_changes" and run.settled_status is not None:
                     settled.append(self._runs.setdefault(run.id, run))
@@ -2123,6 +2153,13 @@ class HarnessService:
                     continue
                 self._mark_orphaned_run(run)
             self._startup_reconciled = True
+        for run, status, reason in retries:
+            try:
+                self._finish(run, status, reason)
+            except Exception:
+                with self._lock:
+                    self._startup_reconciled = False
+                raise
         for run in settled:
             try:
                 self._finish(run, AgentRunStatus(run.settled_status), run.settled_stop_reason or run.settled_status)
@@ -2201,7 +2238,7 @@ class HarnessService:
     def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
         if not telemetry:
             self._persist(run)
-        if run.id not in self._interaction_failure_runs:
+        if run.id not in self._interaction_failure_runs or not is_run_lifecycle_live(run.status):
             self._observe_interaction(run, None, telemetry=telemetry)
         self._updates.notify_all()
 
