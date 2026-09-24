@@ -45,7 +45,7 @@ export function ChoiceControl({ id, label, value, options, onChange, custom = tr
   if (custom && numeric.length >= 3 && (value === "" || value === "custom" || Number.isFinite(Number(value)))) {
     const resolved = typeof resolvedValue === "number" ? resolvedValue : Number.isFinite(Number(resolvedValue)) && resolvedValue !== null && resolvedValue !== "" ? Number(resolvedValue) : null;
     const format = (number: number) => options.find(option => option.value === String(number))?.label ?? number.toLocaleString();
-    return <DiscreteSliderField id={id} label={label} value={value} resolved={resolved} values={numeric} format={format} min={min} max={max} step={step} disabled={disabled} onChange={next => onChange(next === "" ? "" : next)} />;
+    return <DiscreteSliderField id={id} label={label} value={value} resolved={resolved} values={numeric} format={format} min={min} max={max} step={step} disabled={disabled} onChange={onChange} />;
   }
   const isCustom = value === "custom" || !inList;
   return <div className="field-group">

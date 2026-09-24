@@ -343,6 +343,7 @@ export function DeploymentsPanel({
   const contextLoaded = selectedRunning?.server_props?.n_ctx;
   const contextResolvedRaw = startupResolved("ctx_size");
   const contextResolved = typeof contextResolvedRaw === "number" ? contextResolvedRaw : null;
+  const portResolved = startupResolved("port");
   const contextChoices = contextSteps(configuration?.context_size.options?.map(option => Number(option.value)) ?? [], maximumContext);
   const contextShown = settings.ctx_size !== "" && Number.isFinite(Number(settings.ctx_size)) && Number(settings.ctx_size) > 0 ? Number(settings.ctx_size) : contextResolved ?? contextChoices[0] ?? 4096;
   const gpuLoaded = selectedRunning?.applied_startup.n_gpu_layers;
@@ -473,7 +474,7 @@ export function DeploymentsPanel({
       </SettingSection>
       <SettingSection title="Advanced settings">
         <SettingRow label="Server port" htmlFor="model-port" help={<>Automatic chooses a free port when the model loads. Fixed ports are checked before starting.<code>--port</code></>} provenance={startupReadout("port")} onReset={canResetStartup("port") && !busy ? () => change("port", "") : undefined}>
-          <NumberField id="model-port" label="Server port" value={settings.port} placeholder="Automatic" min={1} max={65535} step={1} disabled={Boolean(busy)} onChange={value => change("port", value == null ? "" : String(value))} />
+          <NumberField id="model-port" label="Server port" value={settings.port} placeholder={typeof portResolved === "number" ? String(portResolved) : "Automatic"} min={1} max={65535} step={1} disabled={Boolean(busy)} onChange={value => change("port", value == null ? "" : String(value))} />
         </SettingRow>
         <SettingRow stacked label="Additional settings" htmlFor="additional-startup" help="JSON for supported template and draft-model controls. Use the named controls above for settings already shown.">
           <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder="{}" />

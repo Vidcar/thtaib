@@ -47,16 +47,16 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
       </>;
     }
     const sampling = [
-      { key: "temperature", label: "Temperature", min: 0, max: 2, step: 0.05, help: "Higher values give more varied replies; lower values are more focused." },
-      { key: "top_p", label: "Top P", min: 0, max: 1, step: 0.01, help: "Samples from the smallest set of tokens whose probability adds up to this value." },
-      { key: "top_k", label: "Top K", min: 0, max: 200, step: 1, help: "Samples from this many of the most likely tokens. 0 turns the limit off." },
-      { key: "min_p", label: "Min P", min: 0, max: 1, step: 0.01, help: "Drops tokens less likely than this share of the most likely token." },
-      { key: "presence_penalty", label: "Presence penalty", min: -2, max: 2, step: 0.05, help: "Encourages new topics by penalising tokens already used." },
-      { key: "repeat_penalty", label: "Repetition penalty", min: 0, max: 2, step: 0.05, help: "Discourages repeating recent tokens. 1 turns it off." },
-      { key: "frequency_penalty", label: "Frequency penalty", min: -2, max: 2, step: 0.05, help: "Penalises tokens in proportion to how often they appear." },
+      { key: "temperature", label: "Temperature", min: 0, max: 2, step: 0.05, exact: { min: 0 }, help: "Higher values give more varied replies; lower values are more focused." },
+      { key: "top_p", label: "Top P", min: 0, max: 1, step: 0.01, exact: { min: 0, max: 1 }, help: "Samples from the smallest set of tokens whose probability adds up to this value." },
+      { key: "top_k", label: "Top K", min: 0, max: 200, step: 1, exact: { min: 0, step: 1 }, help: "Samples from this many of the most likely tokens. 0 turns the limit off." },
+      { key: "min_p", label: "Min P", min: 0, max: 1, step: 0.01, exact: { min: 0, max: 1 }, help: "Drops tokens less likely than this share of the most likely token." },
+      { key: "presence_penalty", label: "Presence penalty", min: -2, max: 2, step: 0.05, exact: {}, help: "Encourages new topics by penalising tokens already used." },
+      { key: "repeat_penalty", label: "Repetition penalty", min: 0, max: 2, step: 0.05, exact: { min: 0 }, help: "Discourages repeating recent tokens. 1 turns it off." },
+      { key: "frequency_penalty", label: "Frequency penalty", min: -2, max: 2, step: 0.05, exact: {}, help: "Penalises tokens in proportion to how often they appear." },
     ] as const;
     return <>{sampling.map(item => <SettingRow key={item.key} label={item.label} htmlFor={`model-response-${item.key}`} help={`${item.help} Empty uses the inherited setting.`} provenance={readout(item.key)} onReset={set(item.key) && !disabled ? () => inherit(item.key) : undefined}>
-      <SliderField id={`model-response-${item.key}`} label={item.label} value={numberValue(item.key)} resolved={resolvedNumber(item.key)} min={item.min} max={item.max} step={item.step} disabled={disabled} onChange={commit(item.key)} />
+      <SliderField id={`model-response-${item.key}`} label={item.label} value={numberValue(item.key)} resolved={resolvedNumber(item.key)} min={item.min} max={item.max} step={item.step} exact={item.exact} disabled={disabled} onChange={commit(item.key)} />
     </SettingRow>)}</>;
   }
   const resets = (key: string) => <span className="setting-reset-actions">

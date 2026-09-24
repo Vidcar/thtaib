@@ -84,6 +84,8 @@ async function configurations(Panel) {
     assert.equal(lastPreview().overrides.per_request_overrides.temperature, null, 'clearing a saved response setting explicitly resets the authoritative preview');
     assert.equal(numeric('Temperature').props.value, '', 'empty input remains an inherited setting, not a saved default');
     assert.equal(numeric('Temperature').props.placeholder, '0.8', 'the empty field previews the inherited value it will use');
+    assert.equal(numeric('Temperature').props.max, undefined, 'exact entry is not capped by the slider range');
+    assert.equal(numeric('Temperature').props.step, 'any', 'exact entry accepts any precision');
     assert.match(text(settingRow(numeric('Temperature'))), /0\.8.*Model default.*Inherited/, 'resolved model default and its source are the visible readout');
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
