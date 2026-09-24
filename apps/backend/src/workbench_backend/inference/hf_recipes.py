@@ -50,6 +50,7 @@ _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _HTML_HEADING = re.compile(r"^\s*<h[1-6][^>]*>(.+?)</h[1-6]>\s*$", re.I)
 _BOLD_HEADING = re.compile(r"^\s*(?:<b>|<strong>)(.+?)(?:</b>|</strong>)\s*$", re.I)
 _MARKDOWN_BOLD_HEADING = re.compile(r"^\s*\*\*(.+?)\*\*\s*$")
+_NUMBERED_SECTION = re.compile(r"^\s*\d+[.)]\s+\*\*(.+?)\*\*:\s*(.*?)\s*$")
 _BULLET = re.compile(r"^\s*[-*]\s+(.{3,160}?):\s*(.+?)\s*$")
 _ASSIGNMENT = re.compile(r"^([a-z][a-z0-9_]*)\s*=\s*(\S+)$", re.I)
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$", re.I)
@@ -141,10 +142,21 @@ def parse_model_card_recipes(
     recipes: dict[str, dict[str, Any]] = {}
     ambiguous: set[str] = set()
     section: str | None = None
+    parent_heading: str | None = None
     for line in card_text.splitlines():
         heading = _heading(line)
         if heading is not None:
+            parent_heading = heading
             section = heading if _is_recommendation_heading(heading) else None
+            continue
+        numbered = _NUMBERED_SECTION.match(line)
+        if numbered is not None:
+            title, description = numbered.groups()
+            recommended_context = bool(parent_heading and re.search(r"\b(?:best practices|recommendations?)\b", parent_heading, re.I))
+            explicit_sampling = bool(title.casefold() == "sampling parameters"
+                and re.search(r"\b(?:suggest|recommend)\b", description, re.I)
+                and re.search(r"\bsampling parameters\b", description, re.I))
+            section = title if recommended_context and explicit_sampling else None
             continue
         if section is None:
             continue
