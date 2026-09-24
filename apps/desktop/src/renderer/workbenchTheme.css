@@ -144,7 +144,7 @@ details[open] > summary {color: var(--text); margin-bottom: var(--space-compact)
 .chat-search > svg {position: absolute; left: 9px; color: var(--muted);}
 .chat-search input {width: 100%; padding: var(--pad-tight) var(--pad-compact) var(--pad-tight) var(--pad-page); background: transparent; min-height: var(--control-height); border-color: transparent; font-size: var(--text-body);}
 .chat-search input:hover, .chat-search input:focus {background: var(--bg-input); border-color: var(--border);}
-.chat-groups {gap: var(--space-stack); margin: 0 -3px; padding: 0 var(--pad-tight); overflow-x: hidden;}
+.chat-groups {grid-template-columns: minmax(0, 1fr); gap: var(--space-stack); margin: 0 -3px; padding: 0 var(--pad-tight); overflow-x: hidden;}
 .chat-groups .nav-list, .chat-groups .nav-list li {min-width: 0; max-width: 100%; overflow-x: hidden;}
 .chat-group h3, .chat-group > summary {font-size: var(--text-small); letter-spacing: 0; text-transform: none; padding: 0 var(--pad-compact); margin: 0 0 var(--space-tight); font-weight: var(--weight-medium);}
 .chat-group > summary {min-height: var(--control-height); min-width: 0; overflow: hidden;}
