@@ -55,6 +55,7 @@ import {
   type RunProfile,
   type WorkbenchTab,
 } from "./types";
+import "./ChatPanel.css";
 
 interface PendingStopRequest {
   id: string;

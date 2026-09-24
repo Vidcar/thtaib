@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { applyAppearancePreviewState, type AppearancePreviewState } from "./appearancePreviewSync";
+import { CompactSwitch } from "./CompactControls";
 import { Icon } from "./Icon";
 import "./appearancePanel.css";
 
@@ -47,10 +48,7 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
     <aside className={`appearance-stage${guides ? " show-guides" : ""}`} data-active={aimed} aria-label="Appearance preview">
       <div className="appearance-stage-bar">
         <strong>Preview</strong>
-        <label>
-          <input type="checkbox" data-appearance-guide="" checked={guides} onChange={event => setGuides(event.target.checked)} />
-          Spacing guides
-        </label>
+        <span className="appearance-stage-guides" data-appearance-guide="">Spacing guides <CompactSwitch bare label="Spacing guides" checked={guides} onChange={setGuides} /></span>
       </div>
       <p className="appearance-stage-caption">
         {active ? `${active.name}. ${active.detail}` : "Point at a control. The marked parts are what it changes."}
@@ -97,6 +95,10 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
                 <Hit active={aimed} tokens={["palette-ok", "radius-pill", "text-small"]} className="appearance-stage-badge is-ok">Saved</Hit>
               </Hit>
               <Hit active={aimed} tokens={["palette-bg-input", "radius-control", "pad-compact", "text-ui", "layout-column"]} className="appearance-stage-field">Field</Hit>
+              <Hit active={aimed} guide tokens={["layout-form", "pad-card", "radius-card", "palette-bg-panel"]} className="appearance-stage-setting">
+                <span>Setting row</span>
+                <Hit active={aimed} tokens={["layout-control", "control-height", "radius-control"]} className="appearance-stage-setting-control"><i /><i /><i /></Hit>
+              </Hit>
               <Hit active={aimed} guide tokens={["palette-bg-raised", "radius-composer", "pad-card", "shadow-soft", "space-tight"]} className="appearance-stage-composer">
                 <span>Composer</span>
                 <Hit active={aimed} tokens={["palette-accent", "radius-circle", "control-height-lg", "weight-bold"]} className="appearance-stage-send">Send</Hit>

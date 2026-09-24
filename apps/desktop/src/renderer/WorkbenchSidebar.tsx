@@ -12,6 +12,7 @@ import { PanelResize } from "./PanelResize";
 import type { ChatConversation, WorkbenchTab } from "./types";
 import { tabIcons, tabLabel, workbenchTabs } from "./workspaceNavigation";
 import { workspaceApi, type ProjectRecord } from "./workspaceApi";
+import "./WorkbenchSidebar.css";
 
 export interface ChatLaunch {
   id: string;

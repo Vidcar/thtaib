@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { MessageCircle, Cpu, BookOpen, Workflow, FlaskConical, Library, SlidersHorizontal, Plus, ArrowUp, Square, ShieldCheck, Files, Ellipsis, X, Pencil, Archive, PanelLeft, PanelRight, Activity, Bell, Folder, Trash2, Search, RotateCcw, Maximize2, Minimize2, Info, Check, Terminal, Minus, Download, Copy, RefreshCw, Settings2, Sparkles, GitBranch, Brain } from "lucide-react";
+import { MessageCircle, Cpu, BookOpen, Workflow, FlaskConical, Library, SlidersHorizontal, Plus, ArrowUp, Square, ShieldCheck, Files, Ellipsis, X, Pencil, Archive, PanelLeft, PanelRight, Activity, Bell, Folder, Trash2, Search, RotateCcw, Maximize2, Minimize2, Info, Check, Terminal, Minus, Download, Copy, RefreshCw, Settings2, Sparkles, GitBranch, Brain, ExternalLink } from "lucide-react";
 
 const icons = {
   chat: MessageCircle, models: Cpu, knowledge: BookOpen, "agent-run": Workflow,
@@ -9,7 +9,7 @@ const icons = {
   attention: Bell, folder: Folder, trash: Trash2, search: Search, restore: RotateCcw,
   expand: Maximize2, shrink: Minimize2, info: Info, check: Check, terminal: Terminal,
   minus: Minus, download: Download, copy: Copy, refresh: RefreshCw, tune: Settings2,
-  sparkles: Sparkles, branch: GitBranch,
+  sparkles: Sparkles, branch: GitBranch, external: ExternalLink,
 } as const;
 
 export type IconName = keyof typeof icons;

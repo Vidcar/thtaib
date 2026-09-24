@@ -55,6 +55,8 @@
   --layout-narrow: 90px;
   --layout-inset: 42px;
   --layout-menu: 420px;
+  --layout-control: 300px;
+  --layout-form: 780px;
   --control-height: 30px;
   --control-height-lg: 38px;
   --icon-md: 16px;
