@@ -393,6 +393,13 @@ class SetupService:
     def _resolve_model_selector_layer(self, values: dict, effective: dict, explicit: dict) -> None:
         """A higher model choice cannot be replaced by a lower incompatible one."""
         if explicit.get("model_configuration_id"):
+            # A configuration selected at this layer must not inherit a lower
+            # layer's deployment snapshot. Keep a deployment only when the
+            # same layer deliberately pairs it with the configuration, so the
+            # caller can apply the changed startup settings to that instance.
+            if not explicit.get("deployment_id"):
+                values.pop("deployment_id", None)
+                effective.pop("deployment_id", None)
             return
         def clear(key: str) -> None:
             values.pop(key, None)

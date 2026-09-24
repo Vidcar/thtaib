@@ -10,9 +10,10 @@ globalThis.window = Object.assign(new EventTarget(), { workbench: { backendUrl: 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const vite = await createViteServer({ root, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
+const { preferredChatDeploymentId } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
 const { api } = await vite.ssrLoadModule("/src/renderer/api.ts");
 const { workspaceApi } = await vite.ssrLoadModule("/src/renderer/workspaceApi.ts");
-const original = { modelConfiguration: api.modelConfiguration, reconfigure: api.reconfigure, saveModelConfiguration: api.saveModelConfiguration, resolveSetup: workspaceApi.resolveSetup };
+const original = { modelConfiguration: api.modelConfiguration, reconfigure: api.reconfigure, start: api.start, startManaged: api.startManaged, saveModelConfiguration: api.saveModelConfiguration, resolveSetup: workspaceApi.resolveSetup };
 const bag = (requested = {}) => ({ requested, applied: {}, overridden: [], unsupported: [], retired: [] });
 const profile = (id, bundle) => ({ id, bundle_id: bundle, revision: 1, display_name: id === "model_a" ? "Qwen" : "Second model", bags: { startup: bag({ ctx_size: 32768, n_gpu_layers: 50 }), per_request: bag({ temperature: 0.7 }), agent: bag() } });
 const deployment = (id, bundle, scope = "managed") => ({ id, profile_id: id === "dep_a" ? "model_a" : "model_b", bundle_id: bundle, display_name: `${scope}:${id}`, scope, status: "running", updated_at: "2026-09-23T12:00:00Z", health: { healthy: true }, server_props: { n_ctx: 32768 }, applied_startup: { ctx_size: 32768, n_gpu_layers: 50 }, settings: { startup: bag(), per_request: bag(), agent: bag() } });
@@ -37,19 +38,23 @@ function button(renderer, label) { const found = renderer.root.findAll(node => n
 function range(renderer, label) { return renderer.root.findAll(node => node.type === "input" && node.props.type === "range" && node.props["aria-label"] === label)[0]; }
 async function flush() { await act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); }); }
 async function render(overrides = {}, resolve = preview) {
-  const applied = [], saved = [], reloads = [], reconfigured = [];
+  const applied = [], saved = [], reloads = [], reconfigured = [], started = [], managed = [];
   workspaceApi.resolveSetup = async (_project, _agent, config) => resolve(config);
   api.modelConfiguration = async () => options();
   api.reconfigure = async (id, payload) => { reconfigured.push({ id, payload }); return deployment(id, "bundle_a"); };
+  api.start = async id => { started.push(id); return deployment(id, "bundle_a"); };
+  api.startManaged = async (bundle, profileId, startup) => { managed.push({ bundle, profileId, startup }); return deployment("dep_variant", bundle); };
   api.saveModelConfiguration = async (bundle, payload) => { saved.push({ bundle, payload }); return profile(payload.configuration_id, bundle); };
   const props = { deployments: [deployment("dep_a", "bundle_a"), deployment("dep_b", "bundle_b"), deployment("connected", null, "connected")], profiles: [profile("model_a", "bundle_a"), profile("model_b", "bundle_b")], selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "model_a" }, onApply: value => applied.push(value), onReloaded: async () => { reloads.push(true); }, ...overrides };
   let renderer;
   await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
   await flush();
-  return { renderer, props, applied, saved, reloads, reconfigured, async update(value) { Object.assign(props, value); await act(async () => renderer.update(React.createElement(ChatModelControls, props))); await flush(); }, async close() { await act(async () => renderer.unmount()); } };
+  return { renderer, props, applied, saved, reloads, reconfigured, started, managed, async update(value) { Object.assign(props, value); await act(async () => renderer.update(React.createElement(ChatModelControls, props))); await flush(); }, async close() { await act(async () => renderer.unmount()); } };
 }
 
 try {
+  assert.equal(preferredChatDeploymentId([deployment("dep_a", "bundle_a")], "", "variant_a"), "", "refresh cannot attach an old deployment to a newly selected variant");
+  assert.equal(preferredChatDeploymentId([deployment("dep_a", "bundle_a")], ""), "dep_a", "automatic Chat selection still finds an available deployment");
   {
     const state = await render({ configuration: {}, selectedDeploymentId: "", selectedConfigurationId: "model_b", projectId: "project_with_model_choice" }, config => preview({ ...config, model_configuration_id: "model_b" }));
     assert.equal(state.renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Chat model settings: Second model").length, 1, "the trigger names an inherited configuration even before its model is loaded");
@@ -95,6 +100,82 @@ try {
     await state.close();
   }
   {
+    const state = await render();
+    await state.update({ onApply: async () => { throw new Error("Could not resolve selected setup"); } });
+    const trigger = state.renderer.root.findByProps({ "aria-label": "Chat model settings: Qwen" });
+    await act(async () => trigger.props.onClick());
+    await act(async () => range(state.renderer, "Thinking level").props.onChange({ target: { value: "1" } }));
+    await act(async () => button(state.renderer, "Apply").props.onClick());
+    assert.equal(trigger.props["aria-expanded"], true, "a failed Chat setup bind leaves model settings open");
+    assert.equal(range(state.renderer, "Thinking level").props["aria-valuetext"], "Medium", "a failed bind preserves the staged model edit");
+    assert.match(text(state.renderer.toJSON()), /Could not resolve selected setup/);
+    await state.close();
+  }
+  {
+    const variant = { ...profile("model_a", "bundle_a"), id: "variant_a", display_name: "96k Q8 MTP variant", bags: { ...profile("model_a", "bundle_a").bags, startup: bag({ ctx_size: 98304, spec_type: "draft-mtp", cache_type_k: "q8_0", cache_type_v: "q8_0" }) } };
+    const state = await render({ configuration: { model_configuration_id: variant.id, deployment_id: null }, selectedDeploymentId: "dep_b", profiles: [variant] }, config => ({
+      ...preview(config),
+      configuration: { ...config, model_configuration_id: variant.id, deployment_id: null },
+      effective_values: { "startup.ctx_size": fact(98304, "Configuration") },
+    }));
+    await state.update({ onApply: value => {
+      state.applied.push(value);
+      state.props.configuration = value;
+      state.props.selectedDeploymentId = value.deployment_id;
+      state.renderer.update(React.createElement(ChatModelControls, state.props));
+    } });
+    const trigger = state.renderer.root.findAll(node => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("Chat model settings:"))[0];
+    await act(async () => trigger.props.onClick());
+    assert.equal(button(state.renderer, "Apply & load").props.disabled, false, "a selected variant without a deployment can be loaded from Chat");
+    await act(async () => button(state.renderer, "Apply & load").props.onClick());
+    assert.deepEqual(state.managed, [{ bundle: "bundle_a", profileId: variant.id, startup: variant.bags.startup.requested }], "loading uses the selected variant's full startup recipe");
+    assert.equal(state.reconfigured.length, 0, "an older deployment for another bundle cannot override a resolved null deployment");
+    assert.equal(state.applied[0].deployment_id, "dep_variant", "the loaded deployment is bound to the applied Chat setup");
+    assert.equal(state.applied[0].model_configuration_id, variant.id);
+    assert.equal(trigger.props["aria-expanded"], false, "successful Apply closes even after the parent updates its model configuration");
+    await state.close();
+  }
+  {
+    const variant = { ...profile("model_a", "bundle_a"), id: "variant_a", display_name: "96k Q8 MTP variant", bags: { ...profile("model_a", "bundle_a").bags, startup: bag({ ctx_size: 98304, spec_type: "draft-mtp", cache_type_k: "q8_0", cache_type_v: "q8_0" }) } };
+    const state = await render({ configuration: { model_configuration_id: variant.id, deployment_id: null }, selectedDeploymentId: "dep_a", profiles: [variant] }, config => ({
+      ...preview(config), configuration: { ...config, model_configuration_id: variant.id, deployment_id: null },
+      effective_values: { "startup.ctx_size": fact(98304, "Configuration") },
+    }));
+    assert.equal(button(state.renderer, "Apply & reload").props.disabled, false, "a running same-bundle model can switch to a new variant without starting a second copy");
+    await act(async () => button(state.renderer, "Apply & reload").props.onClick());
+    assert.equal(state.reconfigured.length, 1);
+    assert.equal(state.reconfigured[0].id, "dep_a");
+    assert.equal(state.reconfigured[0].payload.model_configuration_id, variant.id);
+    assert.deepEqual(state.managed, []);
+    assert.equal(state.applied[0].deployment_id, "dep_a");
+    await state.close();
+  }
+  {
+    const stopped = { ...deployment("dep_a", "bundle_a"), status: "stopped", health: null, server_props: null };
+    const state = await render({ deployments: [stopped] }, config => ({
+      ...preview(config),
+      effective_values: { "startup.ctx_size": fact(65536, "Configuration", true) },
+    }));
+    assert.equal(button(state.renderer, "Apply & reload").props.disabled, false, "a stopped deployment with changed startup can be reconfigured");
+    await act(async () => button(state.renderer, "Apply & reload").props.onClick());
+    assert.equal(state.reconfigured.length, 1);
+    assert.equal(state.reconfigured[0].id, stopped.id);
+    assert.equal(state.reconfigured[0].payload.model_configuration_id, "model_a", "reconfiguration refreshes the selected configuration snapshot even when its id is unchanged");
+    assert.equal(state.reconfigured[0].payload.expected_configuration_revision, 1);
+    assert.equal(state.applied[0].deployment_id, stopped.id);
+    await state.close();
+  }
+  {
+    const stopped = { ...deployment("dep_a", "bundle_a"), status: "stopped", health: null, server_props: null };
+    const state = await render({ deployments: [stopped] });
+    assert.equal(button(state.renderer, "Apply & load").props.disabled, false, "a matching stopped model offers a load action");
+    await act(async () => button(state.renderer, "Apply & load").props.onClick());
+    assert.deepEqual(state.started, [stopped.id]);
+    assert.equal(state.reconfigured.length, 0);
+    assert.equal(state.applied[0].deployment_id, stopped.id);
+    await state.close();
+  }
+  {
     const loaded = { ...deployment("dep_a", "bundle_a"), profile_id: null, requested_startup: { ctx_size: 8192, n_gpu_layers: 30 }, settings: { startup: bag(), per_request: bag({ temperature: 0.4 }), agent: bag() } };
     const state = await render({ configuration: {}, projectId: "project_without_model_choice", deployments: [loaded] }, config => ({
       ...preview(config), configuration: { ...config, deployment_id: "dep_a", model_configuration_id: null, profile_id: null },
@@ -114,6 +195,13 @@ try {
     assert.match(text(state.renderer.toJSON()), /managed outside Workbench/);
     assert.equal(button(state.renderer, "Save to model").props.disabled, true);
     assert.match(button(state.renderer, "Save to model").props.title, /external server/);
+    await state.close();
+  }
+  {
+    const state = await render({ configuration: { deployment_id: "connected" }, selectedDeploymentId: "connected" }, config => ({
+      ...preview(config), effective_values: { "startup.ctx_size": fact(65536, "Configuration", true) },
+    }));
+    assert.equal(button(state.renderer, "Apply").props.disabled, true, "Workbench cannot apply startup changes to a connected server");
     await state.close();
   }
   {
@@ -156,7 +244,7 @@ try {
   }
   console.log("Chat model staged configuration, default provenance, reload failure and stale response checks passed.");
 } finally {
-  Object.assign(api, { modelConfiguration: original.modelConfiguration, reconfigure: original.reconfigure, saveModelConfiguration: original.saveModelConfiguration });
+  Object.assign(api, { modelConfiguration: original.modelConfiguration, reconfigure: original.reconfigure, start: original.start, startManaged: original.startManaged, saveModelConfiguration: original.saveModelConfiguration });
   workspaceApi.resolveSetup = original.resolveSetup;
   await vite.close();
 }
