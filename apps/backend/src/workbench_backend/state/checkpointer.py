@@ -204,12 +204,44 @@ def _close_holder(key: str) -> None:
     holder.close()
 
 
-async def acheckpoint_ids_from_graph(agent: object, config: dict[str, object]) -> list[str]:
-    """Read durable linkage through the public async graph API."""
-    ids = [_checkpoint_id(snapshot) async for snapshot in agent.aget_state_history(config)]
-    if not any(ids):
-        ids = [_checkpoint_id(await agent.aget_state(config))]
-    return list(dict.fromkeys(item for item in ids if item))
+async def acheckpoint_ids_from_graph(
+    agent: object, config: dict[str, object], *, stop_at_id: str | None = None,
+) -> list[str]:
+    """Read this run's checkpoints, newest first, through bounded graph pages.
+
+    ``stop_at_id`` is the checkpoint observed before the run began. It is
+    exclusive, so linkage cannot accidentally claim earlier runs on a reused
+    graph thread. LangGraph materializes each history query before yielding,
+    hence the explicit page size matters even to an async consumer.
+    """
+    page_size = 64
+    before: dict[str, object] | None = None
+    ids: list[str] = []
+    while True:
+        page = [snapshot async for snapshot in agent.aget_state_history(
+            config, before=before, limit=page_size,
+        )]
+        if not page:
+            break
+        for snapshot in page:
+            checkpoint_id = _checkpoint_id(snapshot)
+            if checkpoint_id == stop_at_id and stop_at_id is not None:
+                return list(dict.fromkeys(ids))
+            if checkpoint_id:
+                ids.append(checkpoint_id)
+        if len(page) < page_size:
+            break
+        next_before = getattr(page[-1], "config", None)
+        if not isinstance(next_before, dict):
+            raise ValueError("Checkpoint history page has no continuation config.")
+        before = next_before
+    if stop_at_id is not None:
+        raise ValueError(f"Pre-run checkpoint {stop_at_id} is absent from graph history.")
+    if not ids:
+        latest = _checkpoint_id(await agent.aget_state(config))
+        if latest:
+            ids.append(latest)
+    return list(dict.fromkeys(ids))
 
 
 def _checkpoint_id(snapshot: object) -> str | None:

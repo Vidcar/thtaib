@@ -178,7 +178,7 @@ class LabService:
                 workspace_id=workspace.id,
                 project_root=Path(workspace.path),
                 kind="final",
-                allowlist=request.allowlist or workspace.allowlist,
+                allowlist=request.allowlist if request.allowlist is not None else workspace.allowlist,
                 unresolved_side_effects=unresolved,
             )
             snapshot_kind = manifest.kind

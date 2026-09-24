@@ -263,10 +263,13 @@ export function LabPanel() {
         <button type="submit" disabled={busy || (!deploymentId && !configuration.model_configuration_id) || !workspace || Boolean(liveRunId)}>
           <Icon name="send" size={14} /> Run tool check
         </button>
-        {run ? <RunProgress run={run} title={result ? "Comparison run" : "Tool check"} onCancel={() => void action(async () => {
-          const next = await api.cancelAgentRun(run.id);
-          setRun(current => current?.id === next.id ? next : current);
-        })} /> : null}
+        {run ? <RunProgress run={run} title={result ? "Comparison run" : "Tool check"} onCancel={() => {
+          if (run.finalization_phase === "saving_changes") return;
+          void action(async () => {
+            const next = await api.cancelAgentRun(run.id);
+            setRun(current => current?.id === next.id ? next : current);
+          });
+        }} /> : null}
         {run?.error ? <Notice tone="error">{run.error}</Notice> : null}
       </form>
       </div>

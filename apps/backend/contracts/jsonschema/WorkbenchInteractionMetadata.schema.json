@@ -288,6 +288,19 @@
           "default": null,
           "title": "Final Snapshot Id"
         },
+        "finalization_phase": {
+          "anyOf": [
+            {
+              "const": "saving_changes",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finalization Phase"
+        },
         "finished_at": {
           "anyOf": [
             {
@@ -420,6 +433,18 @@
           ],
           "default": null
         },
+        "pre_run_checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pre Run Checkpoint Id"
+        },
         "presented_tools": {
           "items": {
             "type": "string"
@@ -539,6 +564,35 @@
         },
         "review_observation": {
           "$ref": "#/$defs/ReviewObservation"
+        },
+        "settled_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "completed",
+                "failed",
+                "cancelled"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settled Status"
+        },
+        "settled_stop_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Settled Stop Reason"
         },
         "skill_version_refs": {
           "items": {
@@ -1549,7 +1603,10 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "const": "replay_gap",
+          "enum": [
+            "replay_gap",
+            "history_unavailable"
+          ],
           "title": "Kind",
           "type": "string"
         },

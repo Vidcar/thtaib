@@ -51,10 +51,10 @@ class ChatBranchTests(unittest.TestCase):
 
         self.app.state.harness._model_factory = factory
 
-    def create_conversation(self) -> dict:
+    def create_conversation(self, **extra: object) -> dict:
         response = self.client.post(
             "/v1/chat/conversations",
-            json={"deployment_id": self.deployment_id, "project_path": str(self.project)},
+            json={"deployment_id": self.deployment_id, "project_path": str(self.project), **extra},
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
@@ -258,6 +258,26 @@ class ChatBranchTests(unittest.TestCase):
         original = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
         self.assertIn("original answer", str(original["transcript"]))
         self.assertNotIn("regenerated answer", str(original["transcript"]))
+
+    def test_continue_branch_retains_file_created_by_completed_run(self) -> None:
+        self.install_model([
+            AIMessage(content="", tool_calls=[{
+                "name": "write_file", "args": {"file_path": "/created.txt", "content": "safe result"},
+                "id": "write_created",
+            }]),
+            AIMessage(content="file created"),
+        ])
+        conversation = self.create_conversation(approval_mode="full_access")
+        run = self.start_turn(conversation["id"], "Create the result file.", presented_tools=["write_file"])
+        self.assertEqual(run["status"], "completed", run)
+        self.assertEqual((self.project / "created.txt").read_text(encoding="utf-8"), "safe result")
+        snapshot_tree = self.app.state.manager.paths.snapshots / run["final_snapshot_id"] / "tree"
+        self.assertEqual((snapshot_tree / "created.txt").read_text(encoding="utf-8"), "safe result")
+
+        branched = self.client.post(f"/v1/chat/conversations/{conversation['id']}/branches",
+            json={"source_run_id": run["id"], "mode": "continue"})
+        self.assertEqual(branched.status_code, 200, branched.text)
+        self.assertEqual((Path(branched.json()["project_path"]) / "created.txt").read_text(encoding="utf-8"), "safe result")
 
     def test_regenerate_final_store_failure_preserves_accepted_run_resources(self) -> None:
         self.install_model([AIMessage(content="original answer"), AIMessage(content="regenerated answer")])

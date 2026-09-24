@@ -258,6 +258,7 @@ function ChatInteractionStreamContent(props: {
     !conversation.current_run
     )
   ));
+  const savingProjectState = projectionRunOwned && run?.finalization_phase === "saving_changes";
   const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
   const inputId = pendingSubmit?.id ?? run?.input_message_id;
   const reverseInputIndex = [...projection.messages].reverse().findIndex(message => inputId ? message.id === inputId : message.getType() === "human");
@@ -265,7 +266,7 @@ function ChatInteractionStreamContent(props: {
   const hasTurnOutput = inputIndex >= 0 && projection.messages.slice(inputIndex + 1).some(message =>
     message.getType() !== "human" && (message.content.length > 0 || Boolean((message as { tool_calls?: unknown[] }).tool_calls?.length)),
   ) || projection.toolCalls.some(call => (call.status as string) === "preparing" || call.status === "running");
-  const waitingForOutput = projectionRunOwned && !visibleInterrupt && !hasTurnOutput &&
+  const waitingForOutput = projectionRunOwned && !savingProjectState && !visibleInterrupt && !hasTurnOutput &&
     Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
   const projectionSignature = useRef("");
   const ownershipLookupKey = useRef("");
@@ -302,6 +303,7 @@ function ChatInteractionStreamContent(props: {
     const signature = JSON.stringify({
       runId: run?.id ?? null,
       runStatus: run?.status ?? null,
+      finalizationPhase: run?.finalization_phase ?? null,
       eventCount: run?.events.length ?? null,
     });
     publishLiveMeasurement({
@@ -417,6 +419,7 @@ function ChatInteractionStreamContent(props: {
         }} />
       ) : null}
       {projectionRunOwned ? <RunActivitySummary run={run} /> : null}
+      {savingProjectState ? <div className="chat-waiting" role="status">Saving project state…</div> : null}
       {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
       {projectionRunOwned && visibleInterrupt ? (
         <InterruptApproval
@@ -1052,6 +1055,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     interactionThreadId === pendingSubmit.thread_id &&
     boundGeneration === pendingSubmit.selection_generation,
   );
+  const savingProjectState = conversation?.current_run?.finalization_phase === "saving_changes" && !pendingSubmissionActive;
   const localPendingStopActive = Boolean(
     pendingStop &&
     pendingSubmit &&
@@ -1216,6 +1220,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             fail(error);
           }
         });
+      return;
+    }
+    if (conversation.current_run?.finalization_phase === "saving_changes") {
       return;
     }
     if (!conversation.current_run) {
@@ -1620,9 +1627,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           )}
           {runBusy && !pendingInterrupt && (pendingStopActive || !canObserveInteraction) ? (
             <p className="hint" role="status">
-              Working… {pendingStopActive ? (
+              {savingProjectState ? "Saving project state…" : "Working…"} {pendingStopActive ? (
                 <StatusBadge label="Stopping submission" tone="warn" />
-              ) : pendingSubmissionActive ? (
+              ) : savingProjectState ? null : pendingSubmissionActive ? (
                 <StatusBadge label="Loading model" tone="live" />
               ) : (
                 <StatusBadge status={conversation?.current_run?.status} />
@@ -1787,13 +1794,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <ChatMeasurements run={conversation?.current_run} />
             <button
               type="button"
-              aria-label={pendingStopActive ? "Stopping…" : "Stop"}
+              aria-label={savingProjectState ? "Saving project state" : pendingStopActive ? "Stopping…" : "Stop"}
               className="stop-button"
               data-idle={!runBusy && !pendingStopActive}
-              disabled={!conversation || !runBusy || pendingStopActive}
+              disabled={!conversation || !runBusy || pendingStopActive || savingProjectState}
+              title={savingProjectState ? "Execution finished; saving project state" : undefined}
               onClick={stopCurrentWork}
             >
-              <Icon name="stop" size={16} /><span className="sr-only">{pendingStopActive ? "Stopping…" : "Stop"}</span>
+              <Icon name="stop" size={16} /><span className="sr-only">{savingProjectState ? "Saving project state" : pendingStopActive ? "Stopping…" : "Stop"}</span>
             </button>
             <button
               type="submit"

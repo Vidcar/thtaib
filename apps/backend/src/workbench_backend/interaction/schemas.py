@@ -11,7 +11,7 @@ from workbench_backend.agents.schemas import AgentRun
 class InteractionRecovery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["replay_gap"]
+    kind: Literal["replay_gap", "history_unavailable"]
     message: str
 
 

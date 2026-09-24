@@ -1,0 +1,572 @@
+diff --git a/dist/client/stream/index.cjs b/dist/client/stream/index.cjs
+index eaa0e018f434f23f421b01b6d3d5a25aaa615758..30db70d4eb85b151be9dcb00c9b24049929b0edc 100644
+--- a/dist/client/stream/index.cjs
++++ b/dist/client/stream/index.cjs
+@@ -95,6 +95,7 @@ function filterEqual(a, b) {
+ 	for (const ch of b.channels) if (!aChannels.has(ch)) return false;
+ 	if (!namespaceListsEqual(a.namespaces, b.namespaces)) return false;
+ 	if ((a.depth ?? null) !== (b.depth ?? null)) return false;
++	if ((a.since ?? 0) !== (b.since ?? 0)) return false;
+ 	return true;
+ }
+ function isPrefix(prefix, candidate) {
+@@ -123,6 +124,7 @@ function isPrefix(prefix, candidate) {
+ *      target's max absolute depth is `target.depth` (prefix is `[]`).
+ */
+ function filterCovers(coverer, target) {
++	if ((coverer.since ?? 0) > (target.since ?? 0)) return false;
+ 	const covererChannels = new Set(coverer.channels);
+ 	for (const ch of target.channels) if (!covererChannels.has(ch)) return false;
+ 	const covererDepth = coverer.depth;
+@@ -346,6 +348,10 @@ var ThreadStream = class {
+ 	#openPromise;
+ 	#sharedStream = null;
+ 	#sharedStreamFilter = null;
++	#streamGeneration = 0;
++	#sharedStreamGeneration = 0;
++	#hydrationCursor = 0;
++	#hydratedRootOpened = false;
+ 	#rotationState = "idle";
+ 	/** Pending `subscribe()` promises waiting for a covering rotation. */
+ 	#pendingSubResolves = [];
+@@ -442,6 +448,9 @@ var ThreadStream = class {
+ 			this.#consumeEvents();
+ 		}
+ 	}
++	setHydrationCursor(cursor) {
++		if (Number.isSafeInteger(cursor) && cursor >= 0) this.#hydrationCursor = cursor;
++	}
+ 	/**
+ 	* Ensure the underlying transport is connected.
+ 	*
+@@ -967,7 +976,7 @@ var ThreadStream = class {
+ 		} catch {
+ 			return;
+ 		}
+-		const filter = { channels: ["lifecycle", "input"] };
++		const filter = { channels: ["lifecycle", "input"], since: this.#hydrationCursor };
+ 		let handle;
+ 		try {
+ 			handle = this.#transportAdapter.openEventStream(filter);
+@@ -1028,6 +1037,7 @@ var ThreadStream = class {
+ 	*/
+ 	#handleLifecycleWatcherMessage(message) {
+ 		if (message.type !== "event") return;
++		if (typeof message.seq === "number" && message.seq <= this.#hydrationCursor) return;
+ 		if (typeof message.seq === "number") this.ordering.lastSeenSeq = maxSeq(this.ordering.lastSeenSeq, message.seq);
+ 		if (message.event_id) this.ordering.lastEventId = message.event_id;
+ 		const eventId = message.event_id ?? void 0;
+@@ -1144,15 +1154,25 @@ var ThreadStream = class {
+ 			this.#subscriptions.delete(id);
+ 			this.#scheduleReconcile();
+ 		}, transform);
++		const isRoot = !this.#hydratedRootOpened && params.depth === 1 &&
++			params.namespaces?.length === 1 && params.namespaces[0].length === 0 &&
++			["values", "messages", "tools"].every((channel) => params.channels.includes(channel));
++		if (isRoot) this.#hydratedRootOpened = true;
++		const replayFromSeq = typeof params.since === "number" ? params.since : isRoot ? this.#hydrationCursor : 0;
++		const filter = { ...params, since: replayFromSeq };
++		const minStreamGeneration = this.#streamGeneration + 1;
+ 		const subscription = Object.assign(handle, {
+-			filter: params,
++			filter,
++			replayFromSeq,
++			minStreamGeneration,
+ 			registeredAfterSeq: this.ordering.lastSeenSeq,
+ 			seenEventIds: /* @__PURE__ */ new Set()
+ 		});
+ 		this.#subscriptions.set(subscriptionId, subscription);
+ 		const covered = new Promise((resolve, reject) => {
+ 			this.#pendingSubResolves.push({
+-				filter: params,
++				filter,
++				minStreamGeneration,
+ 				resolve,
+ 				reject
+ 			});
+@@ -1162,6 +1182,7 @@ var ThreadStream = class {
+ 			await covered;
+ 		} catch (err) {
+ 			this.#subscriptions.delete(subscriptionId);
++			if (isRoot) this.#hydratedRootOpened = false;
+ 			throw err;
+ 		}
+ 		return handle;
+@@ -1193,14 +1214,16 @@ var ThreadStream = class {
+ 		const namespaceMap = /* @__PURE__ */ new Map();
+ 		let unboundedDepth = false;
+ 		let maxDepth = 0;
++		let since = Infinity;
+ 		for (const sub of this.#subscriptions.values()) {
++			since = Math.min(since, sub.replayFromSeq);
+ 			for (const ch of sub.filter.channels) channels.add(ch);
+ 			if (sub.filter.namespaces == null) wildcardNamespaces = true;
+ 			else if (!wildcardNamespaces) for (const ns of sub.filter.namespaces) namespaceMap.set(namespaceKey(ns), ns);
+ 			if (sub.filter.depth == null) unboundedDepth = true;
+ 			else if (!unboundedDepth && sub.filter.depth > maxDepth) maxDepth = sub.filter.depth;
+ 		}
+-		const result = { channels: [...channels] };
++		const result = { channels: [...channels], since };
+ 		if (!wildcardNamespaces) result.namespaces = [...namespaceMap.values()];
+ 		if (!unboundedDepth) result.depth = maxDepth;
+ 		return result;
+@@ -1262,6 +1285,7 @@ var ThreadStream = class {
+ 			return;
+ 		}
+ 		this.#rotationState = "rotating";
++		const generation = ++this.#streamGeneration;
+ 		let newHandle;
+ 		try {
+ 			newHandle = this.#transportAdapter.openEventStream(desired);
+@@ -1287,28 +1311,29 @@ var ThreadStream = class {
+ 			this.#rotationState = "idle";
+ 			return;
+ 		}
+-		this.#pumpStream(newHandle);
++		this.#pumpStream(newHandle, generation);
+ 		const oldHandle = this.#sharedStream;
+ 		this.#sharedStream = newHandle;
+ 		this.#sharedStreamFilter = desired;
++		this.#sharedStreamGeneration = generation;
+ 		if (oldHandle != null) try {
+ 			oldHandle.close();
+ 		} catch {}
+ 		this.#rotationState = "idle";
+ 		this.#resolvePending();
+ 		const next = this.#computeUnionFilter();
+-		if (next != null && !filterEqual(next, this.#sharedStreamFilter)) this.#scheduleReconcile();
++		if (next != null && (!filterEqual(next, this.#sharedStreamFilter) || this.#pendingSubResolves.length > 0)) this.#scheduleReconcile();
+ 	}
+ 	/**
+ 	* Pump events from a shared-stream handle into `#handleIncoming`.
+ 	* One pump task runs per open stream; during rotation overlap two
+ 	* pumps may be active briefly, with `#seenEventIds` deduping.
+ 	*/
+-	async #pumpStream(handle) {
++	async #pumpStream(handle, generation) {
+ 		try {
+ 			for await (const message of handle.events) {
+ 				if (this.#closed) break;
+-				this.#handleIncoming(message);
++				this.#handleIncoming(message, generation);
+ 			}
+ 		} catch (err) {
+ 			if (handle === this.#sharedStream && !this.#closed) this.#failThreadWithError(err);
+@@ -1324,7 +1349,7 @@ var ThreadStream = class {
+ 		const current = this.#sharedStreamFilter;
+ 		if (this.#pendingSubResolves.length === 0) return;
+ 		const stillPending = [];
+-		for (const pending of this.#pendingSubResolves) if (filterCovers(current, pending.filter)) pending.resolve();
++		for (const pending of this.#pendingSubResolves) if (this.#sharedStreamGeneration >= pending.minStreamGeneration && filterCovers(current, pending.filter)) pending.resolve();
+ 		else stillPending.push(pending);
+ 		this.#pendingSubResolves.length = 0;
+ 		this.#pendingSubResolves.push(...stillPending);
+@@ -1339,10 +1364,12 @@ var ThreadStream = class {
+ 		if (this.#pendingSubResolves.length === 0) return;
+ 		const current = this.#sharedStreamFilter;
+ 		const stillPending = [];
+-		for (const pending of this.#pendingSubResolves) if (current != null && filterCovers(current, pending.filter)) pending.resolve();
+-		else stillPending.push(pending);
++		for (const pending of this.#pendingSubResolves) if (current != null && this.#sharedStreamGeneration >= pending.minStreamGeneration && filterCovers(current, pending.filter)) pending.resolve();
++		else if (pending.minStreamGeneration > this.#streamGeneration) stillPending.push(pending);
++		else pending.reject(err);
+ 		this.#pendingSubResolves.length = 0;
+-		for (const pending of stillPending) pending.reject(err);
++		this.#pendingSubResolves.push(...stillPending);
++		if (stillPending.length > 0) this.#scheduleReconcile();
+ 	}
+ 	/**
+ 	* Terminate the thread due to an unrecoverable shared-stream error.
+@@ -1450,7 +1477,7 @@ var ThreadStream = class {
+ 			}
+ 		}, 0);
+ 	}
+-	#handleIncoming(message) {
++	#handleIncoming(message, streamGeneration = Infinity) {
+ 		if (message.type === "event") {
+ 			if (typeof message.seq === "number") this.ordering.lastSeenSeq = maxSeq(this.ordering.lastSeenSeq, message.seq);
+ 			if (message.event_id) this.ordering.lastEventId = message.event_id;
+@@ -1462,13 +1489,15 @@ var ThreadStream = class {
+ 				"completed",
+ 				"failed"
+ 			]);
+-			if (!globallyProcessed) {
++			if (!globallyProcessed && !(typeof message.seq === "number" && message.seq <= this.#hydrationCursor)) {
+ 				this.#applyThreadLevelEffects(message);
+ 				this.#fireOnEvent(message);
+ 			}
+ 			let fannedToAny = false;
+ 			for (const subscription of this.#subscriptions.values()) {
++				if (streamGeneration < subscription.minStreamGeneration) continue;
+ 				if (!require_subscription.matchesSubscription(message, subscription.filter)) continue;
++				if (typeof message.seq === "number" && message.seq <= subscription.replayFromSeq && !(eventId?.startsWith("resume:"))) continue;
+ 				if (eventId != null) {
+ 					if (subscription.seenEventIds.has(eventId)) continue;
+ 					subscription.seenEventIds.add(eventId);
+diff --git a/dist/client/stream/index.d.ts b/dist/client/stream/index.d.ts
+index db03fbf2fe65509fe8d13393a0f620cc831d7c79..29fb2b7019b9beb863a23f5284db98f0205e00c8 100644
+--- a/dist/client/stream/index.d.ts
++++ b/dist/client/stream/index.d.ts
+@@ -89,6 +89,8 @@ declare class ThreadStream<TExtensions extends Record<string, unknown> = Record<
+   readonly interrupts: InterruptPayload[];
+   readonly assistantId: string;
+   constructor(transportAdapter: TransportAdapter, options: ThreadStreamOptions);
++  /** Begin the hydrated root stream after the state's interaction cursor. */
++  setHydrationCursor(cursor: number): void;
+   /**
+    * Streaming messages. Each `for await` loop gets an independent cursor
+    * over the shared buffer; late consumers see all previously emitted
+diff --git a/dist/client/stream/index.js b/dist/client/stream/index.js
+index 07d564bf0aae142a09505d72c70258d78e67e40a..8eb9ac44b18adcc5e38d23689c75c3d37fdb297b 100644
+--- a/dist/client/stream/index.js
++++ b/dist/client/stream/index.js
+@@ -95,6 +95,7 @@ function filterEqual(a, b) {
+ 	for (const ch of b.channels) if (!aChannels.has(ch)) return false;
+ 	if (!namespaceListsEqual(a.namespaces, b.namespaces)) return false;
+ 	if ((a.depth ?? null) !== (b.depth ?? null)) return false;
++	if ((a.since ?? 0) !== (b.since ?? 0)) return false;
+ 	return true;
+ }
+ function isPrefix(prefix, candidate) {
+@@ -123,6 +124,7 @@ function isPrefix(prefix, candidate) {
+ *      target's max absolute depth is `target.depth` (prefix is `[]`).
+ */
+ function filterCovers(coverer, target) {
++	if ((coverer.since ?? 0) > (target.since ?? 0)) return false;
+ 	const covererChannels = new Set(coverer.channels);
+ 	for (const ch of target.channels) if (!covererChannels.has(ch)) return false;
+ 	const covererDepth = coverer.depth;
+@@ -346,6 +348,10 @@ var ThreadStream = class {
+ 	#openPromise;
+ 	#sharedStream = null;
+ 	#sharedStreamFilter = null;
++	#streamGeneration = 0;
++	#sharedStreamGeneration = 0;
++	#hydrationCursor = 0;
++	#hydratedRootOpened = false;
+ 	#rotationState = "idle";
+ 	/** Pending `subscribe()` promises waiting for a covering rotation. */
+ 	#pendingSubResolves = [];
+@@ -443,6 +449,14 @@ var ThreadStream = class {
+ 		}
+ 	}
+ 	/**
++	* A hydrated root projection already contains events through this cursor.
++	* Its first subscription and the lifecycle watcher must start after it;
++	* independently opened subscriptions still receive their own replay.
++	*/
++	setHydrationCursor(cursor) {
++		if (Number.isSafeInteger(cursor) && cursor >= 0) this.#hydrationCursor = cursor;
++	}
++	/**
+ 	* Ensure the underlying transport is connected.
+ 	*
+ 	* For HTTP/SSE this is a no-op. For WebSocket this performs the
+@@ -967,7 +981,7 @@ var ThreadStream = class {
+ 		} catch {
+ 			return;
+ 		}
+-		const filter = { channels: ["lifecycle", "input"] };
++		const filter = { channels: ["lifecycle", "input"], since: this.#hydrationCursor };
+ 		let handle;
+ 		try {
+ 			handle = this.#transportAdapter.openEventStream(filter);
+@@ -1028,6 +1042,7 @@ var ThreadStream = class {
+ 	*/
+ 	#handleLifecycleWatcherMessage(message) {
+ 		if (message.type !== "event") return;
++		if (typeof message.seq === "number" && message.seq <= this.#hydrationCursor) return;
+ 		if (typeof message.seq === "number") this.ordering.lastSeenSeq = maxSeq(this.ordering.lastSeenSeq, message.seq);
+ 		if (message.event_id) this.ordering.lastEventId = message.event_id;
+ 		const eventId = message.event_id ?? void 0;
+@@ -1144,15 +1159,25 @@ var ThreadStream = class {
+ 			this.#subscriptions.delete(id);
+ 			this.#scheduleReconcile();
+ 		}, transform);
++		const isRoot = !this.#hydratedRootOpened && params.depth === 1 &&
++			params.namespaces?.length === 1 && params.namespaces[0].length === 0 &&
++			["values", "messages", "tools"].every((channel) => params.channels.includes(channel));
++		if (isRoot) this.#hydratedRootOpened = true;
++		const replayFromSeq = typeof params.since === "number" ? params.since : isRoot ? this.#hydrationCursor : 0;
++		const filter = { ...params, since: replayFromSeq };
++		const minStreamGeneration = this.#streamGeneration + 1;
+ 		const subscription = Object.assign(handle, {
+-			filter: params,
++			filter,
++			replayFromSeq,
++			minStreamGeneration,
+ 			registeredAfterSeq: this.ordering.lastSeenSeq,
+ 			seenEventIds: /* @__PURE__ */ new Set()
+ 		});
+ 		this.#subscriptions.set(subscriptionId, subscription);
+ 		const covered = new Promise((resolve, reject) => {
+ 			this.#pendingSubResolves.push({
+-				filter: params,
++				filter,
++				minStreamGeneration,
+ 				resolve,
+ 				reject
+ 			});
+@@ -1162,6 +1187,7 @@ var ThreadStream = class {
+ 			await covered;
+ 		} catch (err) {
+ 			this.#subscriptions.delete(subscriptionId);
++			if (isRoot) this.#hydratedRootOpened = false;
+ 			throw err;
+ 		}
+ 		return handle;
+@@ -1193,14 +1219,16 @@ var ThreadStream = class {
+ 		const namespaceMap = /* @__PURE__ */ new Map();
+ 		let unboundedDepth = false;
+ 		let maxDepth = 0;
++		let since = Infinity;
+ 		for (const sub of this.#subscriptions.values()) {
++			since = Math.min(since, sub.replayFromSeq);
+ 			for (const ch of sub.filter.channels) channels.add(ch);
+ 			if (sub.filter.namespaces == null) wildcardNamespaces = true;
+ 			else if (!wildcardNamespaces) for (const ns of sub.filter.namespaces) namespaceMap.set(namespaceKey(ns), ns);
+ 			if (sub.filter.depth == null) unboundedDepth = true;
+ 			else if (!unboundedDepth && sub.filter.depth > maxDepth) maxDepth = sub.filter.depth;
+ 		}
+-		const result = { channels: [...channels] };
++		const result = { channels: [...channels], since };
+ 		if (!wildcardNamespaces) result.namespaces = [...namespaceMap.values()];
+ 		if (!unboundedDepth) result.depth = maxDepth;
+ 		return result;
+@@ -1262,6 +1290,7 @@ var ThreadStream = class {
+ 			return;
+ 		}
+ 		this.#rotationState = "rotating";
++		const generation = ++this.#streamGeneration;
+ 		let newHandle;
+ 		try {
+ 			newHandle = this.#transportAdapter.openEventStream(desired);
+@@ -1287,28 +1316,29 @@ var ThreadStream = class {
+ 			this.#rotationState = "idle";
+ 			return;
+ 		}
+-		this.#pumpStream(newHandle);
++		this.#pumpStream(newHandle, generation);
+ 		const oldHandle = this.#sharedStream;
+ 		this.#sharedStream = newHandle;
+ 		this.#sharedStreamFilter = desired;
++		this.#sharedStreamGeneration = generation;
+ 		if (oldHandle != null) try {
+ 			oldHandle.close();
+ 		} catch {}
+ 		this.#rotationState = "idle";
+ 		this.#resolvePending();
+ 		const next = this.#computeUnionFilter();
+-		if (next != null && !filterEqual(next, this.#sharedStreamFilter)) this.#scheduleReconcile();
++		if (next != null && (!filterEqual(next, this.#sharedStreamFilter) || this.#pendingSubResolves.length > 0)) this.#scheduleReconcile();
+ 	}
+ 	/**
+ 	* Pump events from a shared-stream handle into `#handleIncoming`.
+ 	* One pump task runs per open stream; during rotation overlap two
+ 	* pumps may be active briefly, with `#seenEventIds` deduping.
+ 	*/
+-	async #pumpStream(handle) {
++	async #pumpStream(handle, generation) {
+ 		try {
+ 			for await (const message of handle.events) {
+ 				if (this.#closed) break;
+-				this.#handleIncoming(message);
++				this.#handleIncoming(message, generation);
+ 			}
+ 		} catch (err) {
+ 			if (handle === this.#sharedStream && !this.#closed) this.#failThreadWithError(err);
+@@ -1324,7 +1354,7 @@ var ThreadStream = class {
+ 		const current = this.#sharedStreamFilter;
+ 		if (this.#pendingSubResolves.length === 0) return;
+ 		const stillPending = [];
+-		for (const pending of this.#pendingSubResolves) if (filterCovers(current, pending.filter)) pending.resolve();
++		for (const pending of this.#pendingSubResolves) if (this.#sharedStreamGeneration >= pending.minStreamGeneration && filterCovers(current, pending.filter)) pending.resolve();
+ 		else stillPending.push(pending);
+ 		this.#pendingSubResolves.length = 0;
+ 		this.#pendingSubResolves.push(...stillPending);
+@@ -1339,10 +1369,12 @@ var ThreadStream = class {
+ 		if (this.#pendingSubResolves.length === 0) return;
+ 		const current = this.#sharedStreamFilter;
+ 		const stillPending = [];
+-		for (const pending of this.#pendingSubResolves) if (current != null && filterCovers(current, pending.filter)) pending.resolve();
+-		else stillPending.push(pending);
++		for (const pending of this.#pendingSubResolves) if (current != null && this.#sharedStreamGeneration >= pending.minStreamGeneration && filterCovers(current, pending.filter)) pending.resolve();
++		else if (pending.minStreamGeneration > this.#streamGeneration) stillPending.push(pending);
++		else pending.reject(err);
+ 		this.#pendingSubResolves.length = 0;
+-		for (const pending of stillPending) pending.reject(err);
++		this.#pendingSubResolves.push(...stillPending);
++		if (stillPending.length > 0) this.#scheduleReconcile();
+ 	}
+ 	/**
+ 	* Terminate the thread due to an unrecoverable shared-stream error.
+@@ -1450,7 +1482,7 @@ var ThreadStream = class {
+ 			}
+ 		}, 0);
+ 	}
+-	#handleIncoming(message) {
++	#handleIncoming(message, streamGeneration = Infinity) {
+ 		if (message.type === "event") {
+ 			if (typeof message.seq === "number") this.ordering.lastSeenSeq = maxSeq(this.ordering.lastSeenSeq, message.seq);
+ 			if (message.event_id) this.ordering.lastEventId = message.event_id;
+@@ -1462,13 +1494,15 @@ var ThreadStream = class {
+ 				"completed",
+ 				"failed"
+ 			]);
+-			if (!globallyProcessed) {
++			if (!globallyProcessed && !(typeof message.seq === "number" && message.seq <= this.#hydrationCursor)) {
+ 				this.#applyThreadLevelEffects(message);
+ 				this.#fireOnEvent(message);
+ 			}
+ 			let fannedToAny = false;
+ 			for (const subscription of this.#subscriptions.values()) {
++				if (streamGeneration < subscription.minStreamGeneration) continue;
+ 				if (!matchesSubscription(message, subscription.filter)) continue;
++				if (typeof message.seq === "number" && message.seq <= subscription.replayFromSeq && !(eventId?.startsWith("resume:"))) continue;
+ 				if (eventId != null) {
+ 					if (subscription.seenEventIds.has(eventId)) continue;
+ 					subscription.seenEventIds.add(eventId);
+diff --git a/dist/client/stream/transport/http.cjs b/dist/client/stream/transport/http.cjs
+index 9a2334d7ea5897323cc3c90f2278db9fe24990be..4d0edee22bd01f34abf287e32824c492fe3aaac4 100644
+--- a/dist/client/stream/transport/http.cjs
++++ b/dist/client/stream/transport/http.cjs
+@@ -138,6 +138,7 @@ var ProtocolSseTransportAdapter = class {
+ 			rejectReady = reject;
+ 		});
+ 		const initialSince = typeof params.since === "number" ? params.since : void 0;
++		let resumeSince = initialSince;
+ 		let readySettled = false;
+ 		const startStream = async () => {
+ 			let attempt = 0;
+@@ -153,7 +154,7 @@ var ProtocolSseTransportAdapter = class {
+ 						channels: params.channels,
+ 						...params.namespaces ? { namespaces: params.namespaces } : {},
+ 						...params.depth != null ? { depth: params.depth } : {},
+-						...!readySettled && initialSince != null ? { since: initialSince } : {}
++						...resumeSince != null ? { since: resumeSince } : {}
+ 					}),
+ 					signal: ac.signal
+ 				}, { stream: true });
+@@ -179,6 +180,7 @@ var ProtocolSseTransportAdapter = class {
+ 					if (require_utils.isRecord(event.data)) {
+ 						receivedEvent = true;
+ 						streamQueue.push(event.data);
++						if (Number.isSafeInteger(event.data.seq) && event.data.seq >= 0) resumeSince = Math.max(resumeSince ?? 0, event.data.seq);
+ 					}
+ 				}
+ 				if (ac.signal.aborted || this.closed || this.maxReconnectAttempts <= 0) {
+diff --git a/dist/client/stream/transport/http.js b/dist/client/stream/transport/http.js
+index 93f7ee019a2559d3b8ffa8d22a9fd00fc74bf3fe..3cf21e7cd785ae6f2a7ca5e17a8102effeae33da 100644
+--- a/dist/client/stream/transport/http.js
++++ b/dist/client/stream/transport/http.js
+@@ -138,6 +138,7 @@ var ProtocolSseTransportAdapter = class {
+ 			rejectReady = reject;
+ 		});
+ 		const initialSince = typeof params.since === "number" ? params.since : void 0;
++		let resumeSince = initialSince;
+ 		let readySettled = false;
+ 		const startStream = async () => {
+ 			let attempt = 0;
+@@ -153,7 +154,7 @@ var ProtocolSseTransportAdapter = class {
+ 						channels: params.channels,
+ 						...params.namespaces ? { namespaces: params.namespaces } : {},
+ 						...params.depth != null ? { depth: params.depth } : {},
+-						...!readySettled && initialSince != null ? { since: initialSince } : {}
++						...resumeSince != null ? { since: resumeSince } : {}
+ 					}),
+ 					signal: ac.signal
+ 				}, { stream: true });
+@@ -179,6 +180,7 @@ var ProtocolSseTransportAdapter = class {
+ 					if (isRecord(event.data)) {
+ 						receivedEvent = true;
+ 						streamQueue.push(event.data);
++						if (Number.isSafeInteger(event.data.seq) && event.data.seq >= 0) resumeSince = Math.max(resumeSince ?? 0, event.data.seq);
+ 					}
+ 				}
+ 				if (ac.signal.aborted || this.closed || this.maxReconnectAttempts <= 0) {
+diff --git a/dist/stream/controller.cjs b/dist/stream/controller.cjs
+index 9c000c5f1fc0fff58a87bee94b232c16c53b3b1d..79ae48deaa7b14ecfabdb146918d7e2f2bf3c24d 100644
+--- a/dist/stream/controller.cjs
++++ b/dist/stream/controller.cjs
+@@ -488,8 +488,10 @@ var StreamController = class {
+ 		let threadExists = false;
+ 		let threadMissing = false;
+ 		let threadActive = true;
++		let hydrationCursor = 0;
+ 		try {
+ 			const state = await this.#fetchHydrationState();
++			hydrationCursor = state?.interaction_cursor;
+ 			if (this.#disposed || this.#currentThreadId !== hydratedThreadId) return;
+ 			threadExists = state != null;
+ 			threadActive = isThreadStateActive(state);
+@@ -629,7 +631,7 @@ var StreamController = class {
+ 		* The transport replays from `seq=0` on the deferred subscribe, so
+ 		* nothing is missed.
+ 		*/
+-		const thread = this.#ensureThread(hydratedThreadId, !threadActive);
++		const thread = this.#ensureThread(hydratedThreadId, !threadActive, hydrationCursor);
+ 		/**
+ 		* Start the wildcard lifecycle watcher up-front for existing,
+ 		* active threads. The root content pump runs at `depth: 1`, which
+@@ -1217,8 +1219,9 @@ var StreamController = class {
+ 	*   that subscribe synchronously (WebSocket) the deferred path is
+ 	*   still required.
+ 	*/
+-	#ensureThread(threadId, deferRootPump = false) {
++	#ensureThread(threadId, deferRootPump = false, hydrationCursor) {
+ 		if (this.#thread != null) {
++			if (hydrationCursor != null) this.#thread.setHydrationCursor(hydrationCursor);
+ 			if (!deferRootPump && !this.#rootPumpDeferred && this.#rootPump == null) this.#startRootPump(this.#thread);
+ 			return this.#thread;
+ 		}
+@@ -1233,6 +1236,7 @@ var StreamController = class {
+ 			onReconnect: this.#options.onReconnect,
+ 			onConnected: this.#options.onConnected
+ 		});
++		if (hydrationCursor != null) this.#thread.setHydrationCursor(hydrationCursor);
+ 		this.registry.bind(this.#thread);
+ 		if (deferRootPump) {
+ 			this.#rootPumpReady = Promise.resolve();
+diff --git a/dist/stream/controller.js b/dist/stream/controller.js
+index 85a89ea7b6286d74f9f20dbce1b842231af20d22..a31e8a1d5f60392ac22418d0e938a5e424c25f49 100644
+--- a/dist/stream/controller.js
++++ b/dist/stream/controller.js
+@@ -487,8 +487,10 @@ var StreamController = class {
+ 		let threadExists = false;
+ 		let threadMissing = false;
+ 		let threadActive = true;
++		let hydrationCursor = 0;
+ 		try {
+ 			const state = await this.#fetchHydrationState();
++			hydrationCursor = state?.interaction_cursor;
+ 			if (this.#disposed || this.#currentThreadId !== hydratedThreadId) return;
+ 			threadExists = state != null;
+ 			threadActive = isThreadStateActive(state);
+@@ -628,7 +630,7 @@ var StreamController = class {
+ 		* The transport replays from `seq=0` on the deferred subscribe, so
+ 		* nothing is missed.
+ 		*/
+-		const thread = this.#ensureThread(hydratedThreadId, !threadActive);
++		const thread = this.#ensureThread(hydratedThreadId, !threadActive, hydrationCursor);
+ 		/**
+ 		* Start the wildcard lifecycle watcher up-front for existing,
+ 		* active threads. The root content pump runs at `depth: 1`, which
+@@ -1216,8 +1218,9 @@ var StreamController = class {
+ 	*   that subscribe synchronously (WebSocket) the deferred path is
+ 	*   still required.
+ 	*/
+-	#ensureThread(threadId, deferRootPump = false) {
++	#ensureThread(threadId, deferRootPump = false, hydrationCursor) {
+ 		if (this.#thread != null) {
++			if (hydrationCursor != null) this.#thread.setHydrationCursor(hydrationCursor);
+ 			if (!deferRootPump && !this.#rootPumpDeferred && this.#rootPump == null) this.#startRootPump(this.#thread);
+ 			return this.#thread;
+ 		}
+@@ -1232,6 +1235,7 @@ var StreamController = class {
+ 			onReconnect: this.#options.onReconnect,
+ 			onConnected: this.#options.onConnected
+ 		});
++		if (hydrationCursor != null) this.#thread.setHydrationCursor(hydrationCursor);
+ 		this.registry.bind(this.#thread);
+ 		if (deferRootPump) {
+ 			this.#rootPumpReady = Promise.resolve();

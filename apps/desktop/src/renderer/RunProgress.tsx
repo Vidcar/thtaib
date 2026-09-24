@@ -18,6 +18,7 @@ export function RunProgress(props: {
     return null;
   }
   const live = isAgentRunLive(run.status);
+  const savingProjectState = run.finalization_phase === "saving_changes";
   const retrieved = run.retrieved_material ?? [];
   const related = run.related_files ?? [];
   const context = run.context_observation;
@@ -39,11 +40,11 @@ export function RunProgress(props: {
       <div className="run-progress-head">
         <h3>
           {title ?? "Activity"}
-          <StatusBadge status={run.status} />
+          <StatusBadge status={run.status} label={savingProjectState ? "Saving project state" : undefined} tone={savingProjectState ? "live" : undefined} />
         </h3>
         {onCancel ? (
-          <button type="button" disabled={!live || cancelBusy} onClick={onCancel}>
-            <Icon name="stop" size={13} /> {run.status === "cancel_requested" ? "Stopping…" : "Cancel"}
+          <button type="button" disabled={!live || cancelBusy || savingProjectState} title={savingProjectState ? "Execution finished; saving project state" : undefined} onClick={onCancel}>
+            <Icon name="stop" size={13} /> {savingProjectState ? "Saving…" : run.status === "cancel_requested" ? "Stopping…" : "Cancel"}
           </button>
         ) : null}
       </div>

@@ -121,3 +121,19 @@ An active Lab run SHALL hold a backend-owned exclusive reservation. Work already
 - **WHEN** a measurement is running and the person opens Chat
 - **THEN** a banner names the measurement and does not look like a send failure
 - **AND** sending a new chat turn does not start a second model run.
+
+### Requirement: LAB-015 - Prune excluded project trees during capture
+
+Project and Lab capture SHALL avoid descending into excluded directories. An explicitly empty Lab allowlist SHALL produce an empty file capture. Captured paths SHALL remain within the selected root, and changed files or symlinks that cannot be copied and verified safely SHALL fail capture without publishing a partial snapshot.
+
+#### Scenario: Excluded large tree
+
+- **WHEN** a project contains a large excluded dependency or environment directory
+- **THEN** capture does not enumerate that directory's files
+- **AND** its included files still restore byte for byte.
+
+#### Scenario: Explicit empty capture and unsafe file
+
+- **WHEN** a Lab capture explicitly selects no files
+- **THEN** its file snapshot is empty
+- **AND** an unsafe link or changing included file fails a separate capture without publishing partial data.

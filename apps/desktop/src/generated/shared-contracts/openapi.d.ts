@@ -2183,6 +2183,8 @@ export interface components {
             file_changes?: components["schemas"]["ProjectFileChange"][];
             /** Final Snapshot Id */
             final_snapshot_id?: string | null;
+            /** Finalization Phase */
+            finalization_phase?: "saving_changes" | null;
             /** Finished At */
             finished_at?: string | null;
             /** Framework Read Paths */
@@ -2223,6 +2225,8 @@ export interface components {
             /** Parent Run Id */
             parent_run_id?: string | null;
             pending_interrupt?: components["schemas"]["PendingInterrupt"] | null;
+            /** Pre Run Checkpoint Id */
+            pre_run_checkpoint_id?: string | null;
             /** Presented Tools */
             presented_tools: string[];
             /** Profile Id */
@@ -2264,6 +2268,10 @@ export interface components {
             retrieved_material?: string[];
             review?: components["schemas"]["ReviewConfiguration"];
             review_observation?: components["schemas"]["ReviewObservation"];
+            /** Settled Status */
+            settled_status?: ("completed" | "failed" | "cancelled") | null;
+            /** Settled Stop Reason */
+            settled_stop_reason?: string | null;
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /**
@@ -4262,9 +4270,9 @@ export interface components {
         InteractionRecovery: {
             /**
              * Kind
-             * @constant
+             * @enum {string}
              */
-            kind: "replay_gap";
+            kind: "replay_gap" | "history_unavailable";
             /** Message */
             message: string;
         };

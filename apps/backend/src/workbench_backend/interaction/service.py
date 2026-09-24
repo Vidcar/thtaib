@@ -14,7 +14,7 @@ from langchain_protocol import Command, EventStreamRequest
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest, UserAnswerRequest
 from workbench_backend.chat.schemas import ChatStartRequest
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
-from workbench_backend.errors import WorkbenchError
+from workbench_backend.errors import InteractionPersistenceError, WorkbenchError
 from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.state.checkpointer import conversation_state
 from workbench_backend.interaction.projection import archive_messages, event, native_event, partial_archive
@@ -336,18 +336,29 @@ class InteractionService:
 
     def observe(self, run: AgentRun, raw: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         with self._projection_lock:
+            if raw is not None:
+                try:
+                    if raw.get("method") in {"messages", "tools"}:
+                        thread_id = self.store.interaction_id_for_graph(run.thread_id or run.id)
+                        if thread_id is not None:
+                            self._enqueue_native(thread_id, run, raw)
+                        return
+                    binding = self.store.interaction_for_graph(run.thread_id or run.id)
+                    if binding is not None:
+                        self._flush_thread(binding["id"])
+                        self._observe_native_event(binding, run, raw)
+                except Exception as exc:
+                    raise InteractionPersistenceError() from exc
+                return
             binding = self.store.interaction_for_graph(run.thread_id or run.id)
             if binding is None:
                 return
-            if raw is not None:
-                if raw.get("method") in {"messages", "tools"}:
-                    self._enqueue_native(binding, run, raw)
-                    return
-                self._flush_thread(binding["id"])
-                self._observe_native_event(binding, run, raw)
-                return
             self._flush_thread(binding["id"])
             binding = self.binding(binding["id"])
+            if telemetry and not self._telemetry_matches_projection(binding["snapshot"], run):
+                # Measurement publication runs outside the harness lock. A
+                # newer execution or finalization frame may have overtaken it.
+                return
             if telemetry and is_run_lifecycle_live(run.status) and self._speed_only(binding["snapshot"], run):
                 self._observe_measurement(binding, run)
                 return
@@ -391,8 +402,19 @@ class InteractionService:
             )
             self.store.append_interaction(binding["id"], outgoing, snapshot=snapshot, run_id=run.id,
                                           replaceable_measurement=replaceable)
-            if run.status.value == "completed":
+            if run.status.value in {"completed", "failed", "cancelled"}:
                 self.store.discard_finished_token_log(binding["id"])
+
+    @staticmethod
+    def _telemetry_matches_projection(snapshot: dict[str, Any], run: AgentRun) -> bool:
+        saved = (snapshot.get("workbench") or {}).get("run") or {}
+        return (
+            saved.get("id") == run.id
+            and saved.get("status") == run.status.value
+            and saved.get("finalization_phase") == run.finalization_phase
+            and len(saved.get("events") or []) == len(run.events)
+            and len(saved.get("tool_invocations") or []) == len(run.tool_invocations)
+        )
 
     def _observe_native_event(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> None:
         """Append one native event. Rewrite the snapshot only when it changes."""
@@ -457,8 +479,7 @@ class InteractionService:
             finally:
                 self._flushing = False
 
-    def _enqueue_native(self, binding: dict[str, Any], run: AgentRun, raw: dict[str, Any]) -> None:
-        thread_id = binding["id"]
+    def _enqueue_native(self, thread_id: str, run: AgentRun, raw: dict[str, Any]) -> None:
         bucket = self._pending.setdefault(thread_id, [])
         if not bucket:
             self._pending_at[thread_id] = time.monotonic()
@@ -475,11 +496,13 @@ class InteractionService:
         outgoing: list[dict[str, Any]] = []
         snapshot: dict[str, Any] | None = None
         run_id = bucket[-1][0].id
+        binding = self.binding(thread_id)
         for run, raw in bucket:
-            events, snap = self._project_native(self.binding(thread_id), run, raw)
+            events, snap = self._project_native(binding, run, raw)
             outgoing.extend(events)
             if snap is not None:
                 snapshot = snap
+                binding = {**binding, "snapshot": snap}
             run_id = run.id
         if outgoing or snapshot is not None:
             self.store.append_interaction(thread_id, outgoing, snapshot=snapshot, run_id=run_id)
@@ -536,14 +559,19 @@ class InteractionService:
                 since = item["seq"]
                 yield item
 
-    def resynchronize(self, thread_id: str) -> int:
+    def resynchronize(self, thread_id: str, *, historical: bool = False) -> int:
         self.state(thread_id)
         with self._projection_lock:
             binding = self.binding(thread_id)
             snapshot = copy.deepcopy(binding["snapshot"])
-            snapshot.setdefault("workbench", {})["recovery"] = {
-                "kind": "replay_gap", "message": "Live updates were interrupted. Saved output has been reloaded; no action was repeated.",
-            }
+            unavailable = historical or self.store.interaction_history_unavailable(thread_id)
+            snapshot.setdefault("workbench", {})["recovery"] = (
+                {"kind": "history_unavailable",
+                 "message": "Some older activity detail is unavailable. The saved conversation is still readable."}
+                if unavailable else
+                {"kind": "replay_gap",
+                 "message": "Live updates were interrupted. Saved output has been reloaded; no action was repeated."}
+            )
             outgoing = [event("values", snapshot)]
             run = snapshot["workbench"].get("run")
             if run:
@@ -609,6 +637,11 @@ class InteractionService:
             live_events = list(self.replay(thread_id, started, seq)) if run_status and is_run_lifecycle_live(run_status) else []
         if live_events:
             snapshot = self._with_live_partials(snapshot, live_events)
+        if self.store.interaction_history_unavailable(thread_id):
+            snapshot.setdefault("workbench", {})["recovery"] = {
+                "kind": "history_unavailable",
+                "message": "Some older activity detail is unavailable. The saved conversation is still readable.",
+            }
         values = self.display_values(snapshot)
         if (not run_record.get("pending_interrupt") or not run_status or
                 not is_run_lifecycle_live(run_status) or run_status == "cancel_requested"):
@@ -639,25 +672,38 @@ class InteractionService:
         return snapshot
 
     def resume_view(self, thread_id: str, since: int) -> ResumeProjection:
-        self.binding(thread_id)
-        return ResumeProjection(self, thread_id, since)
+        binding = self.binding(thread_id)
+        started = (binding["snapshot"].get("workbench") or {}).get("run_started_seq", 0)
+        return ResumeProjection(self, thread_id, since, run_started_seq=started if isinstance(started, int) else 0)
 
     def stream_page(self, thread_id: str, since: int, options: dict[str, Any],
                     resume: ResumeProjection) -> tuple[list[dict[str, Any]], int, bool]:
         """Prepare a replay page before completion can compact its token prefix."""
         with self._projection_lock:
-            page, _high_water, gap = self.store.interaction_page(thread_id, since)
-            if gap:
-                return [], since, True
-            wires: list[dict[str, Any]] = []
-            for item in page:
-                since = item["seq"]
-                if not self.matches(item, options):
-                    continue
-                if item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
-                    item["params"]["data"] = self.display_values(item["params"]["data"])
-                wires.extend(resume.present(item))
-            return wires, since, False
+            return self._stream_page_locked(thread_id, since, options, resume)
+
+    def stream_poll(self, thread_id: str, since: int, options: dict[str, Any],
+                    resume: ResumeProjection) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+        """Read one page and its scalar display metadata in a consistent boundary."""
+        with self._projection_lock:
+            _high_water, cutover, status = self.store.interaction_stream_metadata(thread_id)
+            since = max(since, cutover - 1)
+            wires, cursor, gap = self._stream_page_locked(thread_id, since, options, resume)
+            return wires, cursor, gap, status
+
+    def _stream_page_locked(self, thread_id: str, since: int, options: dict[str, Any],
+                            resume: ResumeProjection) -> tuple[list[dict[str, Any]], int, bool]:
+        page, _high_water, gap = self.store.interaction_page(thread_id, since)
+        if gap:
+            return [], since, True
+        wires: list[dict[str, Any]] = []
+        for item in page:
+            since = item["seq"]
+            matches = self.matches(item, options)
+            if matches and item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
+                item["params"]["data"] = self.display_values(item["params"]["data"])
+            wires.extend(resume.consume(item, matches=matches))
+        return wires, since, False
 
     def discard_finished_token_logs(self) -> int:
         # Startup maintenance shares the same read/compaction boundary as a

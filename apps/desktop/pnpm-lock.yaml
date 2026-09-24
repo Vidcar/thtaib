@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@langchain/langgraph-sdk@1.11.1':
+    hash: 27694891b4a26305889dda5fc68d5b85bf7715ad87f8397a02f92c98ef0a7e89
+    path: patches/@langchain__langgraph-sdk@1.11.1.patch
+
 importers:
 
   .:
@@ -13,7 +18,7 @@ importers:
         version: 1.2.9
       '@langchain/langgraph-sdk':
         specifier: 1.11.1
-        version: 1.11.1(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 1.11.1(patch_hash=27694891b4a26305889dda5fc68d5b85bf7715ad87f8397a02f92c98ef0a7e89)(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@langchain/react':
         specifier: 1.1.1
         version: 1.1.1(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -2126,7 +2131,7 @@ snapshots:
       - openai
       - ws
 
-  '@langchain/langgraph-sdk@1.11.1(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@langchain/langgraph-sdk@1.11.1(patch_hash=27694891b4a26305889dda5fc68d5b85bf7715ad87f8397a02f92c98ef0a7e89)(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@langchain/core': 1.2.9
       '@langchain/protocol': 0.0.19
@@ -2142,7 +2147,7 @@ snapshots:
   '@langchain/react@1.1.1(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@langchain/core': 1.2.9
-      '@langchain/langgraph-sdk': 1.11.1(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@langchain/langgraph-sdk': 1.11.1(patch_hash=27694891b4a26305889dda5fc68d5b85bf7715ad87f8397a02f92c98ef0a7e89)(@langchain/core@1.2.9)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       react: 19.3.0
     transitivePeerDependencies:
       - react-dom

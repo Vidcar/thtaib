@@ -3,7 +3,10 @@
   "additionalProperties": false,
   "properties": {
     "kind": {
-      "const": "replay_gap",
+      "enum": [
+        "replay_gap",
+        "history_unavailable"
+      ],
       "title": "Kind",
       "type": "string"
     },

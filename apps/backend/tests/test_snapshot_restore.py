@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import unittest
@@ -10,7 +11,8 @@ from unittest.mock import patch
 
 from workbench_backend.errors import LabError
 from workbench_backend.lab.schemas import SnapshotFile
-from workbench_backend.lab.snapshot import restore_snapshot_tree, write_snapshot_tree
+from workbench_backend.lab.snapshot import capture_project_snapshot, restore_snapshot_tree, write_snapshot_tree
+from workbench_backend.paths import WorkbenchPaths
 
 
 class SnapshotRestoreIntegrityTests(unittest.TestCase):
@@ -43,6 +45,68 @@ class SnapshotRestoreIntegrityTests(unittest.TestCase):
             (self.root / "second" / "notes.md").read_text(encoding="utf-8"),
             "original notes",
         )
+
+    def test_capture_publishes_only_verified_tree_and_cleans_failed_staging(self) -> None:
+        paths = WorkbenchPaths(self.root / "data").ensure()
+        with patch("workbench_backend.lab.snapshot._copy_stable_file", side_effect=OSError("copy interrupted")):
+            with self.assertRaisesRegex(OSError, "copy interrupted"):
+                capture_project_snapshot(paths, workspace_id="test", project_root=self.source, kind="final")
+        self.assertEqual(list(paths.snapshots.iterdir()), [])
+
+        manifest = capture_project_snapshot(paths, workspace_id="test", project_root=self.source, kind="final")
+        self.assertTrue((paths.snapshots / manifest.id / "manifest.json").is_file())
+        self.assertEqual((Path(manifest.tree_path) / "notes.md").read_text(encoding="utf-8"), "original notes")
+        self.assertFalse(any(path.name.endswith(".staging") for path in paths.snapshots.iterdir()))
+
+    def test_prunes_excluded_directories_before_scanning_their_files(self) -> None:
+        excluded_file = self.source / "node_modules" / "pkg" / "index.js"
+        excluded_file.parent.mkdir(parents=True)
+        excluded_file.write_text("large dependency", encoding="utf-8")
+        real_scandir = os.scandir
+        scanned: list[Path] = []
+
+        def record_scan(path: str | os.PathLike[str]):
+            scanned.append(Path(path))
+            return real_scandir(path)
+
+        with patch("workbench_backend.lab.snapshot.os.scandir", side_effect=record_scan):
+            included, exclusions = write_snapshot_tree(self.source, self.tree)
+        self.assertEqual({item.path: item.reason for item in exclusions}["node_modules"], "node_modules")
+        self.assertNotIn("node_modules/pkg/index.js", {item.path for item in included})
+        self.assertFalse(any(path.name == "node_modules" for path in scanned))
+
+    def test_explicit_empty_allowlist_captures_no_files(self) -> None:
+        included, exclusions = write_snapshot_tree(self.source, self.tree, allowlist=[])
+        self.assertEqual(included, [])
+        self.assertEqual(exclusions, [])
+        self.assertEqual(list(self.tree.iterdir()), [])
+
+    def test_escaping_symlink_is_reported_by_lexical_path_and_not_copied(self) -> None:
+        outside = self.root / "private.txt"
+        outside.write_text("outside project", encoding="utf-8")
+        link = self.source / "alias.txt"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"File symlinks unavailable: {exc}")
+        included, exclusions = write_snapshot_tree(self.source, self.tree)
+        self.assertNotIn("alias.txt", {item.path for item in included})
+        self.assertEqual({item.path: item.reason for item in exclusions}["alias.txt"], "symlink_escape")
+        self.assertFalse((self.tree / "alias.txt").exists())
+
+    def test_changed_source_aborts_capture_without_publishing_a_snapshot(self) -> None:
+        paths = WorkbenchPaths(self.root / "data").ensure()
+        real_copy = shutil.copyfileobj
+
+        def change_after_copy(source, target, *args, **kwargs):
+            real_copy(source, target, *args, **kwargs)
+            if Path(source.name).name == "notes.md":
+                (self.source / "notes.md").write_text("changed while copying", encoding="utf-8")
+
+        with patch("workbench_backend.lab.snapshot.shutil.copyfileobj", side_effect=change_after_copy):
+            with self.assertRaisesRegex(OSError, "changed"):
+                capture_project_snapshot(paths, workspace_id="test", project_root=self.source, kind="final")
+        self.assertEqual(list(paths.snapshots.iterdir()), [])
 
     def test_intentionally_empty_snapshot_round_trips(self) -> None:
         empty_source = self.root / "empty-project"

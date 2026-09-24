@@ -1,3 +1,4 @@
 apps/backend/contracts/*.json text eol=lf
 apps/backend/contracts/jsonschema/*.json text eol=lf
 apps/desktop/src/generated/shared-contracts/*.d.ts text eol=lf
+apps/desktop/patches/*.patch whitespace=-space-before-tab

@@ -330,6 +330,7 @@ class AdapterTests(unittest.TestCase):
                 model.set_generation_observer(seen.append)
                 try:
                     list(model.stream([HumanMessage(content="ping")]))
+                    self.assertTrue(model._generation_publisher.wait_idle(2))
                 finally:
                     model.close()
                 body = _RecordingHandler.requests[-1]["body"]
@@ -353,6 +354,7 @@ class AdapterTests(unittest.TestCase):
             stream = model.stream([HumanMessage(content="ping")])
             next(stream)
             stream.close()
+            self.assertTrue(model._generation_publisher.wait_idle(2))
             self.assertEqual(observed[-1]["phase"], "interrupted")
             self.assertEqual(observed[-1]["output_tokens"], 10)
             first_id = observed[-1]["request_id"]
@@ -362,6 +364,7 @@ class AdapterTests(unittest.TestCase):
                 stream = model.astream([HumanMessage(content="ping")])
                 await anext(stream)
                 await stream.aclose()
+                self.assertTrue(await asyncio.to_thread(model._generation_publisher.wait_idle, 2))
                 await model.aclose()
 
             asyncio.run(cancel_async())
@@ -371,6 +374,83 @@ class AdapterTests(unittest.TestCase):
             self.assertNotEqual(observed[-1]["request_id"], first_id)
         finally:
             model.close()
+
+    def test_blocked_measurement_publisher_does_not_hold_generated_token(self) -> None:
+        entered, release = threading.Event(), threading.Event()
+        _RecordingHandler.stream_chunks = [
+            {"id": "timed", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ready"}}],
+             "timings": {"cache_n": 3, "prompt_n": 2, "predicted_n": 2,
+                         "predicted_ms": 100, "predicted_per_second": 20}},
+            {"id": "timed", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+
+        def blocked(_sample):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("measurement publisher was not released")
+
+        async def exercise() -> None:
+            model = chat_model_for_deployment(self._deployment())
+            model.set_generation_observer(blocked)
+            stream = model.astream([HumanMessage(content="ping")])
+            try:
+                chunk = await asyncio.wait_for(anext(stream), 2)
+                self.assertEqual(chunk.content, "ready")
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                self.assertEqual(model.latest_generation_sample()["output_tokens"], 2)
+                release.set()
+                await stream.aclose()
+                self.assertTrue(await asyncio.to_thread(model._generation_publisher.wait_idle, 2))
+                self.assertEqual(model.latest_generation_sample()["phase"], "interrupted")
+            finally:
+                release.set()
+                await stream.aclose()
+                await model.aclose()
+
+        asyncio.run(exercise())
+
+    def test_failed_measurement_publisher_does_not_change_stream_or_model_error(self) -> None:
+        _RecordingHandler.stream_chunks = [
+            {"id": "timed", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {"role": "assistant", "content": "answer"}}],
+             "timings": {"cache_n": 3, "prompt_n": 2, "predicted_n": 2,
+                         "predicted_ms": 100, "predicted_per_second": 20}},
+            {"id": "timed", "object": "chat.completion.chunk", "model": "fake-llama",
+             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+
+        def failed(_sample):
+            raise RuntimeError("measurement publication failed")
+
+        model = chat_model_for_deployment(self._deployment())
+        model.set_generation_observer(failed)
+        try:
+            with patch("workbench_backend.inference.telemetry._logger.exception"):
+                self.assertEqual("".join(chunk.content for chunk in model.stream([HumanMessage(content="ping")])), "answer")
+                self.assertTrue(model._generation_publisher.wait_idle(2))
+            self.assertEqual(model.latest_generation_sample()["phase"], "completed")
+        finally:
+            model.close()
+
+        async def interrupted() -> None:
+            from workbench_backend.inference.adapter import AsyncRecordingTransport
+
+            client = httpx.AsyncClient(transport=AsyncRecordingTransport([], inner=_AsyncCancelledTransport()))
+            model = chat_model_for_deployment(self._deployment(), http_async_client=client)
+            model.set_generation_observer(failed)
+            try:
+                with patch("workbench_backend.inference.telemetry._logger.exception"):
+                    with self.assertRaises(asyncio.CancelledError):
+                        async for _chunk in model.astream([HumanMessage(content="ping")]):
+                            pass
+                    self.assertTrue(await asyncio.to_thread(model._generation_publisher.wait_idle, 2))
+            finally:
+                await model.aclose()
+                await client.aclose()
+
+        asyncio.run(interrupted())
 
     def test_reasoning_final_message_replays_once_after_generic_projection(self) -> None:
         props = ServerProperties(

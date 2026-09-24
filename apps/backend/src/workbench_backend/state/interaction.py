@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from workbench_backend.contracts.lifecycle import LIVE_RUN_LIFECYCLE_STATUSES
+from workbench_backend.interaction.projection import compact_finished_message_deltas
 
 _LIVE_RUN_STATUS = {item.value for item in LIVE_RUN_LIFECYCLE_STATUSES}
 
@@ -23,7 +24,11 @@ CREATE TABLE IF NOT EXISTS interaction_threads (
     run_id TEXT,
     seq INTEGER NOT NULL DEFAULT 0,
     snapshot TEXT NOT NULL DEFAULT '{}',
-    full_values_seq INTEGER NOT NULL DEFAULT 0
+    full_values_seq INTEGER NOT NULL DEFAULT 0,
+    display_cutover_seq INTEGER NOT NULL DEFAULT 0,
+    projected_status TEXT,
+    compacted_through_seq INTEGER NOT NULL DEFAULT 0,
+    history_unavailable INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS interaction_events (
     thread_id TEXT NOT NULL REFERENCES interaction_threads(id),
@@ -43,19 +48,46 @@ class InteractionStoreMixin:
         thread_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(interaction_threads)")}
         if "full_values_seq" not in thread_columns:
             self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN full_values_seq INTEGER NOT NULL DEFAULT 0")
+        if "display_cutover_seq" not in thread_columns:
+            self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN display_cutover_seq INTEGER NOT NULL DEFAULT 0")
+            self._conn.execute("""UPDATE interaction_threads
+                                  SET display_cutover_seq=COALESCE(json_extract(snapshot, '$.workbench.display_cutover_seq'), 0)""")
+        if "projected_status" not in thread_columns:
+            self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN projected_status TEXT")
+            self._conn.execute("""UPDATE interaction_threads
+                                  SET projected_status=json_extract(snapshot, '$.workbench.run.status')""")
+        if "compacted_through_seq" not in thread_columns:
+            self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN compacted_through_seq INTEGER NOT NULL DEFAULT 0")
+        detect_legacy_gaps = "history_unavailable" not in thread_columns
+        if detect_legacy_gaps:
+            self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN history_unavailable INTEGER NOT NULL DEFAULT 0")
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(interaction_events)")}
         if "replaceable_measurement" not in columns:
             self._conn.execute("ALTER TABLE interaction_events ADD COLUMN replaceable_measurement INTEGER NOT NULL DEFAULT 0")
         if "after_seq" not in columns:
             self._conn.execute("ALTER TABLE interaction_events ADD COLUMN after_seq INTEGER NOT NULL DEFAULT 0")
             self._conn.execute("UPDATE interaction_events SET after_seq=seq-1")
+        if detect_legacy_gaps:
+            self._conn.execute("""WITH ordered AS (
+                SELECT thread_id, seq, after_seq,
+                       LAG(seq, 1, 0) OVER (PARTITION BY thread_id ORDER BY seq) AS previous_seq
+                FROM interaction_events
+            )
+            UPDATE interaction_threads SET history_unavailable=1
+            WHERE id IN (SELECT thread_id FROM ordered WHERE after_seq > previous_seq)
+               OR (seq > 0 AND NOT EXISTS (
+                   SELECT 1 FROM interaction_events WHERE thread_id=interaction_threads.id
+               ))""")
 
     def register_interaction(self, thread_id: str, surface: str, graph_thread_id: str,
                              conversation_id: str | None, snapshot: dict[str, Any]) -> dict[str, Any]:
+        cutover, status = self._snapshot_stream_metadata(snapshot)
         with self._lock:
             self._conn.execute(
-                "INSERT OR IGNORE INTO interaction_threads(id,surface,graph_thread_id,conversation_id,snapshot) VALUES(?,?,?,?,?)",
-                (thread_id, surface, graph_thread_id, conversation_id, json.dumps(snapshot)),
+                """INSERT OR IGNORE INTO interaction_threads
+                   (id,surface,graph_thread_id,conversation_id,snapshot,display_cutover_seq,projected_status)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (thread_id, surface, graph_thread_id, conversation_id, json.dumps(snapshot), cutover, status),
             )
             self._conn.commit()
             return self.get_interaction(thread_id) or self.interaction_for_graph(graph_thread_id)
@@ -75,6 +107,14 @@ class InteractionStoreMixin:
             row = self._conn.execute("SELECT * FROM interaction_threads WHERE graph_thread_id=?", (graph_thread_id,)).fetchone()
             return self._interaction_row(row)
 
+    def interaction_id_for_graph(self, graph_thread_id: str) -> str | None:
+        """Resolve a native event's display owner without decoding its archive."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM interaction_threads WHERE graph_thread_id=?", (graph_thread_id,)
+            ).fetchone()
+            return str(row["id"]) if row is not None else None
+
     @staticmethod
     def _interaction_row(row: Any) -> dict[str, Any] | None:
         if row is None:
@@ -82,6 +122,34 @@ class InteractionStoreMixin:
         result = dict(row)
         result["snapshot"] = json.loads(result["snapshot"])
         return result
+
+    @staticmethod
+    def _snapshot_stream_metadata(snapshot: dict[str, Any]) -> tuple[int, str | None]:
+        workbench = snapshot.get("workbench") or {}
+        cutover = workbench.get("display_cutover_seq", 0)
+        run = workbench.get("run") or {}
+        status = run.get("status") if isinstance(run, dict) else None
+        valid_cutover = cutover if isinstance(cutover, int) and not isinstance(cutover, bool) and cutover >= 0 else 0
+        return valid_cutover, status if isinstance(status, str) else None
+
+    def interaction_stream_metadata(self, thread_id: str) -> tuple[int, int, str | None]:
+        """Read the polling cursor and display state without decoding the transcript."""
+        self._flush_interaction(thread_id)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT seq,display_cutover_seq,projected_status FROM interaction_threads WHERE id=?",
+                (thread_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(thread_id)
+        return int(row["seq"]), int(row["display_cutover_seq"]), row["projected_status"]
+
+    def interaction_history_unavailable(self, thread_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT history_unavailable FROM interaction_threads WHERE id=?", (thread_id,)
+            ).fetchone()
+            return bool(row["history_unavailable"]) if row is not None else False
 
     def append_interaction(self, thread_id: str, events: list[dict[str, Any]], *,
                            snapshot: dict[str, Any] | None = None, run_id: str | None = None,
@@ -91,7 +159,9 @@ class InteractionStoreMixin:
         if replaceable_measurement and (len(events) != 1 or not root_values or snapshot is None):
             raise ValueError("Only a single measurement values snapshot can be replaceable.")
         with self._lock:
-            row = self.get_interaction(thread_id)
+            row = self._conn.execute(
+                "SELECT seq,run_id,full_values_seq FROM interaction_threads WHERE id=?", (thread_id,)
+            ).fetchone()
             if row is None:
                 raise KeyError(thread_id)
             seq = row["seq"]
@@ -142,8 +212,10 @@ class InteractionStoreMixin:
                     self._conn.execute("UPDATE interaction_threads SET seq=?,run_id=?,full_values_seq=? WHERE id=?",
                                        (seq, run_id or row["run_id"], full_values[-1] if full_values else row["full_values_seq"], thread_id))
                 else:
-                    self._conn.execute("UPDATE interaction_threads SET seq=?,snapshot=?,run_id=?,full_values_seq=? WHERE id=?",
-                                       (seq, json.dumps(snapshot), run_id or row["run_id"], full_values[-1] if full_values else row["full_values_seq"], thread_id))
+                    cutover, status = self._snapshot_stream_metadata(snapshot)
+                    self._conn.execute("""UPDATE interaction_threads SET seq=?,snapshot=?,run_id=?,full_values_seq=?,
+                                         display_cutover_seq=?,projected_status=? WHERE id=?""",
+                                       (seq, json.dumps(snapshot), run_id or row["run_id"], full_values[-1] if full_values else row["full_values_seq"], cutover, status, thread_id))
                 self._conn.commit()
             except BaseException:
                 self._conn.rollback()
@@ -171,16 +243,15 @@ class InteractionStoreMixin:
         self._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", (thread_id, seq))
 
     def discard_finished_token_log(self, thread_id: str) -> int:
-        """Drop token rows and older snapshots once a turn is no longer live.
+        """Compact only finished message deltas after the run settles.
 
-        The thread row keeps the latest display snapshot and the cursor.
-        The newest values event and lifecycle events stay so a subscriber
-        can still see that the turn finished.
+        The retained final block occupies an original event position. Tool,
+        lifecycle, nested, and unfinished message records retain their order.
         """
 
         with self._lock:
             row = self._conn.execute(
-                "SELECT run_id, json_extract(snapshot, '$.workbench.run.status') AS projected_status FROM interaction_threads WHERE id = ?",
+                "SELECT run_id, projected_status, seq, compacted_through_seq FROM interaction_threads WHERE id = ?",
                 (thread_id,),
             ).fetchone()
             if row is None:
@@ -196,29 +267,61 @@ class InteractionStoreMixin:
                 ).fetchone()
                 if status is not None and status["status"] in _LIVE_RUN_STATUS:
                     return 0
-            removed = self._conn.execute(
-                """
-                DELETE FROM interaction_events
-                WHERE thread_id = ?
-                  AND json_extract(payload, '$.method') IN ('messages', 'tools')
-                """,
-                (thread_id,),
-            ).rowcount
-            removed += self._conn.execute(
-                """
-                DELETE FROM interaction_events
-                WHERE thread_id = ?
-                  AND json_extract(payload, '$.method') = 'values'
-                  AND seq < (
-                    SELECT MAX(seq) FROM interaction_events
-                    WHERE thread_id = ?
-                      AND json_extract(payload, '$.method') = 'values'
-                  )
-                """,
-                (thread_id, thread_id),
-            ).rowcount
-            self._conn.commit()
-            return int(removed or 0)
+            through = int(row["seq"])
+            if through <= int(row["compacted_through_seq"]):
+                return 0
+            messages = self._conn.execute(
+                """SELECT payload FROM interaction_events
+                   WHERE thread_id=? AND seq>? AND seq<=?
+                     AND json_extract(payload, '$.method')='messages'
+                   ORDER BY seq""",
+                (thread_id, row["compacted_through_seq"], through),
+            ).fetchall()
+            replacements, deletions = compact_finished_message_deltas(
+                thread_id, [json.loads(item["payload"]) for item in messages],
+            )
+            try:
+                for seq, replacement in replacements.items():
+                    self._conn.execute(
+                        "UPDATE interaction_events SET payload=? WHERE thread_id=? AND seq=?",
+                        (json.dumps(replacement), thread_id, seq),
+                    )
+                if deletions:
+                    # Follow only predecessor links we deliberately remove.
+                    # A missing native event has no such link and remains a gap.
+                    resolved_after: dict[int, int] = {}
+                    affected = self._conn.execute(
+                        """SELECT seq,after_seq FROM interaction_events
+                           WHERE thread_id=? AND seq>=? AND seq<=? ORDER BY seq""",
+                        (thread_id, min(deletions), through),
+                    ).fetchall()
+                    for item in affected:
+                        seq, after = int(item["seq"]), int(item["after_seq"])
+                        bridged = resolved_after.get(after, after)
+                        if seq in deletions:
+                            resolved_after[seq] = bridged
+                        elif bridged != after:
+                            self._conn.execute(
+                                "UPDATE interaction_events SET after_seq=? WHERE thread_id=? AND seq=?",
+                                (bridged, thread_id, seq),
+                            )
+                    ordered = sorted(deletions)
+                    for index in range(0, len(ordered), 400):
+                        chunk = ordered[index:index + 400]
+                        placeholders = ",".join("?" for _ in chunk)
+                        self._conn.execute(
+                            f"DELETE FROM interaction_events WHERE thread_id=? AND seq IN ({placeholders})",
+                            (thread_id, *chunk),
+                        )
+                self._conn.execute(
+                    "UPDATE interaction_threads SET compacted_through_seq=? WHERE id=?",
+                    (through, thread_id),
+                )
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+            return len(deletions)
 
     def discard_finished_token_logs(self) -> int:
         with self._lock:
@@ -279,6 +382,6 @@ class InteractionStoreMixin:
                 gap = gap or row["after_seq"] > cursor
                 cursor = row["seq"]
             page = [json.loads(row["payload"]) for row in rows]
-            binding = self.get_interaction(thread_id)
-            high_water = binding["seq"] if binding else 0
+            latest = self._conn.execute("SELECT seq FROM interaction_threads WHERE id=?", (thread_id,)).fetchone()
+            high_water = int(latest["seq"]) if latest else 0
             return page, high_water, gap or since > high_water or (not page and since < high_water)

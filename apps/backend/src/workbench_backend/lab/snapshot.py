@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
@@ -90,33 +92,55 @@ def plan_snapshot(
     *,
     allowlist: list[str] | None = None,
 ) -> tuple[list[tuple[Path, str]], list[SnapshotExclusion]]:
-    root = project_root.resolve()
+    root = project_root.resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(root)
     included: list[tuple[Path, str]] = []
     excluded: list[SnapshotExclusion] = []
     seen: set[str] = set()
 
-    candidates: list[Path]
-    if allowlist:
-        candidates = []
+    candidates: list[Path] = []
+    if allowlist is not None:
         for rel in allowlist:
-            candidate = (root / rel).resolve()
-            if candidate.is_file():
+            requested = PurePosixPath(rel.replace("\\", "/"))
+            if requested.is_absolute() or Path(rel).drive or ".." in requested.parts or requested.as_posix() in {"", "."}:
+                excluded.append(SnapshotExclusion(path=rel, reason="allowlist_invalid"))
+                continue
+            candidate = root.joinpath(*requested.parts)
+            symlink_reason = _symlink_reason(root, candidate)
+            if symlink_reason:
+                excluded.append(SnapshotExclusion(path=requested.as_posix(), reason=symlink_reason))
+            elif candidate.is_file():
                 candidates.append(candidate)
             else:
-                excluded.append(SnapshotExclusion(path=_rel(root, Path(rel)), reason="allowlist_missing"))
+                excluded.append(SnapshotExclusion(path=requested.as_posix(), reason="allowlist_missing"))
     else:
-        candidates = [path for path in root.rglob("*") if path.is_file() or path.is_symlink()]
+        def raise_walk_error(error: OSError) -> None:
+            raise error
+
+        for current, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=raise_walk_error):
+            directory = Path(current)
+            kept_dirs: list[str] = []
+            for name in sorted(dirs):
+                path = directory / name
+                relative = path.relative_to(root).as_posix()
+                reason = _symlink_reason(root, path) or exclusion_reason(relative)
+                if reason:
+                    excluded.append(SnapshotExclusion(path=relative, reason=reason))
+                else:
+                    kept_dirs.append(name)
+            dirs[:] = kept_dirs
+            candidates.extend(directory / name for name in sorted(files))
 
     for path in candidates:
-        relative = _rel(root, path)
+        relative = path.relative_to(root).as_posix()
         if relative in seen:
             continue
         seen.add(relative)
-        if path.is_symlink() or path.is_file():
-            resolved = path.resolve()
-            if not _is_within(root, resolved):
-                excluded.append(SnapshotExclusion(path=relative, reason="symlink_escape"))
-                continue
+        symlink_reason = _symlink_reason(root, path)
+        if symlink_reason:
+            excluded.append(SnapshotExclusion(path=relative, reason=symlink_reason))
+            continue
         reason = exclusion_reason(relative)
         if reason:
             excluded.append(SnapshotExclusion(path=relative, reason=reason))
@@ -128,13 +152,6 @@ def plan_snapshot(
     return included, excluded
 
 
-def write_snapshot_manifest(paths: WorkbenchPaths, manifest: SnapshotManifest) -> Path:
-    path = paths.snapshots / manifest.id / "manifest.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-    return path
-
-
 def capture_project_snapshot(
     paths: WorkbenchPaths,
     *,
@@ -143,30 +160,54 @@ def capture_project_snapshot(
     kind: SnapshotKind,
     allowlist: list[str] | None = None,
     unresolved_side_effects: list[str] | None = None,
+    snapshot_id: str | None = None,
 ) -> SnapshotManifest:
     """Write one application-owned directory snapshot. Not a second snapshot system."""
 
-    snapshot_id = new_id("snap")
-    tree_path = paths.snapshots / snapshot_id / "tree"
-    included, exclusions = write_snapshot_tree(
-        project_root,
-        tree_path,
-        allowlist=allowlist,
-    )
-    manifest = SnapshotManifest(
-        id=snapshot_id,
-        workspace_id=workspace_id,
-        captured_at=utc_now(),
-        kind=kind,
-        included_files=included,
-        exclusions=exclusions,
-        environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
-        unresolved_side_effects=list(unresolved_side_effects or []),
-        allowlist=allowlist,
-        tree_path=str(tree_path),
-    )
-    write_snapshot_manifest(paths, manifest)
-    return manifest
+    snapshot_id = snapshot_id or new_id("snap")
+    if not snapshot_id.startswith("snap_") or not all(
+        char.isalnum() or char in {"_", "-"} for char in snapshot_id
+    ):
+        raise ValueError("Invalid snapshot identity.")
+    final = paths.snapshots / snapshot_id
+    staging = paths.snapshots / f".{snapshot_id}.staging"
+    paths.snapshots.mkdir(parents=True, exist_ok=True)
+    if final.exists() or staging.exists():
+        raise FileExistsError(f"Snapshot identity is already in use: {snapshot_id}")
+    staging.mkdir()
+    try:
+        included, exclusions = write_snapshot_tree(project_root, staging / "tree", allowlist=allowlist)
+        manifest = SnapshotManifest(
+            id=snapshot_id,
+            workspace_id=workspace_id,
+            captured_at=utc_now(),
+            kind=kind,
+            included_files=included,
+            exclusions=exclusions,
+            environment_exclusions=list(ENVIRONMENT_EXCLUSIONS),
+            unresolved_side_effects=list(unresolved_side_effects or []),
+            allowlist=allowlist,
+            tree_path=str(final / "tree"),
+        )
+        (staging / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+        staging.rename(final)
+        return manifest
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def discard_incomplete_snapshot_staging(paths: WorkbenchPaths, snapshot_id: str) -> None:
+    """Remove only the reserved staging tree after an interrupted capture."""
+    if not snapshot_id.startswith("snap_") or not all(
+        char.isalnum() or char in {"_", "-"} for char in snapshot_id
+    ):
+        raise ValueError("Invalid snapshot identity.")
+    staging = paths.snapshots / f".{snapshot_id}.staging"
+    if staging.is_symlink() or staging.is_junction():
+        staging.unlink()
+    elif staging.exists():
+        shutil.rmtree(staging)
 
 
 def write_snapshot_tree(
@@ -181,7 +222,7 @@ def write_snapshot_tree(
     for source, relative in included:
         target = dest_tree / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        _copy_stable_file(project_root.resolve(), source, target)
         files.append(
             SnapshotFile(
                 path=relative,
@@ -358,11 +399,41 @@ def _discard_failed_staging(dest: Path) -> None:
         shutil.rmtree(dest)
 
 
-def _rel(root: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(root).as_posix()
-    except ValueError:
-        return Path(path).as_posix().replace("\\", "/")
+def _symlink_reason(root: Path, path: Path) -> str | None:
+    current = root
+    for part in path.relative_to(root).parts:
+        current /= part
+        if current.is_symlink() or current.is_junction():
+            try:
+                return "symlink_escape" if not _is_within(root, current.resolve(strict=True)) else "symlink"
+            except OSError:
+                return "symlink"
+    return None
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _copy_stable_file(root: Path, source: Path, target: Path) -> None:
+    if _symlink_reason(root, source):
+        raise OSError(f"Snapshot source became a symlink: {source}")
+    before = source.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError(f"Snapshot source is not a regular file: {source}")
+    with source.open("rb") as opened:
+        if _file_identity(os.fstat(opened.fileno())) != _file_identity(before):
+            raise OSError(f"Snapshot source changed while opening: {source}")
+        if not _is_within(root, source.resolve(strict=True)):
+            raise OSError(f"Snapshot source escaped the project: {source}")
+        with target.open("wb") as copied:
+            shutil.copyfileobj(opened, copied)
+        if _file_identity(os.fstat(opened.fileno())) != _file_identity(before):
+            raise OSError(f"Snapshot source changed while copying: {source}")
+    if _symlink_reason(root, source) or _file_identity(source.stat()) != _file_identity(before):
+        raise OSError(f"Snapshot source changed after copying: {source}")
+    if target.stat().st_size != before.st_size:
+        raise OSError(f"Snapshot copy size mismatch: {source}")
 
 
 def _is_within(root: Path, candidate: Path) -> bool:

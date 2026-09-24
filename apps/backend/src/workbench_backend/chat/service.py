@@ -818,7 +818,15 @@ class ChatService:
                 input_message_id,
                 run_id=accepted.id,
             )
-            self.harness.cancel(accepted.id)
+            try:
+                self.harness.cancel(accepted.id)
+            except HarnessError as exc:
+                # The admission guard may have cancelled the run before this
+                # durable Chat linkage completed. Once execution has settled,
+                # the finalizing guard correctly refuses another Stop; the
+                # accepted turn must still be returned to its sender.
+                if exc.code != "run_finalizing":
+                    raise
         self._clear_submission_cancel_event(
             next_conversation.id,
             next_conversation.thread_id,
