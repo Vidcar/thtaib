@@ -1,8 +1,16 @@
 import { useId } from "react";
 import { HoverHelp } from "./HoverHelp";
 
-export function CompactSwitch(props: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; description?: string }) {
-  return <span className="compact-switch-row"><span>{props.label}{props.description ? <HoverHelp title={`About ${props.label.toLowerCase()}`}>{props.description}</HoverHelp> : null}</span><button type="button" className="compact-switch" role="switch" aria-label={props.label} aria-checked={props.checked} disabled={props.disabled} onClick={() => props.onChange(!props.checked)}><span /></button></span>;
+export function CompactSwitch(props: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; description?: string; meta?: string }) {
+  return <span className="compact-switch-row"><span>{props.label}{props.description ? <HoverHelp title={`About ${props.label.toLowerCase()}`}>{props.description}</HoverHelp> : null}{props.meta ? <small className="control-provenance">{props.meta}</small> : null}</span><button type="button" className="compact-switch" role="switch" aria-label={props.label} aria-checked={props.checked} disabled={props.disabled} onClick={() => props.onChange(!props.checked)}><span /></button></span>;
+}
+
+export function SegmentedChoice({ label, value, options, onChange, disabled = false, description, meta }: {
+  label: string; value: string; options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void; disabled?: boolean; description?: string; meta?: string;
+}) {
+  const id = useId();
+  return <fieldset className="segmented-setting" disabled={disabled}><legend>{label}{description ? <HoverHelp title={`About ${label.toLowerCase()}`}>{description}</HoverHelp> : null}{meta ? <small className="control-provenance">{meta}</small> : null}</legend><div className="segmented-options">{options.map(option => <label key={option.value}><input type="radio" name={id} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} /><span>{option.label}</span></label>)}</div></fieldset>;
 }
 
 export function CompactSlider(props: { hideHeading?: boolean; label: string; value: number; values: number[]; onChange: (value: number) => void; formatValue?: (value: number) => string; disabled?: boolean; description?: string }) {

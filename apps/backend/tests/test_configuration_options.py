@@ -123,6 +123,21 @@ class BundleConfigurationOptionsTests(unittest.TestCase):
         report = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{% if enable_thinking is undefined or enable_thinking is true %}think{% endif %}"))
         self.assertEqual(report.per_request_defaults["reasoning"].default_value, "on")
 
+    def test_thinking_history_requires_template_evidence(self) -> None:
+        keep = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=
+            "{% if preserve_thinking is undefined or preserve_thinking is true %}{{ message.reasoning_content }}{% endif %}"))
+        self.assertTrue(keep.startup_defaults["reasoning_preserve"].supported)
+        self.assertIs(keep.startup_defaults["reasoning_preserve"].default_value, True)
+        self.assertEqual(keep.startup_defaults["reasoning_preserve"].default_source, "gguf_template")
+        unknown = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template=
+            "{% if preserve_thinking %}{{ message.reasoning_content }}{% endif %}"))
+        self.assertTrue(unknown.startup_defaults["reasoning_preserve"].supported)
+        self.assertIsNone(unknown.startup_defaults["reasoning_preserve"].default_value)
+        unsupported = bundle_configuration_options("bundle", GgufRuntimeMetadata(chat_template="{{ messages }}"))
+        self.assertIs(unsupported.startup_defaults["reasoning_preserve"].supported, False)
+        missing = bundle_configuration_options("bundle", GgufRuntimeMetadata())
+        self.assertIsNone(missing.startup_defaults["reasoning_preserve"].supported)
+
     def test_connected_configuration_options_uses_server_template_without_bundle(self) -> None:
         from workbench_backend.inference.schemas import Deployment, DeploymentStatus, ManagementScope
         deployment = Deployment(id="connected-template", display_name="Connected", scope=ManagementScope.connected,

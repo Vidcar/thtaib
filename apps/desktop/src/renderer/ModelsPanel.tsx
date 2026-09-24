@@ -11,13 +11,12 @@ import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
 import { Help } from "./ModelControls";
 import { PathBrowseButton } from "./PathField";
-import { PanelResize, usePanelWidth } from "./PanelResize";
+import { ModelPicker } from "./ModelPicker";
 import type { InspectReport, ModelBundle, RunProfile } from "./types";
 import { HuggingFaceImport } from "./HuggingFaceImport";
 import "./ModelsPanel.css";
 
 export function ModelsPanel() {
-  const [libraryWidth, setLibraryWidth] = usePanelWidth("models-library", 220, 180, 400);
   const [view, setView] = useState<"library" | "add" | "downloads">("library");
   const [localBusy, setLocalBusy] = useState(false);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
@@ -32,6 +31,7 @@ export function ModelsPanel() {
   const [loading, setLoading] = useState(true);
   const [importRevision, setImportRevision] = useState(0);
   const [verifyBusy, setVerifyBusy] = useState(false);
+  const [draftModelIds, setDraftModelIds] = useState<ReadonlySet<string>>(new Set());
 
   async function refresh(): Promise<void> {
     setLoading(true);
@@ -149,46 +149,13 @@ export function ModelsPanel() {
 
       </section>
       </div>
-      <div id="models-panel-library" role="tabpanel" aria-labelledby="models-tab-library" className="models-workspace" hidden={view !== "library"} style={{ gridTemplateColumns: `${libraryWidth}px minmax(0, 1fr)` }}>
-      <aside className="model-library" aria-label="Your models" style={{ position: "relative" }}>
-        <div className="section-heading"><h3>Installed</h3><span className="hint">{bundles.length}</span></div>
-        {loading ? (
-          <EmptyState title="Loading your models">
-            Loading saved model details.
-          </EmptyState>
-        ) : bundles.length === 0 ? (
-          <EmptyState title="Your first model starts here">
-            Add a model from your computer or download one from Hugging Face. <button type="button" onClick={() => setView("add")}>Add models</button>
-          </EmptyState>
-        ) : (
-          <ul className="model-list">
-            {bundles.map((bundle) => (
-              <li key={bundle.id}>
-                <button
-                  type="button"
-                  className={bundle.id === selectedId ? "model-tile selected" : "model-tile"}
-                  aria-pressed={bundle.id === selectedId}
-                  onClick={() => {
-                    setSelectedId(bundle.id);
-                    setInspect(null);
-                  }}
-                >
-                  <span className="nav-item-title">{bundle.display_name}</span>
-                  <span className="nav-item-meta">
-                    {bundle.quantization ?? "GGUF"} · {formatBytes(bundle.files.reduce((total, file) => total + file.size_bytes, 0))}
-                    {!bundle.disk_matches ? " · Check files" : ""}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <PanelResize label="Resize model library" width={libraryWidth} onResize={setLibraryWidth} min={180} max={400} reset={220} />
-      </aside>
+      <div id="models-panel-library" role="tabpanel" aria-labelledby="models-tab-library" className="models-workspace" hidden={view !== "library"}>
+      {loading ? <EmptyState title="Loading your models">Loading saved model details.</EmptyState> : bundles.length === 0 ? <EmptyState title="Your first model starts here">Add a model from your computer or download one from Hugging Face. <button type="button" onClick={() => setView("add")}>Add models</button></EmptyState> : null}
+      {bundles.length ? <ModelPicker bundles={bundles} selectedId={selectedId} dirtyIds={draftModelIds} onSelect={id => { setSelectedId(id); setInspect(null); }} /> : null}
       <div className="model-detail">
-      {selected ? <header className="model-selected-heading" aria-label="Selected model"><h3>{selected.display_name}</h3><div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div></header> : null}
-      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} />
+      <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} onDirtyModelsChange={setDraftModelIds} />
       {selected ? <details className="card technical-details model-facts-details"><summary>Files, source &amp; metadata</summary>
+      <div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div>
       {selected.huggingface_configuration ? <section className="source-provenance" aria-label="Hugging Face model settings">
         <h4>Publisher guidance &amp; template <span className="hint">{selected.huggingface_configuration.source_verified ? "Verified publisher source" : "GGUF repository only"}</span></h4>
         {selected.huggingface_configuration.source_repo_id ? <p className="hint">{selected.huggingface_configuration.source_repo_id} @ {selected.huggingface_configuration.source_revision?.slice(0, 8) ?? "unverified"}</p> : null}

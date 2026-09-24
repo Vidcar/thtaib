@@ -14,10 +14,20 @@
 .menu-section {padding: var(--pad-compact) 0; border-top: var(--line-hairline) solid var(--border); margin-top: var(--space-tight); display: grid; gap: var(--space-compact);}
 .compact-switch-row {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); min-height: var(--control-height);}
 .compact-switch-row > span {display: flex; align-items: center; gap: var(--space-tight);}
-.compact-switch {width: 30px; min-width: 30px; height: 18px; min-height: 18px; padding: 2px; border: 0; border-radius: var(--radius-pill); background: var(--border);}
-.compact-switch > span {display: block; width: 14px; height: 14px; border-radius: var(--radius-circle); background: var(--text);}
+.compact-switch {width: 44px; min-width: 44px; height: 28px; min-height: 28px; padding: 3px; border: 0; border-radius: var(--radius-pill); background: var(--border);}
+.compact-switch > span {display: block; width: 22px; height: 22px; border-radius: var(--radius-circle); background: var(--text); transition: transform .14s ease;}
 .compact-switch[aria-checked="true"] {background: var(--accent);}
-.compact-switch[aria-checked="true"] > span {transform: translateX(12px); background: var(--bg);}
+.compact-switch[aria-checked="true"] > span {transform: translateX(16px); background: var(--bg);}
+.segmented-setting {border: 0; padding: 0; margin: 0; min-width: 0;}
+.segmented-setting legend {display: flex; align-items: center; gap: var(--space-tight); width: 100%; margin: 0 0 var(--space-tight); font-size: var(--text-body);}
+.segmented-options {display: inline-flex; max-width: 100%; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-pill); padding: 2px; background: var(--bg-input);}
+.segmented-options label {position: relative; margin: 0; min-width: 0; cursor: pointer;}
+.segmented-options input {position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;}
+.segmented-options span {display: flex; align-items: center; justify-content: center; min-height: 32px; padding: 4px 12px; border-radius: var(--radius-pill); font-size: var(--text-small); white-space: nowrap;}
+.segmented-options input:checked + span {background: var(--accent); color: var(--bg);}
+.segmented-options input:focus-visible + span {outline: var(--focus-ring) solid var(--accent); outline-offset: 2px;}
+.segmented-setting:disabled {opacity: .55;}
+.control-provenance {margin-left: auto; min-width: 0; color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular); text-align: right;}
 .compact-slider {display: grid; gap: var(--space-tight); min-width: 0;}
 .compact-slider-heading {display: flex; align-items: center; gap: var(--space-tight);}
 .compact-slider-heading label {margin: 0; font-size: var(--text-body);}

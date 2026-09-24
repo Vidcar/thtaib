@@ -32,7 +32,7 @@ export function settingSource(source?: string | null): string {
   const labels: Record<string, string> = {
     server_template: "Model default", gguf_template: "Model default", server_properties: "Server reported",
     loaded_template_settings: "Loaded template", loaded_startup: "Loaded settings", workbench_default: "Workbench default",
-    pinned_runtime_default: "Runtime default", gguf_metadata: "Model metadata", runtime_observation: "Runtime reported",
+    pinned_runtime_default: "Runtime default", pinned_runtime_schema: "Runtime options", gguf_metadata: "Model metadata", gguf_tensor_directory: "Model metadata", runtime_observation: "Runtime reported",
     automatic_fit: "Automatic fit", backend_recommendation: "Recommended", unavailable: "Unavailable",
   };
   return source ? labels[source] ?? source : "Default not reported";

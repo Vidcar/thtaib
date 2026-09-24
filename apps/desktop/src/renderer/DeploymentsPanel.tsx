@@ -11,6 +11,7 @@ import { StatusBadge } from "./StatusBadge";
 import { Icon } from "./Icon";
 import { ModelCapabilities } from "./ModelCapabilities";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
+import { settingSource, settingValue } from "./effectiveSettings";
 import { useSetupPreview } from "./effectiveSettings";
 import { ModelProjectorControls } from "./ModelProjectorControls";
 import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
@@ -19,9 +20,11 @@ import "./deploymentReadouts.css";
 const cacheTypes = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
 const choices = (values: string[]) => values.map(value => ({ value, label: value }));
 const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
-const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "-1", flash_attn: "on", fit: "on", cache_type_k: "f16", cache_type_v: "f16", threads: "", threads_batch: "", load_mode: "auto", parallel: "1", port: "", batch_size: "2048", ubatch_size: "512", reasoning: "auto", reasoning_effort: "", reasoning_format: "auto", reasoning_budget: "-1", embedding: "off", pooling: "last", spec_type: "none", spec_draft_n_max: "3" };
+const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "-1", flash_attn: "", fit: "", cache_type_k: "f16", cache_type_v: "f16", threads: "", threads_batch: "", load_mode: "auto", parallel: "1", port: "", batch_size: "2048", ubatch_size: "512", reasoning: "auto", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "auto", reasoning_budget: "-1", embedding: "off", pooling: "last", spec_type: "none", spec_draft_n_max: "3" };
 const EMPTY_BUNDLES: ModelBundle[] = [];
 const EMPTY_PROFILES: RunProfile[] = [];
+type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; name: string; advanced: string; changed: string[] };
+const draftKey = (bundle: string, profile: string) => `${bundle}:${profile || "default"}`;
 
 function stateOf(d: Deployment): { label: string; tone: "ok" | "warn" | "neutral" | "danger" } {
   if (d.status === "stopped") return { label: "Stopped", tone: "neutral" };
@@ -37,6 +40,7 @@ export function DeploymentsPanel({
   initialProfiles = EMPTY_PROFILES,
   onBundlesChanged,
   onSelectBundle,
+  onDirtyModelsChange,
 }: {
   selectedBundleId?: string;
   bundlesVersion?: string;
@@ -44,6 +48,7 @@ export function DeploymentsPanel({
   initialProfiles?: RunProfile[];
   onBundlesChanged?: () => Promise<void>;
   onSelectBundle?: (id: string) => void;
+  onDirtyModelsChange?: (ids: ReadonlySet<string>) => void;
 } = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const selection = useRef(selectedBundleId); selection.current = selectedBundleId;
@@ -51,6 +56,8 @@ export function DeploymentsPanel({
   if (selectionOwner.current.id !== selectedBundleId) selectionOwner.current = { id: selectedBundleId, generation: selectionOwner.current.generation + 1 };
   const hydrated = useRef({ bundle: "", deployment: "", profile: "", revision: 0 });
   const dirty = useRef(false);
+  const drafts = useRef(new Map<string, ModelDraft>());
+  const activeDraftKey = useRef("");
   const actionPending = useRef(false);
   const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
@@ -68,7 +75,6 @@ export function DeploymentsPanel({
   const [configuration, setConfiguration] = useState<BundleConfigurationOptions | null>(null);
   const [maximumContext, setMaximumContext] = useState<number | null>(null);
   const [layers, setLayers] = useState<number | null>(null);
-  const [contextChoices, setContextChoices] = useState<Array<{ value: string; label: string }>>([]);
   const [threadChoices, setThreadChoices] = useState(numberChoices([1, 2, 4, 6, 8, 12, 16, 24, 32]));
   const [modelInfo, setModelInfo] = useState("Reading model limits…");
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:8080/v1");
@@ -109,15 +115,36 @@ export function DeploymentsPanel({
   const thinkingAvailable = Boolean(configuration?.per_request_defaults?.reasoning?.supported || configuration?.per_request_defaults?.reasoning_effort?.supported);
   const descriptorOptions = (key: string) => (configuration?.startup_defaults[key]?.options ?? []).map(option => ({ value: String(option.value ?? ""), label: option.label }));
 
+  function publishDraftMarkers() {
+    const ids = new Set([...drafts.current.keys()].map(key => key.split(":", 1)[0]));
+    if (dirty.current && activeDraftKey.current) ids.add(activeDraftKey.current.split(":", 1)[0]);
+    onDirtyModelsChange?.(ids);
+  }
+  function stashDraft() {
+    if (!activeDraftKey.current || !dirty.current) return;
+    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current] });
+    publishDraftMarkers();
+  }
+  function restoreDraft(key: string): boolean {
+    const draft = drafts.current.get(key);
+    if (!draft) return false;
+    activeDraftKey.current = key;
+    dirty.current = true;
+    changedStartup.current = new Set(draft.changed);
+    setSettings({ ...draft.settings }); setResponse({ ...draft.response }); setConfigurationName(draft.name); setAdvancedStartup(draft.advanced); setSettingsPreview(null);
+    publishDraftMarkers();
+    return true;
+  }
+  useEffect(() => { publishDraftMarkers(); }, [settings, response, configurationName, advancedStartup, selectedBundleId, profileId]);
+
   function applyConfiguration(report: BundleConfigurationOptions) {
     if (report.bundle_id !== selection.current) return;
     setConfiguration(report);
     const maximum = report.context_size.maximum;
     setMaximumContext(maximum); setLayers(report.gpu_layers.maximum);
-    setContextChoices(report.context_size.options.filter(option => typeof option.value === "number").map(option => ({ value: String(option.value), label: `${option.label}${option.value === maximum ? " · maximum" : ""}` })));
     const threads = report.startup_defaults.threads;
     if (threads?.options.length) setThreadChoices(threads.options.filter(option => typeof option.value === "number" && Number(option.value) > 0).map(option => ({ value: String(option.value), label: option.label })));
-    setModelInfo(maximum && maximum > 0 ? `${tokenLabel(maximum)} context · ${report.metadata.architecture ?? "GGUF"}${report.metadata.inspection_cached ? " · saved details" : ""}` : "Model capacity unavailable");
+    setModelInfo(maximum && maximum > 0 ? `${tokenLabel(maximum)} maximum context · ${report.metadata.architecture ?? "GGUF"}` : "Model capacity unavailable");
   }
 
   async function refresh() {
@@ -131,13 +158,21 @@ export function DeploymentsPanel({
     const saved = (!changedModel ? selectedProfile : undefined) ?? profiles.find(item => item.id === (selectedRunning?.profile_id ?? selected?.default_configuration_id)) ?? profiles.find(item => item.bundle_id === selectedBundleId);
     const changedProfile = saved && (hydrated.current.profile !== saved.id || hydrated.current.revision !== saved.revision);
     const shouldHydrate = changedModel || (!dirty.current && changedProfile) || (selectedRunning && !dirty.current && hydrated.current.deployment !== selectedRunning.id);
-    if (changedModel) { dirty.current = false; setMessage(""); setProfileId(""); }
+    if (changedModel) { stashDraft(); dirty.current = false; setMessage(""); setProfileId(""); }
     let cancelled = false;
-    if (changedModel) { setConfiguration(null); setMaximumContext(null); setLayers(null); setContextChoices([]); setModelInfo("Loading model details…"); }
+    if (changedModel) { setConfiguration(null); setMaximumContext(null); setLayers(null); setModelInfo("Loading model details…"); }
     if (shouldHydrate) {
-    changedStartup.current = new Set(Object.keys(selectedRunning?.startup_overrides ?? {}));
     hydrated.current = { bundle: selectedBundleId, deployment: selectedRunning?.id ?? "", profile: saved?.id ?? "", revision: saved?.revision ?? 0 };
-    setProfileId(saved?.id ?? ""); setConfigurationName(saved?.display_name ?? selected?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {});
+    const nextProfileId = saved?.id ?? "";
+    const nextKey = draftKey(selectedBundleId, nextProfileId);
+    setProfileId(nextProfileId);
+    if (changedModel && restoreDraft(nextKey)) {
+      // Keep the draft; metadata still refreshes for the newly selected model.
+    } else {
+    activeDraftKey.current = nextKey;
+    dirty.current = false;
+    changedStartup.current = new Set(Object.keys(selectedRunning?.startup_overrides ?? {}));
+    setConfigurationName(saved?.display_name ?? selected?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {});
     const starting = { ...initialSettings };
     const extra: Record<string, unknown> = {};
     const inherited = saved;
@@ -145,7 +180,7 @@ export function DeploymentsPanel({
       ? mergedStartup(inherited.bags.startup.requested, selectedRunning?.startup_overrides ?? {})
       : selectedRunning?.applied_startup ?? {};
     for (const [key, value] of Object.entries(formStartup)) {
-      if (key in starting) starting[key] = String(value);
+      if (key in starting) starting[key] = key === "reasoning_preserve" ? value === true ? "keep" : value === false ? "drop" : "" : String(value);
       else if (key !== "host") extra[key] = value;
     }
     for (const [key, value] of Object.entries(selectedRunning?.startup_overrides ?? {})) {
@@ -154,6 +189,7 @@ export function DeploymentsPanel({
     if (!inherited && selectedRunning?.server_props?.total_slots && !("parallel" in selectedRunning.applied_startup)) starting.parallel = String(selectedRunning.server_props.total_slots);
     if (!inherited && selectedRunning?.server_props?.n_ctx && Number(starting.parallel) === 1) starting.ctx_size = String(selectedRunning.server_props.n_ctx);
     setSettings(starting); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
+    }
     }
     if (selectedBundleId) void api.modelConfiguration(selectedBundleId, selectedRunning?.id).then(report => {
       if (cancelled) return;
@@ -179,13 +215,19 @@ export function DeploymentsPanel({
   }, [deployments]);
   function change(key: string, value: string) { dirty.current = true; changedStartup.current.add(key); setSettings(previous => ({ ...previous, [key]: value })); setSettingsPreview(null); setMessage(""); }
   function selectProfile(id: string) {
-    changedStartup.current = new Set();
-    setProfileId(id); dirty.current = true;
+    stashDraft();
+    const key = draftKey(selectedBundleId, id);
     const profile = profiles.find(item => item.id === id);
+    hydrated.current = { ...hydrated.current, profile: id, revision: profile?.revision ?? 0 };
+    activeDraftKey.current = key;
+    dirty.current = false;
+    changedStartup.current = new Set();
+    setProfileId(id);
+    if (restoreDraft(key)) return;
     setConfigurationName(profile?.display_name ?? selected?.display_name ?? "Default"); setResponse(profile?.bags.per_request.requested ?? {});
     const next = { ...initialSettings }, extra: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(profile?.bags.startup.requested ?? {})) {
-      if (key in next) next[key] = String(value);
+      if (key in next) next[key] = key === "reasoning_preserve" ? value === true ? "keep" : value === false ? "drop" : "" : String(value);
       else extra[key] = value;
     }
     setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
@@ -200,7 +242,7 @@ export function DeploymentsPanel({
   function startup(): Record<string, unknown> {
     const values = startupPayload(settings, advancedStartup, profiles.find(profile => profile.id === profileId)?.bags.startup.requested, changedStartup.current);
     if (!thinkingAvailable && !profileId) {
-      for (const key of ["reasoning", "reasoning_effort", "reasoning_format", "reasoning_budget"]) {
+      for (const key of ["reasoning", "reasoning_effort", "reasoning_format", "reasoning_budget", "reasoning_preserve"]) {
         if (!changedStartup.current.has(key) && !selectedRunning?.applied_startup[key]) delete values[key];
       }
     }
@@ -224,7 +266,10 @@ export function DeploymentsPanel({
   async function persistConfiguration(payload: ReturnType<typeof configurationPayload>, asVariant: boolean, owner: typeof selectionOwner.current) {
     const saved = await api.saveModelConfiguration(owner.id, payload);
     if (selectionOwner.current === owner) {
+      drafts.current.delete(activeDraftKey.current);
+      activeDraftKey.current = draftKey(owner.id, saved.id);
       setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false;
+      publishDraftMarkers();
       setCreatingVariant(false); setVariantName("");
     }
     await onBundlesChanged?.(); await refresh();
@@ -238,16 +283,21 @@ export function DeploymentsPanel({
   }
   const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number) => {
     const requested = settings[key];
-    const selectedLabel = options.find(option => option.value === requested)?.label ?? requested;
-    const savedValue = selectedProfile?.bags.startup.requested[key];
-    const source = changedStartup.current.has(key) ? "Unsaved edit"
-      : savedValue !== undefined ? "Saved configuration"
-      : selectedRunning?.applied_startup[key] !== undefined ? "Loaded model"
-      : configuration?.startup_defaults[key]?.default_source ?? "Automatic engine choice";
+    const descriptor = configuration?.startup_defaults[key];
+    const defaultValue = descriptor?.default_value ?? descriptor?.applied;
+    const defaultLabel = key === "spec_type" && defaultValue === "none" ? "Off" : settingValue(defaultValue);
+    const meta = defaultValue == null ? "Default unknown" : `Default ${defaultLabel} · ${settingSource(descriptor?.default_source ?? descriptor?.source)}`;
     const observed = key === "ctx_size" ? selectedRunning?.server_props?.n_ctx : configuration?.startup_defaults[key]?.observed;
-    return <div key={key} className="model-setting-wrap"><Choice id={`model-${key}`} label={label} help={help} flag={`--${key.replaceAll("_", "-")}`} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} />
-      <span className="hint model-effective-hint">{requested === "" || requested === "auto" ? "Automatic" : selectedLabel} · {source}{observed != null ? ` · Running: ${key === "ctx_size" ? `${tokenLabel(Number(observed))} tokens` : String(observed)}` : ""}</span></div>;
+    const loadedValue = observed ?? selectedRunning?.applied_startup[key];
+    const normalizedLoaded = key === "reasoning_preserve" ? loadedValue === true ? "keep" : loadedValue === false ? "drop" : loadedValue : loadedValue;
+    const requestedValue = requested === "" || requested === "auto" ? defaultValue : requested;
+    const showLoaded = selectedRunning && normalizedLoaded != null && String(normalizedLoaded) !== String(requestedValue ?? "");
+    return <div key={key} className="model-setting-wrap"><Choice id={`model-${key}`} label={label} help={help} flag={`--${key.replaceAll("_", "-")}`} meta={meta} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} segmented={["fit", "flash_attn", "reasoning_preserve"].includes(key) && requested !== "auto"} />
+      {showLoaded ? <span className="hint model-loaded-difference">Loaded: {key === "ctx_size" ? `${tokenLabel(Number(loadedValue))} tokens` : settingValue(normalizedLoaded)}</span> : null}</div>;
   };
+  const gpuMode = settings.n_gpu_layers === "auto" ? "auto" : settings.n_gpu_layers === "-1" ? "all" : settings.n_gpu_layers === "0" ? "cpu" : "exact";
+  const contextLoaded = selectedRunning?.server_props?.n_ctx;
+  const gpuLoaded = selectedRunning?.applied_startup.n_gpu_layers;
   const readout = (values: Record<string, unknown>) => <dl className="settings-readout">{Object.entries(values).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>)}</dl>;
 
   function renderDeployment(d: Deployment) {
@@ -293,9 +343,8 @@ export function DeploymentsPanel({
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
     {otherCurrent.length ? <aside className="other-active-models" aria-label="Other active models"><span className="hint">Also active</span>{otherCurrent.map(d => <button type="button" key={d.id} disabled={!onSelectBundle} onClick={() => onSelectBundle?.(d.bundle_id!)}><span>{bundles.find(bundle => bundle.id === d.bundle_id)?.display_name}</span><StatusBadge {...stateOf(d)} /></button>)}</aside> : null}
-    {selectedCurrent.length ? <section className="card running-section"><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <details className="technical-details"><summary>Additional connections <span>{selectedConnections.length}</span></summary><ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul></details> : null}</section> : null}
-    {selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}
-    {selected ? <section className="card model-setup"><div className="section-heading"><h3>Configuration</h3><span className="model-edit-state" data-dirty={dirty.current}>{dirty.current ? "Edits to save" : "Saved configuration"}</span></div><form ref={formRef} className="model-settings" onSubmit={event => {
+    {selectedCurrent.length ? <div className="model-run-summary" aria-label="Loaded model status"><StatusBadge {...stateOf(selectedCurrent[0])} /><span>{selectedRunning?.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context loaded` : selectedCurrent[0].status === "starting" ? "Starting engine" : "Engine state available in details"}</span>{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(selectedActive.id, async () => { await api.stop(selectedActive.id); await refresh(); })}>Unload</button> : null}<details><summary>Diagnostics</summary><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul> : null}</details></div> : null}
+    {selected ? <section className="card model-setup"><div className="section-heading"><h3>Model settings</h3><span className="model-edit-state" data-dirty={dirty.current}>{dirty.current ? "Unsaved" : "Saved configuration"}</span></div><form ref={formRef} className="model-settings" onSubmit={event => {
       event.preventDefault(); void action("start", async () => {
         const payload = configurationPayload(), overrides = startup(), owner = selectionOwner.current;
         await preview(payload.startup, payload.per_request, owner);
@@ -320,20 +369,25 @@ export function DeploymentsPanel({
       <div className="section-heading"><span className="hint model-capacity">{modelInfo}</span><button type="button" className="icon-button" aria-label="Refresh model details" title="Re-read model metadata and supported controls" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true)); })}><Icon name="refresh" size={16} /></button></div>
       <div className="setup-form-grid"><label>Configuration<select value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">Default</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id && profile.display_name.trim().toLowerCase() !== "default" ? " · default" : ""}</option>)}</select></label><label>Name<input value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label></div>
       {selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" className="quiet-button" disabled={Boolean(busy)} onClick={() => void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); })}>Use as model default</button> : null}
-      {selectedActive ? <div className="inline-note">{selectedRunning ? `Loaded model: ${selectedRunning.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context reported by the engine` : "see runtime details for reported settings"}.` : "This model is loading or waiting for a connection."} Save changes for future use; choose Apply &amp; reload to change this loaded model.</div> : <p className="hint">Changes to this saved configuration will be used by future Chat, Lab and Workflows sessions. Loading applies startup settings.</p>}
-      <div className="model-settings-grid">
-        {field("ctx_size", "Context size", "Space for the conversation, instructions and replies, measured in tokens. Larger contexts use more memory. Automatic fitting chooses a size at startup; the running value is shown above.", [{ value: "", label: maximumContext ? `Automatic · up to ${tokenLabel(maximumContext)}` : "Automatic · fit available memory" }, ...contextChoices], true, 1, maximumContext ?? undefined)}
-        {field("n_gpu_layers", "GPU layers", "Move model layers to your graphics card for faster responses. All layers requests full offload; memory fitting can adjust this. Zero uses the CPU. The output layer is included in the available count.", [{ value: "-1", label: `All layers (−1)${layers ? ` · ${layers} available` : ""}` }, { value: "auto", label: "Automatic · fit GPU memory" }, { value: "0", label: "0 · CPU only" }, ...numberChoices([...new Set([...(layers ? Array.from({ length: 7 }, (_, i) => Math.max(1, Math.round(layers * (i + 1) / 8))) : [8, 16, 24, 32, 48, 64, 80]), layers ?? 99])])], true, -1, layers ?? undefined)}
-        {field("fit", "Memory fitting", "Adjust settings that have not been fixed explicitly to fit GPU memory. Large explicit settings can still exceed available memory.", switches)}
-        {field("flash_attn", "Flash attention", "Faster, more memory-efficient attention when supported by your GPU and model. Auto lets the engine choose.", [...switches, { value: "auto", label: "Automatic" }])}
+      <p className="hint model-setting-guidance">Saved settings apply to future Chat, Lab and Workflows turns. {selectedActive ? "Apply & reload updates this loaded engine." : "Loading applies startup settings."}</p>
+      <div className="model-editor-columns">
+        <section className="model-editor-column" aria-labelledby="run-memory-heading"><h4 id="run-memory-heading">Run &amp; memory</h4><div className="model-column-fields">
+          <div className="model-setting-wrap"><div className="setting-title"><label htmlFor="model-ctx-size">Context size</label><Help label="Context size">Conversation capacity in tokens. Clearing the value restores automatic fitting.</Help><small className="control-provenance">Default Automatic · {settingSource(configuration?.startup_defaults.ctx_size?.source)}</small></div><input id="model-ctx-size" type="number" min={1} max={maximumContext ?? undefined} value={settings.ctx_size} placeholder="Automatic" disabled={Boolean(busy)} onChange={event => change("ctx_size", event.target.value)} />{contextLoaded && (!settings.ctx_size || Number(settings.ctx_size) !== contextLoaded) ? <span className="hint model-loaded-difference">Loaded: {tokenLabel(contextLoaded)} tokens</span> : null}</div>
+          <div className="model-setting-wrap"><div className="setting-title"><label htmlFor="model-gpu-mode">GPU layers</label><Help label="GPU layers">Automatic fits available memory; All requests full offload; CPU keeps layers off the GPU.</Help><small className="control-provenance">Default All · Workbench</small></div><div className="model-gpu-control"><select id="model-gpu-mode" value={gpuMode} disabled={Boolean(busy)} onChange={event => change("n_gpu_layers", event.target.value === "all" ? "-1" : event.target.value === "cpu" ? "0" : event.target.value === "exact" ? String(Math.max(1, Math.floor((layers ?? 32) / 2))) : "auto")}><option value="auto">Automatic</option><option value="all">All</option><option value="cpu">CPU</option><option value="exact">Exact</option></select>{gpuMode === "exact" ? <input type="number" aria-label="Exact GPU layers" min={1} max={layers ?? undefined} value={settings.n_gpu_layers} disabled={Boolean(busy)} onChange={event => change("n_gpu_layers", event.target.value || "custom")} /> : null}</div>{gpuLoaded != null && String(gpuLoaded) !== settings.n_gpu_layers ? <span className="hint model-loaded-difference">Loaded: {String(gpuLoaded)} requested</span> : null}</div>
+          {field("fit", "Memory fitting", "Adjust settings not fixed explicitly to fit GPU memory.", [{ value: "", label: "Default" }, ...switches])}
+          {field("flash_attn", "Flash attention", "Faster, more memory-efficient attention when supported.", [{ value: "", label: "Default" }, ...switches, ...(settings.flash_attn === "auto" ? [{ value: "auto", label: "Engine automatic" }] : [])])}
+          {field("cache_type_k", "Key cache precision", "Stores attention keys. Lower precision saves memory with a possible quality trade-off.", choices(cacheTypes))}
+          {field("cache_type_v", "Value cache precision", "Stores attention values. Some lower-precision combinations require Flash attention.", choices(cacheTypes))}
+          {field("spec_type", "Speculative mode", configuration?.startup_defaults.spec_type?.description ?? "Drafts ahead to accelerate generation where supported.", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
+          {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens drafted per step.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
+        </div></section>
+        <section className="model-editor-column" aria-labelledby="thinking-response-heading"><h4 id="thinking-response-heading">Thinking &amp; responses</h4>
+          {configuration?.startup_defaults.reasoning_preserve?.supported ? field("reasoning_preserve", "Thinking history", "Keep or drop earlier thinking in later ordinary turns.", [{ value: "", label: "Default" }, { value: "keep", label: "Keep" }, { value: "drop", label: "Drop" }]) : null}
+          <ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" />
+          {responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}
+        </section>
       </div>
-      <section className="settings-group visible-settings-group"><h4>Speculative decoding</h4><div className="model-settings-grid">
-        {field("spec_type", "Mode", configuration?.startup_defaults.spec_type?.description ?? "Select a speculative decoding mode. MTP needs a compatible draft head, and runtime support does not guarantee a speed increase.", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
-        {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens to draft per step. The runtime default is 3.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
-      </div></section>
-      <details className="settings-group technical-settings"><summary>Technical settings <span>Cache, processing, templates and port</span></summary><section><h4>Memory &amp; processing</h4><div className="model-settings-grid">
-        {field("cache_type_k", "Key cache precision", "Stores attention keys. f16 uses half precision; q8_0 and q4_0 reduce memory use with a possible quality trade-off.", choices(cacheTypes))}
-        {field("cache_type_v", "Value cache precision", "Stores attention values. Lower precision saves memory; some combinations require Flash attention.", choices(cacheTypes))}
+      <details className="settings-group technical-settings"><summary>More details <span>CPU, batch, templates, port and diagnostics</span></summary><section><h4>Memory &amp; processing</h4><div className="model-settings-grid">
         {field("threads", "CPU threads", "CPU threads used to generate responses. For a new model, the suggested count uses your physical CPU cores. Automatic lets the engine decide; it may not report the resolved count.", [{ value: "", label: "Automatic · count not reported" }, ...threadChoices], true, 1)}
         {field("threads_batch", "Prompt processing threads", "CPU threads used to process your prompt. When linked, uses the same count as generation.", [{ value: "", label: settings.threads && settings.threads !== "custom" ? `${settings.threads} · same as CPU threads` : "Same as CPU threads" }, ...threadChoices], true, 1)}
         {field("load_mode", "Model loading", "Automatic chooses how weights are read. Memory mapping reads files as needed; locking keeps pages in RAM and needs sufficient memory.", [{ value: "auto", label: "Automatic" }, { value: "mmap", label: "Memory mapped (mmap)" }, { value: "mmap+mlock", label: "Memory mapped + locked" }, { value: "mlock", label: "Loaded + locked in RAM" }, { value: "none", label: "Standard file loading" }, { value: "dio", label: "Direct disk access" }])}
@@ -351,8 +405,7 @@ export function DeploymentsPanel({
         <div className="model-settings-grid">{field("port", "Server port", "Automatic chooses a free port when the model loads. Fixed ports are checked before starting.", [{ value: "", label: "Automatic · free port" }, ...numberChoices([8080, 8081, 8082, 8090])], true, 1, 65535)}</div>
         <div className="setting-title"><label htmlFor="additional-startup">Additional settings</label><Help label="Additional settings">JSON for supported template and draft-model controls. Use the named controls above for settings already shown.</Help></div>
         <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder="{}" />
-      </section></details>
-      <section className="settings-group"><h4>Responses</h4><ResponseSettingsEditor value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" />{responsePreview.error ? <span role="status" className="hint">{responsePreview.error}</span> : null}</section>
+      </section>{selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}</details>
       <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Engine setup required"}</div><div className="actions">
         <button type="button" disabled={Boolean(busy)} onClick={() => { if (formRef.current?.reportValidity()) void action("preview", async () => { const owner = selectionOwner.current; await preview(); if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage("Settings checked. Review the launch values below."); } }); }}>Check settings</button>
         <button type="button" disabled={Boolean(busy) || !configurationName.trim()} onClick={() => { if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration()); }}>Save changes</button>

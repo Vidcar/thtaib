@@ -12,4 +12,7 @@ assert.deepEqual(startupPayload({ ...controls, ctx_size: '' }, '{}', profile, ne
 assert.equal(startupPayload(controls, '{}').ctx_size, 4096, 'Custom setup still sends its chosen values');
 assert.equal(startupPayload({ spec_type: 'draft-mtp', spec_draft_n_max: '6' }, '{}').spec_draft_n_max, 6, 'MTP draft count is sent as an integer');
 assert.ok(!('spec_draft_n_max' in startupPayload({ spec_type: 'none', spec_draft_n_max: '6' }, '{}')), 'Inactive draft settings are omitted');
+assert.deepEqual(startupPayload({ reasoning_preserve: 'keep' }, '{}'), { reasoning_preserve: true }, 'Keep uses the existing boolean startup key');
+assert.deepEqual(startupPayload({ reasoning_preserve: 'drop' }, '{}'), { reasoning_preserve: false }, 'Drop is an explicit false');
+assert.deepEqual(startupPayload({ reasoning_preserve: '' }, '{}', { reasoning_preserve: true }, new Set(['reasoning_preserve'])), { reasoning_preserve: null }, 'Default clears a saved Keep override');
 console.log('Model preset request boundary checks passed.');

@@ -22,8 +22,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
 from workbench_backend.errors import HarnessError
-from workbench_backend.inference.configuration_options import validate_model_reasoning
-from workbench_backend.inference.schemas import Deployment, SettingsBag
+from workbench_backend.inference.configuration_options import reasoning_history_descriptor, validate_model_reasoning
+from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
 from workbench_backend.inference.telemetry import RequestTelemetry
 
@@ -568,10 +568,13 @@ def _model_identities(payload: Any) -> list[str]:
 def _reasoning_replay_supported(deployment: Deployment) -> bool:
     props = deployment.server_props
     caps = props.chat_template_caps if props is not None else {}
-    return bool(
-        caps.get("supports_preserve_reasoning")
-        and deployment.applied_startup.get("reasoning_preserve") is True
-    )
+    if caps.get("supports_preserve_reasoning") is not True:
+        return False
+    explicit = deployment.applied_startup.get("reasoning_preserve")
+    if explicit is not None:
+        return explicit is True
+    descriptor = reasoning_history_descriptor(GgufRuntimeMetadata(), deployment)
+    return descriptor.default_value is True
 
 
 def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:

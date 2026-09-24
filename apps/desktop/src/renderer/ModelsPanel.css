@@ -23,8 +23,23 @@
 .models-surface .local-model-form {display: grid; gap: var(--space-compact); margin-top: var(--space-compact);}
 .models-surface .local-model-form > :is(label, .actions, .setting-title) {margin: 0;}
 .models-surface .local-model-form > button {justify-self: start;}
-.models-surface .models-workspace {gap: var(--space-stack);}
+.models-surface {max-width: 1600px; width: 100%;}
+.models-surface .models-workspace {display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-compact);}
 .models-surface .model-detail {width: 100%; min-width: 0;}
+.models-surface .model-picker {position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-compact); min-width: 0; max-width: 820px;}
+.models-surface .model-picker-label {font-size: var(--text-small); color: var(--muted); font-weight: var(--weight-medium);}
+.models-surface .model-picker-trigger {display: flex; align-items: center; gap: var(--space-compact); min-width: 0; width: 100%; text-align: left; background: var(--bg-raised); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact) var(--pad-card);}
+.models-surface .model-picker-trigger strong {display: block; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: var(--weight-medium);}
+.models-surface .model-picker-chevron {font-size: var(--text-heading); line-height: 1; color: var(--muted);}
+.models-surface .model-picker-unsaved {font-size: var(--text-small); color: var(--accent); white-space: nowrap;}
+.models-surface .model-picker-popover {position: absolute; z-index: 50; top: calc(100% + 5px); left: 0; right: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-panel); box-shadow: var(--shadow); min-width: min(320px, 100%);}
+.models-surface .model-picker-popover input {width: 100%;}
+.models-surface .model-picker-popover ul {list-style: none; margin: var(--space-compact) 0 0; padding: 0; max-height: min(340px, 45vh); overflow: auto;}
+.models-surface .model-picker-popover li {display: grid; gap: 2px; padding: var(--pad-compact); border-radius: var(--radius-control); cursor: pointer; min-width: 0;}
+.models-surface .model-picker-popover li.active, .models-surface .model-picker-popover li:hover {background: var(--hover);}
+.models-surface .model-picker-popover li[aria-selected="true"] {box-shadow: inset 2px 0 var(--accent);}
+.models-surface .model-picker-popover li strong {font-size: var(--text-body); font-weight: var(--weight-medium); overflow-wrap: anywhere;}
+.models-surface .model-picker-popover li span, .models-surface .model-picker-empty {font-size: var(--text-small); color: var(--muted);}
 .models-surface > .card {width: 100%;}
 .models-surface .model-library {padding: var(--pad-compact);}
 .models-surface .model-tile {padding: var(--pad-compact) var(--pad-compact);}
@@ -39,6 +54,28 @@
 .models-surface .model-file-actions .model-deletion > button {font-size: var(--text-small);}
 .models-surface .model-settings-grid {gap: var(--space-compact) var(--space-compact);}
 .models-surface .model-setup > form {display: grid; gap: var(--space-compact); margin-top: var(--space-compact);}
+.models-surface .model-editor-columns {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-section); align-items: start;}
+.models-surface .model-editor-column {min-width: 0; display: grid; gap: var(--space-compact); align-content: start;}
+.models-surface .model-editor-column > h4 {margin: 0; padding-bottom: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border); font-size: var(--text-body);}
+.models-surface .model-column-fields {display: grid; gap: var(--space-compact);}
+.models-surface .model-column-fields .model-setting-wrap, .models-surface .model-response-setting {padding: var(--pad-tight) 0; border-bottom: var(--line-hairline) solid var(--border);}
+.models-surface .model-column-fields .setting-title, .models-surface .model-response-setting .setting-title {margin: 0 0 var(--space-tight); min-width: 0;}
+.models-surface .model-column-fields .setting-title label, .models-surface .model-response-setting .setting-title label {white-space: nowrap;}
+.models-surface .control-provenance {max-width: 50%; white-space: normal; line-height: var(--leading-tight);}
+.models-surface .model-setting-wrap input, .models-surface .model-setting-wrap select, .models-surface .model-response-setting input, .models-surface .model-response-setting select {width: 100%;}
+.models-surface .model-gpu-control {display: grid; grid-template-columns: minmax(0, 1fr) minmax(80px, .6fr); gap: var(--space-compact);}
+.models-surface .model-gpu-control select:only-child {grid-column: 1 / -1;}
+.models-surface .model-loaded-difference {display: block; font-size: var(--text-small); margin-top: var(--space-tight); color: var(--accent);}
+.models-surface .model-response-editor {gap: var(--space-compact);}
+.models-surface .model-response-editor .response-numeric-grid {grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-compact) var(--space-stack);}
+.models-surface .model-run-summary {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel); font-size: var(--text-small);}
+.models-surface .model-run-summary > span:nth-child(2) {margin-right: auto; color: var(--muted);}
+.models-surface .model-run-summary > button {white-space: nowrap; font-size: var(--text-small);}
+.models-surface .model-run-summary > details[open] {flex-basis: 100%;}
+.models-surface .model-run-summary > details > summary {font-size: var(--text-small);}
+.models-surface .model-run-summary .running-model {padding: var(--pad-compact);}
+.models-surface .model-start-footer {position: sticky; bottom: 0; z-index: 5; background: var(--bg-raised); padding: var(--pad-compact) 0; box-shadow: 0 -8px 12px -14px var(--text);}
+.models-surface .segmented-options input {min-height: 0; padding: 0;}
 .models-surface .model-projector-settings select {width: 100%;}
 .models-surface .model-projector-path {overflow-wrap: anywhere; font-size: var(--text-small);}
 .models-surface .model-projector-settings > summary span {margin-left: var(--space-tight);}
@@ -143,6 +180,9 @@
 @container workbench-surface (max-width: 850px) {
   .models-surface .response-numeric-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
 }
+@container workbench-surface (max-width: 1050px) {
+  .models-surface .model-editor-columns {grid-template-columns: minmax(0, 1fr);}
+}
 @container workbench-surface (max-width: 620px) {
   .models-surface .variant-table thead {display: none;}
   .models-surface .variant-table, .models-surface .variant-table tbody {display: block; width: 100%;}
@@ -160,13 +200,12 @@
 }
 @container workbench-surface (max-width: 460px) {
   .models-surface .response-numeric-grid {grid-template-columns: 1fr;}
+  .models-surface .model-response-editor .response-numeric-grid {grid-template-columns: 1fr;}
   .models-surface .selected-download-files {grid-template-columns: 1fr;}
   .models-surface .selected-download-files ul {grid-column: 1;}
 }
 @container workbench-surface (max-width: 720px) {
   .models-surface .models-workspace {grid-template-columns: minmax(0, 1fr) !important;}
-  .models-surface .model-library {max-height: 210px; overflow: auto;}
-  .models-surface .model-library .panel-resize {display: none;}
 }
 @container workbench-surface (max-width: 460px) {
   .models-surface .model-search {flex-wrap: wrap;}
