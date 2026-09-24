@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS interaction_threads (
     graph_thread_id TEXT NOT NULL UNIQUE,
     run_id TEXT,
     seq INTEGER NOT NULL DEFAULT 0,
-    snapshot TEXT NOT NULL DEFAULT '{}'
+    snapshot TEXT NOT NULL DEFAULT '{}',
+    full_values_seq INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS interaction_events (
     thread_id TEXT NOT NULL REFERENCES interaction_threads(id),
@@ -39,6 +40,9 @@ class InteractionStoreMixin:
     """Methods executed with ApplicationStore's connection and lock."""
 
     def _migrate_interaction_replay(self) -> None:
+        thread_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(interaction_threads)")}
+        if "full_values_seq" not in thread_columns:
+            self._conn.execute("ALTER TABLE interaction_threads ADD COLUMN full_values_seq INTEGER NOT NULL DEFAULT 0")
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(interaction_events)")}
         if "replaceable_measurement" not in columns:
             self._conn.execute("ALTER TABLE interaction_events ADD COLUMN replaceable_measurement INTEGER NOT NULL DEFAULT 0")
@@ -91,41 +95,80 @@ class InteractionStoreMixin:
             if row is None:
                 raise KeyError(thread_id)
             seq = row["seq"]
+            full_values: list[int] = []
             try:
                 for original in events:
                     seq += 1
                     event = {**original, "type": "event", "seq": seq, "event_id": str(seq)}
                     self._conn.execute("INSERT INTO interaction_events(thread_id,seq,payload,replaceable_measurement,after_seq) VALUES(?,?,?,?,?)",
                                        (thread_id, seq, json.dumps(event), int(replaceable_measurement), seq - 1))
+                    if (not replaceable_measurement and original.get("method") == "values" and
+                            not original.get("params", {}).get("namespace") and
+                            not original.get("params", {}).get("measurement")):
+                        full_values.append(seq)
                 if root_values:
                     # A newer complete values record supersedes only snapshots
                     # explicitly marked as transient measurements. Message,
                     # tool, lifecycle and final request records remain intact.
                     obsolete = self._conn.execute(
-                        "SELECT seq,after_seq FROM interaction_events WHERE thread_id=? AND replaceable_measurement=1 AND seq<=? ORDER BY seq",
+                        "SELECT seq FROM interaction_events WHERE thread_id=? AND replaceable_measurement=1 AND seq<=? ORDER BY seq",
                         (thread_id, row["seq"]),
                     ).fetchall()
                     for old in obsolete:
-                        successor = self._conn.execute(
-                            "SELECT seq FROM interaction_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT 1",
-                            (thread_id, old["seq"]),
-                        ).fetchone()
-                        self._conn.execute(
-                            "UPDATE interaction_events SET after_seq=(SELECT after_seq FROM interaction_events WHERE thread_id=? AND seq=?) WHERE thread_id=? AND seq=? AND after_seq<=?",
-                            (thread_id, old["seq"], thread_id, successor["seq"], old["seq"]),
+                        self._remove_replay_event(thread_id, old["seq"])
+                if full_values:
+                    # A complete values frame carries the accumulated saved
+                    # snapshot. Keep its newest copy; native message/tool deltas
+                    # still supply any live partial and resume detail.
+                    if row["full_values_seq"]:
+                        obsolete_full = [row["full_values_seq"], *full_values[:-1]]
+                    else:
+                        # Existing databases had no full-values cursor. Compact
+                        # their older copies once, on the next complete frame.
+                        obsolete_full = self._conn.execute(
+                            """SELECT seq FROM interaction_events
+                               WHERE thread_id=? AND seq<?
+                                 AND replaceable_measurement=0
+                                 AND json_extract(payload, '$.method')='values'
+                                 AND json_extract(payload, '$.params.namespace')='[]'
+                                 AND COALESCE(json_extract(payload, '$.params.measurement'),0)=0
+                               ORDER BY seq""",
+                            (thread_id, full_values[-1]),
                         )
-                        self._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", (thread_id, old["seq"]))
+                        obsolete_full = [old["seq"] for old in obsolete_full]
+                    for old_seq in obsolete_full:
+                        self._remove_replay_event(thread_id, old_seq)
                 if snapshot is None:
-                    self._conn.execute("UPDATE interaction_threads SET seq=?,run_id=? WHERE id=?",
-                                       (seq, run_id or row["run_id"], thread_id))
+                    self._conn.execute("UPDATE interaction_threads SET seq=?,run_id=?,full_values_seq=? WHERE id=?",
+                                       (seq, run_id or row["run_id"], full_values[-1] if full_values else row["full_values_seq"], thread_id))
                 else:
-                    self._conn.execute("UPDATE interaction_threads SET seq=?,snapshot=?,run_id=? WHERE id=?",
-                                       (seq, json.dumps(snapshot), run_id or row["run_id"], thread_id))
+                    self._conn.execute("UPDATE interaction_threads SET seq=?,snapshot=?,run_id=?,full_values_seq=? WHERE id=?",
+                                       (seq, json.dumps(snapshot), run_id or row["run_id"], full_values[-1] if full_values else row["full_values_seq"], thread_id))
                 self._conn.commit()
             except BaseException:
                 self._conn.rollback()
                 raise
             return seq
+
+    def _remove_replay_event(self, thread_id: str, seq: int) -> None:
+        current = self._conn.execute(
+            "SELECT after_seq FROM interaction_events WHERE thread_id=? AND seq=?",
+            (thread_id, seq),
+        ).fetchone()
+        if current is None:
+            return
+        successor = self._conn.execute(
+            "SELECT seq FROM interaction_events WHERE thread_id=? AND seq>? ORDER BY seq LIMIT 1",
+            (thread_id, seq),
+        ).fetchone()
+        if successor is not None:
+            # Preserve an existing real gap; bridge only the row we deliberately
+            # removed so an ordinary reconnect does not claim data was lost.
+            self._conn.execute(
+                "UPDATE interaction_events SET after_seq=? WHERE thread_id=? AND seq=? AND after_seq<=?",
+                (current["after_seq"], thread_id, successor["seq"], seq),
+            )
+        self._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", (thread_id, seq))
 
     def discard_finished_token_log(self, thread_id: str) -> int:
         """Drop token rows and older snapshots once a turn is no longer live.
