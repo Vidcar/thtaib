@@ -46,13 +46,23 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   const currentOwner = useRef({ identity });
   if (currentOwner.current.identity !== identity) currentOwner.current = { identity };
   const owner = currentOwner.current;
+  const selectionIdentity = JSON.stringify([conversationId, projectId, agentSetupVersionId]);
+  const selectionOwner = useRef({ identity: selectionIdentity, generation: 0 });
+  if (selectionOwner.current.identity !== selectionIdentity) selectionOwner.current = { identity: selectionIdentity, generation: selectionOwner.current.generation + 1 };
+  const selectionGeneration = selectionOwner.current.generation;
   const latest = useRef({ configuration, onApply }); latest.current = { configuration, onApply };
   useEffect(() => { setDraft(JSON.parse(incoming) as SetupConfiguration); setError(""); setNotice(""); }, [incoming, conversationId]);
   const preview = useSetupPreview({ ...configuration, ...draft }, projectId, agentSetupVersionId);
   const resolved = preview.data?.configuration;
   const facts = preview.data?.effective_values ?? {};
   const selected = findConfiguration(profiles, resolved?.model_configuration_id ?? draft.model_configuration_id);
-  const deployment = deployments.find(item => item.id === (resolved?.deployment_id ?? draft.deployment_id ?? selectedDeploymentId));
+  // A resolved null deployment means this variant has no loaded engine yet.
+  // The previous Chat deployment is only a fallback for automatic selection.
+  const resolvedDeploymentId = resolved ? resolved.deployment_id : draft.deployment_id ?? (draft.model_configuration_id ? null : selectedDeploymentId);
+  const deployment = deployments.find(item => item.id === resolvedDeploymentId);
+  const previousDeployment = deployments.find(item => item.id === selectedDeploymentId);
+  const reconfigureCandidate = !deployment && selected?.bundle_id && previousDeployment?.scope === "managed" && previousDeployment.bundle_id === selected.bundle_id
+    ? previousDeployment : null;
   const saveTarget = facts.model_configuration_target;
   const savedConfiguration = findConfiguration(profiles, typeof saveTarget?.value === "string" ? saveTarget.value : null);
   const bundleId = selected?.bundle_id ?? deployment?.bundle_id;
@@ -74,7 +84,12 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
   const desiredContext = typeof draft.startup_overrides?.ctx_size === "number" ? draft.startup_overrides.ctx_size : typeof facts["startup.ctx_size"]?.value === "number" ? facts["startup.ctx_size"].value as number : loadedContext;
   const contextChoices = options?.context_size.options.flatMap(item => typeof item.value === "number" && item.value > 0 ? [item.value] : []) ?? [];
   const contextReason = runtimeBusy ? "Wait for this conversation’s running and queued work to finish." : deployment?.scope === "connected" ? "This server is managed outside Workbench. Change context in the app that runs it." : !deployment?.health?.healthy ? "Load the model to change its active context." : undefined;
-  const reloadNeeded = deployment?.health?.healthy && Object.values(facts).some(item => item.requires_reload);
+  const startupChange = Object.values(facts).some(item => item.requires_reload);
+  const managedChoice = deployment?.scope === "managed" || (!deployment && Boolean(selected?.bundle_id));
+  const loadNeeded = managedChoice && !deployment?.health?.healthy && !reconfigureCandidate;
+  const reloadNeeded = Boolean(reconfigureCandidate) || (managedChoice && Boolean(deployment?.health?.healthy && startupChange));
+  const lifecycleNeeded = loadNeeded || reloadNeeded;
+  const connectedStartupChange = deployment?.scope === "connected" && startupChange;
   const stageContext = (value: number) => setDraft(current => ({ ...current, startup_overrides: { ...current.startup_overrides, ctx_size: value } }));
   const startup = () => mergedStartup(selected?.bags.startup.requested ?? deployment?.requested_startup ?? deployment?.settings?.startup.requested ?? {}, draft.startup_overrides ?? {});
   async function act(operation: () => Promise<void>) {
@@ -99,21 +114,38 @@ export function ChatModelControls({ deployments, profiles, selectedDeploymentId,
       </div>
       <ResponseSettingsEditor compact value={draft.per_request_overrides ?? {}} onChange={per_request_overrides => setDraft(current => ({ ...current, per_request_overrides }))} options={options} facts={facts} disabled={busy || preview.loading} />
       {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}{notice ? <Notice tone="info">{notice}</Notice> : null}
-      <div className="actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(reloadNeeded && contextReason)} onClick={() => void act(async () => {
-        if (reloadNeeded && deployment) {
+      <div className="actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(lifecycleNeeded && runtimeBusy) || connectedStartupChange} onClick={() => void act(async () => {
+        let loaded: Deployment | null = null;
+        if (lifecycleNeeded) {
           try {
-            const next = await api.reconfigure(deployment.id, { startup: startup(), replace_startup: true, ...(selected && selected.id !== deployment.profile_id ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: deployment.updated_at, conversation_id: conversationId });
-            if (!next.health?.healthy) throw new Error(next.error ?? "Model did not become ready.");
+            const target = deployment ?? reconfigureCandidate;
+            if (target && (startupChange || reconfigureCandidate)) {
+              loaded = await api.reconfigure(target.id, { startup: startup(), replace_startup: true, ...(selected ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: target.updated_at, conversation_id: conversationId });
+            } else if (deployment) {
+              loaded = await api.start(deployment.id);
+            } else if (selected?.bundle_id) {
+              loaded = await api.startManaged(selected.bundle_id, selected.id, startup());
+            }
+            if (!loaded?.health?.healthy) throw new Error(loaded?.error ?? "Model did not become ready.");
           } catch (failure) {
             await onReloaded().catch(() => {});
             throw failure;
           }
-          await onReloaded();
+          // Existing deployments already own the Chat selection, so refresh
+          // their facts before committing staged settings. A newly loaded
+          // variant has no selection yet: bind its id before refresh can pick
+          // another ready deployment as the Chat fallback.
+          if (deployment || reconfigureCandidate) await onReloaded();
         }
         if (currentOwner.current !== owner) return;
-        await latest.current.onApply({ ...latest.current.configuration, ...draft });
-        if (currentOwner.current === owner) close();
-      })}>{busy ? "Applying…" : reloadNeeded ? "Apply & reload" : "Apply"}</button>
+        try {
+          await latest.current.onApply({ ...latest.current.configuration, ...draft, ...(loaded ? { deployment_id: loaded.id } : {}) });
+        } catch (failure) {
+          if (loaded && !deployment && !reconfigureCandidate) await onReloaded().catch(() => {});
+          throw failure;
+        }
+        if (selectionOwner.current.generation === selectionGeneration) close();
+      })}>{busy ? "Applying…" : reloadNeeded || (loadNeeded && startupChange) ? "Apply & reload" : loadNeeded ? "Apply & load" : "Apply"}</button>
       <button type="button" disabled={busy || preview.loading || !!preview.error || !savedConfiguration?.bundle_id} title={!savedConfiguration ? saveTarget?.unavailable_reason ?? "Choose a saved model configuration first" : `Save to ${saveTarget.source} for future work`} onClick={() => void act(async () => {
         if (!savedConfiguration?.bundle_id) return;
         await api.saveModelConfiguration(savedConfiguration.bundle_id, { display_name: savedConfiguration.display_name, configuration_id: savedConfiguration.id, expected_revision: savedConfiguration.revision, startup: startup(), per_request: mergedStartup(selected?.bags.per_request.requested ?? deployment?.settings.per_request.requested ?? {}, draft.per_request_overrides ?? {}) });

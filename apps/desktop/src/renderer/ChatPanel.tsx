@@ -508,7 +508,10 @@ function chatDeployHealthNotice(conversation: ChatConversation | null, selectedD
   return { tone: health.healthy === false ? "error" : "warn", message: health.message };
 }
 
-function preferredChatDeploymentId(deployments: Deployment[], current: string): string {
+export function preferredChatDeploymentId(deployments: Deployment[], current: string, selectedConfigurationId = ""): string {
+  // A saved model configuration with no matching deployment is intentional.
+  // Refresh must not pair it with an arbitrary older deployment.
+  if (!current && selectedConfigurationId) return "";
   const chatDeployments = deployments.filter((deployment) => !isDeclaredEmbedder(deployment));
   if (chatDeployments.some((deployment) => deployment.id === current)) {
     return current;
@@ -610,6 +613,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [deploymentId, setDeploymentId] = useState("");
   const [embeddingDeploymentId, setEmbeddingDeploymentId] = useState("");
   const [profileId, setProfileId] = useState("");
+  const profileIdRef = useRef(profileId);
   const [startupOverrides, setStartupOverrides] = useState<Record<string, unknown>>({});
   const [projectPath, setProjectPath] = useState("");
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -742,7 +746,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     void api.deployments()
       .then((next) => {
         setDeployments(next);
-        setDeploymentId((current) => current || preferredChatDeploymentId(next, current));
+        setDeploymentId((current) => current || preferredChatDeploymentId(next, current, profileIdRef.current));
       })
       .catch(() => {
         // Chat state remains authoritative for the run; a later refresh will update model status.
@@ -780,12 +784,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     const [nextDeployments, nextProfiles, tools, nextConversations, nextKnowledge] = results;
     if (nextDeployments.status === "fulfilled") {
       setDeployments(nextDeployments.value);
-      setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments.value, current));
+      setDeploymentId((current) => current || preferredChatDeploymentId(nextDeployments.value, current, profileIdRef.current));
     }
     setDeploymentsLoaded(true);
     if (nextProfiles.status === "fulfilled") {
       setProfiles(nextProfiles.value);
-      setProfileId((current) => (nextProfiles.value.some((profile) => profile.id === current) ? current : ""));
+      setProfileId((current) => {
+        const next = nextProfiles.value.some((profile) => profile.id === current) ? current : "";
+        profileIdRef.current = next;
+        return next;
+      });
     }
     if (tools.status === "fulfilled") setEnabledTools(tools.value.enabled);
     if (nextConversations.status === "fulfilled") setConversations(newestConversationFirst(reconcileHistory(nextConversations.value)));
@@ -843,7 +851,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (config.deployment_id) setDeploymentId(config.deployment_id);
     else if (config.model_configuration_id) setDeploymentId("");
     else { const loaded = preferredChatDeploymentId(deployments, ""); setDeploymentId(loaded); }
-    setProfileId(config.model_configuration_id ?? config.profile_id ?? "");
+    profileIdRef.current = config.model_configuration_id ?? config.profile_id ?? "";
+    setProfileId(profileIdRef.current);
     setStartupOverrides(config.startup_overrides ?? {});
     setEmbeddingDeploymentId(config.embedding_deployment_id ?? "");
     if (!setupEditedFields.current.has("approval_mode")) setApprovalMode(approvalModeOf(config.approval_mode));
@@ -859,13 +868,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setReview({ enabled: config.review?.enabled === true, criteria: config.review?.criteria ?? "", max_revisions: 2 });
   }
 
-  async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}, preserveWorkspace = false) {
+  async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}, preserveWorkspace = false, rejectOnFailure = false) {
     const request = ++setupRequest.current;
     const generation = selectionRequest.current;
     setSetupResolving(true); setSetupError("");
     try {
       const resolved = await workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides);
-      if (request !== setupRequest.current || generation !== selectionRequest.current) return;
+      if (request !== setupRequest.current || generation !== selectionRequest.current) {
+        if (rejectOnFailure) throw new Error("The selected Chat changed while applying model settings. Try again.");
+        return;
+      }
       setupEditedFields.current = new Set(Object.keys(overrides));
       if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
       setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
@@ -873,6 +885,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       applyResolvedSetup(resolved);
     } catch (error) {
       if (request === setupRequest.current && generation === selectionRequest.current) setSetupError(errorMessage(error));
+      if (rejectOnFailure) throw error;
     } finally {
       if (request === setupRequest.current) setSetupResolving(false);
     }
@@ -887,14 +900,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }, [props.activeTab]);
 
   useEffect(() => {
-    if (!deploymentsLoaded || modelWarm.current) return;
+    if (!deploymentsLoaded || setupDefaultsLoading || modelWarm.current) return;
     modelWarm.current = true;
     const report = props.onModelPhase;
     if (window.workbench?.productName !== "Local AI Workbench") {
       report?.("none");
       return;
     }
-    const preferred = preferredChatDeploymentId(deployments, deploymentId);
+    const preferred = preferredChatDeploymentId(deployments, deploymentId, profileIdRef.current);
     const selected = deployments.find(item => item.id === preferred);
     if (!selected || selected.scope !== "managed") {
       report?.(selected?.status === "running" ? "ready" : "none");
@@ -916,7 +929,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       report?.("failed");
       setMessage("The model did not start.");
     });
-  }, [deploymentsLoaded]);
+  }, [deploymentsLoaded, setupDefaultsLoading]);
 
   useEffect(() => { props.onHistoryChanged?.(); }, [historySignature]);
   useEffect(() => { props.onActiveConversationId?.(conversation?.id ?? selectionLoading?.id ?? null); }, [conversation?.id, selectionLoading?.id]);
@@ -1112,7 +1125,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setSelectionLoading(null);
         setDeploymentId(typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : next.deployment_id);
         setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
-        setProfileId(typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "");
+        profileIdRef.current = typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "";
+        setProfileId(profileIdRef.current);
         setStartupOverrides(overrides.startup_overrides ?? {});
         setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
@@ -1767,7 +1781,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </MenuPopover>
             <MenuPopover label="Work mode" trigger={<><Icon name={workMode === "plan" ? "knowledge" : "agent-run"} size={16} /><span>{workMode === "plan" ? "Plan" : "Work"}</span></>} disabled={selectionBusy || sending}>{close => <div className="chat-mode-options" role="radiogroup" aria-label="Work mode">{(["work", "plan"] as const).map(mode => <button type="button" className="menu-action" role="radio" aria-checked={workMode === mode} key={mode} onClick={() => { markSetupEdited("work_mode"); setWorkMode(mode); close(); }}><Icon name={mode === "plan" ? "knowledge" : "agent-run"} /><span>{mode === "plan" ? "Plan" : "Work"}<small>{mode === "plan" ? "Read-only investigation and planning" : "Use tools with the selected access"}</small></span></button>)}</div>}</MenuPopover>
             <ChatModelControls deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
-              await chooseSetup(projectId, agentSetupVersionId, configuration, true);
+              await chooseSetup(projectId, agentSetupVersionId, configuration, true, true);
               await refresh();
             }} />
             <MenuPopover label="Named helpers" align="end" trigger={<><Icon name="sparkles" size={16} />{helperAgentIds.length ? <span>{helperAgentIds.length}</span> : null}</>} disabled={selectionBusy || sending}><h3>Helpers</h3>{agentSetups.length ? agentSetups.map(agent => <label className="helper-choice" key={agent.id}><input type="checkbox" checked={helperAgentIds.includes(agent.id)} disabled={Boolean(agent.missing_dependencies?.length)} title={agent.missing_dependencies?.map(issue => issue.reason).join(", ")} onChange={event => { markSetupEdited("helper_agent_ids"); setHelperAgentIds(current => event.target.checked ? [...current, agent.id] : current.filter(id => id !== agent.id)); }} /><span>{agent.name}<small>{helperModelLabel(agent)}</small></span></label>) : <p className="hint">Create an agent to choose a helper.</p>}<div className="menu-section"><small className="hint">Only selected helpers can run. Helpers cannot delegate again.</small><button type="button" className="menu-action" onClick={() => navigateAway("agents")}>Manage agents</button></div></MenuPopover>

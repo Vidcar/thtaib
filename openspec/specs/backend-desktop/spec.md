@@ -491,6 +491,13 @@ Changing or unloading a model SHALL require explicit reviewed confirmation. An e
 - **WHEN** a reply or a Lab run is still using the model
 - **THEN** the confirmation names that work and does not unload it silently.
 
+#### Scenario: Apply a named model variant in Chat
+
+- **WHEN** a person selects a variant whose startup settings are not loaded and chooses Apply in Chat
+- **THEN** Workbench loads or safely reconfigures a managed deployment with those settings and binds Chat to it before completing Apply
+- **AND** a stopped or absent deployment cannot make Apply appear successful while the next message still requires a reload
+- **AND** a failed load leaves the draft available and shows the failure.
+
 ### Requirement: API-029 - Show who is working and who is waiting
 
 When a named helper or a workflow step is running, the activity view SHALL show that agent or step by its name under the parent conversation or workflow. Status uses plain words: working, waiting for approval, waiting for a typed answer, waiting for the model, or failed. The reason for a wait is one line. Child tool rows use the same one-line activity labels as API-026 and stay indented under that name. Stopping names what will stop. The view MUST NOT be the only place a person can approve or answer. Those cards stay in the conversation or on the workflow step.

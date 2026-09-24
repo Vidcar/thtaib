@@ -8,7 +8,7 @@ from unittest.mock import patch
 from workbench_backend.agents.setup_schemas import SetupConfiguration
 from workbench_backend.agents.setup_service import SetupService
 from workbench_backend.chat.schemas import ChatConversation, ChatQueueItem
-from workbench_backend.errors import ManagerError
+from workbench_backend.errors import HarnessError, ManagerError
 from workbench_backend.inference.schemas import (LocalImportRequest, ManagedDeploymentRequest,
     ModelConfigurationWriteRequest, ReconfigureDeploymentRequest)
 from workbench_backend.inference.service import ModelManager
@@ -195,6 +195,41 @@ class ModelConfigurationTests(unittest.TestCase):
         self.manager.store.put_deployment(deployment.model_copy(update={"id":"duplicate","status":DeploymentStatus.failed,"updated_at":"2030"}))
         self.assertEqual(self.manager.configuration_deployment(config.id).id, healthy.id)
 
+    def test_named_variants_share_healthy_startup_but_keep_selected_response_settings(self):
+        from workbench_backend.agents.effective_setup import resolve_effective_setup
+        from workbench_backend.inference.schemas import DeploymentStatus, HealthReport, ProcessIdentity
+        from workbench_backend.knowledge.schemas import KnowledgeRefs
+
+        loaded_profile = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Loaded variant", startup={"ctx_size": 8192}, per_request={"temperature": 0.2}))
+        deployment = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, profile_id=loaded_profile.id, auto_start=False))
+        self.manager.store.put_deployment(deployment.model_copy(update={
+            "status": DeploymentStatus.running,
+            "process_identity": ProcessIdentity(pid=42, create_time=1, executable="fixture"),
+            "health": HealthReport(healthy=True, endpoint="fixture", checked="now"),
+        }))
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Response variant", startup={"ctx_size": 8192}, per_request={"temperature": 0.8}))
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=selected.id, expected_revision=selected.revision,
+            display_name="Response variant", startup={"ctx_size": 8192}, per_request={"temperature": 0.9}))
+
+        with open_application_store(self.paths) as store:
+            resolved = SetupService(store, self.manager).resolve(
+                overrides=SetupConfiguration(model_configuration_id=selected.id), prepare_model=True)
+        self.assertEqual(resolved.configuration.deployment_id, deployment.id)
+        self.assertEqual(resolved.configuration.profile_id, selected.id)
+        self.assertFalse(any(fact.requires_reload for fact in resolved.effective_values.values()))
+        self.assertEqual(len(self.manager.list_deployments()), 1)
+
+        execution = resolve_effective_setup(
+            deployment=self.manager.get_deployment(deployment.id), profile=self.manager.get_profile(selected.id),
+            knowledge_refs=KnowledgeRefs(), knowledge_versions=[], surface_system_prompt=None,
+            default_system_prompt="Fixture system prompt")
+        self.assertEqual(execution.bags.per_request.applied["temperature"], 0.9)
+        self.assertEqual(self.manager.get_deployment(deployment.id).settings.per_request.applied["temperature"], 0.2)
+
     def test_model_selection_uses_default_and_preserves_explicit_loaded_target(self):
         first = self.deployment(ctx_size=8192)
         second = self.deployment(ctx_size=16384)
@@ -209,6 +244,66 @@ class ModelConfigurationTests(unittest.TestCase):
             self.assertEqual(preview.configuration.deployment_id, first.id)
             self.assertTrue(preview.effective_values["startup.ctx_size"].requires_reload)
             self.assertEqual(self.manager.get_deployment(second.id).requested_startup["ctx_size"], 16384)
+
+    def test_named_configuration_replaces_inherited_stopped_deployment(self):
+        old = self.deployment(ctx_size=8192)
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Larger variant", startup={"ctx_size": 16384}))
+        with open_application_store(self.paths) as store:
+            store.put_setup_defaults(SetupConfiguration(deployment_id=old.id))
+            resolved = SetupService(store, self.manager).resolve(
+                overrides=SetupConfiguration(model_configuration_id=selected.id), prepare_model=True)
+        replacement = self.manager.get_deployment(resolved.configuration.deployment_id)
+        self.assertNotEqual(replacement.id, old.id)
+        self.assertEqual(replacement.profile_id, selected.id)
+        self.assertEqual(replacement.status.value, "stopped")
+        self.assertEqual(replacement.requested_startup["ctx_size"], 16384)
+        self.assertEqual(self.manager.get_deployment(old.id).requested_startup["ctx_size"], 8192)
+        self.assertFalse(any(fact.requires_reload for fact in resolved.effective_values.values()))
+
+    def test_named_configuration_without_existing_deployment_prepares_its_recipe(self):
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Larger variant", startup={"ctx_size": 16384}))
+        with open_application_store(self.paths) as store:
+            resolved = SetupService(store, self.manager).resolve(
+                overrides=SetupConfiguration(model_configuration_id=selected.id), prepare_model=True)
+        deployment = self.manager.get_deployment(resolved.configuration.deployment_id)
+        self.assertEqual(deployment.profile_id, selected.id)
+        self.assertEqual(deployment.requested_startup["ctx_size"], 16384)
+        self.assertFalse(any(fact.requires_reload for fact in resolved.effective_values.values()))
+
+    def test_edited_named_configuration_does_not_reuse_stale_stopped_recipe(self):
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Variant", startup={"ctx_size": 8192}))
+        previous = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, profile_id=selected.id, auto_start=False))
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=selected.id, display_name="Variant", startup={"ctx_size": 16384},
+            expected_revision=selected.revision))
+        with open_application_store(self.paths) as store:
+            resolved = SetupService(store, self.manager).resolve(
+                overrides=SetupConfiguration(model_configuration_id=selected.id), prepare_model=True)
+        replacement = self.manager.get_deployment(resolved.configuration.deployment_id)
+        self.assertNotEqual(replacement.id, previous.id)
+        self.assertEqual(replacement.requested_startup["ctx_size"], 16384)
+        self.assertEqual(self.manager.get_deployment(previous.id).requested_startup["ctx_size"], 8192)
+        self.assertFalse(any(fact.requires_reload for fact in resolved.effective_values.values()))
+
+    def test_explicit_stopped_deployment_keeps_mismatch_until_applied(self):
+        old = self.deployment(ctx_size=8192)
+        selected = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Larger variant", startup={"ctx_size": 16384}))
+        with open_application_store(self.paths) as store:
+            service = SetupService(store, self.manager)
+            preview = service.resolve(overrides=SetupConfiguration(
+                deployment_id=old.id, model_configuration_id=selected.id))
+            self.assertEqual(preview.configuration.deployment_id, old.id)
+            self.assertTrue(preview.effective_values["startup.ctx_size"].requires_reload)
+            with self.assertRaises(HarnessError) as error:
+                service.resolve(overrides=SetupConfiguration(
+                    deployment_id=old.id, model_configuration_id=selected.id), prepare_model=True)
+        self.assertEqual(error.exception.code, "model_reload_required")
+        self.assertEqual(self.manager.get_deployment(old.id).requested_startup["ctx_size"], 8192)
 
     def test_parent_permission_and_sampler_value_remain_available_under_override(self):
         with open_application_store(self.paths) as store:

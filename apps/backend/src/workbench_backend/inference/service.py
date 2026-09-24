@@ -353,8 +353,9 @@ class ModelManager:
 
     def configuration_deployment(self, configuration_id: str) -> Deployment | None:
         profile = self.get_profile(configuration_id)
+        selected_startup = requested_identity(profile.bags)[0]
         matches = [d for d in self.store.list_deployments() if d.bundle_id == profile.bundle_id
-            and (d.profile_id == profile.id or requested_identity(d.settings) == requested_identity(profile.bags))]
+            and requested_identity(d.settings)[0] == selected_startup]
         return max(matches, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy and d.process_identity),
             d.status != DeploymentStatus.failed, d.updated_at), default=None)
 
