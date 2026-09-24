@@ -108,6 +108,73 @@ class MeasurementReplayTests(unittest.TestCase):
         self.measure(4)
         self.assertIn(preserved, [item["seq"] for item in self.store.interaction_events_after("display", 0)])
 
+    def test_full_values_keep_only_the_latest_snapshot_and_replay_native_events(self):
+        before = self.store.get_interaction("display")["seq"]
+        first = 0
+        retained_tool = 0
+        for index in range(24):
+            self.service.observe(self.run, event("values", {"messages": [{
+                "type": "ai", "id": f"answer-{index}", "content": "output " * 512,
+            }]}))
+            if index == 0:
+                first = self.store.get_interaction("display")["seq"]
+            if index == 12:
+                self.service.observe(self.run, event("tools", {
+                    "event": "tool-finished", "tool_call_id": "retained-tool", "output": "retained result",
+                }))
+                retained_tool = self.store.get_interaction("display")["seq"]
+        page, latest, gap = self.store.interaction_page("display", before)
+        self.assertFalse(gap)
+        self.assertEqual(latest, self.store.get_interaction("display")["seq"])
+        self.assertEqual([item["seq"] for item in page if item["method"] == "tools"], [retained_tool])
+        self.assertNotIn(first, [item["seq"] for item in page])
+        values = [item for item in page if item["method"] == "values" and not item["params"].get("measurement")]
+        self.assertEqual(len(values), 1)
+        self.assertEqual(values[0]["params"]["data"]["messages"][-1]["id"], "answer-23")
+        self.assertEqual(len(self.store.get_interaction("display")["snapshot"]["messages"]), 40)
+        retained = self.store._conn.execute(
+            "SELECT COUNT(*) AS n,SUM(LENGTH(payload)) AS bytes FROM interaction_events WHERE thread_id='display'"
+        ).fetchone()
+        self.assertLess(retained["bytes"], 200_000)
+
+    def test_older_full_values_are_compacted_on_first_new_snapshot(self):
+        for index in range(3):
+            self.service.observe(self.run, event("values", {"messages": [{
+                "type": "ai", "id": f"old-{index}", "content": "retained",
+            }]}))
+        with self.store._lock:
+            self.store._conn.execute("UPDATE interaction_threads SET full_values_seq=0 WHERE id='display'")
+            self.store._conn.commit()
+        self.service.observe(self.run, event("values", {"messages": [{
+            "type": "ai", "id": "new", "content": "latest",
+        }]}))
+        page, _latest, gap = self.store.interaction_page("display", 0)
+        self.assertFalse(gap)
+        self.assertEqual(len([item for item in page if item["method"] == "values"]), 1)
+        self.assertEqual(page[-1]["params"]["data"]["messages"][-1]["id"], "new")
+
+    def test_full_values_compaction_does_not_hide_a_missing_native_event(self):
+        cursor = self.store.get_interaction("display")["seq"]
+        self.service.observe(self.run, event("values", {"messages": []}))
+        self.service.observe(self.run, event("messages", {"event": "message-start", "id": "missing"}))
+        missing = self.store.get_interaction("display")["seq"]
+        with self.store._lock:
+            self.store._conn.execute("DELETE FROM interaction_events WHERE thread_id=? AND seq=?", ("display", missing))
+            self.store._conn.commit()
+        self.service.observe(self.run, event("values", {"messages": []}))
+        self.assertTrue(self.store.interaction_page("display", cursor)[2])
+
+    def test_transient_full_measurements_do_not_replace_the_authoritative_snapshot(self):
+        binding = self.store.get_interaction("display")
+        full_seq = binding["full_values_seq"]
+        for _ in range(2):
+            self.store.append_interaction("display", [event("values", binding["snapshot"])],
+                                          snapshot=binding["snapshot"], replaceable_measurement=True)
+        page, _latest, gap = self.store.interaction_page("display", 0)
+        self.assertFalse(gap)
+        self.assertIn(full_seq, [item["seq"] for item in page])
+        self.assertEqual(self.store.get_interaction("display")["full_values_seq"], full_seq)
+
     def test_snapshot_delete_and_append_roll_back_together(self):
         self.measure(1)
         before = self.store.get_interaction("display")
@@ -119,6 +186,21 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertEqual(self.store.get_interaction("display"), before)
         self.assertEqual(self.store.interaction_events_after("display", 0), events)
 
+    def test_full_values_replacement_rolls_back_with_snapshot(self):
+        self.service.observe(self.run, event("values", {"messages": [{
+            "type": "ai", "id": "kept", "content": "before",
+        }]}))
+        before = self.store.get_interaction("display")
+        events = self.store.interaction_events_after("display", 0)
+        self.store._conn.execute("CREATE TRIGGER fail_full_snapshot BEFORE UPDATE ON interaction_threads BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+        self.store._conn.commit()
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "injected failure"):
+            self.service.observe(self.run, event("values", {"messages": [{
+                "type": "ai", "id": "new", "content": "after",
+            }]}))
+        self.assertEqual(self.store.get_interaction("display"), before)
+        self.assertEqual(self.store.interaction_events_after("display", 0), events)
+
     def test_existing_replay_migration_preserves_real_gap_detection(self):
         self.store.close()
         with closing(sqlite3.connect(self.paths.application_db)) as connection:
@@ -127,11 +209,13 @@ class MeasurementReplayTests(unittest.TestCase):
                 CREATE TABLE interaction_events(thread_id TEXT NOT NULL,seq INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(thread_id,seq));
                 INSERT INTO interaction_events(thread_id,seq,payload) SELECT thread_id,seq,payload FROM old_events;
                 DROP TABLE old_events;
+                ALTER TABLE interaction_threads DROP COLUMN full_values_seq;
                 DELETE FROM interaction_events WHERE seq=1;
             """)
         self.store = ApplicationStore(self.paths)
         page, _latest, gap = self.store.interaction_page("display", 0)
         self.assertTrue(gap)
+        self.assertEqual(self.store.get_interaction("display")["full_values_seq"], 0)
         self.assertNotIn("after_seq", json.dumps(page))
         self.assertNotIn("replaceable_measurement", json.dumps(page))
 

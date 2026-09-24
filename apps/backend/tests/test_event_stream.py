@@ -227,7 +227,7 @@ class InteractionStreamTests(unittest.TestCase):
                 token=self.app.state.local_trust_token,
                 thread_id=thread_id,
                 body={"channels": ["values", "lifecycle"], "namespaces": [[]], "since": 0},
-                stop=lambda events: len([e for e in events if e.get("data")]) >= cursor,
+                stop=lambda events: any(int(e.get("id") or 0) >= cursor for e in events if e.get("data")),
                 timeout=5.0,
             )
             seqs = [item["data"]["seq"] for item in initial if item.get("data")]
