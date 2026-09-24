@@ -152,11 +152,16 @@ async function inheritedAccessAndEmptyTools(Editor) {
   };
   try {
     await act(async () => { renderer = create(React.createElement(Editor, { value: {}, scope: "project", projectId: "project", catalogue, onChange: value => edits.push(value) })); await tick(); });
-    const access = renderer.root.findAllByType("select").find(node => node.findAllByType("option").some(option => option.props.value === "full_access"));
-    assert.equal(access.props.value, "", "inherited access stays inherited instead of being coerced to Ask");
-    assert.match(text(access.findAllByType("option")[0]), /Full access.*Application default/, "known inherited permission and its owner are displayed");
-    const tools = renderer.root.findAllByType("select").find(node => node.props.value === "inherit" && text(node).includes("1 selected"));
-    await act(async () => tools.props.onChange({ target: { value: "choose" } }));
+    const radios = group => group.findAll(node => node.type === "input" && node.props.type === "radio");
+    const choice = label => renderer.root.findAll(node => node.props.role === "radiogroup" && typeof node.type === "string").find(group => text(settingRow(group)).startsWith(label));
+    const access = choice("Access");
+    assert.deepEqual(radios(access).map(radio => radio.props.value), ["", "ask", "full_access"], "access offers an explicit inherited choice");
+    assert.equal(radios(access).find(radio => radio.props.checked).props.value, "", "inherited access stays inherited instead of being coerced to Ask");
+    assert.match(text(settingRow(access)), /Full access.*Application default/, "known inherited permission and its owner are displayed");
+    const tools = choice("Tools");
+    assert.equal(radios(tools).find(radio => radio.props.checked).props.value, "inherit");
+    assert.match(text(settingRow(tools)), /1 selected/, "the inherited tool selection is summarised");
+    await act(async () => radios(tools).find(radio => radio.props.value === "choose").props.onChange());
     assert.deepEqual(edits.at(-1).presented_tools, [], "explicit None clears inherited tools");
     assert.equal(text(renderer.root).includes("Inherit preset"), false);
   } finally { if (renderer) await act(async () => renderer.unmount()); }

@@ -6,8 +6,7 @@
 .models-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-stack);}
 .models-heading h2 {font-size: var(--text-heading); margin: 0;}
 .models-surface .eyebrow {font-size: var(--text-small); letter-spacing: var(--tracking-wide); color: var(--muted);}
-.models-surface .model-tabs {overflow-x: auto; flex-shrink: 0;}
-.models-surface .model-tabs button span {margin-left: var(--space-tight); padding: 0 var(--pad-tight); border-radius: var(--radius-pill); background: var(--bg-raised); color: var(--muted); font-size: var(--text-small);}
+.models-surface .model-tabs {flex-shrink: 0;}
 .section-heading {display: flex; justify-content: space-between; align-items: center; gap: var(--space-stack);}
 .section-heading h3 {margin: 0;}
 .section-heading .hint {margin: 0; font-size: var(--text-small);}
@@ -15,7 +14,8 @@
 /* Workspace and picker */
 .models-surface .models-workspace {display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-stack); align-items: start;}
 .models-surface :is(.model-detail, .model-configuration) {display: grid; gap: var(--space-stack); width: 100%; min-width: 0;}
-.models-surface .model-picker {position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-compact); min-width: 0; max-width: var(--layout-form);}
+.models-surface :is(.model-detail, .model-picker) {max-width: var(--layout-form);}
+.models-surface .model-picker {position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-compact); min-width: 0;}
 .models-surface .model-picker-label {font-size: var(--text-small); color: var(--muted); font-weight: var(--weight-medium);}
 .models-surface .model-picker-trigger {display: flex; align-items: center; gap: var(--space-compact); width: 100%; min-width: 0; text-align: left; background: var(--bg-input); padding: var(--pad-tight) var(--pad-compact);}
 .models-surface .model-picker-current {display: grid; min-width: 0; flex: 1;}
@@ -52,7 +52,7 @@
 .models-surface .model-deletion .inline-note :is(h4, p, ul) {margin: 0;}
 
 /* Configuration form */
-.models-surface .model-setup {display: grid; gap: var(--space-stack); min-width: 0; max-width: var(--layout-form);}
+.models-surface .model-setup {display: grid; gap: var(--space-stack); min-width: 0;}
 .models-surface .model-setup-head {display: flex; align-items: center; gap: var(--space-compact); flex-wrap: wrap;}
 .models-surface .model-setup-head h3 {margin: 0; font-size: var(--text-heading); overflow-wrap: anywhere;}
 .models-surface .model-setup-head .model-capacity {margin: 0 auto 0 0;}
@@ -67,8 +67,7 @@
 .settings-group {border-top: var(--line-hairline) solid var(--border); padding: var(--pad-compact) 0;}
 .settings-group > summary {font-weight: var(--weight-medium);}
 .settings-group > summary span {margin-left: var(--space-compact); font-weight: var(--weight-regular); font-size: var(--text-small); color: var(--muted);}
-.models-surface .technical-settings[open] {display: grid; gap: var(--space-stack);}
-.models-surface .technical-settings[open] > summary {margin-bottom: var(--space-compact);}
+.models-surface .technical-settings > :not(summary) + :not(summary) {margin-top: var(--space-stack);}
 .technical-details {margin-top: var(--space-compact);}
 .technical-details summary {font-size: var(--text-small); color: var(--muted);}
 .technical-details p {overflow-wrap: anywhere;}

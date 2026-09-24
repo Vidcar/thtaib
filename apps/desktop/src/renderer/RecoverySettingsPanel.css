@@ -6,9 +6,6 @@
 .settings-surface [hidden] {display: none !important;}
 .settings-category-content {display: grid; gap: var(--space-stack); width: 100%; max-width: var(--layout-form); min-width: 0;}
 .settings-category-content > .surface, .settings-category-content > .packet03-panel {padding: 0; max-width: none;}
-.setting-actions {display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-compact);}
-.setting-actions > button {display: inline-flex; align-items: center; gap: var(--space-tight);}
-.setting-rows > .setting-actions {padding-block: var(--pad-compact) var(--pad-card);}
 .path-field {display: flex; gap: var(--space-compact); min-width: 0;}
 .path-field > input {flex: 1 1 auto;}
 .path-field > button {display: inline-flex; align-items: center; gap: var(--space-tight); flex-shrink: 0; white-space: nowrap;}

@@ -9,23 +9,20 @@
 .workspace-records-surface .card {display: grid; gap: var(--space-compact); padding: var(--pad-card) var(--pad-card); border-radius: var(--radius-card); min-width: 0;}
 .workspace-records-surface details.card:not([open]) {display: block;}
 .workspace-records-surface :is(h3, h4, p) {margin: 0;}
-.workspace-records-surface :is(input, select, textarea) {min-width: 0; width: 100%;}
+.workspace-records-surface :is(input:not([type="radio"], [type="checkbox"], [type="range"]), select, textarea) {min-width: 0; width: 100%;}
 .workspace-records-surface .workspace-editor {display: grid; gap: var(--space-compact);}
 .workspace-records-surface details > .workspace-editor {margin-top: var(--space-compact);}
 .workspace-records-surface .workspace-editor > button {justify-self: start;}
 .workspace-records-surface label {margin: 0;}
 .workspace-records-surface .section-heading {gap: var(--space-compact); flex-wrap: wrap;}
-.setup-form-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-compact);}
-.setup-configuration-editor {display: grid; gap: var(--space-compact); min-width: 0;}
-.setup-configuration-editor textarea {min-height: 100px; resize: vertical;}
-.setup-options {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
-.setup-options > summary {font-size: var(--text-body);}
-.setup-selection-group {display: grid; gap: var(--space-compact); margin-top: var(--space-compact);}
-.setup-selection-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact);}
-.setup-selection-heading select {width: 130px;}
-.setup-selection-options {display: grid; gap: var(--space-tight); max-height: 230px; overflow: auto; padding: var(--pad-compact) var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control);}
-.workspace-records-surface .check-row {display: flex; gap: var(--space-compact); align-items: flex-start;}
-.workspace-records-surface .check-row input {width: var(--icon-md); height: var(--icon-md); min-height: 0; flex: 0 0 14px;}
+.setup-form-grid {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(var(--layout-column), 100%), 1fr)); gap: var(--space-compact);}
+.setup-configuration-editor {min-width: 0;}
+.setup-configuration-editor textarea {min-height: calc(var(--control-height) * 3.5); resize: vertical;}
+.setup-options {padding-block: var(--pad-compact); border-top: var(--line-hairline) solid var(--border);}
+.setup-options > summary .hint {margin-left: auto;}
+.setup-selection-options {display: grid; max-height: var(--layout-menu); overflow: auto; margin-bottom: var(--space-compact); padding: 0 var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-input);}
+.setup-selection-options > .setting-row + .setting-row {border-top: var(--line-hairline) solid var(--border);}
+.setup-selection-options > .setting-row {min-height: 0; padding-block: var(--pad-tight);}
 .workspace-records-surface .hint {font-size: var(--text-small); overflow-wrap: anywhere;}
 .workspace-text {white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-body); line-height: var(--leading-body);}
 .workspace-records-surface .wrapped-text, .chat-setup .wrapped-text {white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--layout-menu); overflow: auto; margin: var(--space-compact) 0; font-size: var(--text-body); line-height: var(--leading-body);}
@@ -54,6 +51,5 @@
   .workspace-record-list .nav-list {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(var(--layout-side), 100%), 1fr)); gap: var(--space-tight);}
 }
 @container workspace-records (max-width: 430px) {
-  .setup-form-grid {grid-template-columns: minmax(0, 1fr);}
   .workspace-records-surface .surface-head {flex-wrap: wrap;}
 }

@@ -8,7 +8,7 @@ const failure = message => ({ ok: false, status: 409, json: async () => ({ error
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async work => { await act(async () => { await work?.(); await tick(); }); };
 function button(root, label) { const node = root.findAllByType("button").find(item => text(item).trim() === label); assert.ok(node, `button ${label}`); return node; }
-function field(root, label, type) { const row = root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(row, `field ${label}`); return row.findByType(type); }
+function field(root, label, type) { const row = root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(row, `field ${label}`); return row.props.htmlFor ? root.find(node => node.type === type && node.props.id === row.props.htmlFor) : row.findByType(type); }
 const change = (root, label, type, value) => settle(() => field(root, label, type).props.onChange({ target: { value } }));
 const click = (root, label) => settle(() => button(root, label).props.onClick());
 const submit = root => settle(() => root.findByType("form").props.onSubmit({ preventDefault() {} }));

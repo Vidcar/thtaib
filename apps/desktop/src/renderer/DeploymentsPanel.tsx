@@ -151,7 +151,7 @@ export function DeploymentsPanel({
     const edited = stagedStartup && Object.hasOwn(stagedStartup, key);
     const saved = Object.hasOwn(selectedProfile?.bags.startup.requested ?? {}, key);
     const state = edited && stagedStartup?.[key] !== null ? "Selected for next load" : saved && !edited ? "Set in configuration" : "Inherited";
-    return <span className="model-effective-readout" data-state={state === "Inherited" ? "inherited" : "set"}><strong>{display.value}</strong> · {display.source}{!setupPreview.loading && !stagedStartupError ? ` · ${state}` : ""}</span>;
+    return <span className="model-effective-readout" data-state={state === "Inherited" ? "inherited" : "set"}><strong>{display.value}</strong>{[display.source, !setupPreview.loading && !stagedStartupError ? state : ""].filter(Boolean).map(part => ` · ${part}`).join("")}</span>;
   };
   const startupResolved = (key: string) => {
     const fact = modelFacts[`startup.${key}`];

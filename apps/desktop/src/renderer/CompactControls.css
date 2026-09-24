@@ -8,6 +8,8 @@
 .setting-rows > * + * {border-top: var(--line-hairline) solid color-mix(in srgb, var(--border) var(--tint-strong), transparent);}
 .setting-rows > .setting-row:last-child, .setting-rows > :last-child {padding-bottom: var(--pad-card);}
 .setting-rows > :not(.setting-row) {padding-block: var(--pad-compact);}
+.setting-rows > .empty-state {max-width: none; margin: var(--space-tight) 0 var(--pad-card); padding: var(--pad-card); border: var(--line-hairline) dashed var(--border);}
+.setting-rows > .notice {margin: var(--space-tight) 0; padding: var(--pad-compact) var(--pad-card);}
 .menu-popover-panel, .settings-category-content, .model-settings, .setting-host {container-type: inline-size;}
 
 .setting-row {display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, var(--layout-control)); align-items: center; column-gap: var(--space-section); row-gap: var(--space-tight); min-width: 0; min-height: calc(var(--control-height) + var(--pad-compact) * 2); padding: var(--pad-compact) 0; margin: 0;}
@@ -24,6 +26,11 @@
 .setting-row-control > .number-field {margin-left: auto;}
 .setting-row-hint {flex-basis: 100%; color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight);}
 .setting-row-stacked .setting-row-control {justify-content: flex-start;}
+.setting-actions {display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-compact);}
+.setting-actions > button {display: inline-flex; align-items: center; gap: var(--space-tight);}
+.setting-actions > .hint {margin: 0 auto 0 0;}
+.setting-rows > .setting-actions {padding-block: var(--pad-compact) var(--pad-card);}
+.setting-section > form > .setting-actions {padding: var(--pad-compact) 0 var(--pad-card); border-top: var(--line-hairline) solid var(--border);}
 .field-group {display: grid; gap: var(--space-compact); min-width: 0;}
 @container (max-width: 520px) {
   .setting-row:not(.setting-row-inline) {grid-template-columns: minmax(0, 1fr);}
