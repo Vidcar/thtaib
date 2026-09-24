@@ -357,24 +357,30 @@ class ImportJobRunner:
 
     def _discard_job_locked(self, job_id: str) -> ImportJob:
         job = self.get_job(job_id)
-        if job.status in {ImportStatus.pending, ImportStatus.running, ImportStatus.stopping}:
+        if self.job_is_active(job):
             raise ManagerError("Stop the import before discarding it.", code="job_active", status_code=409)
-        self._discard_partial_owned_install(job)
-        if job.staging_path:
-            staging = Path(job.staging_path)
-            if self._owns_staging(staging) and not self._staging_is_referenced(staging, ignore_job_ids={job.id}):
-                if staging.exists():
-                    shutil.rmtree(staging)
-        return self.store.put_job(
-            job.model_copy(
-                update={
-                    "status": ImportStatus.discarded,
-                    "updated_at": utc_now(),
-                    "finished_at": job.finished_at or utc_now(),
-                    "progress": ImportProgress(stage=ImportStage.cleanup, message="Discarded stopped import"),
-                }
-            )
-        )
+        if job.status == ImportStatus.complete:
+            raise ManagerError("A completed import belongs to its installed model and cannot be discarded.", code="job_complete", status_code=409)
+        if job.status not in {ImportStatus.stopped, ImportStatus.failed, ImportStatus.interrupted, ImportStatus.discarded}:
+            raise ManagerError("Only terminal incomplete imports can be discarded.", code="job_not_discardable", status_code=409)
+        try:
+            self._discard_partial_owned_install(job)
+            if job.staging_path:
+                staging = Path(job.staging_path)
+                if self._owns_staging(staging) and not self._staging_is_referenced(staging, ignore_job_ids={job.id}):
+                    if staging.exists():
+                        shutil.rmtree(staging)
+        except OSError as exc:
+            raise ManagerError("Temporary import files could not be cleared. Close programs using them, then retry.",
+                               code="job_cleanup_failed", status_code=409) from exc
+        cleared = job.model_copy(update={
+            "status": ImportStatus.discarded,
+            "updated_at": utc_now(),
+            "finished_at": job.finished_at or utc_now(),
+            "progress": ImportProgress(stage=ImportStage.cleanup, message="Cleared terminal import"),
+        })
+        self.store.delete_job(job.id)
+        return cleared
 
     def storage_summary(self) -> StorageSummary:
         # Only recorded, explicitly managed files belong to this product. A user

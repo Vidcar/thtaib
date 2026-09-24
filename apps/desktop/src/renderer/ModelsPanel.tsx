@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
 import { api } from "./api";
 import { DeploymentsPanel } from "./DeploymentsPanel";
@@ -6,22 +6,20 @@ import { formatBytes } from "./display";
 import { EmptyState } from "./EmptyState";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
-import { ImportJobsPanel } from "./ImportJobsPanel";
+import { ImportJobsPanel, useImportJobs } from "./ImportJobsPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
 import { Help } from "./ModelControls";
 import { PathBrowseButton } from "./PathField";
-import { Icon } from "./Icon";
 import { PanelResize, usePanelWidth } from "./PanelResize";
-import type { InspectReport, ModelBundle, PathsInfo, RunProfile } from "./types";
+import type { InspectReport, ModelBundle, RunProfile } from "./types";
 import { HuggingFaceImport } from "./HuggingFaceImport";
 import "./ModelsPanel.css";
 
 export function ModelsPanel() {
   const [libraryWidth, setLibraryWidth] = usePanelWidth("models-library", 220, 180, 400);
-  const [view, setView] = useState<"library" | "add">("library");
+  const [view, setView] = useState<"library" | "add" | "downloads">("library");
   const [localBusy, setLocalBusy] = useState(false);
-  const [paths, setPaths] = useState<PathsInfo | null>(null);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [inspect, setInspect] = useState<InspectReport | null>(null);
@@ -44,11 +42,7 @@ export function ModelsPanel() {
       setSelectedId(current => nextBundles.some(bundle => bundle.id === current) ? current : nextBundles[0]?.id ?? "");
       bundlesLoaded = true;
       setLoading(false);
-      const [nextPaths, nextProfiles] = await Promise.all([
-        api.paths(),
-        api.profiles(),
-      ]);
-      setPaths(nextPaths);
+      const nextProfiles = await api.profiles();
       setProfiles(nextProfiles);
       setBundles(await api.bundles());
       setLoadError("");
@@ -62,6 +56,18 @@ export function ModelsPanel() {
       setLoadError(errorMessage(error));
     });
   }, []);
+
+  const imports = useImportJobs(importRevision, refresh);
+  const tabs = ["library", "add", "downloads"] as const;
+  function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, current: typeof view) {
+    const index = tabs.indexOf(current);
+    const next = event.key === "ArrowRight" ? tabs[(index + 1) % tabs.length]
+      : event.key === "ArrowLeft" ? tabs[(index + tabs.length - 1) % tabs.length]
+      : event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length - 1] : null;
+    if (!next) return;
+    event.preventDefault(); setView(next);
+    document.getElementById(`models-tab-${next}`)?.focus();
+  }
 
   const selected = bundles.find((bundle) => bundle.id === selectedId) ?? null;
   const publisherTemplateFound = Boolean(selected?.huggingface_configuration?.source_verified && selected.files.some(file =>
@@ -85,19 +91,21 @@ export function ModelsPanel() {
     <section className="surface models-surface">
       <header className="models-heading">
         <h2>Models</h2>
-        <button type="button" className="primary-button" onClick={() => setView(view === "add" ? "library" : "add")}><Icon name={view === "add" ? "close" : "plus"} size={16} />{view === "add" ? "Close" : "Add model"}</button>
       </header>
-      <nav className="model-tabs" aria-label="Model sections">
-        <button type="button" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}>My models <span>{bundles.length}</span></button>
+      <nav className="model-tabs" role="tablist" aria-label="Model sections">
+        <button id="models-tab-library" type="button" role="tab" aria-controls="models-panel-library" aria-selected={view === "library"} aria-current={view === "library" ? "page" : undefined} tabIndex={view === "library" ? 0 : -1} onKeyDown={event => onTabKeyDown(event, "library")} onClick={() => setView("library")}>My models <span>{bundles.length}</span></button>
+        <button id="models-tab-add" type="button" role="tab" aria-controls="models-panel-add" aria-selected={view === "add"} aria-current={view === "add" ? "page" : undefined} tabIndex={view === "add" ? 0 : -1} onKeyDown={event => onTabKeyDown(event, "add")} onClick={() => setView("add")}>Add models</button>
+        <button id="models-tab-downloads" type="button" role="tab" aria-controls="models-panel-downloads" aria-selected={view === "downloads"} aria-current={view === "downloads" ? "page" : undefined} tabIndex={view === "downloads" ? 0 : -1} onKeyDown={event => onTabKeyDown(event, "downloads")} onClick={() => setView("downloads")}>Downloads {imports.attentionCount ? <span aria-label={`${imports.attentionCount} downloads active or needing attention`}>{imports.attentionCount}</span> : null}</button>
       </nav>
       {message ? <Notice tone={/fail|error|mismatch/i.test(message) ? "error" : "info"}>{message}</Notice> : null}
-      {view === "add" ? <>
+      <div id="models-panel-add" role="tabpanel" aria-labelledby="models-tab-add" className="models-tab-panel models-add-panel" hidden={view !== "add"}>
       <HuggingFaceImport onStarted={async job => {
         setImportRevision(value => value + 1);
-        if (job.bundle_id) { setSelectedId(job.bundle_id); setView("library"); setMessage("Model added to your library."); }
+        if (job.bundle_id) { setSelectedId(job.bundle_id); setMessage("Model added to your library."); }
+        setView("downloads");
         await refresh();
       }} />
-      <details className="card local-model-import"><summary>From your computer</summary>
+      <section className="card local-model-import"><h3>From your computer</h3>
         <form
           className="local-model-form"
           onSubmit={(event) => {
@@ -110,10 +118,10 @@ export function ModelsPanel() {
                 setMessage(
                   job.error
                     ? `Local import ${job.status}: ${job.error}`
-                    : job.status === "complete" ? "Model added to your library." : "Import started. Progress and recovery controls are below.",
+                    : job.status === "complete" ? "Model added to your library." : "Import started. Track progress in Downloads.",
                 );
                 setImportRevision(value => value + 1);
-                if (job.bundle_id) setView("library");
+                setView("downloads");
                 return refresh();
               })
               .catch(fail).finally(() => setLocalBusy(false));
@@ -139,9 +147,9 @@ export function ModelsPanel() {
           </button>
         </form>
 
-      </details>
-      </> : null}
-      {view === "library" ? <div className="models-workspace" style={{ gridTemplateColumns: `${libraryWidth}px minmax(0, 1fr)` }}>
+      </section>
+      </div>
+      <div id="models-panel-library" role="tabpanel" aria-labelledby="models-tab-library" className="models-workspace" hidden={view !== "library"} style={{ gridTemplateColumns: `${libraryWidth}px minmax(0, 1fr)` }}>
       <aside className="model-library" aria-label="Your models" style={{ position: "relative" }}>
         <div className="section-heading"><h3>Installed</h3><span className="hint">{bundles.length}</span></div>
         {loading ? (
@@ -150,7 +158,7 @@ export function ModelsPanel() {
           </EmptyState>
         ) : bundles.length === 0 ? (
           <EmptyState title="Your first model starts here">
-            Add a model from your computer or download one from Hugging Face.
+            Add a model from your computer or download one from Hugging Face. <button type="button" onClick={() => setView("add")}>Add models</button>
           </EmptyState>
         ) : (
           <ul className="model-list">
@@ -175,14 +183,14 @@ export function ModelsPanel() {
             ))}
           </ul>
         )}
-        {paths ? <details className="library-storage"><summary>Storage location</summary><code>{paths.models}</code></details> : null}
         <PanelResize label="Resize model library" width={libraryWidth} onResize={setLibraryWidth} min={180} max={400} reset={220} />
       </aside>
       <div className="model-detail">
       {selected ? <header className="model-selected-heading" aria-label="Selected model"><h3>{selected.display_name}</h3><div className="model-file-actions"><span className="hint">{formatBytes(selected.files.reduce((total, file) => total + file.size_bytes, 0))} on disk · {selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span><ModelDeletion key={selected.id} kind="bundle" id={selected.id} name={selected.display_name} onDeleted={refresh} /></div></header> : null}
       <DeploymentsPanel selectedBundleId={selectedId} bundlesVersion={bundles.map((bundle) => `${bundle.id}:${bundle.companions.map(file => file.sha256).join("-")}`).join(",")} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} />
-      {selected?.huggingface_configuration ? <section className="card" aria-label="Hugging Face model settings">
-        <div className="section-heading"><strong>Model settings from Hugging Face</strong><span className="hint">{selected.huggingface_configuration.source_verified ? "Verified publisher source" : "GGUF repository only"}</span></div>
+      {selected ? <details className="card technical-details model-facts-details"><summary>Files, source &amp; metadata</summary>
+      {selected.huggingface_configuration ? <section className="source-provenance" aria-label="Hugging Face model settings">
+        <h4>Publisher guidance &amp; template <span className="hint">{selected.huggingface_configuration.source_verified ? "Verified publisher source" : "GGUF repository only"}</span></h4>
         {selected.huggingface_configuration.source_repo_id ? <p className="hint">{selected.huggingface_configuration.source_repo_id} @ {selected.huggingface_configuration.source_revision?.slice(0, 8) ?? "unverified"}</p> : null}
         <p>Chat template for next load: <strong>{selected.huggingface_configuration.template_origin === "gguf" ? "GGUF embedded" : selected.huggingface_configuration.template_origin === "none" ? "Unavailable" : selected.huggingface_configuration.template_origin === "publisher" ? "Publisher file" : "GGUF repository file"}</strong>{selected.huggingface_configuration.template_differs ? " · publisher file differs" : ""}</p>
         {publisherTemplateFound ? <div className="actions">
@@ -192,8 +200,7 @@ export function ModelsPanel() {
         {Object.keys(selected.huggingface_configuration.generation_defaults).length ? <dl className="meta compact">{Object.entries(selected.huggingface_configuration.generation_defaults).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{key === "logit_bias" ? "Source token suppression" : String(value)}</dd></div>)}</dl> : <p className="hint">No verified publisher generation settings were found.</p>}
         {Object.keys(selected.huggingface_configuration.unsupported).length ? <details className="technical-details"><summary>Settings not applied ({Object.keys(selected.huggingface_configuration.unsupported).length})</summary><dl className="meta compact">{Object.entries(selected.huggingface_configuration.unsupported).map(([key, reason]) => <div key={key}><dt>{key}</dt><dd>{reason}</dd></div>)}</dl></details> : null}
       </section> : null}
-      {selected ? (
-          <details className="card technical-details"><summary>Files &amp; metadata</summary>
+          <section className="files-metadata"><h4>Files &amp; metadata</h4>
             <p className="hint">Model ID: <code>{selected.id}</code></p>
             <p>
               {selected.files.length} files
@@ -257,11 +264,13 @@ export function ModelsPanel() {
                 </div>
               </dl>
             ) : null}
-          </details>
-        ) : null}
-      </div></div> : null}
-      <ImportJobsPanel revision={importRevision} onCompleted={refresh} />
-      <ModelStoragePanel />
+          </section>
+        </details> : null}
+      </div></div>
+      <div id="models-panel-downloads" role="tabpanel" aria-labelledby="models-tab-downloads" className="models-tab-panel models-downloads-panel" hidden={view !== "downloads"}>
+        <ImportJobsPanel state={imports} />
+        <ModelStoragePanel />
+      </div>
     </section>
   );
 }

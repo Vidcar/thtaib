@@ -205,6 +205,41 @@ class ImportJobRunnerTests(unittest.TestCase):
 
         self.assertEqual(discarded.status, ImportStatus.discarded)
         self.assertFalse(staging.exists())
+        self.assertIsNone(self.store.get_job(job.id))
+
+    def test_discard_clears_legacy_record_without_removing_shared_staging(self) -> None:
+        staging = self.paths.state / "staging" / "huggingface" / "shared"
+        staging.mkdir(parents=True)
+        (staging / "download.gguf").write_bytes(b"installed download")
+        completed = self.store.put_job(ImportJob(id="complete", kind=BundleSourceKind.huggingface,
+            status=ImportStatus.complete, created_at="2026-09-20T00:00:00Z", staging_path=str(staging)))
+        old = self.store.put_job(ImportJob(id="old-discarded", kind=BundleSourceKind.huggingface,
+            status=ImportStatus.discarded, created_at="2026-09-20T00:00:00Z", staging_path=str(staging)))
+
+        cleared = self.runner.discard_job(old.id)
+
+        self.assertEqual(cleared.status, ImportStatus.discarded)
+        self.assertIsNone(self.store.get_job(old.id))
+        self.assertIsNotNone(self.store.get_job(completed.id))
+        self.assertEqual((staging / "download.gguf").read_bytes(), b"installed download")
+
+    def test_discard_rejects_active_and_completed_jobs(self) -> None:
+        for status in (ImportStatus.running, ImportStatus.complete):
+            job = self.store.put_job(ImportJob(id=f"job-{status.value}", kind=BundleSourceKind.huggingface,
+                status=status, created_at="2026-09-20T00:00:00Z"))
+            with self.assertRaises(ManagerError):
+                self.runner.discard_job(job.id)
+            self.assertIsNotNone(self.store.get_job(job.id))
+
+    def test_discard_cleanup_failure_keeps_job_actionable(self) -> None:
+        staging = self.paths.state / "staging" / "huggingface" / "blocked"
+        staging.mkdir(parents=True)
+        job = self.store.put_job(ImportJob(id="blocked", kind=BundleSourceKind.huggingface,
+            status=ImportStatus.failed, created_at="2026-09-20T00:00:00Z", staging_path=str(staging)))
+        with patch("workbench_backend.inference.import_jobs.shutil.rmtree", side_effect=OSError("file locked")):
+            with self.assertRaisesRegex(ManagerError, "could not be cleared"):
+                self.runner.discard_job(job.id)
+        self.assertEqual(self.store.get_job(job.id).status, ImportStatus.failed)
 
     def test_storage_summary_reports_future_install_root_and_bytes(self) -> None:
         job = self.runner.start_local(LocalImportRequest(source_path=str(self.source)))

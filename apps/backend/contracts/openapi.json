@@ -5649,6 +5649,13 @@
       },
       "HubRepository": {
         "properties": {
+          "auxiliary_ggufs": {
+            "items": {
+              "$ref": "#/components/schemas/HubVariant"
+            },
+            "title": "Auxiliary Ggufs",
+            "type": "array"
+          },
           "file_sha256": {
             "additionalProperties": {
               "anyOf": [

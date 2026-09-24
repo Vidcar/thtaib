@@ -224,6 +224,7 @@ class HubRepository(BaseModel):
     resolved_revision: str
     variants: list[HubVariant]
     projectors: list[HubVariant]
+    auxiliary_ggufs: list[HubVariant] = Field(default_factory=list)
     guidance_files: list[str]
     warnings: list[str]
     file_sha256: dict[str, str | None] = Field(default_factory=dict)
