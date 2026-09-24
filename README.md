@@ -28,6 +28,7 @@ Product data—models, runtimes, state, cases, snapshots, knowledge and the SQLi
 | Need | Open |
 | --- | --- |
 | Agent working rules | [AGENTS.md](AGENTS.md) |
+| LangChain framework references for development agents | [Local upstream references](.agents/references/langchain/README.md) |
 | Current product contracts | [OpenSpec capabilities](openspec/specs/) |
 | Proposed and active changes | [OpenSpec changes](openspec/changes/) |
 | Current delivery snapshot | [HANDOVER.md](HANDOVER.md) |
