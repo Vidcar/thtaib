@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 
 import { appearanceTokens } from "./appearanceCatalog";
 import { setAppearancePreviewAim, syncAppearancePreview } from "./appearancePreviewSync";
@@ -17,7 +17,8 @@ import {
 import { shippedValue, type AppearanceGroup, type AppearanceToken } from "./appearanceValue";
 import type { PresentationTheme } from "./types";
 import { HoverHelp } from "./HoverHelp";
-import { CompactSlider } from "./CompactControls";
+import { CompactSlider, SegmentedChoice, SettingSection } from "./CompactControls";
+import { Icon } from "./Icon";
 import "./appearancePanel.css";
 
 const groups: Array<AppearanceGroup | "All"> = ["All", "Colours", "Text", "Corners", "Spacing", "Layout", "Lines", "Effects"];
@@ -57,49 +58,83 @@ export function AppearanceSettings({ theme }: { theme: PresentationTheme }) {
 
   return (
     <div className="appearance-editor">
-      <div className="appearance-bar">
-        <p className="hint">{dirty ? "Unsaved changes" : "No unsaved changes"} · editing {active} colours</p>
-        <button type="button" onClick={() => void window.workbench?.openAppearancePreview?.().then(() => syncAppearancePreview())}>Pop out preview</button>
+      <SettingSection title="Basics" description="Quick choices. Each one writes the matching settings below.">
+        <AppearanceBasics />
+      </SettingSection>
+      <section className="setting-section appearance-studio">
+        <header className="setting-section-head">
+          <div><h3>All appearance settings</h3><p>Every colour, size and spacing value the Workbench uses.</p></div>
+          <div className="setting-section-actions">
+            <button type="button" className="quiet-button appearance-customize" aria-expanded={customize} onClick={() => setCustomize(value => !value)}>{customize ? "Hide advanced controls" : "Customize appearance"}</button>
+          </div>
+        </header>
+        {customize ? <div className="appearance-advanced">
+          <div className="appearance-filter">
+            <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
+            <div className="chips appearance-groups" role="group" aria-label="Appearance groups">
+              {groups.map(item => <button key={item} type="button" className="chip" aria-pressed={group === item} onClick={() => setGroup(item)}>{item}</button>)}
+            </div>
+            <p className="appearance-count" role="status" data-appearance-version={version}>{visible.length} shown</p>
+          </div>
+          <div className="appearance-rows">
+            {visible.map(token => <AppearanceRow key={token.id} token={token} value={currentAppearanceValue(token)} />)}
+            {visible.length === 0 ? <p className="hint appearance-empty">No setting matches “{query}”.</p> : null}
+          </div>
+        </div> : null}
+      </section>
+      <div className="appearance-bar" role="group" aria-label="Appearance changes">
+        <button type="button" className="quiet-button" onClick={() => void window.workbench?.openAppearancePreview?.().then(() => syncAppearancePreview())}><Icon name="external" size={14} /> Pop out preview</button>
+        <p className="appearance-bar-status" role="status">{message || (dirty ? `Unsaved changes · editing ${active} colours` : `No unsaved changes · editing ${active} colours`)}</p>
+        <HoverHelp title="Appearance changes">Changes preview immediately. Apply saves them on this computer; Cancel restores the last saved values. Reset returns an individual control to its shipped value. Pop out the preview to see a sample conversation.</HoverHelp>
         <button type="button" disabled={!dirty || saving} title="Restore the last saved appearance" onClick={() => { cancelAppearance(); setMessage(""); }}>Cancel</button>
-        <button type="button" className="primary-button" disabled={!dirty || saving} title="Save appearance on this computer" onClick={() => void onApply()}>Apply</button>
-        <HoverHelp title="Appearance changes">Changes preview immediately. Apply saves them on this computer; Cancel restores the last saved values. Reset returns an individual control to its shipped value. Open Preview to see a sample conversation.</HoverHelp>
+        <button type="button" className="primary-button" disabled={!dirty || saving} title="Save appearance on this computer" onClick={() => void onApply()}>{saving ? "Applying…" : "Apply"}</button>
       </div>
-      {message ? <p className="hint" role="status">{message}</p> : null}
-      <AppearanceBasics />
-      <button type="button" className="appearance-customize" aria-expanded={customize} onClick={() => setCustomize(value => !value)}>{customize ? "Hide advanced controls" : "Customize appearance"}</button>
-      {customize ? <div className="appearance-advanced">
-      <input className="appearance-search" type="search" value={query} placeholder="Find a setting" aria-label="Find an appearance setting" onChange={event => setQuery(event.target.value)} />
-      <div className="appearance-groups" role="group" aria-label="Appearance groups">
-        {groups.map(item => (
-          <button key={item} type="button" aria-pressed={group === item} onClick={() => setGroup(item)}>{item}</button>
-        ))}
-      </div>
-      <p className="hint" data-appearance-version={version}>{visible.length} shown</p>
-      {visible.map(token => <AppearanceRow key={token.id} token={token} value={currentAppearanceValue(token)} />)}
-      </div> : null}
     </div>
   );
 }
 
+const fontPresets: Record<string, Array<{ label: string; value: string }>> = {
+  "font-ui": [{ label: "Arial", value: "Arial, sans-serif" }, { label: "Verdana", value: "Verdana, sans-serif" }, { label: "Georgia", value: "Georgia, serif" }],
+  "font-mono": [{ label: "Consolas", value: "Consolas, monospace" }, { label: "Courier New", value: "\"Courier New\", monospace" }],
+};
+
+const densities: Record<string, Record<string, string>> = {
+  Compact: { "pad-compact": "8px", "space-compact": "8px", "control-height": "30px" },
+  Comfortable: { "pad-compact": "12px", "space-compact": "12px", "control-height": "36px" },
+};
+
 function AppearanceBasics() {
   const token = (id: string) => appearanceTokens.find(item => item.id === id)!;
   const current = (id: string) => currentAppearanceValue(token(id));
-  const font = current("font-ui");
-  const fonts = [{ label: "System", value: token("font-ui").shipped }, { label: "Arial", value: "Arial, sans-serif" }, { label: "Verdana", value: "Verdana, sans-serif" }];
-  const densities: Record<string, Record<string, string>> = { Compact: { "pad-compact": "8px", "space-compact": "8px", "control-height": "30px" }, Comfortable: { "pad-compact": "12px", "space-compact": "12px", "control-height": "36px" } };
+  const size = parseFloat(current("text-body"));
   const density = Object.entries(densities).find(([, values]) => Object.entries(values).every(([id, value]) => current(id) === value))?.[0] ?? "Custom";
-  return <div className="appearance-basics"><label>Font<select aria-label="Interface font choice" value={font} onChange={event => updateAppearanceValue("font-ui", event.target.value)}>{!fonts.some(item => item.value === font) ? <option value={font}>Custom</option> : null}{fonts.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><CompactSlider label="Interface size" value={parseFloat(current("text-body"))} values={[11, 12, 13, 14, 15, 16, 18]} formatValue={value => `${value}px`} onChange={value => updateAppearanceValue("text-body", `${value}px`)} /><label>Density<select aria-label="Density" value={density} onChange={event => Object.entries(densities[event.target.value] ?? {}).forEach(([id, value]) => updateAppearanceValue(id, value))}>{density === "Custom" ? <option>Custom</option> : null}{Object.keys(densities).map(value => <option key={value}>{value}</option>)}</select></label></div>;
+  return <div className="appearance-basics">
+    <div className="appearance-basic">
+      <span className="appearance-basic-label">Font</span>
+      <FamilyControl token={token("font-ui")} value={current("font-ui")} label="Interface font choice" />
+    </div>
+    <div className="appearance-basic">
+      <span className="appearance-basic-label">Interface size <output>{size}px</output></span>
+      <CompactSlider hideHeading label="Interface size" value={size} values={[11, 12, 13, 14, 15, 16, 18]} formatValue={value => `${value}px`} onChange={value => updateAppearanceValue("text-body", `${value}px`)} />
+    </div>
+    <div className="appearance-basic">
+      <span className="appearance-basic-label">Density {density === "Custom" ? <small className="control-provenance">Custom</small> : null}</span>
+      <SegmentedChoice bare label="Density" value={density} options={Object.keys(densities).map(value => ({ value, label: value }))} onChange={value => Object.entries(densities[value] ?? {}).forEach(([id, next]) => updateAppearanceValue(id, next))} />
+    </div>
+  </div>;
 }
 
 const AppearanceRow = memo(function AppearanceRow({ token, value }: { token: AppearanceToken; value: string }) {
   const shipped = shippedValue(token, token.theme === "split" ? appearanceActiveTheme() : "dark");
+  const changed = value !== shipped;
   return (
-    <div className="appearance-row" onFocusCapture={() => setAppearancePreviewAim(token)} onPointerEnter={() => setAppearancePreviewAim(token)}>
+    <div className="appearance-row" data-changed={changed || undefined} onFocusCapture={() => setAppearancePreviewAim(token)} onPointerEnter={() => setAppearancePreviewAim(token)}>
       <div className="appearance-row-name">
-        <strong>{token.name}<HoverHelp title={`About ${token.name.toLowerCase()}`}>{token.group}. Shipped {shipped}. {token.detail}</HoverHelp></strong>
-        <button type="button" className="appearance-reset" hidden={value === shipped} onClick={() => resetAppearanceValue(token.id)}>Reset</button>
+        <span className="appearance-row-title"><strong>{token.name}</strong><HoverHelp title={`About ${token.name.toLowerCase()}`}>{token.group}. Shipped {shipped}. {token.detail}</HoverHelp>
+          <button type="button" className="text-button appearance-reset" hidden={!changed} onClick={() => resetAppearanceValue(token.id)}>Reset</button></span>
+        <small className="control-provenance">{changed ? `Changed · shipped ${shipped}` : `${token.group} · shipped`}</small>
       </div>
-      <div className="appearance-controls">
+      <div className="appearance-controls" data-kind={token.kind}>
         <AppearanceControl token={token} value={value} />
       </div>
       <AppearanceSample token={token} value={value} />
@@ -114,10 +149,22 @@ function AppearanceControl({ token, value }: { token: AppearanceToken; value: st
   return <NumberControl token={token} value={value} />;
 }
 
-function FamilyControl({ token, value }: { token: AppearanceToken; value: string }) {
+function FamilyControl({ token, value, label }: { token: AppearanceToken; value: string; label?: string }) {
+  const presets = [{ label: "System default", value: token.shipped }, ...(fontPresets[token.id] ?? [])];
+  const preset = presets.find(item => item.value === value);
+  const [customOpen, setCustomOpen] = useState(false);
+  const custom = customOpen || !preset;
   const [text, setText] = useState(value);
   useEffect(() => { setText(value); }, [value]);
-  return <input type="text" aria-label={token.name} value={text} onChange={event => { setText(event.target.value); updateAppearanceValue(token.id, event.target.value); }} />;
+  const choice = custom ? "custom" : preset?.value ?? "custom";
+  return <div className="appearance-family">
+    <select aria-label={label ?? token.name} value={choice} onChange={event => {
+      if (event.target.value === "custom") { setCustomOpen(true); return; }
+      setCustomOpen(false);
+      updateAppearanceValue(token.id, event.target.value);
+    }}>{presets.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}<option value="custom">Custom…</option></select>
+    {custom ? <input type="text" aria-label={`${label ?? token.name} custom`} value={text} spellCheck={false} placeholder="Font family list" onChange={event => { setText(event.target.value); updateAppearanceValue(token.id, event.target.value); }} /> : null}
+  </div>;
 }
 
 function NumberControl({ token, value }: { token: AppearanceToken; value: string }) {
@@ -130,11 +177,13 @@ function NumberControl({ token, value }: { token: AppearanceToken; value: string
   const max = Math.max(span, Number.isFinite(numeric) ? numeric : 0, Number.isFinite(shippedNumber) ? shippedNumber : 0);
   const slider = Math.min(max, Math.max(min, Number.isFinite(numeric) ? numeric : min));
   return (
-    <>
-      <input type="range" aria-label={`${token.name} slider`} min={min} max={max} step="any" value={slider} onChange={event => commitNumber(token, event.target.value)} />
-      <input type="number" aria-label={token.name} min={token.allowNegative ? undefined : min} max={token.max ?? undefined} step="any" value={text} onChange={event => { setText(event.target.value); commitNumber(token, event.target.value); }} />
-      {token.unit ? <span className="hint">{token.unit}</span> : null}
-    </>
+    <div className="slider-field">
+      <input type="range" aria-label={`${token.name} slider`} min={min} max={max} step="any" value={slider} style={rangeFill(slider, min, max)} onChange={event => commitNumber(token, event.target.value)} />
+      <span className="number-field">
+        <input type="number" aria-label={token.name} min={token.allowNegative ? undefined : min} max={token.max ?? undefined} step="any" value={text} onChange={event => { setText(event.target.value); commitNumber(token, event.target.value); }} />
+        <span className="field-unit">{token.unit || "\u00a0"}</span>
+      </span>
+    </div>
   );
 }
 
@@ -150,12 +199,15 @@ function ColorControl({ token, value }: { token: AppearanceToken; value: string 
   const [hex, setHex] = useState(value);
   useEffect(() => { setHex(value); }, [value]);
   return (
-    <>
+    <div className="appearance-color">
       <input type="color" aria-label={token.name} value={rgb} onChange={event => updateAppearanceValue(token.id, composeColor(event.target.value, alpha))} />
-      <input type="text" aria-label={`${token.name} hex`} value={hex} spellCheck={false} onChange={event => { setHex(event.target.value); updateAppearanceValue(token.id, event.target.value.trim()); }} />
-      <input type="range" aria-label={`${token.name} transparency`} min={0} max={100} step="any" value={alpha} onChange={event => updateAppearanceValue(token.id, composeColor(rgb, Number(event.target.value)))} />
-      <input type="number" aria-label={`${token.name} transparency percent`} min={0} max={100} step="any" value={alpha} onChange={event => commitAlpha(token.id, rgb, event.target.value)} />
-    </>
+      <input type="text" className="appearance-hex" aria-label={`${token.name} hex`} value={hex} spellCheck={false} onChange={event => { setHex(event.target.value); updateAppearanceValue(token.id, event.target.value.trim()); }} />
+      <input type="range" aria-label={`${token.name} transparency`} title="Opacity" min={0} max={100} step="any" value={alpha} style={rangeFill(alpha, 0, 100)} onChange={event => updateAppearanceValue(token.id, composeColor(rgb, Number(event.target.value)))} />
+      <span className="number-field">
+        <input type="number" aria-label={`${token.name} transparency percent`} min={0} max={100} step="any" value={alpha} onChange={event => commitAlpha(token.id, rgb, event.target.value)} />
+        <span className="field-unit">%</span>
+      </span>
+    </div>
   );
 }
 
@@ -177,33 +229,41 @@ function ShadowControl({ value, onChange }: { value: string; onChange: (value: s
     onChange(`${next.x}px ${next.y}px ${next.blur}px${spread} ${next.color}`);
   }
   return (
-    <>
+    <div className="appearance-shadow-controls">
       <NumberBits label="Shadow offset x" value={parsed.x} onChange={x => write({ x })} />
       <NumberBits label="Shadow offset y" value={parsed.y} onChange={y => write({ y })} />
       <NumberBits label="Shadow blur" value={parsed.blur} onChange={blur => write({ blur })} />
       <ColorBits label="Shadow colour" value={parsed.color} onChange={color => write({ color })} />
-    </>
+    </div>
   );
 }
 
 function NumberBits({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   const max = Math.max(256, Math.abs(value));
   return (
-    <>
-      <input type="range" aria-label={`${label} slider`} min={-max} max={max} step="any" value={value} onChange={event => onChange(Number(event.target.value))} />
-      <input type="number" aria-label={label} step="any" value={value} onChange={event => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} />
-    </>
+    <div className="slider-field">
+      <input type="range" aria-label={`${label} slider`} min={-max} max={max} step="any" value={value} style={rangeFill(value, -max, max)} onChange={event => onChange(Number(event.target.value))} />
+      <span className="number-field">
+        <input type="number" aria-label={label} step="any" value={value} onChange={event => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} />
+        <span className="field-unit">px</span>
+      </span>
+    </div>
   );
 }
 
 function ColorBits({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const { rgb, alpha } = splitColor(value);
   return (
-    <>
+    <div className="appearance-color appearance-color-short">
       <input type="color" aria-label={label} value={rgb} onChange={event => onChange(composeColor(event.target.value, alpha))} />
-      <input type="range" aria-label={`${label} transparency`} min={0} max={100} step="any" value={alpha} onChange={event => onChange(composeColor(rgb, Number(event.target.value)))} />
-    </>
+      <input type="range" aria-label={`${label} transparency`} title="Opacity" min={0} max={100} step="any" value={alpha} style={rangeFill(alpha, 0, 100)} onChange={event => onChange(composeColor(rgb, Number(event.target.value)))} />
+    </div>
   );
+}
+
+function rangeFill(value: number, min: number, max: number): CSSProperties {
+  const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  return { "--range-fill": `${Math.min(100, Math.max(0, percent))}%` } as CSSProperties;
 }
 
 function splitColor(value: string): { rgb: string; alpha: number } {

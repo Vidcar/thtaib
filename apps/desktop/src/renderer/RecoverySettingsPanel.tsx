@@ -8,7 +8,7 @@ import {
 } from "./packet03Api";
 import type { PresentationSettings, PresentationTheme } from "./types";
 import { AppearanceSettings } from "./AppearanceSettings";
-import { CompactSwitch } from "./CompactControls";
+import { CompactSwitch, SegmentedChoice, SettingRow, SettingSection } from "./CompactControls";
 import { HoverHelp } from "./HoverHelp";
 import { pickWorkbenchPath } from "./PathField";
 import { Icon } from "./Icon";
@@ -229,138 +229,116 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
 
   return (
     <section className="packet03-panel settings-surface" aria-label="Recovery and settings">
-      <div className="packet03-row">
-        <h2>Settings</h2>
-        <button type="button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
+      <header className="settings-head">
+        <div><h2>Settings</h2><p className="hint">How the Workbench looks, notifies and keeps your work safe on this computer.</p></div>
+        <button type="button" className="quiet-button" disabled={busy || preferencesBusy} onClick={() => void refresh()}>
           <Icon name="refresh" size={14} /> Refresh
         </button>
-      </div>
-
-      {message ? <p role="status" className="notice">{message}</p> : null}
+      </header>
 
       <nav className="settings-categories" aria-label="Settings categories">{["Appearance", "Notifications", "Defaults", "Connections", "Permissions", "Backup"].map(item => <button type="button" key={item} aria-current={category === item ? "page" : undefined} onClick={() => setCategory(item)}>{item}</button>)}</nav>
 
-      <div className="settings-preferences">
-        <section className="packet03-item" hidden={category !== "Notifications"}>
-          <div className="entity-head"><h3>Notifications</h3><HoverHelp title="About desktop notifications">Shown while the app is in the background. Select a notification to return to the relevant conversation or work. These two preferences work independently.</HoverHelp></div>
-          <CompactSwitch label="Notify when work needs attention" checked={preferences.attention_notifications} disabled={preferenceControlsDisabled} onChange={attention_notifications => void savePreferences({ attention_notifications })} />
-          <CompactSwitch label="Notify when work finishes" checked={preferences.success_notifications} disabled={preferenceControlsDisabled} onChange={success_notifications => void savePreferences({ success_notifications })} />
-          <p className="hint">Attention includes approvals, questions and failures.</p>
-        </section>
-        <section className="packet03-item settings-appearance" hidden={category !== "Appearance"}>
-          <h3>Appearance</h3>
-          <label className="settings-theme">
-            Theme
-            <select
-              aria-label="Theme"
-              value={preferences.theme}
-              disabled={preferenceControlsDisabled}
-              onChange={(event) => void savePreferences({ theme: event.target.value as PresentationTheme })}
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-          <CompactSwitch label="Show reasoning and tool details by default" checked={preferences.detailed_streams} disabled={preferenceControlsDisabled} onChange={detailed_streams => void savePreferences({ detailed_streams })} />
-          <AppearanceSettings theme={preferences.theme} />
-        </section>
+      {message ? <p role="status" className="notice">{message}</p> : null}
+
+      <div className="settings-category-content" hidden={category !== "Notifications"}>
+        <SettingSection title="Notifications" description="Shown while the app is in the background. Select one to return to the work.">
+          <CompactSwitch label="Notify when work needs attention" description="Approvals, questions and failures." checked={preferences.attention_notifications} disabled={preferenceControlsDisabled} onChange={attention_notifications => void savePreferences({ attention_notifications })} />
+          <CompactSwitch label="Notify when work finishes" description="Completed chats and workflow runs. Works independently of attention notifications." checked={preferences.success_notifications} disabled={preferenceControlsDisabled} onChange={success_notifications => void savePreferences({ success_notifications })} />
+        </SettingSection>
+      </div>
+
+      <div className="settings-category-content settings-appearance" hidden={category !== "Appearance"}>
+        <SettingSection title="Theme and display" description="Saved with your preferences.">
+          <SegmentedChoice label="Theme" description="System follows your computer's light or dark setting." value={preferences.theme} disabled={preferenceControlsDisabled} options={[{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} onChange={theme => void savePreferences({ theme: theme as PresentationTheme })} />
+          <CompactSwitch label="Show reasoning and tool details by default" description="Each conversation can still show or hide them from its view menu." checked={preferences.detailed_streams} disabled={preferenceControlsDisabled} onChange={detailed_streams => void savePreferences({ detailed_streams })} />
+        </SettingSection>
+        <AppearanceSettings theme={preferences.theme} />
       </div>
 
       <div hidden={category !== "Defaults"} className="settings-category-content">{defaultsPanel ?? children}</div>
       <div hidden={category !== "Connections"} className="settings-category-content">{connectionsPanel}</div>
 
-        <details className="packet03-item settings-permissions" open hidden={category !== "Permissions"}>
-          <summary>Saved permissions <span className="hint">{grants.length || "None"}</span></summary>
-          <div className="entity-head"><h3>Permissions</h3><HoverHelp title="About saved permissions">Saved approvals are limited to their recorded action, arguments and project. Revoke one to require approval again.</HoverHelp></div>
+      <div className="settings-category-content settings-permissions" hidden={category !== "Permissions"}>
+        <SettingSection title="Saved permissions" description="Each approval is limited to its recorded action, arguments and project. Revoke one to be asked again." actions={<span className="badge">{grants.length || "None"}</span>}>
           {grants.length === 0 ? (
             <p className="hint">No saved approvals. Tools will ask when permission is needed.</p>
-          ) : (
-            <ul className="packet03-list">
-              {grants.map((grant) => (
-                <li key={grant.id} className="packet03-item">
-                  <strong>{grantLabel(grant)}</strong>
-                  <p className="hint">{argumentSummary(grant.arguments)}</p>
-                  {grant.project_path ? <p className="hint">Project: {grant.project_path}</p> : null}
-                  <button type="button" disabled={busy} onClick={() => void revoke(grant.id)}>
-                    <Icon name="close" size={14} /> Revoke
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </details>
-
-      <details className="packet03-item" open hidden={category !== "Backup"}>
-        <summary><Icon name="download" size={15} /> Backup</summary>
-        <div className="entity-head"><h3>Create a backup</h3><HoverHelp title="What a backup includes">Includes app records, compatible checkpoints and retained files. Models, runtimes, project files and credentials stay in their existing locations.</HoverHelp></div>
-        <label>
-          Destination folder
-          <input value={backupDestination} onChange={(event) => setBackupDestination(event.target.value)} placeholder="Choose a folder for the backup archive" />
-        </label>
-        <div className="packet03-actions">
-          <button type="button" onClick={() => void chooseFolder(setBackupDestination)} disabled={!window.workbench?.selectPath}>
-            <Icon name="folder" size={14} /> Choose folder
-          </button>
-          <button type="button" disabled={busy || !backupDestination.trim()} onClick={() => void createBackup()}>
-            <Icon name="download" size={14} /> Create backup
-          </button>
-        </div>
-        {lastBackup ? (
-          <p className="hint">Created {lastBackup.archive_path}. Credentials excluded; effects will not be replayed on restore.</p>
-        ) : null}
-      </details>
-
-      <details className="packet03-item" open hidden={category !== "Backup"}>
-        <summary><Icon name="restore" size={15} /> Restore</summary>
-        <div className="entity-head"><h3>Restore a backup</h3><HoverHelp title="Restore dependencies">Missing models, runtimes and external files are reported before activation.</HoverHelp></div>
-        <p className="hint">Restores to an empty folder. Activation restarts the app; previous actions are never replayed.</p>
-        {activeRunIds.length ? (
-          <p className="notice notice-warn">{activeRunIds.length} active run{activeRunIds.length === 1 ? "" : "s"} detected. Restore is safest after work is stopped or complete.</p>
-        ) : null}
-        <label>
-          Backup archive
-          <input value={restoreArchive} onChange={(event) => setRestoreArchive(event.target.value)} placeholder="Choose a backup archive" />
-        </label>
-        <label>
-          Clean destination folder
-          <input value={restoreDestination} onChange={(event) => setRestoreDestination(event.target.value)} placeholder="Choose an empty folder" />
-        </label>
-        <div className="packet03-actions">
-          <button type="button" onClick={() => void chooseFile(setRestoreArchive)} disabled={!window.workbench?.selectPath}>
-            <Icon name="files" size={14} /> Choose archive
-          </button>
-          <button type="button" onClick={() => void chooseFolder(setRestoreDestination)} disabled={!window.workbench?.selectPath}>
-            <Icon name="folder" size={14} /> Choose destination
-          </button>
-          <button type="button" disabled={busy || !restoreArchive.trim() || !restoreDestination.trim()} onClick={() => void restoreBackup()}>
-            <Icon name="restore" size={14} /> Restore backup
-          </button>
-        </div>
-        {lastRestore ? (
-          <div className="notice">
-            <p>Restored to {lastRestore.destination_root}. Not yet active; no actions replayed.</p>
-            {lastRestore.missing_dependencies.length ? (
-              <ul>
-                {lastRestore.missing_dependencies.map((item, index) => (
-                  <li key={`${item.kind}-${item.path ?? item.id ?? index}`}>{item.kind}: {item.path ?? item.id ?? "missing reference"}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>No missing external dependencies reported.</p>
-            )}
-            {window.workbench?.activateRestore ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void activateRestore(lastRestore.destination_root)}
-              >
-                <Icon name="restore" size={14} /> Activate restore and restart
+          ) : grants.map((grant) => (
+            <SettingRow key={grant.id} inline label={grantLabel(grant)} provenance={<>{argumentSummary(grant.arguments)}{grant.project_path ? <> · Project: {grant.project_path}</> : null}</>}>
+              <button type="button" disabled={busy} onClick={() => void revoke(grant.id)}>
+                <Icon name="close" size={14} /> Revoke
               </button>
-            ) : null}
+            </SettingRow>
+          ))}
+        </SettingSection>
+      </div>
+
+      <div className="settings-category-content" hidden={category !== "Backup"}>
+        <SettingSection title="Create a backup" description="App records, compatible checkpoints and retained files. Models, runtimes, project files and credentials stay where they are.">
+          <SettingRow stacked label="Destination folder" htmlFor="backup-destination" hint={lastBackup ? `Created ${lastBackup.archive_path}. Credentials excluded; effects will not be replayed on restore.` : undefined}>
+            <div className="path-field">
+              <input id="backup-destination" value={backupDestination} onChange={(event) => setBackupDestination(event.target.value)} placeholder="Choose a folder for the backup archive" />
+              <button type="button" onClick={() => void chooseFolder(setBackupDestination)} disabled={!window.workbench?.selectPath}>
+                <Icon name="folder" size={14} /> Choose folder
+              </button>
+            </div>
+          </SettingRow>
+          <div className="setting-actions">
+            <button type="button" className="primary-button" disabled={busy || !backupDestination.trim()} onClick={() => void createBackup()}>
+              <Icon name="download" size={14} /> Create backup
+            </button>
           </div>
-        ) : null}
-      </details>
+        </SettingSection>
+
+        <SettingSection title="Restore a backup" description="Restores into an empty folder. Activation restarts the app; previous actions are never replayed." actions={<HoverHelp title="Restore dependencies">Missing models, runtimes and external files are reported before activation.</HoverHelp>}>
+          {activeRunIds.length ? (
+            <p className="notice notice-warn">{activeRunIds.length} active run{activeRunIds.length === 1 ? "" : "s"} detected. Restore is safest after work is stopped or complete.</p>
+          ) : null}
+          <SettingRow stacked label="Backup archive" htmlFor="restore-archive">
+            <div className="path-field">
+              <input id="restore-archive" value={restoreArchive} onChange={(event) => setRestoreArchive(event.target.value)} placeholder="Choose a backup archive" />
+              <button type="button" onClick={() => void chooseFile(setRestoreArchive)} disabled={!window.workbench?.selectPath}>
+                <Icon name="files" size={14} /> Choose archive
+              </button>
+            </div>
+          </SettingRow>
+          <SettingRow stacked label="Clean destination folder" htmlFor="restore-destination">
+            <div className="path-field">
+              <input id="restore-destination" value={restoreDestination} onChange={(event) => setRestoreDestination(event.target.value)} placeholder="Choose an empty folder" />
+              <button type="button" onClick={() => void chooseFolder(setRestoreDestination)} disabled={!window.workbench?.selectPath}>
+                <Icon name="folder" size={14} /> Choose destination
+              </button>
+            </div>
+          </SettingRow>
+          <div className="setting-actions">
+            <button type="button" className="primary-button" disabled={busy || !restoreArchive.trim() || !restoreDestination.trim()} onClick={() => void restoreBackup()}>
+              <Icon name="restore" size={14} /> Restore backup
+            </button>
+          </div>
+          {lastRestore ? (
+            <div className="notice">
+              <p>Restored to {lastRestore.destination_root}. Not yet active; no actions replayed.</p>
+              {lastRestore.missing_dependencies.length ? (
+                <ul>
+                  {lastRestore.missing_dependencies.map((item, index) => (
+                    <li key={`${item.kind}-${item.path ?? item.id ?? index}`}>{item.kind}: {item.path ?? item.id ?? "missing reference"}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No missing external dependencies reported.</p>
+              )}
+              {window.workbench?.activateRestore ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void activateRestore(lastRestore.destination_root)}
+                >
+                  <Icon name="restore" size={14} /> Activate restore and restart
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </SettingSection>
+      </div>
     </section>
   );
 }

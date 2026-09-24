@@ -41,7 +41,7 @@ export function settingSource(source?: string | null): string {
 export function effectiveSettingDisplay(fact?: EffectiveSetting, loading = false): { value: string; source: string } {
   if (loading) return { value: "Checking…", source: "" };
   if (fact?.supported === false) return { value: "Unavailable", source: fact.unavailable_reason || "This model does not support this setting" };
-  if (!fact?.known) return { value: "Not reported", source: "No resolved value reported" };
+  if (!fact?.known) return { value: "Not reported", source: "" };
   return { value: settingValue(fact.value), source: settingSource(fact.source) };
 }
 

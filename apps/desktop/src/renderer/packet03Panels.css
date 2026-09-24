@@ -1,119 +1,16 @@
-.packet03-panel {
-  display: grid;
-  gap: var(--space-stack);
-  padding: var(--pad-card);
-}
-
-.packet03-panel h2,
-.packet03-panel h3 {
-  margin: 0;
-}
-
-.packet03-toolbar,
-.packet03-row,
-.packet03-actions {
-  display: flex;
-  gap: var(--space-compact);
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.packet03-list {
-  display: grid;
-  gap: var(--space-compact);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.packet03-item {
-  display: grid;
-  gap: var(--space-compact);
-  padding: var(--pad-compact) var(--pad-card);
-  border: var(--line-hairline) solid var(--border);
-  background: var(--bg-raised);
-}
-
-.packet03-item[aria-disabled="true"] {
-  opacity: var(--fade-quiet);
-}
-
-.packet03-meta {
-  display: flex;
-  gap: var(--space-tight);
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: var(--text-small);
-}
-
-.packet03-details {
-  margin-top: var(--space-tight);
-}
-
-.packet03-details summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: var(--text-body);
-}
-
-.packet03-attention-button {
-  position: relative;
-  display: inline-flex;
-  gap: var(--space-tight);
-  align-items: center;
-}
-
-.packet03-attention-button .attention-count {
-  position: absolute;
-  top: 5px;
-  left: 18px;
-  min-width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0 var(--pad-tight);
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--bg);
-  font-size: var(--text-small);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-  text-align: center;
-  box-shadow: 0 0 0 var(--focus-ring) var(--bg-nav);
-}
-
-.packet03-preview {
-  max-height: 18rem;
-  overflow: auto;
-  white-space: pre-wrap;
-  padding: var(--pad-compact);
-  border: var(--line-hairline) solid var(--border);
-  background: var(--bg-input);
-}
-
-.packet03-grid {
-  display: grid;
-  gap: var(--space-stack);
-}
-
-.packet03-attachments {
-  display: grid;
-  gap: var(--space-compact);
-}
-
-.packet03-dropzone {
-  display: grid;
-  gap: var(--space-tight);
-  padding: var(--pad-compact) var(--pad-card);
-  border: var(--line-hairline) dashed var(--border);
-  background: var(--bg-raised);
-}
-
-.packet03-dropzone.is-active {
-  border-color: var(--accent);
-}
-
-@media (min-width: 980px) {
-  .packet03-grid {
-    grid-template-columns: minmax(0, 1.15fr) minmax(var(--layout-column), 0.85fr);
-  }
-}
+/* Shared list, attachment and attention pieces used by Library, Attention, Settings and the composer. */
+.packet03-panel h2, .packet03-panel h3 {margin: 0;}
+.packet03-toolbar, .packet03-row, .packet03-actions {display: flex; gap: var(--space-compact); align-items: center; flex-wrap: wrap;}
+.packet03-list {display: grid; gap: var(--space-compact); list-style: none; margin: 0; padding: 0;}
+.packet03-item {display: grid; gap: var(--space-compact);}
+.packet03-list > .packet03-item {padding: var(--pad-compact) var(--pad-card); background: var(--bg-panel);}
+.packet03-item[aria-disabled="true"] {opacity: var(--fade-quiet);}
+.packet03-meta {display: flex; gap: var(--space-tight); flex-wrap: wrap; color: var(--muted); font-size: var(--text-small);}
+.packet03-details {margin-top: var(--space-tight);}
+.packet03-details summary {color: var(--muted); font-size: var(--text-body);}
+.packet03-attention-button {position: relative; display: inline-flex; gap: var(--space-tight); align-items: center;}
+.packet03-attention-button .attention-count {position: absolute; top: var(--space-tight); left: calc(var(--icon-md) + var(--line-strong)); min-width: calc(var(--text-small) + var(--line-strong)); height: calc(var(--text-small) + var(--line-strong) + var(--line-hairline)); margin: 0; padding: 0 var(--space-tight); border-radius: var(--radius-pill); background: var(--accent); color: var(--bg); font-size: var(--text-small); font-weight: var(--weight-semibold); line-height: var(--leading-tight); text-align: center; box-shadow: 0 0 0 var(--focus-ring) var(--bg-nav);}
+.packet03-preview {max-height: var(--layout-menu); overflow: auto; white-space: pre-wrap; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-input);}
+.packet03-attachments {display: grid; gap: var(--space-compact);}
+.packet03-dropzone {display: grid; gap: var(--space-tight); padding: var(--pad-compact) var(--pad-card); border: var(--line-hairline) dashed var(--border); border-radius: var(--radius-card); background: transparent; transition: border-color .14s ease, background-color .14s ease;}
+.packet03-dropzone.is-active {border-color: var(--accent); background: color-mix(in srgb, var(--accent) var(--tint-quiet), transparent);}

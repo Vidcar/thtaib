@@ -544,7 +544,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
       renderer.root.findByProps({ "aria-label": "Select b.txt" }).props.onChange({ target: { checked: true } });
     });
     await act(async () => {
-      button(renderer, "Delete").props.onClick();
+      exactButton(renderer, "Delete").props.onClick();
       await tick();
     });
     await act(async () => {
@@ -862,6 +862,12 @@ function input(renderer, type) {
 function button(renderer, label) {
   const found = renderer.root.findAll((node) => node.type === "button" && textOf(node).includes(label));
   assert.ok(found.length > 0, `expected button ${label}`);
+  return found[0];
+}
+
+function exactButton(renderer, label) {
+  const found = renderer.root.findAll((node) => node.type === "button" && textOf(node).trim() === label);
+  assert.equal(found.length, 1, `expected one button labelled ${label}`);
   return found[0];
 }
 

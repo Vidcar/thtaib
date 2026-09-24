@@ -263,7 +263,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
           <option value="all">All types</option><option value="upload">Uploads</option><option value="verified_output">Outputs</option>
         </select>
         <select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Newest first</option><option value="name">Name</option><option value="size">Largest first</option></select>
-        <label className="check-row file-deleted-toggle"><input type="checkbox" checked={includeDeleted} onChange={event => setIncludeDeleted(event.target.checked)} /> Deleted</label>
+        <button type="button" className="chip file-deleted-toggle" aria-pressed={includeDeleted} onClick={() => setIncludeDeleted(current => !current)}>Deleted</button>
       </div>
 
       <div className="file-selection-bar" aria-label="File actions">

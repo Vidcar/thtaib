@@ -10,6 +10,7 @@ import { ImportJobsPanel, useImportJobs } from "./ImportJobsPanel";
 import { ModelDeletion } from "./ModelDeletion";
 import { ModelStoragePanel } from "./ModelStoragePanel";
 import { Help } from "./ModelControls";
+import { CompactSwitch } from "./CompactControls";
 import { PathBrowseButton } from "./PathField";
 import { ModelPicker } from "./ModelPicker";
 import { ModelResponseRecipes } from "./ModelResponseRecipes";
@@ -163,7 +164,7 @@ export function ModelsPanel() {
             Display name (optional)
             <input value={localName} onChange={(event) => setLocalName(event.target.value)} />
           </label>
-          <div className="setting-title"><label className="check-row"><input type="checkbox" checked={copyLocal} onChange={event => setCopyLocal(event.target.checked)} />Copy into model storage</label><Help label="Copy model">Turn off to use the original files without another copy. External originals are preserved when this library entry is removed.</Help></div>
+          <CompactSwitch label="Copy into model storage" description="Turn off to use the original files without another copy. External originals are preserved when this library entry is removed." checked={copyLocal} onChange={setCopyLocal} />
           <button type="submit" className="primary-button" disabled={!localPath.trim() || localBusy}>
             {localBusy ? "Adding model…" : "Add model"}
           </button>

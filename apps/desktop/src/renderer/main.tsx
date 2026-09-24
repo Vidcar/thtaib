@@ -1,14 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import "./appearanceDefaults.css";
+import "./styles.css";
 import { App } from "./App";
 import { AppearancePreviewApp } from "./AppearancePreview";
-import "./styles.css";
-import "./chatPolish.css";
-import "./workbenchTheme.css";
-import "./surfacePolish.css";
-import "./appearanceDefaults.css";
-import "./workbenchCohesion.css";
 
 const root = document.getElementById("root");
 if (!root) {

@@ -1,17 +1,15 @@
-.settings-surface {gap: var(--space-compact); max-width: none;}
-.settings-surface > .packet03-row {margin-bottom: var(--space-tight);}
-.settings-surface .settings-preferences {display: grid; gap: var(--space-compact); grid-template-columns: minmax(0, 1fr);}
-.settings-surface .packet03-item {padding: var(--pad-card) var(--pad-card); border-radius: var(--radius-card); gap: var(--space-compact);}
-.settings-surface .packet03-item > :is(h3, h4, p, label) {margin: 0;}
-.settings-surface .settings-theme {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact);}
-.settings-surface .settings-theme select {width: min(100%, var(--layout-side));}
-.settings-surface .check-row {margin: 0; font-size: var(--text-body); gap: var(--space-compact);}
-.settings-surface .packet03-item .hint {font-size: var(--text-small);}
-.settings-surface details.packet03-item > summary {display: flex; align-items: center; gap: var(--space-compact);}
-.settings-surface details.packet03-item > summary::before {content: '›'; width: 8px; color: var(--muted);}
-.settings-surface details.packet03-item[open] > summary::before {content: '⌄';}
-.settings-surface details.packet03-item > summary > span {margin-left: auto;}
-.settings-surface details.packet03-item[open] > summary {margin-bottom: var(--space-compact);}
-.settings-surface .settings-permissions .packet03-list {gap: 0;}
-.settings-surface .settings-permissions .packet03-list .packet03-item {padding: var(--pad-compact) 0; border: 0; border-bottom: var(--line-hairline) solid var(--border); border-radius: 0;}
-
+/* Settings hub: one reading column of setting sections under category tabs. */
+.settings-surface {gap: var(--space-stack); max-width: calc(var(--layout-form) + var(--pad-section) * 2);}
+.settings-head {display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-compact);}
+.settings-head h2 {margin: 0;}
+.settings-head .hint {margin: var(--space-tight) 0 0; font-size: var(--text-body);}
+.settings-surface [hidden] {display: none !important;}
+.settings-category-content {display: grid; gap: var(--space-stack); width: 100%; max-width: var(--layout-form); min-width: 0;}
+.settings-category-content > .surface, .settings-category-content > .packet03-panel {padding: 0; max-width: none;}
+.path-field {display: flex; gap: var(--space-compact); min-width: 0;}
+.path-field > input {flex: 1 1 auto;}
+.path-field > button {display: inline-flex; align-items: center; gap: var(--space-tight); flex-shrink: 0; white-space: nowrap;}
+.settings-permissions .setting-row-control > button {display: inline-flex; align-items: center; gap: var(--space-tight);}
+@container (max-width: 520px) {
+  .path-field {flex-wrap: wrap;}
+}

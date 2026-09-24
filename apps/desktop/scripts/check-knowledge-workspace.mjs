@@ -151,7 +151,9 @@ async function checkKnowledgeOwnershipAndReview(Component) {
     await act(async () => { button(renderer, "Accept").props.onClick(); await tick(); });
     assert.deepEqual(calls.find(call => call.path.endsWith("/review")).body, { decision: "accept" });
     await act(async () => field(renderer, "Destination", "select").props.onChange({ target: { value: "project:project_real" } }));
-    await act(async () => { field(renderer, "Allow agents", "input").props.onChange({ target: { checked: true } }); await tick(); });
+    const automatic = renderer.root.findByProps({ role: "switch", "aria-label": "Save automatically" });
+    assert.equal(automatic.props["aria-checked"], false);
+    await act(async () => { automatic.props.onClick(); await tick(); });
     assert.deepEqual(calls.find(call => call.path.endsWith("automatic-save-policy")).body, { scope: "project", scope_id: "project_real", automatic_agent_writes: true });
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -259,7 +261,7 @@ async function checkRunProposalConflict(Component) {
     assert.ok(button(renderer, "Accept memory"), "a conflicted proposal must not be displayed as committed");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
-function field(renderer, label, type) { const result = renderer.root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(result, `expected label ${label}`); return result.findByType(type); }
+function field(renderer, label, type) { const result = renderer.root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(result, `expected label ${label}`); return result.props.htmlFor ? renderer.root.find(node => node.type === type && node.props.id === result.props.htmlFor) : result.findByType(type); }
 function entry(id, name) { return { id, display_name: name, scope: "user", scope_id: null, kind: "memory", content: `content ${id}`, current_version_id: `${id}-version`, provenance: { actor: "human" }, created_at: "2026-09-22T00:00:00Z", updated_at: "2026-09-22T00:00:00Z" }; }
 function json(body) { return { ok: true, status: 200, json: async () => body }; }
 function text(node) { return typeof node === "string" ? node : (node?.children ?? []).map(text).join(""); }
