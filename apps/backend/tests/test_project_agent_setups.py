@@ -101,6 +101,26 @@ class ProjectSetupTests(unittest.TestCase):
         self.client.delete(f'/v1/agent-setups/{setup["id"]}')
         self.assertEqual(len(self.client.get(f'/v1/agent-setups/{setup["id"]}/versions').json()), 2)
 
+    def test_visual_tool_catalogue_round_trips_saved_agent(self):
+        catalogue_response = self.client.get('/v1/agent-tools')
+        self.assertEqual(catalogue_response.status_code, 200, catalogue_response.text)
+        catalogue = catalogue_response.json()
+        selected = catalogue['enabled']
+        self.assertEqual([tool['id'] for tool in catalogue['tools']], selected)
+        self.assertIn('browser_take_screenshot', selected)
+        self.assertIn('desktop_screenshot', selected)
+        created = self.client.post('/v1/agent-setups', json={
+            'name': 'Visual tester',
+            'configuration': {
+                'deployment_id': self.deployment.id,
+                'desktop_access': 'selected',
+                'presented_tools': selected,
+            },
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()['configuration']['presented_tools'], selected)
+        self.assertEqual(created.json()['configuration']['desktop_access'], 'selected')
+
     def test_named_layers_and_empty_selection_do_not_erase_protected_restrictions(self):
         self.app.state.app_store.put_setup_defaults(SetupConfiguration(instructions="APP", presented_tools=["read_file"], requires_project=True))
         project = self.project(defaults={"instructions": "PROJECT", "presented_tools": ["ls"]})

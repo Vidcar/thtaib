@@ -23,6 +23,10 @@
 .setup-selection-options {display: grid; max-height: var(--layout-menu); overflow: auto; margin-bottom: var(--space-compact); padding: 0 var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-input);}
 .setup-selection-options > .setting-row + .setting-row {border-top: var(--line-hairline) solid var(--border);}
 .setup-selection-options > .setting-row {min-height: 0; padding-block: var(--pad-tight);}
+.setup-unavailable-selections {border-top: var(--line-hairline) solid var(--border); padding-block: var(--pad-tight);}
+.setup-unavailable-selections > summary {color: var(--muted); font-size: var(--text-small);}
+.setup-unavailable-selections > .setting-row {min-height: 0; padding-block: var(--pad-tight);}
+.setup-unavailable-selections > .setting-row + .setting-row {border-top: var(--line-hairline) solid var(--border);}
 .workspace-records-surface .hint {font-size: var(--text-small); overflow-wrap: anywhere;}
 .workspace-text {white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-body); line-height: var(--leading-body);}
 .workspace-records-surface .wrapped-text, .chat-setup .wrapped-text {white-space: pre-wrap; overflow-wrap: anywhere; max-height: var(--layout-menu); overflow: auto; margin: var(--space-compact) 0; font-size: var(--text-body); line-height: var(--leading-body);}

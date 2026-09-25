@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { workspaceApi, type AgentSetup, type AgentSetupVersion, type SetupConfiguration } from "./workspaceApi";
-import { SetupConfigurationEditor, useSetupCatalogue } from "./SetupConfigurationEditor";
+import { SetupConfigurationEditor, useSetupCatalogue, visualSetupCompatibilityIssue } from "./SetupConfigurationEditor";
 import { errorMessage } from "./errors";
 import { formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
@@ -29,6 +29,7 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
   const { catalogue, error: catalogueError } = useSetupCatalogue();
   const selected = records.find(record => record.id === selectedId);
   const draft = creating ? newDraft : selected ? drafts[selected.id] ?? draftOf(selected) : newDraft;
+  const visualCompatibilityIssue = visualSetupCompatibilityIssue(draft.configuration, catalogue);
   async function refresh(preferredId?: string) {
     const next = await workspaceApi.agentSetups();
     setRecords(next); setLoading(false);
@@ -51,6 +52,7 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
   }
   async function save() {
     if (!draft.name.trim()) return;
+    if (visualCompatibilityIssue) { setError(visualCompatibilityIssue); return; }
     await action(async () => {
       const payload = { name: draft.name.trim(), role: draft.role.trim() || null, configuration: draft.configuration };
       const next = creating ? await workspaceApi.createAgentSetup(payload) : await workspaceApi.updateAgentSetup(selected!.id, { ...payload, base_version: draft.base_version });
@@ -69,7 +71,7 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
         {selected?.missing_dependencies?.length && !creating ? <Notice tone="warn">This setup needs attention.<ul>{selected.missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
         <div className="setup-form-grid"><label>Name<input required maxLength={200} value={draft.name} disabled={busy} onChange={event => updateDraft({ name: event.target.value })} placeholder="Research assistant" /></label><label>Purpose<input value={draft.role} disabled={busy} onChange={event => updateDraft({ role: event.target.value })} placeholder="Read sources and compare findings" /></label></div>
         <SetupConfigurationEditor value={draft.configuration} catalogue={catalogue} disabled={busy} requirements onChange={configuration => updateDraft({ configuration })} />
-        <div className="actions"><button className="primary-button" disabled={busy || !draft.name.trim()}><Icon name="check" size={14} />{busy ? "Saving…" : "Save agent"}</button>{!creating && drafts[selected!.id] ? <button type="button" disabled={busy} onClick={() => setDrafts(current => { const next = { ...current }; delete next[selected!.id]; return next; })}>Discard edits</button> : null}{creating && records.length ? <button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
+        <div className="actions"><button className="primary-button" disabled={busy || !draft.name.trim() || Boolean(visualCompatibilityIssue)}><Icon name="check" size={14} />{busy ? "Saving…" : "Save agent"}</button>{!creating && drafts[selected!.id] ? <button type="button" disabled={busy} onClick={() => setDrafts(current => { const next = { ...current }; delete next[selected!.id]; return next; })}>Discard edits</button> : null}{creating && records.length ? <button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
       </form>
       {!creating && selected ? <>
         <div className="actions"><button type="button" disabled={busy} onClick={() => void action(async () => { const next = await workspaceApi.duplicateAgentSetup(selected.id); await refresh(next.id); setMessage("Agent duplicated."); })}><Icon name="copy" size={14} />Duplicate</button></div>
