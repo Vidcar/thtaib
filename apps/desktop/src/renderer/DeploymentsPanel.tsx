@@ -29,7 +29,7 @@ const draftKey = (bundle: string, profile: string) => `${bundle}:${profile || "d
 
 function startupValueLabel(key: string, value: unknown): string {
   if (key === "ctx_size" && typeof value === "number") return `${value.toLocaleString()} tokens`;
-  if (key === "n_gpu_layers") return value === -1 ? "All layers requested" : value === 0 ? "CPU only" : value === "auto" ? "Automatic fit" : typeof value === "number" ? `${value} layers requested` : settingValue(value);
+  if (key === "n_gpu_layers") return value === -1 || value === "-1" || value === "auto" ? "Automatic fit" : value === "all" ? "All layers requested" : value === 0 ? "CPU only" : typeof value === "number" ? `${value} layers requested` : settingValue(value);
   if (key === "spec_type" && value === "none") return "Off";
   if (key === "reasoning_budget" && value === -1) return "Unrestricted";
   if (key === "reasoning_preserve") return value === true ? "Keep" : value === false ? "Drop" : settingValue(value);
@@ -339,7 +339,7 @@ export function DeploymentsPanel({
       <ChoiceControl id={`model-${key}`} label={label} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={min} max={max} disabled={Boolean(busy)} resolvedLabel={resolvedLabel} resolvedValue={normalizedResolved} />
     </SettingRow>;
   };
-  const gpuMode = settings.n_gpu_layers === "" ? "inherit" : settings.n_gpu_layers === "auto" ? "auto" : settings.n_gpu_layers === "-1" ? "all" : settings.n_gpu_layers === "0" ? "cpu" : "exact";
+  const gpuMode = settings.n_gpu_layers === "" ? "inherit" : ["auto", "-1"].includes(settings.n_gpu_layers) ? "auto" : settings.n_gpu_layers === "all" ? "all" : settings.n_gpu_layers === "0" ? "cpu" : "exact";
   const contextLoaded = selectedRunning?.server_props?.n_ctx;
   const contextResolvedRaw = startupResolved("ctx_size");
   const contextResolved = typeof contextResolvedRaw === "number" ? contextResolvedRaw : null;
@@ -363,7 +363,7 @@ export function DeploymentsPanel({
       {d.error && d.status !== "stopped" ? <Notice tone="error">{d.error}</Notice> : null}
       {gpuLayers != null || hasSpeculation || hasThinkingOverride || d.loaded_chat_template_origin ? <dl className="model-applied-facts" aria-label="Applied model settings">
         {d.loaded_chat_template_origin ? <div title="The running server reported the selected Hugging Face chat template"><dt>Chat template</dt><dd>{d.loaded_chat_template_origin === "publisher" ? "Publisher" : "GGUF repository"} · confirmed</dd></div> : null}
-        {gpuLayers != null ? <div title="GPU layers requested at launch; memory fitting may adjust this"><dt>GPU layers</dt><dd>{gpuLayers === -1 ? "All requested" : String(gpuLayers)}</dd></div> : null}
+        {gpuLayers != null ? <div title="GPU layers requested at launch; actual placement is not reported here"><dt>GPU layers</dt><dd>{startupValueLabel("n_gpu_layers", gpuLayers)}</dd></div> : null}
         {hasSpeculation ? <div title="Speculative decoding launch setting"><dt>Speculation</dt><dd>{String(speculation)}{String(speculation).startsWith("draft-") ? ` · ${d.applied_startup.spec_draft_n_max ?? 3} tokens` : ""}</dd></div> : null}
         {hasThinkingOverride ? <div title="Thinking launch setting. Per-message controls can override it."><dt>Thinking</dt><dd>{String(thinking)}</dd></div> : null}
       </dl> : null}
@@ -435,8 +435,8 @@ export function DeploymentsPanel({
         </SettingRow>
         <SettingRow label="GPU layers" labelId="model-gpu-label" help="Automatic fits available memory; All requests full offload; CPU keeps layers off the GPU; Custom sets an exact count." provenance={startupReadout("n_gpu_layers")}
           onReset={canResetStartup("n_gpu_layers") && !busy ? () => change("n_gpu_layers", "") : undefined}
-          hint={gpuLoaded != null && (!modelFacts["startup.n_gpu_layers"]?.known || Number(modelFacts["startup.n_gpu_layers"].value) !== gpuLoaded) ? <span className="model-loaded-difference">Loaded request: {String(gpuLoaded)} layers</span> : undefined}>
-          <SegmentedChoice bare label="GPU layers" value={gpuMode} disabled={Boolean(busy)} options={[{ value: "inherit", label: "Inherited" }, { value: "auto", label: "Auto" }, { value: "all", label: "All" }, { value: "cpu", label: "CPU" }, { value: "exact", label: "Custom…" }]} onChange={mode => change("n_gpu_layers", mode === "inherit" ? "" : mode === "all" ? "-1" : mode === "cpu" ? "0" : mode === "exact" ? String(Math.max(1, Math.floor((layers ?? 32) / 2))) : "auto")} />
+          hint={gpuLoaded != null && (!modelFacts["startup.n_gpu_layers"]?.known || startupValueLabel("n_gpu_layers", modelFacts["startup.n_gpu_layers"].value) !== startupValueLabel("n_gpu_layers", gpuLoaded)) ? <span className="model-loaded-difference">Loaded request: {startupValueLabel("n_gpu_layers", gpuLoaded)}</span> : undefined}>
+          <SegmentedChoice bare label="GPU layers" value={gpuMode} disabled={Boolean(busy)} options={[{ value: "inherit", label: "Inherited" }, { value: "auto", label: "Auto" }, { value: "all", label: "All" }, { value: "cpu", label: "CPU" }, { value: "exact", label: "Custom…" }]} onChange={mode => change("n_gpu_layers", mode === "inherit" ? "" : mode === "all" ? "all" : mode === "cpu" ? "0" : mode === "exact" ? String(Math.max(1, Math.floor((layers ?? 32) / 2))) : "auto")} />
           {gpuMode === "exact" ? <div className="slider-field">
             <input type="range" aria-label="GPU layers slider" min={1} max={layers ?? 128} step={1} value={Number(settings.n_gpu_layers) || 1} disabled={Boolean(busy)} style={{ "--range-fill": `${((Number(settings.n_gpu_layers) || 1) - 1) / Math.max(1, (layers ?? 128) - 1) * 100}%` } as CSSProperties} onChange={event => change("n_gpu_layers", event.target.value)} />
             <span className="number-field"><input type="number" aria-label="Exact GPU layers" min={1} max={layers ?? undefined} value={settings.n_gpu_layers} disabled={Boolean(busy)} onChange={event => change("n_gpu_layers", event.target.value || "custom")} /><span className="field-unit">{layers ? `of ${layers}` : "layers"}</span></span>

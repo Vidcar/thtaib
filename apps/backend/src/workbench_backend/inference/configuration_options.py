@@ -333,16 +333,16 @@ def _context_descriptor(maximum: int | None, observed: int | None) -> RuntimeCon
 def _gpu_layers_descriptor(block_count: int | None) -> RuntimeControlDescriptor:
     maximum = block_count + 1 if block_count is not None and block_count >= 0 else None
     if maximum is None:
-        layer_values = [-1, 0]
+        layer_values = ["auto", "all", -1, 0]
     else:
-        layer_values = [-1, *range(0, maximum + 1)]
+        layer_values = ["auto", "all", -1, *range(0, maximum + 1)]
     return RuntimeControlDescriptor(
         key="n_gpu_layers",
         flag="--n-gpu-layers",
         label="GPU layers",
         description=(
-            "How many transformer layers llama.cpp should place on the GPU. -1 asks "
-            "the runtime to offload all layers it can."
+            "How many transformer layers llama.cpp should place on the GPU. "
+            "Auto (including legacy -1) fits memory; all explicitly requests full offload."
         ),
         source="gguf_metadata" if maximum is not None else "workbench_default",
         applied=DEFAULT_GPU_PROFILE["n_gpu_layers"],
@@ -350,7 +350,7 @@ def _gpu_layers_descriptor(block_count: int | None) -> RuntimeControlDescriptor:
         options=[
             RuntimeControlOption(
                 value=value,
-                label="All available GPU layers" if value == -1 else str(value),
+                label="Automatic (legacy)" if value == -1 else "Automatic" if value == "auto" else "All" if value == "all" else str(value),
                 description=(
                     "Start llama-server with --n-gpu-layers -1."
                     if value == -1
@@ -369,7 +369,7 @@ def _startup_defaults(*, recommended_threads: int | None) -> dict[str, RuntimeCo
             key="n_gpu_layers",
             flag="--n-gpu-layers",
             label="GPU layers",
-            description="Workbench starts managed GPU deployments with full available offload by default.",
+            description="Workbench starts managed GPU deployments with automatic memory fitting by default.",
             source="workbench_default",
             applied=DEFAULT_GPU_PROFILE["n_gpu_layers"],
         ),

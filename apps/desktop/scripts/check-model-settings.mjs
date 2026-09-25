@@ -10,6 +10,9 @@ assert.deepEqual(startupPayload(controls, '{"reasoning_effort":"high"}', profile
 assert.deepEqual(startupPayload({ ...controls, ctx_size: '8192' }, '{"reasoning_effort":"high"}', profile, new Set(['ctx_size'])), { ctx_size: 8192 });
 assert.deepEqual(startupPayload({ ...controls, ctx_size: '' }, '{}', profile, new Set(['ctx_size'])), { reasoning_effort: null, ctx_size: null });
 assert.equal(startupPayload(controls, '{}').ctx_size, 4096, 'Custom setup still sends its chosen values');
+assert.equal(startupPayload({ n_gpu_layers: 'all' }, '{}').n_gpu_layers, 'all', 'All must reach llama.cpp as its literal all mode');
+assert.equal(startupPayload({ n_gpu_layers: 'auto' }, '{}').n_gpu_layers, 'auto', 'Auto must stay distinct from All');
+assert.equal(startupPayload({ n_gpu_layers: '-1' }, '{}').n_gpu_layers, -1, 'Existing automatic configurations retain their value');
 assert.equal(startupPayload({ spec_type: 'draft-mtp', spec_draft_n_max: '6' }, '{}').spec_draft_n_max, 6, 'MTP draft count is sent as an integer');
 assert.ok(!('spec_draft_n_max' in startupPayload({ spec_type: 'none', spec_draft_n_max: '6' }, '{}')), 'Inactive draft settings are omitted');
 assert.deepEqual(startupPayload({ reasoning_preserve: 'keep' }, '{}'), { reasoning_preserve: true }, 'Keep uses the existing boolean startup key');
