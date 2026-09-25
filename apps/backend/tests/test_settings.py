@@ -84,6 +84,14 @@ class SettingsBagTests(unittest.TestCase):
         self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], -1)
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
 
+    def test_explicit_all_gpu_layers_reaches_llama_server(self) -> None:
+        for value in ("all", "auto", -1):
+            with self.subTest(value=value):
+                bags = resolve_bags(startup={"n_gpu_layers": value})
+                self.assertEqual(bags.startup.applied["n_gpu_layers"], value)
+                args = startup_cli_args(bags.startup.applied)
+                self.assertEqual(args[args.index("--n-gpu-layers") + 1], str(value))
+
     def test_flash_attn_cli_is_valued_enum_never_bare(self) -> None:
         cases = (
             (True, "on"),
