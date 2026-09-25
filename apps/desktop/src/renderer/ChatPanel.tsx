@@ -101,6 +101,13 @@ interface PendingChatSubmit {
 
 type ExecutionPreferences = { work_mode?: "work" | "plan"; desktop_access?: DesktopAccess; helper_agent_ids?: string[]; review?: { enabled?: boolean; criteria?: string; max_revisions?: number } };
 
+const nonBlockingReadinessIssues = new Set(["chat_turn_active", "model_load_required", "readiness_unavailable"]);
+
+function readinessBlocksSend(value: ChatReadiness | null): boolean {
+  if (!value || value.can_send || value.status === "unverified") return false;
+  return !value.issues.length || value.issues.some(issue => !nonBlockingReadinessIssues.has(issue.code));
+}
+
 function ChatInteractionStream(props: {
   detailedStreams?: boolean;
   renderMessageFooter?: ComponentProps<typeof AgentMessageFeed>["renderMessageFooter"];
@@ -414,6 +421,34 @@ function ChatInteractionStreamContent(props: {
       });
   }, [clearPendingSubmit, clearSubmittedDraft, isCurrentOwner, owner, pendingSubmit, setMessage, stream, updateConversation]);
 
+  useEffect(() => {
+    if (!pendingSubmit || !isCurrentOwner(owner)) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reconcile = async () => {
+      try {
+        const next = await api.chatConversation(pendingSubmit.conversation_id);
+        if (cancelled || !isCurrentOwner(owner)) return;
+        if (chatHasAcceptedInputMessage(next, pendingSubmit.id)) {
+          updateConversationIfCurrentRun(next, owner, conversation.current_run_id ?? null);
+          clearSubmittedDraft(pendingSubmit);
+          clearPendingSubmit(pendingSubmit);
+          refreshDeployments();
+          return;
+        }
+      } catch {
+        // The interaction stream still owns submission errors and reconnects.
+      }
+      if (!cancelled) timer = setTimeout(() => void reconcile(), 5000);
+    };
+    timer = setTimeout(() => void reconcile(), 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [pendingSubmit, owner.conversationId, owner.threadId, owner.generation, conversation.current_run_id,
+    isCurrentOwner, updateConversationIfCurrentRun, clearSubmittedDraft, clearPendingSubmit, refreshDeployments]);
+
   return (
     <>
       {projectionRunOwned ? (
@@ -609,8 +644,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [setupDefaultsLoading, setSetupDefaultsLoading] = useState(true);
   const [hasApplicationDefaults, setHasApplicationDefaults] = useState(false);
   const [setupError, setSetupError] = useState("");
-  const [readiness, setReadiness] = useState<ChatReadiness | null>(null);
-  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [readinessSnapshot, setReadinessSnapshot] = useState<{ key: string; value: ChatReadiness } | null>(null);
   const [readinessEpoch, setReadinessEpoch] = useState(0);
   const [instructionLayers, setInstructionLayers] = useState<ResolvedSetupSelection["instruction_layers"]>([]);
   const applicationDefaults = useRef<ResolvedSetupSelection | null>(null);
@@ -648,7 +682,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setSelectedPath(path);
   }, [openRail]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|");
+  const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.display_title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
   const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<string[]>([]);
   const [message, setMessage] = useState("");
@@ -658,6 +692,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [pendingStop, setPendingStop] = useState<PendingStopRequest | null>(null);
   const [interactionThreadId, setInteractionThreadId] = useState<string | null>(null);
   const [selectionLoading, setSelectionLoading] = useState<ChatConversation | null>(null);
+  const [selectionFailure, setSelectionFailure] = useState<{ id: string; message: string } | null>(null);
   const [boundGeneration, setBoundGeneration] = useState(0);
   const selectionRequest = useRef(0);
   const draftRevision = useRef(0);
@@ -822,6 +857,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function markSetupEdited(...keys: string[]) { keys.forEach(key => setupEditedFields.current.add(key)); }
 
+  function selectedModelOverrides(): SetupConfiguration {
+    if (!deploymentId && !profileId) return {};
+    return { deployment_id: deploymentId || null, model_configuration_id: profileId || null };
+  }
+
   function chatConfiguration(): Record<string, unknown> {
     const layered = Boolean(hasApplicationDefaults || projectId || agentSetupVersionId || conversation?.agent_setup_version_id || conversation?.project_id);
     const pinnedMemory = hasFixedMemory(conversation) ? conversation?.memory_version_refs ?? [] : undefined;
@@ -874,15 +914,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   async function chooseSetup(nextProjectId: string | null, nextVersionId: string | null, overrides: SetupConfiguration = {}, preserveWorkspace = false, rejectOnFailure = false) {
     const request = ++setupRequest.current;
     const generation = selectionRequest.current;
+    const modelOverrides = Object.hasOwn(overrides, "deployment_id") || Object.hasOwn(overrides, "model_configuration_id")
+      ? {} : selectedModelOverrides();
+    const effectiveOverrides = { ...modelOverrides, ...overrides };
     setSetupResolving(true); setSetupError("");
     try {
-      const resolved = await workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides);
+      const resolved = await workspaceApi.resolveSetup(nextProjectId, nextVersionId, effectiveOverrides);
       if (request !== setupRequest.current || generation !== selectionRequest.current) {
         if (rejectOnFailure) throw new Error("The selected Chat changed while applying model settings. Try again.");
         return;
       }
-      setupEditedFields.current = new Set(Object.keys(overrides));
-      if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
+      setupEditedFields.current = new Set(Object.keys(effectiveOverrides));
+      if (effectiveOverrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
       setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
       if (!preserveWorkspace) setProjectPath(projects.find(project => project.id === nextProjectId)?.canonical_path ?? "");
       applyResolvedSetup(resolved);
@@ -907,6 +950,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     const selected = deployments.find(item => item.id === deploymentId);
     props.onModelPhase?.(selected?.status === "running" ? "ready" : "none");
   }, [deploymentsLoaded, setupDefaultsLoading, deployments, deploymentId, props.onModelPhase]);
+
+  useEffect(() => {
+    if (!deploymentsLoaded || setupDefaultsLoading || conversation || selectionLoading || setupResolving || deploymentId || profileId) return;
+    const healthy = deployments.filter(item => !isDeclaredEmbedder(item) && item.status === "running" && item.health?.healthy === true);
+    if (healthy.length !== 1) return;
+    const only = healthy[0];
+    const configurationId = only.profile_id ?? "";
+    markSetupEdited("deployment_id", "model_configuration_id");
+    setDeploymentId(only.id);
+    profileIdRef.current = configurationId;
+    setProfileId(configurationId);
+  }, [deploymentsLoaded, setupDefaultsLoading, conversation?.id, selectionLoading?.id, setupResolving, deploymentId, profileId, deployments]);
 
   useEffect(() => { props.onHistoryChanged?.(); }, [historySignature]);
   useEffect(() => { props.onActiveConversationId?.(conversation?.id ?? selectionLoading?.id ?? null); }, [conversation?.id, selectionLoading?.id]);
@@ -997,6 +1052,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function startFresh(): void {
+    const keepModelChoice = Boolean(deploymentId || profileId);
     setupRequest.current += 1;
     setSetupResolving(false);
     setSetupError("");
@@ -1007,13 +1063,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setConversation(null);
     setInteractionThreadId(null);
     setSelectionLoading(null);
+    setSelectionFailure(null);
     setPendingSubmit(null);
     setPendingStop(null);
     setSending(false);
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
-    setupEditedFields.current.clear();
+    setupEditedFields.current = keepModelChoice ? new Set(["deployment_id", "model_configuration_id"]) : new Set();
     setApprovalMode(approvalModeOf(applicationDefaults.current?.configuration.approval_mode));
     setPerRequestOverrides({});
     setSelectedTools(null);
@@ -1023,7 +1080,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   const selectionBusy = Boolean(props.restoringSelection) || Boolean(selectionLoading) || setupResolving || setupDefaultsLoading;
   const hasPendingCancelInput = Boolean(conversation?.pending_cancel_input_ids?.length);
-  const runBusy = (conversation?.current_run ? isAgentRunLive(conversation.current_run.status) : false) || Boolean(pendingSubmit) || hasPendingCancelInput;
+  const currentRunLive = Boolean(conversation?.current_run && isAgentRunLive(conversation.current_run.status));
+  const awaitingRunAdmission = Boolean(pendingSubmit && !currentRunLive);
+  const runBusy = currentRunLive || Boolean(pendingSubmit) || hasPendingCancelInput;
   const pendingSubmissionActive = Boolean(
     pendingSubmit &&
     conversation?.id === pendingSubmit.conversation_id &&
@@ -1063,11 +1122,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (historyMutations.current.get(item.id) === "deleted") return;
     const requestId = selectionRequest.current + 1;
     selectionRequest.current = requestId;
+    setupRequest.current += 1;
     activeOwner.current = { conversationId: null, threadId: null, generation: requestId };
     setBoundGeneration(requestId);
     setConversation(null);
     setInteractionThreadId(null);
     setSelectionLoading(item);
+    setSelectionFailure(null);
+    setMessage("");
     setPendingSubmit(null);
     setPendingStop(null);
     setSending(false);
@@ -1078,37 +1140,49 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           return;
         }
         cacheConversation(next);
-        const registered = await api.registerAgentInteractionThread({
-          source_surface: "chat",
-          conversation_id: next.id,
-        });
-        if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") {
-          return;
-        }
         const draftConfig = next.draft?.intended_config ?? {};
         const nextProjectId = typeof draftConfig.project_id === "string" ? draftConfig.project_id : next.project_id ?? null;
         const nextVersionId = Object.hasOwn(draftConfig, "agent_setup_version_id") ? typeof draftConfig.agent_setup_version_id === "string" ? draftConfig.agent_setup_version_id : null : next.agent_setup_version_id ?? null;
+        const draftSelectsConfiguration = Object.hasOwn(draftConfig, "model_configuration_id") || Object.hasOwn(draftConfig, "profile_id");
+        const nextConfigurationId = draftSelectsConfiguration
+          ? typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id
+            : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : ""
+          : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "";
+        const nextDeploymentId = Object.hasOwn(draftConfig, "deployment_id")
+          ? typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : ""
+          : draftSelectsConfiguration ? "" : next.deployment_id;
         // Selecting another saved agent resets the previous agent's overrides,
         // just as dispatch does. A restored draft keeps only its own new edits.
         const priorOverrides = nextVersionId === (next.agent_setup_version_id ?? null) ? next.setup_overrides ?? {} : {};
-        const overrides = setupOverrides({ ...priorOverrides, ...draftConfig });
+        const overrides = setupOverrides({ ...priorOverrides, ...draftConfig,
+          deployment_id: nextDeploymentId || null, model_configuration_id: nextConfigurationId || null });
+        // The fetched chat and draft can be shown while thread registration
+        // and setup resolution finish. Selection ownership still prevents a
+        // late response from rebinding a different chat.
+        setConversation(next);
+        setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
+        setDeploymentId(nextDeploymentId);
+        profileIdRef.current = nextConfigurationId;
+        setProfileId(nextConfigurationId);
+        setTask(next.draft?.content ?? "");
+        setAttachmentIds(next.draft?.attachment_ids ?? []);
+        setSetupResolving(true);
+        const registration = api.registerAgentInteractionThread({ source_surface: "chat", conversation_id: next.id });
         let resolutionFailure = "";
-        const resolved = nextProjectId || nextVersionId || hasApplicationDefaults ? await workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides).catch(error => { resolutionFailure = errorMessage(error); return null; }) : null;
+        const resolution = nextProjectId || nextVersionId || hasApplicationDefaults || (nextConfigurationId && !nextDeploymentId)
+          ? workspaceApi.resolveSetup(nextProjectId, nextVersionId, overrides).catch(error => { resolutionFailure = errorMessage(error); return null; })
+          : Promise.resolve(null);
+        const [registered, resolved] = await Promise.all([registration, resolution]);
         if (selectionRequest.current !== requestId || historyMutations.current.get(item.id) === "deleted") return;
         setupRequest.current += 1;
         setSetupResolving(false); setSetupError(resolutionFailure);
-        setProjectId(nextProjectId); setAgentSetupVersionId(nextVersionId);
         setupEditedFields.current = new Set(Object.keys(overrides));
         if (overrides.approval_mode == null) setupEditedFields.current.delete("approval_mode");
         activeOwner.current = { conversationId: next.id, threadId: registered.thread_id, generation: requestId };
         setBoundGeneration(requestId);
-        setConversation(next);
         setInteractionThreadId(registered.thread_id);
         setSelectionLoading(null);
-        setDeploymentId(typeof draftConfig.deployment_id === "string" ? draftConfig.deployment_id : next.deployment_id);
         setEmbeddingDeploymentId(typeof draftConfig.embedding_deployment_id === "string" ? draftConfig.embedding_deployment_id : next.embedding_deployment_id ?? "");
-        profileIdRef.current = typeof draftConfig.model_configuration_id === "string" ? draftConfig.model_configuration_id : typeof draftConfig.profile_id === "string" ? draftConfig.profile_id : next.setup_overrides?.model_configuration_id ?? next.profile_id ?? "";
-        setProfileId(profileIdRef.current);
         setStartupOverrides(overrides.startup_overrides ?? {});
         setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
@@ -1122,10 +1196,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         ]);
         if (resolved) applyResolvedSetup(resolved, hasFixedMemory(next) ? next.memory_version_refs ?? [] : null);
         else setInstructionLayers([]);
+        const resolvedDeploymentId = nextConfigurationId && resolved?.configuration.model_configuration_id === nextConfigurationId
+          ? resolved.configuration.deployment_id ?? "" : nextDeploymentId;
+        setDeploymentId(resolvedDeploymentId);
+        profileIdRef.current = nextConfigurationId;
+        setProfileId(nextConfigurationId);
         serverDraftRevision.current = next.draft?.revision ?? 0;
         draftRevision.current += 1;
-        setTask(next.draft?.content ?? "");
-        setAttachmentIds(next.draft?.attachment_ids ?? []);
         setMessage("");
       })
       .catch((error: unknown) => {
@@ -1138,8 +1215,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             setMessage("That conversation is no longer available. You can start a new chat.");
             return;
           }
-          setSelectionLoading(null);
-          fail(error);
+          setSetupResolving(false);
+          // Keep the fetched transcript visible, but do not enable Send until
+          // a retry establishes the interaction thread and selection owner.
+          setSelectionFailure({ id: item.id, message: `Could not open this chat: ${errorMessage(error)}` });
         }
       });
   }
@@ -1220,7 +1299,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   async function sendTurn(): Promise<void> {
     const text = task.trim();
-    if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
+    if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || awaitingRunAdmission || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
+      return;
+    }
+    if (conversation && !runBusy && readinessBlocksSend(readiness)) {
+      setMessage(readiness?.issues[0]?.message ?? "This chat needs a setup change before sending.");
+      if (readiness?.issues.some(issue => /window|desktop|grant/.test(issue.code))) openRail("setup");
       return;
     }
     if (desktopAccess !== "off" && !conversation) {
@@ -1234,20 +1318,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       } catch (error) { fail(error); }
       return;
     }
-    if (conversation) {
-      try {
-        const checked = await workspaceApi.chatReadiness(conversation.id, setupOverrides(chatConfiguration()), agentSetupVersionId);
-        setReadiness(checked);
-        if (!checked.can_send) {
-          setMessage(checked.issues[0]?.message ?? "This chat needs a setup change before sending.");
-          if (checked.issues.some(issue => /window|desktop|grant/.test(issue.code))) openRail("setup");
-          return;
-        }
-      } catch (error) { fail(error); return; }
-    }
     const requestId = selectionRequest.current;
     const originConversationId = conversation?.id ?? null;
     const capturedDraftRevision = draftRevision.current;
+    const queueAfterRunId = conversation && (
+      (conversation.current_run && isAgentRunLive(conversation.current_run.status)) ||
+      readiness?.issues.some(issue => issue.code === "chat_turn_active")
+    ) ? conversation.current_run_id ?? conversation.current_run?.id ?? null : null;
     setSending(true);
     setMessage("");
     try {
@@ -1258,8 +1335,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         draft_revision: savedDraft?.draft?.revision ?? conversation?.draft?.revision ?? null,
         attachment_ids: attachmentIds,
       };
-      if (runBusy && conversation) {
-        const queued = await api.enqueueChatTurn(conversation.id, payload);
+      if (queueIntent && conversation) {
+        const queued = await api.enqueueChatTurn(conversation.id, {
+          ...payload, ...(queueAfterRunId ? { queue_after_run_id: queueAfterRunId } : {}),
+        });
         draftWriter.current.observe(queued);
         if (selectionRequest.current !== requestId || activeOwner.current.conversationId !== conversation.id) {
           cacheConversation(queued);
@@ -1366,22 +1445,26 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     return model?.display_name ?? "Uses this chat's model";
   }
 
-  const readinessKey = conversation ? JSON.stringify([conversation.id, setupOverrides(chatConfiguration()), agentSetupVersionId, readinessEpoch]) : "";
+  const readinessKey = conversation && !selectionLoading && !setupResolving && !runBusy
+    ? JSON.stringify([conversation.id, projectId, setupOverrides(chatConfiguration()), agentSetupVersionId,
+      conversation.current_run_id, conversation.current_run?.status, selectedDeployment?.status,
+      selectedDeployment?.health?.healthy, readinessEpoch]) : "";
+  const readiness = readinessSnapshot?.key === readinessKey ? readinessSnapshot.value : null;
+  const readinessBlocked = readinessBlocksSend(readiness);
+  const queueIntent = currentRunLive || hasPendingCancelInput || Boolean(readiness?.issues.some(issue => issue.code === "chat_turn_active"));
   useEffect(() => {
-    if (!conversation) { setReadiness(null); setReadinessLoading(false); return; }
+    if (!conversation || !readinessKey) { setReadinessSnapshot(null); return; }
     let cancelled = false;
-    setReadinessLoading(true);
     void workspaceApi.chatReadiness(conversation.id, setupOverrides(chatConfiguration()), agentSetupVersionId).then(result => {
-      if (!cancelled) setReadiness(result);
+      if (!cancelled) setReadinessSnapshot({ key: readinessKey, value: result });
     }).catch(failure => {
-      if (!cancelled) setReadiness({ status: "unverified", can_send: false, issues: [{ code: "readiness_unavailable", message: errorMessage(failure) }], selection: null });
-    }).finally(() => { if (!cancelled) setReadinessLoading(false); });
+      if (!cancelled) setReadinessSnapshot({ key: readinessKey, value: { status: "unverified", can_send: false,
+        issues: [{ code: "readiness_unavailable", message: errorMessage(failure) }], selection: null } });
+    });
     return () => { cancelled = true; };
   }, [readinessKey]);
 
   async function chooseMainAgent(nextVersionId: string | null): Promise<void> {
-    const currentDeploymentId = deploymentId;
-    const currentProfileId = profileId;
     try {
       if (conversation) {
         const readiness = await workspaceApi.chatReadiness(conversation.id, {}, nextVersionId);
@@ -1389,9 +1472,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       }
       await chooseSetup(projectId, nextVersionId, { approval_mode: approvalMode, desktop_access: desktopAccess,
         work_mode: workMode, ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: selectedTools } : {}) }, true, true);
-      setDeploymentId(currentDeploymentId);
-      profileIdRef.current = currentProfileId;
-      setProfileId(currentProfileId);
     } catch (failure) { setMessage(errorMessage(failure)); }
   }
 
@@ -1615,7 +1695,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <EmptyState title="Your workspace for local AI">
               <button type="button" onClick={() => navigateAway("models")}><Icon name="plus" size={16} /> Add a model</button>
             </EmptyState>
-          ) : selectionLoading ? (
+          ) : selectionLoading && !conversation ? (
             <EmptyState title="Loading conversation">
               Opening {conversationTitle(selectionLoading)}.
             </EmptyState>
@@ -1688,9 +1768,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {deployHealthNotice.message}
           </Notice>
         ) : null}
-        {conversation && readiness && !readiness.can_send && !runBusy ? <Notice tone={readiness.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => openRail("setup")}>Review setup</button>}>{readiness.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
+        {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => openRail("setup")}>Review setup</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
         {message && message !== conversation?.deploy_health?.message ? (
           <Notice tone="error">{message}</Notice>
+        ) : null}
+        {selectionFailure && selectionLoading?.id === selectionFailure.id ? (
+          <Notice tone="error" action={<button type="button" onClick={() => selectConversation(selectionLoading)}>Retry opening chat</button>}>
+            {selectionFailure.message}
+          </Notice>
         ) : null}
         {setupError ? <Notice tone="error">{setupError}</Notice> : null}
 
@@ -1852,7 +1937,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {workMode === "plan" ? <button type="button" className="chat-plan-pill" aria-label="Turn off Plan mode" title="Turn off Plan mode" onClick={() => { markSetupEdited("work_mode"); setWorkMode("work"); }} disabled={selectionBusy || sending}><Icon name="close" size={12} /> Plan</button> : null}
             <ChatModelControls bundles={bundles} deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
               await chooseSetup(projectId, agentSetupVersionId, configuration, true, true);
-              await refresh();
             }} />
             <MenuPopover label="Main agent" trigger={<><Icon name="sparkles" size={16} /><span className="chat-agent-label">{selectedAgent?.name ?? (agentSetupVersionId ? "Saved agent" : "Default agent")}</span></>} disabled={selectionBusy || sending}>{close => <div className="chat-agent-options" role="group" aria-label="Main agent">
               <button type="button" className="menu-action" aria-pressed={!agentSetupVersionId} onClick={() => { void chooseMainAgent(null); close(); }}>Default agent</button>
@@ -1874,12 +1958,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </button>
             <button
               type="submit"
-              aria-label={props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}
+              aria-label={props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : awaitingRunAdmission ? "Starting…" : queueIntent ? "Queue message" : "Send"}
               className="send-button"
-              title={runBusy ? "Queue this message" : "Send message"}
-              disabled={!hasModelChoice || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || Boolean(conversation && (readinessLoading || readiness?.can_send === false)) || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
+              title={awaitingRunAdmission ? "Waiting for this turn to start" : queueIntent ? "Queue this message" : "Send message"}
+              disabled={!hasModelChoice || (!task.trim() && !attachmentIds.length) || selectionBusy || sending || awaitingRunAdmission || (!runBusy && readinessBlocked) || Boolean(pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)}
             >
-              <Icon name="send" /><span className="sr-only">{props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : runBusy ? "Queue message" : "Send"}</span>
+              <Icon name="send" /><span className="sr-only">{props.restoringSelection || selectionLoading ? "Opening conversation…" : selectionBusy ? "Loading settings…" : sending ? "Sending…" : awaitingRunAdmission ? "Starting…" : queueIntent ? "Queue message" : "Send"}</span>
             </button>
           </div>
         </form>

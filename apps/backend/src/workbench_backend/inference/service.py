@@ -660,12 +660,21 @@ class ModelManager:
             return deployment
         if self.deployments._router_enabled():
             if deployment.bundle_id:
-                self._require_deployable_bundle(deployment.bundle_id)
+                # A resident preset already uses verified weight bytes. Recheck
+                # its file identity on each turn without hashing the full GGUF.
+                self._require_deployable_bundle(deployment.bundle_id, use_cache=True)
             # The selected preset may have been evicted since the last turn.
             # Ask the native scheduler to load it again, even if the saved
-            # deployment record still says running.
+            # deployment record still says running. A cache hit is insufficient
+            # at that launch boundary, so the router verifies fully before load.
+            def verify_before_load() -> None:
+                if deployment.bundle_id:
+                    self._require_deployable_bundle(deployment.bundle_id)
+
             return self._wait_deployment_ready(
-                deployment.id, first=self.deployments.start(deployment.id),
+                deployment.id, first=self.deployments.start(
+                    deployment.id, verify_before_load=verify_before_load,
+                ),
                 timeout_seconds=180.0,
             )
         if (
@@ -977,7 +986,7 @@ class ModelManager:
             self.store.delete_bundle(bundle_id)
             return preview
 
-    def _require_deployable_bundle(self, bundle_id: str) -> ModelBundle:
+    def _require_deployable_bundle(self, bundle_id: str, *, use_cache: bool = False) -> ModelBundle:
         stored = self.store.get_bundle(bundle_id)
         if stored is None:
             raise ManagerError(
@@ -986,7 +995,7 @@ class ModelManager:
                 code="bundle_not_deployable",
                 status_code=409,
             )
-        bundle = self.bundles.verify_bundle(stored)
+        bundle = self.bundles.verify_bundle(stored, use_cache=use_cache)
         if bundle.status.value != "complete" or not bundle.disk_matches:
             raise ManagerError(
                 "A complete, on-disk bundle is required. A failed or interrupted "

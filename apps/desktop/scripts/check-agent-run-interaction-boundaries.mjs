@@ -254,7 +254,7 @@ const harness = makeHarness();
 await new Promise((resolve) => harness.server.listen(0, "127.0.0.1", resolve));
 const address = harness.server.address();
 const port = typeof address === "object" && address ? address.port : 0;
-globalThis.window = { workbench: { backendUrl: `http://127.0.0.1:${port}` } };
+globalThis.window = Object.assign(new EventTarget(), { workbench: { backendUrl: `http://127.0.0.1:${port}` } });
 
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
@@ -266,6 +266,7 @@ try {
   });
   await waitFor(() => assert.match(allText(renderer), /Workflows/), "initial task surface render");
   await waitFor(() => assert.ok(renderer.root.findAllByType("button").some(item => String(item.props["aria-label"]).startsWith("Chat model:"))), "workflow model picker ready");
+  await act(async () => renderer.root.findAllByType("button").find(item => String(item.props["aria-label"]).startsWith("Chat model:")).props.onClick());
   const configuredModel = () => renderer.root.findAllByType("button").find(item => item.props.className === "chat-model-choice" && textOf(item).includes("Configured model"));
   await waitFor(() => assert.ok(configuredModel()), "installed model listed once");
   await act(async () => configuredModel().props.onClick());

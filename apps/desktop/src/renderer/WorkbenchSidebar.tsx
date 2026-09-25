@@ -135,7 +135,7 @@ export function WorkbenchSidebar(props: {
     props.onListsReady?.(chatsLoaded && projectsLoaded);
   }, [chatsLoaded, projectsLoaded, props.onListsReady]);
 
-  const searchableRevision = useMemo(() => conversations.map(item => `${item.id}:${item.title ?? ""}:${item.archived ? 1 : 0}`).join("|"), [conversations]);
+  const searchableRevision = useMemo(() => conversations.map(item => `${item.id}:${item.title ?? ""}:${item.display_title ?? ""}:${item.archived ? 1 : 0}`).join("|"), [conversations]);
   useEffect(() => {
     const query = searchQuery.trim();
     if (!query) { setSearchResults(null); return; }

@@ -201,6 +201,7 @@ function makeHarness(options = {}) {
       creates: [],
       resolutions: [],
       registers: [],
+      readiness: [],
       cancels: [],
       streams: [],
       states: [],
@@ -219,12 +220,14 @@ function makeHarness(options = {}) {
     barriers: {
       chatConversation: new Map(),
       register: new Map(),
+      profiles: new Map(),
       command: new Map(),
       cancel: new Map(),
       chatCancel: new Map(),
       assetUpload: new Map(),
       draft: new Map(),
     },
+    registrationFailures: new Map(),
     queuedConversationResponses: new Map(),
     consumedResponses: [],
     outgoingRequests: [],
@@ -269,7 +272,11 @@ function makeHarness(options = {}) {
           json(res, 200, state.windowScope); return;
         }
         if (req.method === "POST" && /^\/v1\/chat\/conversations\/[^/]+\/readiness$/.test(url.pathname)) {
-          json(res, 200, { status: "ready", can_send: true, issues: [], selection: null }); return;
+          const id = url.pathname.split("/").at(-2);
+          const payload = body ? JSON.parse(body) : {};
+          state.requests.readiness.push({ id, payload });
+          const result = await options.readiness?.({ id, payload, count: state.requests.readiness.length });
+          json(res, 200, result ?? { status: "ready", can_send: true, issues: [], selection: null }); return;
         }
         if (req.method === "POST" && url.pathname === "/v1/setup-resolution") {
           const payload = JSON.parse(body); state.requests.resolutions.push(payload);
@@ -289,7 +296,9 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/profiles") {
-          json(res, 200, []);
+          const barrier = state.barriers.profiles.get("list");
+          if (barrier) await barrier.promise;
+          json(res, 200, options.profiles ?? []);
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/agent-tools") {
@@ -528,6 +537,12 @@ function makeHarness(options = {}) {
           if (barrier) {
             await barrier.promise;
           }
+          const failures = state.registrationFailures.get(conversationId) ?? 0;
+          if (failures > 0) {
+            state.registrationFailures.set(conversationId, failures - 1);
+            json(res, 503, { error: "Thread registration is temporarily unavailable" });
+            return;
+          }
           json(res, 200, { thread_id: state.threadByConversation.get(conversationId) ?? "thread_agent" });
           return;
         }
@@ -618,7 +633,7 @@ function makeHarness(options = {}) {
             state.projectedRunIndex += 1;
             const projected = run(
               `run_projected_${state.projectedRunIndex}`,
-              "completed",
+              options.commandProjectedStatus ?? "completed",
               message?.id ?? null,
               `accepted ${state.projectedRunIndex}`,
             );
@@ -627,6 +642,13 @@ function makeHarness(options = {}) {
             if (conversationId && state.conversations[conversationId]) {
               state.conversations[conversationId] = {
                 ...state.conversations[conversationId],
+                ...(options.commandDisplayTitle ? { display_title: options.commandDisplayTitle } : {}),
+                transcript: options.commandSuppressesStream
+                  ? [...state.conversations[conversationId].transcript, {
+                    id: message?.id ?? "input_accepted", role: "user", content: message?.content ?? "",
+                    at: now(), run_id: projected.id, content_blocks: [],
+                  }]
+                  : state.conversations[conversationId].transcript,
                 current_run: projected,
                 current_run_id: projected.id,
                 run_ids: state.conversations[conversationId].run_ids.includes(projected.id)
@@ -636,7 +658,7 @@ function makeHarness(options = {}) {
               state.conversations[conversationId] = clearDraftIfRevision(state.conversations[conversationId], workbench.draft_revision);
             }
             const stream = state.openStreams.get(threadId);
-            stream?.write(`data: ${JSON.stringify(streamFrame(projected))}\n\n`);
+            if (!options.commandSuppressesStream) stream?.write(`data: ${JSON.stringify(streamFrame(projected))}\n\n`);
           }
           const barrier = state.barriers.command.get(threadId);
           if (barrier) {
@@ -840,6 +862,12 @@ function thinkingEffortSlider(renderer) {
   return renderer.root.findAll(node => node.type === "input" && node.props.type === "range" && node.props["aria-label"] === "Thinking level")[0];
 }
 
+async function openModelPicker(renderer) {
+  const trigger = renderer.root.findAll(node => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("Chat model:"))[0];
+  assert.ok(trigger, "Chat model picker is available");
+  await act(async () => trigger.props.onClick());
+}
+
 async function applyModelChanges(renderer) {
   await waitFor(() => assert.equal(button(renderer, "Apply").props.disabled, false), "staged model preview ready");
   await act(async () => button(renderer, "Apply").props.onClick());
@@ -996,7 +1024,8 @@ async function testHeldRegistrationDoesNotBindOldThread(vite) {
     await flush();
     await waitFor(() => assert.equal(harness.state.requests.registers.at(-1)?.conversation_id, "conv_b"), "B held registration started");
     assert.match(activeConversationTitle(renderer), /Conversation B/, "held B registration should mark B as the pending selection");
-    assert.match(allText(renderer), /Loading conversation/, "held B registration should show a safe loading state");
+    assert.ok(renderer.root.findAll(node => node.type === "article" && node.props.className === "bubble bubble-user" && textOf(node).includes("Conversation B")).length,
+      "held B registration should show the fetched transcript");
     assert.equal(buttonByAriaLabel(renderer, "Opening conversation…").props.disabled, true, "opening an existing chat cannot claim a message is being sent");
     assert.equal(harness.state.requests.commands.length, 0, "opening a conversation submits no message");
     assert.equal(harness.state.openStreams.has("thread_a"), false, "A stream must not remain attached while B registration is held");
@@ -1184,7 +1213,8 @@ async function testSubmitBlockedDuringHeldSelectionRegistration(vite) {
       button(renderer, "Conversation B").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.match(allText(renderer), /Loading conversation/), "B loading state");
+    await waitFor(() => assert.ok(renderer.root.findAll(node => node.type === "article" && node.props.className === "bubble bubble-user" && textOf(node).includes("Conversation B")).length), "fetched B transcript visible during registration");
+    assert.equal(textarea(renderer).props.disabled, true, "composer waits for registration while the transcript is visible");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "must not submit while binding" } });
       await Promise.resolve();
@@ -1383,6 +1413,14 @@ async function testPendingSubmitDoesNotReusePreviousCancelledStatus(vite) {
     assert.equal(waiting.props.role, "status", "waiting is announced once in the answer area");
     assert.match(textOf(waiting), /Preparing reply/, "pending submit shows its own preparation status");
     assert.doesNotMatch(textOf(waiting), /Cancelled|Stopped/, "pending submit must not reuse previous terminal run status");
+    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true,
+      "a pending submission without an accepted run cannot queue another message");
+    assert.equal(textarea(renderer).props.disabled, false, "the next draft remains editable while admission is pending");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Second draft while starting" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    assert.equal(harness.state.requests.queues.length, 0, "submitting again before run admission cannot create an idle queue item");
+    heldCommand.resolve();
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "Second draft while starting"), "later draft survives the first command acknowledgement");
   } finally {
     heldCommand.resolve();
     await closeHarness(renderer, harness);
@@ -1640,6 +1678,7 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
     await act(async () => {
       approvalModeButton(renderer, "Full access").props.onClick();
     });
+    await openModelPicker(renderer);
     await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props.disabled, false), "thinking preview ready after access change");
     await act(async () => {
       thinkingEffortSlider(renderer).props.onChange({ target: { value: "2" } });
@@ -1742,6 +1781,7 @@ async function testAcceptedDraftNextSaveUsesIncrementedRevision(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "send saved draft"), "saved draft restored");
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "saved draft chat registered before Send");
     await act(async () => {
       composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
@@ -1788,6 +1828,7 @@ async function testQueuedDraftClearDoesNotEraseLaterDraft(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(textarea(renderer).props.value, "queue saved draft"), "queued draft restored");
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "queued draft chat registered before Queue");
     await act(async () => {
       composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } });
       await Promise.resolve();
@@ -1832,6 +1873,7 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
       textarea(renderer).props.onChange({ target: { value: "queued turn with attachment" } });
       approvalModeButton(renderer, "Full access").props.onClick();
     });
+    await openModelPicker(renderer);
     await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props.disabled, false), "queued thinking preview ready");
     await act(async () => {
       thinkingEffortSlider(renderer).props.onChange({ target: { value: "1" } });
@@ -1916,6 +1958,7 @@ async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
     assert.equal(renderer.root.findByProps({ "aria-label": "Composer attachments" }).props.className, "packet03-attachments compact-attachments", "restored draft attachments are visible as chips before sending");
     assert.equal(harness.state.requests.assetLists.at(-1)?.sessionId, "conv_a", "draft restore lists assets for the selected conversation");
     assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "draft intended config restores the approval mode");
+    await openModelPicker(renderer);
     await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props["aria-valuetext"], "High"), "draft intended config restores per-message reasoning choice");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "restored draft text plus edit" } });
@@ -2733,7 +2776,8 @@ async function testDraftAgentChangeDoesNotRestorePreviousAccess(vite) {
 
 async function testAgentSetupInheritanceAndFutureTurn(vite) {
   const setups = ["one", "two"].map(id => ({ id, name: `Agent ${id}`, current_version_id: `${id}-version`, missing_dependencies: [] }));
-  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: false, agentSetups: setups,
+  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: false,
+    commandProjectsRun: true, commandProjectedStatus: "running", agentSetups: setups,
     resolveSetup: payload => ({ agent_setup_version_id: payload.agent_setup_version_id, configuration: { deployment_id: "dep_1", presented_tools: [], memory_version_refs: ["saved-memory-version"], per_request_overrides: { temperature: 0.4 } }, instruction_layers: [{ name: "Agent instructions", content: "Keep these instructions intact" }] }) });
   const renderer = await renderChat(vite, harness);
   try {
@@ -2746,9 +2790,11 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "setup-backed submission");
     const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Queue message").props.disabled, true), "first accepted run is live before queuing a later draft");
     assert.equal(submitted.agent_setup_version_id, "one-version");
     assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "one-version");
-    for (const key of ["deployment_id", "profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "per_request_overrides"]) {
+    assert.equal(submitted.deployment_id, "dep_1", "the visible main model remains bound after changing agent");
+    for (const key of ["profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "per_request_overrides"]) {
       assert.equal(Object.hasOwn(submitted, key), false, `untouched ${key} must inherit instead of overwriting the saved setup`);
     }
     await act(async () => button(renderer, "Agent two").props.onClick());
@@ -2759,8 +2805,325 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "next task queued");
     const queued = harness.state.requests.queues[0].payload;
     assert.equal(queued.agent_setup_version_id, "two-version");
+    assert.equal(queued.queue_after_run_id, "run_projected_1", "the later task queues behind the accepted live run");
     assert.equal(queued.approval_mode, "full_access", "an approval-mode choice is sent with the queued turn");
     assert.equal(Object.hasOwn(queued, "presented_tools"), false, "the chat shield does not replace the agent's tool list");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testGeneratedDisplayTitleUpdatesSidebar(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null, commandProjectsRun: true,
+    commandDisplayTitle: "Generated answer title" });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "original sidebar title available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "chat registered");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Reply with exactly OK." } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "turn submitted");
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Generated answer title/), "chat fetch receives generated title");
+    await waitFor(() => button(renderer, "Generated answer title"), "sidebar refreshes when only display title changes");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testAcceptedSubmissionRecoversWithoutStreamProjection(vite) {
+  const heldCommand = deferred();
+  const harness = makeHarness({ aRun: null, threadARun: null, commandProjectsRun: true,
+    commandProjectedStatus: "running", commandSuppressesStream: true });
+  harness.state.barriers.command.set("thread_a", heldCommand);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "chat bound");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Accepted without a stream event" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "command sent");
+    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true, "second admission waits for confirmed run");
+    await waitFor(() => assert.equal(selectedRunId(renderer), "run_projected_1"), "saved chat confirms accepted run without stream projection");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Queue behind recovered run" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Queue message").props.disabled, false), "Queue becomes available after durable run confirmation");
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "later turn queued");
+    assert.equal(harness.state.requests.queues[0].payload.queue_after_run_id, "run_projected_1");
+  } finally {
+    heldCommand.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testFailedRegistrationKeepsChatReadOnlyUntilRetry(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null });
+  harness.state.registrationFailures.set("conv_a", 1);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Retry opening chat").length), "failed registration offers retry");
+    assert.ok(renderer.root.findAll(node => node.type === "article" && node.props.className === "bubble bubble-user" && textOf(node).includes("Conversation A")).length,
+      "fetched transcript stays visible after registration fails");
+    assert.equal(textarea(renderer).props.disabled, true, "failed registration never enables an unbound composer");
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    assert.equal(harness.state.requests.commands.length, 0, "failed registration cannot silently submit");
+    assert.equal(harness.state.requests.queues.length, 0, "failed registration cannot queue");
+    await act(async () => button(renderer, "Retry opening chat").props.onClick());
+    await waitFor(() => assert.equal(harness.state.requests.registers.filter(item => item.conversation_id === "conv_a").length, 2), "retry registers the same chat");
+    await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "retry binds the interaction thread");
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "composer enables only after retry binds");
+    assert.equal(buttons(renderer, "Retry opening chat").length, 0, "successful retry clears the error action");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Continue after retry" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "retry establishes an owner for the next Send");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testPendingAdmissionFailureKeepsEditedNextDraft(vite) {
+  const heldCommand = deferred();
+  const previous = run("run_previous", "completed", "old-input", "previous answer");
+  const harness = makeHarness({ aRun: previous, threadARun: previous, commandRejects: true });
+  harness.state.barriers.command.set("thread_a", heldCommand);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "saved chat bound");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "First pending request" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "first command held before response");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Next draft survives failure" } }));
+    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true);
+    heldCommand.resolve();
+    await waitFor(() => assert.match(allText(renderer), /Model startup failed before a run was accepted/), "failed first request reported");
+    assert.equal(textarea(renderer).props.value, "Next draft survives failure", "later draft remains editable after failed admission");
+    assert.equal(harness.state.requests.queues.length, 0, "failure does not leave an idle queued turn");
+  } finally { heldCommand.resolve(); await closeHarness(renderer, harness); }
+}
+
+async function testSelectedModelSurvivesAgentAndNewChat(vite) {
+  const agentSetups = [{ id: "agent_one", name: "Agent one", current_version_id: "agent-one-version", missing_dependencies: [] }];
+  const project = { id: "project_one", name: "Project one", path: "D:\\Projects\\One", canonical_path: "d:\\projects\\one", defaults: {}, active: true };
+  const harness = makeHarness({ aRun: null, threadARun: null, agentSetups, projects: [project],
+    resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: payload.overrides.deployment_id ?? "dep_1" }, instruction_layers: [] }) });
+  const renderer = await renderChat(vite, harness);
+  const picker = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+  try {
+    await waitFor(() => button(renderer, "Agent one"), "agent available");
+    await selectFixtureModel(renderer);
+    await act(async () => button(renderer, "Agent one").props.onClick());
+    await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent one/), "agent applied after model");
+    assert.equal(picker().props.selectedDeploymentId, "dep_1", "agent selection retains the visible model");
+    assert.equal(picker().props.configuration.deployment_id, "dep_1", "agent selection retains the submitted model");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Chat project" }).props.onChange({ target: { value: project.id } }));
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, project.id), "project applied after model");
+    assert.equal(picker().props.configuration.deployment_id, "dep_1", "project selection retains the submitted model");
+    await act(async () => button(renderer, "New").props.onClick());
+    await waitFor(() => assert.equal(picker().props.selectedDeploymentId, "dep_1"), "new chat retains the selected model");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep the selected model" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "new chat created");
+    assert.equal(harness.state.requests.creates[0].deployment_id, "dep_1", "creation submits the selected model");
+    assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "agent-one-version");
+    assert.equal(harness.state.requests.creates[0].project_id, project.id);
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testSoleHealthyModelFallbackKeepsConfigurationIdentity(vite) {
+  const healthy = { ...baseDeployment, scope: "managed", bundle_id: "bundle_1", profile_id: "config_1", health: { healthy: true } };
+  const harness = makeHarness({ aRun: null, threadARun: null, deployments: [healthy] });
+  const renderer = await renderChat(vite, harness);
+  const picker = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+  try {
+    await waitFor(() => assert.equal(picker().props.selectedDeploymentId, "dep_1"), "sole healthy deployment selected");
+    assert.equal(picker().props.selectedConfigurationId, "config_1", "deployment configuration remains exact even before its catalogue entry is available");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Use the running model" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "fallback chat created");
+    assert.equal(harness.state.requests.creates[0].model_configuration_id, "config_1");
+  } finally { await closeHarness(renderer, harness); }
+
+  const multiple = makeHarness({ aRun: null, threadARun: null, deployments: [healthy, { ...healthy, id: "dep_2", profile_id: "config_2" }] });
+  const multiRenderer = await renderChat(vite, multiple);
+  try {
+    await waitFor(() => button(multiRenderer, "Conversation A"), "catalogue loaded");
+    assert.equal(pickerFor(multiRenderer).props.selectedDeploymentId, "", "multiple running models require an explicit choice");
+  } finally { await closeHarness(multiRenderer, multiple); }
+}
+
+async function testStoppedNamedConfigurationSurvivesNewChat(vite) {
+  const bag = (requested = {}) => ({ requested, applied: {}, overridden: [], unsupported: [], retired: [] });
+  const stopped = { ...stoppedManagedDeployment, bundle_id: "bundle_cold", profile_id: "config_cold",
+    settings: { startup: bag(), per_request: bag(), agent: bag() } };
+  const profile = { id: "config_cold", bundle_id: "bundle_cold", display_name: "Cold configuration",
+    bags: { startup: bag(), per_request: bag(), agent: bag() } };
+  const harness = makeHarness({ aRun: null, threadARun: null, deployments: [stopped], profiles: [profile] });
+  harness.state.conversations.conv_a.profile_id = profile.id;
+  harness.state.conversations.conv_a.setup_overrides = { deployment_id: stopped.id, model_configuration_id: profile.id };
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(pickerFor(renderer).props.selectedConfigurationId, profile.id), "saved named configuration restored");
+    await act(async () => button(renderer, "New").props.onClick());
+    await waitFor(() => assert.equal(pickerFor(renderer).props.selectedConfigurationId, profile.id), "unloaded named configuration retained for New Chat");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Load the saved configuration on Send" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "cold named chat created on Send");
+    assert.equal(harness.state.requests.creates[0].model_configuration_id, profile.id);
+    assert.equal(harness.state.requests.creates[0].deployment_id, stopped.id);
+  } finally { await closeHarness(renderer, harness); }
+}
+
+function pickerFor(renderer) {
+  return renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+}
+
+async function testFetchedChatVisibleWhileOpeningAndLateResultsIgnored(vite) {
+  const registration = deferred();
+  const resolution = deferred();
+  const harness = makeHarness({ aRun: null, bRun: null, threadARun: null, threadBRun: null,
+    resolveSetup: async payload => {
+      if (payload.agent_setup_version_id === "agent-b") await resolution.promise;
+      return { configuration: { ...payload.overrides, deployment_id: "dep_1" }, instruction_layers: [] };
+    } });
+  harness.state.conversations.conv_b.agent_setup_version_id = "agent-b";
+  harness.state.barriers.register.set("conv_b", registration);
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation B"), "B available");
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.ok(renderer.root.findAll(node => node.type === "article" && node.props.className === "bubble bubble-user" && textOf(node).includes("Conversation B")).length), "fetched transcript visible before binding");
+    await waitFor(() => assert.ok(harness.state.requests.registers.some(item => item.conversation_id === "conv_b")), "B registration started");
+    assert.ok(harness.state.requests.resolutions.some(item => item.agent_setup_version_id === "agent-b"), "B setup resolution started alongside registration");
+    assert.equal(textarea(renderer).props.disabled, true, "composer waits for both binding requests");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation A/), "A selected before B finishes");
+    registration.resolve(); resolution.resolve();
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "A bound after navigation");
+    assert.match(activeConversationTitle(renderer), /Conversation A/, "late B work cannot restore B");
+  } finally {
+    registration.resolve(); resolution.resolve();
+    await closeHarness(renderer, harness);
+  }
+}
+
+async function testColdSendAndLiveTurnQueueSkipBlockingPreview(vite) {
+  const modelLoadRequired = { status: "needs_action", can_send: false, selection: null,
+    issues: [{ code: "model_load_required", message: "Load this model configuration before using it in Chat." }] };
+  const cold = makeHarness({ aRun: null, threadARun: null, deployments: [stoppedManagedDeployment],
+    readiness: () => modelLoadRequired });
+  const coldRenderer = await renderChat(vite, cold);
+  try {
+    await waitFor(() => button(coldRenderer, "Conversation A"), "cold chat available");
+    await act(async () => button(coldRenderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(cold.state.requests.readiness.some(item => item.id === "conv_a")), "cold model preview returned");
+    await act(async () => textarea(coldRenderer).props.onChange({ target: { value: "Load on Send" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(coldRenderer, "Send").props.disabled, false), "cold model can be sent");
+    await act(async () => composeForm(coldRenderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(cold.state.requests.commands.length, 1), "cold model reaches direct submit");
+    assert.equal(cold.state.requests.queues.length, 0);
+  } finally { await closeHarness(coldRenderer, cold); }
+
+  const live = run("run_live", "running");
+  const queue = makeHarness({ aRun: live, threadARun: live });
+  const queueRenderer = await renderChat(vite, queue);
+  try {
+    await waitFor(() => button(queueRenderer, "Conversation A"), "live chat available");
+    await act(async () => button(queueRenderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(queue.state.openStreams.has("thread_a")), "live run observed");
+    assert.equal(queue.state.requests.readiness.filter(item => item.id === "conv_a").length, 0, "active run does not trigger a blocking readiness preview");
+    await act(async () => textarea(queueRenderer).props.onChange({ target: { value: "Queue while running" } }));
+    assert.equal(buttonByAriaLabel(queueRenderer, "Queue message").props.disabled, false);
+    await act(async () => composeForm(queueRenderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(queue.state.requests.queues.length, 1), "live turn reaches queue admission");
+    assert.equal(queue.state.requests.queues[0].payload.queue_after_run_id, "run_live", "queue admission identifies the run being followed");
+    assert.equal(queue.state.requests.commands.length, 0);
+    const terminal = run("run_live", "completed");
+    await act(async () => {
+      queue.state.openStreams.get("thread_a")?.write(`data: ${JSON.stringify(streamFrame(terminal))}\n\n`);
+      await Promise.resolve();
+    });
+    await waitFor(() => assert.equal(queue.state.requests.readiness.some(item => item.id === "conv_a"), true), "terminal run refreshes setup preview");
+    assert.doesNotMatch(allText(queueRenderer), /Wait for this chat's current turn to finish/);
+  } finally { await closeHarness(queueRenderer, queue); }
+
+  const backendActive = makeHarness({ aRun: null, threadARun: null,
+    readiness: () => ({ status: "needs_action", can_send: false, selection: null,
+      issues: [{ code: "chat_turn_active", message: "Wait for this chat's current turn to finish." }] }) });
+  const backendActiveRenderer = await renderChat(vite, backendActive);
+  try {
+    await waitFor(() => button(backendActiveRenderer, "Conversation A"), "saved chat available");
+    await act(async () => button(backendActiveRenderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(backendActive.state.requests.readiness.some(item => item.id === "conv_a")), "backend activity preview returned");
+    await act(async () => textarea(backendActiveRenderer).props.onChange({ target: { value: "Queue against backend activity" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(backendActiveRenderer, "Queue message").props.disabled, false), "backend activity offers Queue");
+    await act(async () => composeForm(backendActiveRenderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(backendActive.state.requests.queues.length, 1), "backend activity routes to durable Queue");
+    assert.equal(backendActive.state.requests.queues[0].payload.queue_after_run_id, undefined, "an unobserved run is not guessed from stale local state");
+    assert.equal(backendActive.state.requests.commands.length, 0);
+  } finally { await closeHarness(backendActiveRenderer, backendActive); }
+}
+
+async function testLateReadinessCannotBlockAnotherChat(vite) {
+  const heldA = deferred();
+  const harness = makeHarness({ aRun: null, bRun: null, threadARun: null, threadBRun: null,
+    readiness: async ({ id }) => {
+      if (id === "conv_a") {
+        await heldA.promise;
+        return { status: "incompatible", can_send: false, selection: null,
+          issues: [{ code: "old_setup", message: "Old chat setup is unavailable." }] };
+      }
+      return { status: "ready", can_send: true, selection: null, issues: [] };
+    } });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "chats available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(harness.state.requests.readiness.some(item => item.id === "conv_a")), "A preview held");
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.ok(harness.state.requests.readiness.some(item => item.id === "conv_b")), "B preview started");
+    heldA.resolve();
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Send in B" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, false), "late A response cannot block B");
+    assert.doesNotMatch(allText(renderer), /Old chat setup is unavailable/);
+  } finally { heldA.resolve(); await closeHarness(renderer, harness); }
+}
+
+async function testRestoredDraftCanClearSavedConfiguration(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null,
+    deployments: [baseDeployment, { ...baseDeployment, id: "dep_2", display_name: "connected:Second model" }] });
+  harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", null, {
+    profile_id: "old-configuration", setup_overrides: { model_configuration_id: "old-configuration", deployment_id: "dep_1" },
+    draft: { content: "Use the connected model", attachment_ids: [], intended_config: {
+      model_configuration_id: null, profile_id: null, deployment_id: "dep_2",
+    }, revision: 3, updated_at: now() },
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(pickerFor(renderer).props.selectedDeploymentId, "dep_2"), "draft connected deployment restored");
+    assert.equal(pickerFor(renderer).props.selectedConfigurationId, undefined, "explicit null clears the old named configuration");
+    assert.equal(pickerFor(renderer).props.configuration.model_configuration_id, null);
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testRestoredDraftFindsRunningNamedConfiguration(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null,
+    deployments: [baseDeployment, { ...baseDeployment, id: "dep_2", bundle_id: "bundle_2", profile_id: "config_2", scope: "managed", health: { healthy: true } }],
+    resolveSetup: payload => ({ configuration: { ...payload.overrides, model_configuration_id: "config_2", deployment_id: "dep_2" }, instruction_layers: [] }) });
+  harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", null, {
+    draft: { content: "Use the running configuration", attachment_ids: [], intended_config: {
+      model_configuration_id: "config_2",
+    }, revision: 4, updated_at: now() },
+  });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "saved chat available");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(pickerFor(renderer).props.selectedDeploymentId, "dep_2"), "matching running deployment restored from named configuration");
+    assert.equal(pickerFor(renderer).props.selectedConfigurationId, "config_2");
+    assert.ok(harness.state.requests.resolutions.some(item => item.overrides?.model_configuration_id === "config_2"), "named configuration resolved on open");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -2846,12 +3209,21 @@ try {
     ["startup refresh failure remains usable", testStartupRefreshFailureRemainsUsable],
     ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
     ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],
+    ["selected model survives agent and New Chat", testSelectedModelSurvivesAgentAndNewChat],
+    ["sole healthy model fallback keeps configuration", testSoleHealthyModelFallbackKeepsConfigurationIdentity],
+    ["stopped named configuration survives New Chat", testStoppedNamedConfigurationSurvivesNewChat],
+    ["fetched chat visible while opening and late results ignored", testFetchedChatVisibleWhileOpeningAndLateResultsIgnored],
+    ["cold Send and live turn Queue skip blocking preview", testColdSendAndLiveTurnQueueSkipBlockingPreview],
+    ["late readiness cannot block another chat", testLateReadinessCannotBlockAnotherChat],
+    ["restored draft clears saved configuration", testRestoredDraftCanClearSavedConfiguration],
+    ["restored draft finds running named configuration", testRestoredDraftFindsRunningNamedConfiguration],
     ["attention selection consumed", testAttentionActivationDoesNotPinConversation],
     ["attention navigation saves current draft", testExternalAttentionNavigationPreservesDraft],
     ["whole-chat file drop", testWholeChatDropStagesFiles],
     ["new-chat file drop", vite => testWholeChatDropStagesFiles(vite, true)],
     ["file-drop creation navigation guard", testFileDropDuringNewChatRegistrationCannotRetarget],
     ["held registration", testHeldRegistrationDoesNotBindOldThread],
+    ["failed registration stays read-only until retry", testFailedRegistrationKeepsChatReadOnlyUntilRetry],
     ["terminal hydration after B", testTerminalHydrationCannotReselectAfterB],
     ["terminal hydration away/back A", testTerminalHydrationAwayBackSameConversationGeneration],
     ["cancel after switch", testCancelResponseCannotReselectAfterSwitch],
@@ -2862,10 +3234,13 @@ try {
     ["submit ack draft isolation", testSubmitAckDoesNotClearNewerDraft],
     ["submitted draft clears", (vite) => testSubmitAckDoesNotClearNewerDraft(vite, false)],
     ["pending submit hides previous cancelled status", testPendingSubmitDoesNotReusePreviousCancelledStatus],
+    ["accepted submission recovers without stream projection", testAcceptedSubmissionRecoversWithoutStreamProjection],
+    ["pending admission failure keeps edited next draft", testPendingAdmissionFailureKeepsEditedNextDraft],
     ["pending submit stop uses input identity", testPendingSubmitStopUsesPendingInputIdentity],
     ["reopened pending cancel clears from authoritative view", testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear],
     ["fresh draft persists before navigation", testFreshDraftPersistsBeforeImmediateNavigation],
     ["fresh submit shares draft session", testFreshSubmitSharesCreatedDraftSessionAndSendsRevision],
+    ["generated display title updates sidebar", testGeneratedDisplayTitleUpdatesSidebar],
     ["first-turn Windows grant preserves draft", testFirstTurnWindowsGrantPreservesDraft],
     ["accepted draft next save uses incremented revision", testAcceptedDraftNextSaveUsesIncrementedRevision],
     ["queued draft clear preserves later draft", testQueuedDraftClearDoesNotEraseLaterDraft],

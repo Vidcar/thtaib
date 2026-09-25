@@ -138,7 +138,7 @@ class ManagedRouter:
                 "router_status": status,
             }
 
-    def start(self, deployment_id: str) -> Deployment:
+    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None) -> Deployment:
         with self._lock:
             deployment = self._require_managed(deployment_id)
             if deployment.reconfiguration and deployment.reconfiguration.get("phase") == "recovery_required":
@@ -162,6 +162,8 @@ class ManagedRouter:
                                    details={"deployment_id": deployment.id})
             state = self._model_state(model)
             if state != "loaded":
+                if verify_before_load is not None:
+                    verify_before_load()
                 self._post(endpoint, "/models/load", {"model": deployment.id})
                 deadline = time.monotonic() + _LOAD_TIMEOUT
                 while True:

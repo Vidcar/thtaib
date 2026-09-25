@@ -17,6 +17,7 @@ from workbench_backend.inference.schemas import (
     ProcessIdentity, ResourceUsage, ServerProperties,
 )
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.paths import WorkbenchPaths
 
@@ -229,6 +230,55 @@ class RouterRuntimeTests(unittest.TestCase):
         self.assertEqual(ready_parent.status, DeploymentStatus.running)
         self.assertEqual(ready_helper.status, DeploymentStatus.running)
         self.assertEqual(adapter_target(resumed_parent)["model"], parent.id)
+
+    def test_resident_turn_skips_full_hash_but_evicted_load_verifies_again(self) -> None:
+        deployment = self._deployment()
+        bundle = self.manager.get_bundle(self.bundle_id)
+        identity = ProcessIdentity(pid=123, create_time=1.0, executable="llama-server")
+        record = {"endpoint": "http://127.0.0.1:18080/v1", "identity": identity}
+        resident = {"loaded": False}
+
+        def inventory(_endpoint: str, *, reload: bool = False):
+            return {deployment.id: {"id": deployment.id,
+                "status": {"value": "loaded" if resident["loaded"] else "unloaded"}}}
+
+        def load(_endpoint: str, route: str, payload: dict[str, str]):
+            self.assertEqual(route, "/models/load")
+            self.assertEqual(payload["model"], deployment.id)
+            resident["loaded"] = True
+
+        props = ServerProperties(fetched=utc_now(), source_url="http://127.0.0.1:18080/props")
+        health = HealthReport(healthy=True, endpoint=record["endpoint"], checked=utc_now(), detail="ok")
+        with (patch.object(self.manager.deployments, "_router_enabled", return_value=True),
+              patch.object(self.router, "_ensure_router", return_value=record),
+              patch.object(self.router, "_inventory", side_effect=inventory) as inventory_probe,
+              patch.object(self.router, "_post", side_effect=load) as post,
+              patch.object(self.router.probe, "props", return_value=props),
+              patch.object(self.router.probe, "health", return_value=health),
+              patch.object(self.router.processes, "resource_usage", return_value=ResourceUsage(available=True)),
+              patch("workbench_backend.inference.bundles.sha256_file", wraps=sha256_file) as hash_file):
+            self.manager.ensure_deployment_ready(deployment.id)
+            self.assertEqual(hash_file.call_count, 1)
+            self.assertEqual(post.call_count, 1)
+
+            self.manager.ensure_deployment_ready(deployment.id)
+            self.assertEqual(hash_file.call_count, 1)
+            self.assertEqual(post.call_count, 1)
+
+            resident["loaded"] = False
+            self.manager.ensure_deployment_ready(deployment.id)
+            self.assertEqual(hash_file.call_count, 2)
+            self.assertEqual(post.call_count, 2)
+
+            path = Path(bundle.primary_path or "")
+            with path.open("r+b") as handle:
+                handle.write(b"X")
+            inventories_before = inventory_probe.call_count
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.ensure_deployment_ready(deployment.id)
+            self.assertEqual(caught.exception.code, "bundle_not_deployable")
+            self.assertEqual(inventory_probe.call_count, inventories_before)
+            self.assertEqual(post.call_count, 2)
 
 
 if __name__ == "__main__":

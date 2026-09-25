@@ -487,7 +487,7 @@ The active deployment's capability record SHALL distinguish accepted user images
 
 ### Requirement: MOD-032 - Bound managed model residency
 
-The application SHALL save one positive maximum-loaded-model count for managed llama.cpp configurations. A fresh installation SHALL default to one. Every loaded launch configuration SHALL consume one slot, even when two configurations use the same weights; the count SHALL remain distinct from each model's parallel request slots. Connected endpoints SHALL remain outside this owned count. A requested model SHALL load on explicit model selection or on the first submitted turn that needs an unloaded selection. Application launch, chat restoration, passive status reads and navigation SHALL NOT warm or load a model. Loading SHALL show pending, loaded or failed state, and MUST NOT silently substitute weights, quantization, device or settings.
+The application SHALL save one positive maximum-loaded-model count for managed llama.cpp configurations. A fresh installation SHALL default to one. Every loaded launch configuration SHALL consume one slot, even when two configurations use the same weights; the count SHALL remain distinct from each model's parallel request slots. Connected endpoints SHALL remain outside this owned count. A different or unloaded requested model SHALL load on explicit model selection or on the first submitted turn that needs an unloaded selection. Re-selecting the exact healthy loaded configuration SHALL not request another model start. Successive turns on an already loaded configuration SHALL avoid reading the complete weight file again while still checking its saved identity; an evicted configuration SHALL undergo full bundle verification before it loads again. Application launch, chat restoration, passive status reads and navigation SHALL NOT warm or load a model. Loading SHALL show pending, loaded or failed state, and MUST NOT silently substitute weights, quantization, device or settings.
 
 #### Scenario: One-slot model switch
 - **WHEN** the limit is one and a different configuration is explicitly selected
@@ -504,3 +504,14 @@ The application SHALL save one positive maximum-loaded-model count for managed l
 #### Scenario: Failed load
 - **WHEN** a pending model selection fails to load
 - **THEN** the previous conversation binding and draft remain available and the failure names the attempted configuration.
+
+#### Scenario: Exact healthy selection
+
+- **WHEN** Chat selects the same healthy loaded named configuration again
+- **THEN** the existing deployment remains selected without another model start request.
+
+#### Scenario: Another turn on loaded weights
+
+- **WHEN** a selected managed configuration is already loaded and healthy for another Chat turn
+- **THEN** admission checks the saved bundle identity without hashing the entire weight file again
+- **AND** a changed bundle or evicted preset must be fully verified before new weights are loaded.

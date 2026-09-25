@@ -3554,6 +3554,8 @@ export interface components {
             project_path?: string | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[] | null;
+            /** Queue After Run Id */
+            queue_after_run_id?: string | null;
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[] | null;
             review?: components["schemas"]["ReviewConfiguration"] | null;
