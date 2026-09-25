@@ -906,7 +906,8 @@ def _redact_media(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_media(item) for item in value]
     if isinstance(value, dict):
-        if value.get("type") in {"image", "image_url", "audio", "input_audio", "video"}:
+        media_type = value.get("type")
+        if isinstance(media_type, str) and media_type in {"image", "image_url", "audio", "input_audio", "video"}:
             redacted = {key: _redact_media(child) for key, child in value.items() if key not in {"image_url", "data", "image", "audio", "video"}}
             redacted["media"] = "<embedded-media-redacted>"
             return redacted

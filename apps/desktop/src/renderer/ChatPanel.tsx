@@ -8,7 +8,7 @@ import { HoverHelp } from "./HoverHelp";
 
 import { api, ApiError } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection, type ChatReadiness } from "./workspaceApi";
-import { browserToolNames, optionalVisualToolNames, setupOverrides, sparseChatSetup, withBrowserTools, withDesktopTools, type ChatWorkspaceLaunch } from "./chatSetup";
+import { browserToolNames, defaultNextTurnTools, effectiveNextTurnTools, setupOverrides, sparseChatSetup, withBrowserTools, withDesktopTools, type ChatWorkspaceLaunch } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
@@ -29,14 +29,14 @@ function readRailPage(): RailPage {
 import { ChatDockContext } from "./chatDockContext";
 import { packet03Api } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
-import { HelperRail } from "./HelperRail";
+import { HelperRail, helperEntries, helperIsActive } from "./HelperRail";
 import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
 import { ChatRetainedFiles, useChatRetainedAssets } from "./ChatRetainedFiles";
 import { ChatDraftWriter, sameDraftValue } from "./chatDraftWriter";
 import { notifyAttentionChanged } from "./AttentionPanel";
 import { ChatHistoryActions } from "./ChatHistoryActions";
 import { ChatQueuePanel } from "./ChatQueuePanel";
-import { AgentMessageFeed } from "./AgentMessageFeed";
+import { AgentMessageFeed, helperKey } from "./AgentMessageFeed";
 import { RunActivitySummary, helperApprovalOwner } from "./RunActivitySummary";
 import { conversationTitle, displayedTranscript, formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
@@ -51,6 +51,7 @@ import {
   visiblePendingInterrupt,
   type ChatConversation,
   type ChatMessage,
+  type AgentRun,
   type Deployment,
   type KnowledgeEntry,
   type ModelBundle,
@@ -124,6 +125,9 @@ function ChatInteractionStream(props: {
   refreshDeployments: () => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: SelectionOwner) => boolean;
+  onHelperOpen: (runId: string, toolCallId: string) => void;
+  onHelperActivity: (conversationId: string, active: number, total: number) => void;
+  historicalRuns: AgentRun[];
 }) {
   const {
     threadId,
@@ -203,6 +207,9 @@ function ChatInteractionStream(props: {
           refreshDeployments={refreshDeployments}
           setMessage={setMessage}
           isCurrentOwner={isCurrentOwner}
+          onHelperOpen={props.onHelperOpen}
+          onHelperActivity={props.onHelperActivity}
+          historicalRuns={props.historicalRuns}
         />
       )}
     </InteractionStream>
@@ -231,6 +238,9 @@ function ChatInteractionStreamContent(props: {
   refreshDeployments: () => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: SelectionOwner) => boolean;
+  onHelperOpen: (runId: string, toolCallId: string) => void;
+  onHelperActivity: (conversationId: string, active: number, total: number) => void;
+  historicalRuns: AgentRun[];
 }) {
   const {
     stream,
@@ -278,7 +288,23 @@ function ChatInteractionStreamContent(props: {
   ) || projection.toolCalls.some(call => (call.status as string) === "preparing" || call.status === "running");
   const waitingForOutput = projectionRunOwned && !savingProjectState && !visibleInterrupt && !hasTurnOutput &&
     Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
-  const helperCallIds = new Set((run?.child_runs ?? []).flatMap(child => child.tool_call_id ? [child.tool_call_id] : []));
+  const currentParentRun = run ?? conversation.current_run;
+  const helperRuns = [...props.historicalRuns, ...(currentParentRun ? [currentParentRun] : [])];
+  const helpers = helperEntries(helperRuns, stream.subagents.values(), currentParentRun?.id);
+  const helperById = new Map(helpers.map(helper => [helper.key, helper]));
+  useEffect(() => {
+    if (projectionRunOwned) props.onHelperActivity(conversation.id, helpers.filter(helper => helperIsActive(helper.status)).length, helpers.length);
+  }, [conversation.id, helpers.map(helper => `${helper.key}:${helper.status}`).join("|"), projectionRunOwned, props.onHelperActivity]);
+  const helperName: NonNullable<ComponentProps<typeof AgentMessageFeed>["helperName"]> = (tool, runId) => {
+    const args = typeof tool.args === "object" && tool.args ? tool.args as Record<string, unknown> : {};
+    const agentId = typeof args.subagent_type === "string" ? args.subagent_type : "";
+    const parent = helperRuns.find(item => item.id === runId);
+    return (helperById.get(runId && tool.id ? helperKey(runId, tool.id) : "")?.name ?? parent?.helper_snapshots?.find(item => item.agent_id === agentId)?.name ?? agentId) || "Helper";
+  };
+  const helperStatus: NonNullable<ComponentProps<typeof AgentMessageFeed>["helperStatus"]> = (tool, runId) => {
+    const status = helperById.get(runId && tool.id ? helperKey(runId, tool.id) : "")?.status;
+    return status ? status.replaceAll("_", " ") : tool.status === "error" ? "Failed" : tool.status === "finished" ? "Done" : "Working";
+  };
   const projectionSignature = useRef("");
   const ownershipLookupKey = useRef("");
   const terminalRefreshKey = useRef("");
@@ -316,6 +342,7 @@ function ChatInteractionStreamContent(props: {
       runStatus: run?.status ?? null,
       finalizationPhase: run?.finalization_phase ?? null,
       eventCount: run?.events.length ?? null,
+      childRuns: run?.child_runs?.map(child => `${child.tool_call_id}:${child.status}:${child.namespace.join("|")}`) ?? [],
     });
     publishLiveMeasurement({
       runId: run.id,
@@ -452,7 +479,7 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} hiddenToolCallIds={helperCallIds} hideHelperTasks toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
+        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
           return retained?.content;
         }} />
@@ -623,6 +650,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [railOpen, setRailOpen] = useState(() => {
     try { return sessionStorage.getItem("workbench.chat.rail") === "open"; } catch { return false; }
   });
+  const [selectedHelperKey, setSelectedHelperKey] = useState("");
+  const [helperActivity, setHelperActivity] = useState({ conversationId: "", active: 0, total: 0 });
+  const recordHelperActivity = useCallback((conversationId: string, active: number, total: number) => {
+    setHelperActivity(current => current.conversationId === conversationId && current.active === active && current.total === total ? current : { conversationId, active, total });
+  }, []);
   const [selectedPath, setSelectedPath] = useState("");
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -659,6 +691,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [workMode, setWorkMode] = useState<"work" | "plan">("work");
   const [desktopAccess, setDesktopAccess] = useState<DesktopAccess>("off");
   const [selectedTools, setSelectedTools] = useState<string[] | null>(null);
+  const [toolMenuOpen, setToolMenuOpen] = useState(false);
+  const [toolMenuRequest, setToolMenuRequest] = useState(0);
+  const [toolMenuFocus, setToolMenuFocus] = useState<"browser" | "windows" | null>(null);
   const [helperAgentIds, setHelperAgentIds] = useState<string[]>([]);
   const [review, setReview] = useState({ enabled: false, criteria: "", max_revisions: 2 as const });
   const [incomingDrop, setIncomingDrop] = useState<{ id: string; sessionId: string; files: File[] } | null>(null);
@@ -668,6 +703,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   const reuseClaim = useRef<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
+  const [historicalRuns, setHistoricalRuns] = useState<AgentRun[]>([]);
+  const historicalRunIds = conversation?.run_ids.filter(id => id !== conversation.current_run_id && id !== conversation.current_run?.id).join("|") ?? "";
+  useEffect(() => {
+    setHistoricalRuns([]);
+    if (!conversation?.id || !historicalRunIds) return;
+    let cancelled = false;
+    void Promise.allSettled(historicalRunIds.split("|").map(id => api.agentRun(id))).then(results => {
+      if (!cancelled) setHistoricalRuns(results.flatMap(result => result.status === "fulfilled" ? [result.value] : []));
+    });
+    return () => { cancelled = true; };
+  }, [conversation?.id, historicalRunIds]);
   const retainedAssets = useChatRetainedAssets(conversation?.id ?? "");
   const openRail = useCallback((page: RailPage) => {
     setRailOpen(true);
@@ -676,6 +722,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       sessionStorage.setItem("workbench.chat.rail", "open");
       sessionStorage.setItem("workbench.chat.rail.page", page);
     } catch { /* The rail still opens for this view. */ }
+  }, []);
+  const openHelper = useCallback((runId: string, toolCallId: string) => {
+    setSelectedHelperKey(helperKey(runId, toolCallId));
+    openRail("helpers");
+  }, [openRail]);
+  const openToolMenu = useCallback((section: "browser" | "windows") => {
+    setToolMenuFocus(section);
+    setToolMenuRequest(current => current + 1);
   }, []);
   const openFile = useCallback((path: string) => {
     openRail("files");
@@ -1061,6 +1115,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     activeOwner.current = { conversationId: null, threadId: null, generation: selectionRequest.current };
     setBoundGeneration(selectionRequest.current);
     setConversation(null);
+    setSelectedHelperKey("");
     setInteractionThreadId(null);
     setSelectionLoading(null);
     setSelectionFailure(null);
@@ -1109,7 +1164,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const modelChoices = chatDeployments.length > 0 ? chatDeployments : deployments;
   const selectedDeployment = modelChoices.find((item) => item.id === deploymentId);
   const missingDeployment = Boolean(deploymentId && !selectedDeployment);
-  const tools = conversation?.enabled_tools ?? enabledTools;
+  const tools = selectedTools ?? applicationDefaults.current?.configuration.presented_tools ?? defaultNextTurnTools(enabledTools, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length));
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
   const currentArea = selectionLoading ? areaLabel(selectionLoading) : areaLabel(conversation);
@@ -1126,6 +1181,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     activeOwner.current = { conversationId: null, threadId: null, generation: requestId };
     setBoundGeneration(requestId);
     setConversation(null);
+    setSelectedHelperKey("");
     setInteractionThreadId(null);
     setSelectionLoading(item);
     setSelectionFailure(null);
@@ -1304,7 +1360,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     }
     if (conversation && !runBusy && readinessBlocksSend(readiness)) {
       setMessage(readiness?.issues[0]?.message ?? "This chat needs a setup change before sending.");
-      if (readiness?.issues.some(issue => /window|desktop|grant/.test(issue.code))) openRail("setup");
+      if (readiness?.issues.some(issue => /window|desktop|grant/.test(issue.code))) openToolMenu("windows");
+      else if (readiness?.issues.some(issue => /browser/.test(issue.code))) openToolMenu("browser");
       return;
     }
     if (desktopAccess !== "off" && !conversation) {
@@ -1312,7 +1369,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         const created = await persistBeforeLeaving();
         if (created) {
           selectConversation(created);
-          openRail("setup");
+          openToolMenu("windows");
           setMessage("Choose a live Windows grant for this chat, then send your message.");
         }
       } catch (error) { fail(error); }
@@ -1476,7 +1533,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   }
 
   function capabilityTools(): string[] {
-    return selectedTools ?? enabledTools.filter(name => !optionalVisualToolNames.has(name) && name !== "execute" && (Boolean(projectId || projectPath) || !["ls", "glob", "grep", "write_file", "edit_file"].includes(name)));
+    return tools;
   }
 
   function toggleShell(enabled: boolean): void {
@@ -1488,6 +1545,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   function toggleBrowser(enabled: boolean): void {
     setSelectedTools(withBrowserTools(capabilityTools(), enabled, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
     markSetupEdited("presented_tools");
+    setReadinessEpoch(current => current + 1);
   }
 
   useEffect(() => {
@@ -1680,12 +1738,11 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <h2>{conversation ? conversationTitle(conversation) : selectionLoading ? conversationTitle(selectionLoading) : props.restoringSelection ? "Opening conversation…" : "New conversation"}</h2>
           </div>
           <div className="chat-header-actions"><MenuPopover label="Conversation view" align="end" placement="below" trigger={<Icon name="tune" size={16} />}><CompactSwitch label="Reasoning and tools" checked={presentation.detailed_streams} description="Show the model's reasoning and detailed tool activity. This does not change how the model thinks." onChange={checked => { void api.updatePresentationSettings({ detailed_streams: checked }).then(saved => props.onPresentationChange?.(saved)).catch(fail); }} /></MenuPopover>
-          {conversation?.run_ids.length ? <button type="button" className="chat-helper-button" onClick={() => openRail("helpers")} aria-label="Open helper activity"><Icon name="sparkles" size={16} /><span>Helpers</span></button> : null}
-          <button type="button" className={`icon-button${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={railOpen ? "Close the side rail" : "Setup, files, library, and actions"} onClick={() => {
+          <button type="button" className={`icon-button chat-rail-toggle${railOpen ? " is-on" : ""}`} aria-pressed={railOpen} aria-label={railOpen ? "Close conversation rail" : "Open conversation rail"} title={helperActivity.conversationId === conversation?.id && helperActivity.active ? `${helperActivity.active} active helpers` : railOpen ? "Close the side rail" : "Helpers, setup, files, library, and actions"} onClick={() => {
             const next = !railOpen;
             setRailOpen(next);
             try { sessionStorage.setItem("workbench.chat.rail", next ? "open" : "closed"); } catch { /* The toggle still applies. */ }
-          }}><Icon name="panelRight" /></button></div>
+          }}><Icon name="panelRight" />{helperActivity.conversationId === conversation?.id && helperActivity.total ? <span className={`chat-rail-count${helperActivity.active ? " is-live" : ""}`} aria-label={`${helperActivity.active} active helpers`}>{helperActivity.active || helperActivity.total}</span> : null}</button></div>
         </header>
         <div className={`chat-workspace${railOpen ? " files-open" : ""}`}>
         <div className="chat-conversation">
@@ -1734,6 +1791,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               refreshDeployments={refreshDeployments}
               setMessage={setMessage}
               isCurrentOwner={isCurrentOwner}
+              onHelperOpen={openHelper}
+              onHelperActivity={recordHelperActivity}
+              historicalRuns={historicalRuns}
             />
           ) : (
             transcript.map((item, index) => (
@@ -1768,7 +1828,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             {deployHealthNotice.message}
           </Notice>
         ) : null}
-        {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => openRail("setup")}>Review setup</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
+        {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => {
+          const code = readiness?.issues[0]?.code ?? "";
+          if (/browser/.test(code)) openToolMenu("browser");
+          else if (/window|desktop|grant/.test(code)) openToolMenu("windows");
+          else openRail("setup");
+        }}>{readiness?.issues[0]?.code === "browser_worker_missing" ? "Install browser worker" : readiness?.issues[0]?.code === "browser_session_lost" ? "Reset browser" : /window|desktop|grant/.test(readiness?.issues[0]?.code ?? "") ? "Review Windows access" : "Review setup"}</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
         {message && message !== conversation?.deploy_health?.message ? (
           <Notice tone="error">{message}</Notice>
         ) : null}
@@ -1789,7 +1854,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             <button type="button" className="icon-button chat-rail-close" aria-label="Close conversation rail" title="Close" onClick={() => { setRailOpen(false); try { sessionStorage.setItem("workbench.chat.rail", "closed"); } catch { /* Closed for this view. */ } }}><Icon name="close" size={14} /></button>
           </div>
           <div className="chat-rail-body">
-            {railPage === "helpers" ? <HelperRail run={conversation?.current_run} runIds={conversation?.run_ids ?? []} threadId={interactionThreadId} /> : null}
+            {railPage === "helpers" ? <HelperRail key={conversation?.id ?? "new"} runs={[...historicalRuns, ...(conversation?.current_run ? [conversation.current_run] : [])]} currentRunId={conversation?.current_run?.id} threadId={interactionThreadId} conversationId={conversation?.id ?? ""} selectedHelperKey={selectedHelperKey} detailedStreams={presentation.detailed_streams} /> : null}
             <div hidden={railPage !== "setup"}><ConversationSetup
               projectId={projectId}
               projects={projects}
@@ -1815,24 +1880,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 markSetupEdited("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs");
                 setSelectedKnowledgeIds(current => current.includes(versionId) ? current.filter(item => item !== versionId) : [...current, versionId]);
               }}
-              tools={tools}
+              tools={effectiveNextTurnTools(tools, workMode)}
               filesystemToolsAvailable={conversation?.filesystem_tools_available}
               shellToolsAvailable={conversation?.shell_tools_available}
             /></div>
-            {railPage === "setup" ? <VisualTestingControls conversationId={conversation?.id ?? null} threadId={interactionThreadId} browserEnabled={Boolean(selectedTools?.some(name => browserToolNames.some(browserName => browserName === name)))} desktopAccess={desktopAccess} workMode={workMode} disabled={selectionBusy || sending || runBusy} onPrepareConversation={async () => {
-                if (!hasModelChoice) throw new Error("Choose a model before creating this chat.");
-                const created = await persistBeforeLeaving() ?? await createDraftConversation();
-                cacheConversation(created);
-                selectConversation(created);
-              }}
-              onBrowserEnabled={enabled => {
-                setSelectedTools(withBrowserTools(capabilityTools(), enabled, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
-                markSetupEdited("presented_tools");
-              }}
-              onDesktopAccess={scope => {
-                setSelectedTools(withDesktopTools(capabilityTools(), scope !== "off", Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
-                setDesktopAccess(scope); markSetupEdited("desktop_access", "presented_tools"); setReadinessEpoch(current => current + 1);
-              }} /> : null}
             {railPage === "actions" ? conversation ? <ChatHistoryActions
               key={conversation.id}
               conversation={conversation}
@@ -1916,15 +1967,22 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             />
           </label>
           <div className="actions">
-            <MenuPopover label="Add to message" trigger={<Icon name="plus" />} disabled={!hasModelChoice || sending || selectionBusy}>{close => <>
-              <button type="button" className="menu-action" onClick={() => { close(); filePicker.current?.click(); }}><Icon name="files" />Attach files or images</button>
+            <MenuPopover label="Add to message" trigger={<Icon name="plus" />} panelClassName="chat-tools-popover-panel" disabled={sending || selectionBusy} openRequest={toolMenuRequest} onOpenChange={setToolMenuOpen}>{close => <>
+              <button type="button" className="menu-action" disabled={!hasModelChoice} onClick={() => { close(); filePicker.current?.click(); }}><Icon name="files" />Attach files or images</button>
               <button type="button" className="menu-action" onClick={() => { close(); openRail("library"); }}><Icon name="library" />Choose from Library</button>
               <button type="button" className="menu-action" onClick={() => { close(); openRail("setup"); }}><Icon name="knowledge" />Skills and context</button>
               <div className="menu-section chat-capability-group" role="group" aria-label="Chat capabilities">
                 <div className="chat-capability-summary"><Icon name="folder" size={16} /><span>Project files</span><small>{projectId || projectPath ? "Available" : "Choose a project"}</small></div>
-                <button type="button" className="menu-action" aria-pressed={Boolean(selectedTools?.includes("execute"))} onClick={() => toggleShell(!selectedTools?.includes("execute"))}><Icon name="terminal" size={16} />Shell <small>{selectedTools?.includes("execute") ? "On" : "Off"}</small></button>
-                <button type="button" className="menu-action" aria-pressed={Boolean(selectedTools?.some(name => browserToolNames.some(browserName => browserName === name)))} onClick={() => toggleBrowser(!selectedTools?.some(name => browserToolNames.some(browserName => browserName === name)))}><Icon name="external" size={16} />Browser <small>{selectedTools?.some(name => browserToolNames.some(browserName => browserName === name)) ? "On" : "Off"}</small></button>
-                <button type="button" className="menu-action" onClick={() => { close(); openRail("setup"); }}><Icon name="panelRight" size={16} />Windows access <small>{desktopAccess === "off" ? "Off" : desktopAccess === "selected" ? "Selected window" : "All windows"}</small></button>
+                <button type="button" className="menu-action" aria-pressed={tools.includes("execute")} onClick={() => toggleShell(!tools.includes("execute"))}><Icon name="terminal" size={16} />Shell <small>{tools.includes("execute") ? "On" : "Off"}</small></button>
+                {toolMenuOpen ? <VisualTestingControls conversationId={conversation?.id ?? null} threadId={interactionThreadId} browserEnabled={tools.some(name => browserToolNames.some(browserName => browserName === name))} desktopAccess={desktopAccess} workMode={workMode} focusSection={toolMenuFocus} focusNonce={toolMenuRequest} disabled={selectionBusy || sending || runBusy} canPrepareConversation={hasModelChoice} onReadinessChange={() => setReadinessEpoch(current => current + 1)} onPrepareConversation={async () => {
+                  if (!hasModelChoice) throw new Error("Choose a model before creating this chat.");
+                  const created = await persistBeforeLeaving() ?? await createDraftConversation();
+                  cacheConversation(created);
+                  selectConversation(created);
+                }} onBrowserEnabled={toggleBrowser} onDesktopAccess={scope => {
+                  setSelectedTools(withDesktopTools(capabilityTools(), scope !== "off", Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
+                  setDesktopAccess(scope); markSetupEdited("desktop_access", "presented_tools"); setReadinessEpoch(current => current + 1);
+                }} /> : null}
               </div>
               <button type="button" className="menu-action" onClick={() => { markSetupEdited("work_mode"); setWorkMode("plan"); close(); }} disabled={workMode === "plan"}><Icon name="knowledge" />Plan mode{workMode === "plan" ? " · on" : ""}</button>
               <div className="menu-section"><CompactSwitch label="Review before finishing" checked={review.enabled} onChange={enabled => { markSetupEdited("review"); setReview(current => ({ ...current, enabled })); }} description="Checks the result against your criteria and revises it up to twice." />{review.enabled ? <><label>Review criteria<textarea rows={2} value={review.criteria} placeholder="What should a good result satisfy?" onChange={event => { markSetupEdited("review"); setReview(current => ({ ...current, criteria: event.target.value })); }} /></label><small className="hint">Up to 2 revisions</small></> : null}</div>

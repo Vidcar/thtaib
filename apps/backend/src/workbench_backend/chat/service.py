@@ -326,6 +326,9 @@ class ChatService:
         except (ChatError, HarnessError, ManagerError) as exc:
             code = getattr(exc, "code", "setup_unavailable")
             action = {
+                "browser_worker_missing": "Install browser worker",
+                "browser_session_lost": "Reset browser",
+                "browser_unavailable": "Set up browser",
                 "desktop_grant_required": "Grant Windows access",
                 "desktop_window_required": "Choose a window",
                 "desktop_window_changed": "Choose the window again",
@@ -1221,6 +1224,19 @@ class ChatService:
                 status_code=400,
                 details={"tools": shell_blocked},
             )
+        if conversation.work_mode == "work":
+            from workbench_backend.browser.service import BROWSER_TOOL_NAMES
+
+            if set(_presented).intersection(BROWSER_TOOL_NAMES):
+                browser = self.harness.browser
+                if browser is None:
+                    raise ChatError("Browser control is unavailable.", code="browser_unavailable", status_code=409)
+                if conversation.thread_id and browser.status(conversation.thread_id).get("state") == "lost":
+                    raise ChatError(
+                        "The previous browser session was lost. Reset it to start a fresh isolated browser.",
+                        code="browser_session_lost", status_code=409,
+                    )
+                browser.runtime.require_installed()
         if conversation.work_mode == "work" and conversation.thread_id:
             from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
 

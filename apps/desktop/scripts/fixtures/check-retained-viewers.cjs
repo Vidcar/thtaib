@@ -68,6 +68,25 @@ app.whenReady().then(async () => {
       await js(`window.fixture.resolveOriginal();delete window.fixture.resolveOriginal;new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
       assert.equal(await js(`document.activeElement?.getAttribute('aria-label')`),'View image Library image.png','late original completion cannot lose restored Library focus');
     }
+    await js(`document.documentElement.dataset.theme='light';window.fixture.showToolMenu()`);
+    for (const width of [360, 600]) {
+      win.setContentSize(width, 750);
+      await ready(`Math.abs(innerWidth-${width})<=1 && document.querySelector('button[aria-label="Add to message"]')`);
+      await js(`document.querySelector('button[aria-label="Add to message"]').click()`);
+      await ready(`document.querySelector('.visual-testing-controls')`);
+      for (const capability of ['Browser', 'Windows']) {
+        await js(`Array.from(document.querySelectorAll('.visual-testing-disclosure')).find(button=>button.textContent.includes('${capability}')).click()`);
+        await ready(`Array.from(document.querySelectorAll('.visual-testing-disclosure')).some(button=>button.textContent.includes('${capability}') && button.getAttribute('aria-expanded')==='true')`);
+        const geometry = await js(`(()=>{const panel=document.querySelector('.chat-tools-popover-panel'),rect=panel.getBoundingClientRect();return {innerWidth,innerHeight,rect:{left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom},scrollWidth:panel.scrollWidth,clientWidth:panel.clientWidth,pageScrollWidth:document.documentElement.scrollWidth,active:document.querySelector('.visual-testing-disclosure[aria-expanded="true"]')?.textContent}})()`);
+        assert.ok(geometry.rect.left >= 0 && geometry.rect.right <= geometry.innerWidth + 1 && geometry.rect.top >= 0 && geometry.rect.bottom <= geometry.innerHeight + 1, `${capability} menu stays inside ${width}px viewport`);
+        assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1 && geometry.pageScrollWidth <= geometry.innerWidth + 1, `${capability} menu has no horizontal overflow at ${width}px`);
+        if (width === 360) { await js(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`); fs.writeFileSync(path.join(scratch, `chat-tools-${capability.toLowerCase()}-360.png`), (await win.webContents.capturePage()).toPNG()); }
+        console.log(JSON.stringify({ capability, ...geometry }));
+      }
+      await js(`document.querySelector('button[aria-label="Add to message"]').click()`);
+      await ready(`document.querySelector('button[aria-label="Add to message"]').getAttribute('aria-expanded')==='false'`);
+    }
+    console.log('Chat tools native 360px and 600px geometry checks passed.');
     console.log('Source reference native geometry, exact range, failure and keyboard checks passed.');
   } finally { win.destroy(); app.quit(); }
 }).catch(error => { console.error(error); app.exit(1); });

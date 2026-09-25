@@ -18,8 +18,23 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import SettingsBags
 
 
+def _child_run_id(parent, snapshot, call_id):
+    return "child_" + hashlib.sha256(f"{parent.id}:{call_id}:{snapshot.agent_id}".encode()).hexdigest()[:24]
+
+
+def _saved_child_message_identities(child):
+    """Skip checkpoint replay already represented in this child's audit."""
+    seen = set()
+    for event in child.events:
+        if event.kind == "assistant_message" and isinstance(event.detail.get("message_id"), str):
+            seen.add(("message", event.detail["message_id"]))
+        elif event.kind == "tool_result" and isinstance(event.detail.get("tool_call_id"), str):
+            seen.add(("tool", event.detail["tool_call_id"]))
+    return seen
+
+
 def _child_run(owner, parent, snapshot, call_id, payload):
-    child_id = "child_" + hashlib.sha256(f"{parent.id}:{call_id}:{snapshot.agent_id}".encode()).hexdigest()[:24]
+    child_id = _child_run_id(parent, snapshot, call_id)
     existing = owner.store.get_run(child_id)
     if existing is not None:
         return existing
@@ -96,66 +111,122 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
     specs = []
     for snapshot in parent.helper_snapshots:
         async def invoke(payload, config, snapshot=snapshot):
-            control.require_dispatch(parent)
             call_id = CURRENT_TOOL_CALL.get()
             if not call_id:
                 raise HarnessError("A helper requires an owned parent tool-call identity.", code="helper_identity_missing", status_code=409)
             namespace = [part for part in config.get("configurable", {}).get("checkpoint_ns", "").split("|") if part]
+            if not namespace:
+                namespace = [f"tools:{call_id}"]
+            child_id = _child_run_id(parent, snapshot, call_id)
+            with owner._lock:
+                activity = next((item for item in parent.child_runs if item.tool_call_id == call_id), None)
+                if activity is None:
+                    activity = ChildRunActivity(run_id=child_id, agent_id=snapshot.agent_id,
+                        version_id=snapshot.version_id, name=snapshot.name, namespace=namespace, tool_call_id=call_id)
+                    parent.child_runs.append(activity)
+                activity.status = "waiting for model"
+                activity.error = None
+                owner._persist_and_notify(parent)
+
+            child = None
             def admit():
+                control.require_dispatch(parent)
                 with owner.manager.reserve_deployment(snapshot.configuration.deployment_id or parent.deployment_id,
                         profile_id=snapshot.configuration.profile_id):
                     control.require_dispatch(parent)
-                    child = _child_run(owner, parent, snapshot, call_id, payload)
+                    admitted = _child_run(owner, parent, snapshot, call_id, payload)
                     with owner._lock:
-                        activity = next((item for item in parent.child_runs if item.run_id == child.id), None)
-                        if activity is None:
-                            activity = ChildRunActivity(run_id=child.id, agent_id=snapshot.agent_id,
-                                version_id=snapshot.version_id, name=snapshot.name, namespace=namespace, tool_call_id=call_id)
-                            parent.child_runs.append(activity)
                         activity.status = "working"
-                        child.status = AgentRunStatus.running
-                        child.error = None
-                        child.stop_reason = None
-                        child.finished_at = None
-                        owner._runs[child.id] = child
-                        owner._persist(child)
+                        admitted.status = AgentRunStatus.running
+                        admitted.error = None
+                        admitted.stop_reason = None
+                        admitted.finished_at = None
+                        admitted.pending_interrupt = None
+                        owner._runs[admitted.id] = admitted
+                        owner._persist(admitted)
                         owner._persist_and_notify(parent)
-                    return child, activity
-            child, activity = await asyncio.to_thread(admit)
+                    return admitted
             sink = []
             try:
+                child = await asyncio.to_thread(admit)
                 async with owner._worker_tools_context(child) as external:
                     graph = await asyncio.to_thread(owner._create_compiled_agent, child, sink, None,
                         external_tools=external, execution_control=control, is_child=True, inspection_only=inspection_only)
-                    result = await graph.ainvoke(payload, config)
-                owner._ingest_native_values(child, result, set())
+                    stream = None
+                    result = None
+                    seen_messages = _saved_child_message_identities(child)
+                    message_nodes = {}
+                    try:
+                        stream = await graph.astream_events(payload, config=config, version="v3")
+                        async for event in stream:
+                            params = event.get("params") if isinstance(event, dict) else None
+                            if not isinstance(params, dict):
+                                continue
+                            child_namespace = list(params.get("namespace") or [])
+                            # The child graph may report its root with the
+                            # checkpoint namespace. Rebase only this task's
+                            # prefix; older nested streams used plain "tools".
+                            relative_namespace = (child_namespace[len(activity.namespace):]
+                                if child_namespace[:len(activity.namespace)] == activity.namespace else
+                                child_namespace[1:] if child_namespace[:1] == ["tools"] else child_namespace)
+                            local = {**event, "params": {**params, "namespace": relative_namespace}}
+                            scoped = {**event, "params": {**params, "namespace": [*activity.namespace, *relative_namespace]}}
+                            try:
+                                await asyncio.to_thread(owner._observe_interaction, parent, scoped)
+                            except Exception as exc:  # noqa: BLE001 - live output must be durable
+                                raise owner._interaction_persistence_failure(parent, exc) from exc
+                            await asyncio.to_thread(owner._ingest_native_event, child, local, seen_messages, message_nodes)
+                            if params.get("interrupts"):
+                                from workbench_backend.agents.harness import _pending_from_native_event
+                                child.pending_interrupt = _pending_from_native_event(scoped)
+                                raise GraphInterrupt(params["interrupts"])
+                            if event.get("method") == "values" and not relative_namespace:
+                                values = params.get("data")
+                                if isinstance(values, tuple):
+                                    values = values[0]
+                                if isinstance(values, dict):
+                                    result = values
+                    finally:
+                        await owner._close_native_stream(stream)
+                    if result is None:
+                        raise HarnessError("The helper finished without a graph result.", code="helper_result_missing", status_code=500)
+                owner._ingest_native_values(child, result, seen_messages, message_nodes)
                 child.status = AgentRunStatus.completed
                 child.stop_reason = "completed"
                 child.finished_at = utc_now()
+                child.pending_interrupt = None
                 activity.status = "completed"
                 return result
             except GraphInterrupt:
                 activity.status = "waiting for approval or answer"
                 raise
             except asyncio.CancelledError:
-                child.status = AgentRunStatus.cancelled
-                child.stop_reason = "cancelled"
-                child.finished_at = utc_now()
+                if child is not None:
+                    child.status = AgentRunStatus.cancelled
+                    child.stop_reason = "cancelled"
+                    child.finished_at = utc_now()
+                    child.pending_interrupt = None
                 activity.status = "cancelled"
                 raise
             except BaseException as exc:
-                child.status = AgentRunStatus.failed
-                child.error = str(exc)
-                child.stop_reason = "failed"
-                child.finished_at = utc_now()
-                activity.status = "failed"
-                activity.error = str(exc)
+                cancelling = (isinstance(exc, HarnessError) and exc.code == "run_cancelling"
+                    or parent.status in {AgentRunStatus.cancel_requested, AgentRunStatus.cancelled})
+                if child is not None:
+                    child.status = AgentRunStatus.cancelled if cancelling else AgentRunStatus.failed
+                    child.error = None if cancelling else str(exc)
+                    child.stop_reason = "cancelled" if cancelling else "failed"
+                    child.finished_at = utc_now()
+                    child.pending_interrupt = None
+                activity.status = "cancelled" if cancelling else "failed"
+                activity.error = None if cancelling else str(exc)
                 raise
             finally:
                 with owner._lock:
-                    owner._persist(child)
+                    if child is not None:
+                        owner._persist(child)
                     owner._persist_and_notify(parent)
-                await asyncio.to_thread(owner._close_model_client, child.id)
+                if child is not None:
+                    await asyncio.to_thread(owner._close_model_client, child.id)
         specs.append({"name": snapshot.agent_id, "description": f"{snapshot.name}: {snapshot.role or 'Selected helper'}",
             "runnable": RunnableLambda(invoke, name=snapshot.name)})
     return specs

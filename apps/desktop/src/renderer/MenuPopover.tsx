@@ -13,15 +13,26 @@ export function MenuPopover(props: {
   disabled?: boolean;
   role?: "dialog" | "menu" | "group";
   onOpenChange?: (open: boolean) => void;
+  openRequest?: number;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const lastOpenRequest = useRef(props.openRequest ?? 0);
   const [position, setPosition] = useState({ left: 8, top: 8, ready: false });
   const close = () => { setOpen(false); trigger.current?.focus({ preventScroll: true }); };
 
   useEffect(() => { props.onOpenChange?.(open); }, [open, props.onOpenChange]);
+  useEffect(() => {
+    const next = props.openRequest ?? 0;
+    if (next > 0 && next !== lastOpenRequest.current) {
+      setPosition(current => ({ ...current, ready: false }));
+      if (typeof document !== "undefined") document.dispatchEvent(new CustomEvent("workbench:popover-open", { detail: id }));
+      setOpen(true);
+    }
+    lastOpenRequest.current = next;
+  }, [id, props.openRequest]);
 
   useLayoutEffect(() => {
     if (!open || typeof window === "undefined") return;

@@ -1,7 +1,8 @@
 /* Chat: header, transcript, composer, tool activity and chat popovers. */
 .chat-layout {display: grid; height: 100%; min-height: 0;}
-.chat-helper-button {display: inline-flex; align-items: center; gap: var(--space-tight); border: 0; background: transparent; color: var(--muted); font-size: var(--text-small);}
-.chat-helper-button:hover {color: var(--text);}
+.chat-rail-toggle {position: relative;}
+.chat-rail-count {position: absolute; right: -5px; top: -5px; display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 3px; border-radius: var(--radius-pill); background: var(--bg-raised); color: var(--text); border: var(--line-hairline) solid var(--border); font-size: 10px; line-height: 1;}
+.chat-rail-count.is-live {background: var(--accent); color: var(--bg); border-color: var(--accent);}
 .chat-plan-pill {display: inline-flex; align-items: center; gap: var(--space-tight); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); border: 0; border-radius: var(--radius-pill); background: var(--bg-panel); color: var(--text); font-size: var(--text-small); white-space: nowrap;}
 .chat-agent-label {display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .chat-agent-options {display: grid; min-width: 12rem;}
@@ -11,11 +12,23 @@
 .chat-capability-group .menu-action small {margin-left: auto; color: var(--muted);}
 .chat-capability-summary {display: flex; align-items: center; gap: var(--space-compact); padding: var(--pad-tight) var(--pad-compact); color: var(--muted);}
 .chat-capability-summary small {margin-left: auto;}
+.chat-tools-popover-panel {width: min(360px, calc(100vw - 16px)); max-height: min(640px, calc(100vh - 16px)); overflow: auto;}
+.helper-delegation {display: grid; gap: var(--space-tight); width: min(100%, 46rem); min-width: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel); color: var(--text); text-align: left;}
+.helper-delegation:hover {border-color: var(--accent);}
+.helper-delegation-head {display: flex; align-items: center; gap: var(--space-tight); min-width: 0; font-size: var(--text-small);}
+.helper-delegation-head strong {font-weight: var(--weight-medium);}
+.helper-delegation-head > span {margin-left: auto; color: var(--muted);}
+.helper-delegation-request {color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight); white-space: pre-wrap; overflow-wrap: anywhere;}
 .helper-rail {display: grid; gap: var(--space-compact); min-width: 0;}
-.helper-rail-list {display: grid; gap: var(--space-tight);}
-.helper-rail-list button {display: flex; justify-content: space-between; gap: var(--space-compact); min-width: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
-.helper-rail-list button[aria-selected="true"] {border-color: var(--accent); background: var(--bg-raised);}
-.helper-rail-list button span {color: var(--muted); font-size: var(--text-small);}
+.helper-rail-list {display: grid; gap: var(--space-section);}
+.helper-rail-group {display: grid; gap: var(--space-tight);}
+.helper-rail-group h3 {margin: 0; color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-medium);}
+.helper-rail-group button {display: flex; justify-content: space-between; gap: var(--space-compact); min-width: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
+.helper-rail-group button:hover {border-color: var(--accent);}
+.helper-rail-group button span, .helper-rail-heading span {color: var(--muted); font-size: var(--text-small);}
+.helper-rail-back {justify-self: start;}
+.helper-rail-heading {display: flex; justify-content: space-between; gap: var(--space-compact);}
+.helper-rail-request {margin: 0; color: var(--muted); font-size: var(--text-small); white-space: pre-wrap; overflow-wrap: anywhere;}
 .helper-rail .message-feed {display: grid; gap: var(--space-compact); min-width: 0;}
 .helper-rail .bubble {max-width: 100%;}
 .run-progress-head {display: flex; align-items: center;}

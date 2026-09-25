@@ -1,5 +1,10 @@
-.visual-testing-controls { display: grid; gap: var(--space-compact); padding: var(--pad-compact) 0; border-top: var(--line-hairline) solid var(--border); min-width: 0; container-type: inline-size; }
-.visual-testing-controls h3 { margin: 0; font-size: var(--text-body); }
+.visual-testing-controls { display: grid; gap: var(--space-tight); padding: var(--pad-tight) 0; border-top: var(--line-hairline) solid var(--border); min-width: 0; container-type: inline-size; }
+.visual-testing-capability { display: grid; gap: var(--space-tight); min-width: 0; }
+.visual-testing-detail { display: grid; gap: var(--space-tight); padding: var(--pad-tight) var(--pad-compact); border-left: var(--line-strong) solid var(--border); min-width: 0; }
+.visual-testing-detail > label { display: grid; gap: var(--space-tight); font-size: var(--text-small); }
+.visual-testing-disclosure { display: flex; align-items: center; gap: var(--space-tight); width: 100%; min-width: 0; border: 0; background: transparent; color: var(--text); text-align: left; padding: var(--pad-tight) var(--pad-compact); }
+.visual-testing-disclosure strong { font-size: var(--text-body); font-weight: var(--weight-medium); }
+.visual-testing-disclosure small { margin-left: auto; color: var(--muted); font-size: var(--text-small); }
 .visual-testing-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); min-width: 0; }
 .visual-testing-description { display: grid; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .visual-testing-description strong { font-size: var(--text-body); font-weight: var(--weight-medium); }

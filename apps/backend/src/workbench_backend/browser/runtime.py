@@ -55,7 +55,7 @@ class BrowserRuntime:
 
     def require_installed(self) -> tuple[Path, Path]:
         if not self.node.is_file() or not self.cli.is_file():
-            raise HarnessError("Install the optional browser worker in Workbench setup before using browser tools.", code="browser_worker_missing", status_code=409)
+            raise HarnessError("Install the optional browser worker from Chat's + tools menu before using browser tools.", code="browser_worker_missing", status_code=409)
         return self.node, self.cli
 
     def install(self) -> dict[str, object]:
@@ -84,7 +84,7 @@ class BrowserRuntime:
                 text=True, timeout=300, check=False,
             )
             if completed.returncode or not (package_stage / "node_modules" / "@playwright" / "mcp" / "cli.js").is_file():
-                raise HarnessError("The pinned browser package could not be installed. Check network access and retry from setup.", code="browser_install_failed")
+                raise HarnessError("The pinned browser package could not be installed. Check network access and retry from Chat's + tools menu.", code="browser_install_failed")
             self._replace(node_stage, self.node_root)
             self._replace(package_stage, self.package_root)
             return self.status()

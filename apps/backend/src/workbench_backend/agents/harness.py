@@ -1310,7 +1310,10 @@ class HarnessService:
             ],
             name="workbench-embedded-harness",
             response_format=response_format,
-            checkpointer=True if is_child else open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
+            # A concrete saver preserves the task-qualified namespace. With
+            # checkpointer=True LangGraph strips task IDs, merging parallel
+            # helpers into the same "tools" checkpoint state.
+            checkpointer=open_sqlite_checkpointer(self.manager.paths.checkpoints_db),
             **agent_kwargs,
         )
 
@@ -1396,18 +1399,30 @@ class HarnessService:
                 getattr(exc, "interrupts", None)
             )
             if found is not None:
-                return found
+                return self._owned_child_interrupt(run, found)
             raise
         finally:
             self._native_streams.pop(run.id, None)
             await self._close_native_stream(stream)
         if pending is not None:
-            return pending
+            return self._owned_child_interrupt(run, pending)
         try:
             state = await agent.aget_state(config)
         except Exception:  # noqa: BLE001 - missing state is a completed or failed stream
             return None
         return pending_interrupt_from_raw(getattr(state, "interrupts", None))
+
+    def _owned_child_interrupt(self, run: AgentRun, pending: PendingInterrupt) -> PendingInterrupt:
+        """Use the child's saved checkpoint namespace for an inline approval."""
+        if not pending.interrupt_id:
+            return pending
+        with self._lock:
+            for activity in run.child_runs:
+                child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+                owned = child.pending_interrupt if child is not None else None
+                if owned is not None and owned.interrupt_id == pending.interrupt_id and owned.namespace == activity.namespace:
+                    return owned
+        return pending
 
     def _interaction_persistence_failure(self, run: AgentRun, exc: Exception) -> HarnessError:
         with self._lock:
@@ -1635,11 +1650,17 @@ class HarnessService:
         # Inline children have no detached worker once their owning graph ends.
         for activity in run.child_runs:
             child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+            if child is None and activity.status not in {"completed", "failed", "cancelled"}:
+                activity.status = "cancelled" if status == AgentRunStatus.cancelled else "failed"
+                activity.error = (None if status == AgentRunStatus.cancelled else
+                    activity.error or "The parent run ended before this helper was admitted.")
+                continue
             if child is not None and is_run_lifecycle_live(child.status):
                 child.status = AgentRunStatus.cancelled if status == AgentRunStatus.cancelled else AgentRunStatus.failed
                 child.stop_reason = "parent_" + str(status.value)
                 child.finished_at = run.finished_at
                 child.updated_at = run.finished_at
+                child.pending_interrupt = None
                 activity.status = child.status.value
                 self._persist(child)
         if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
@@ -1802,15 +1823,23 @@ class HarnessService:
         now = utc_now()
         emitted = False
         if isinstance(message, AIMessage) and message.tool_calls:
+            known_child_calls = ({item.get("id") for item in run.tool_invocations if item.get("id")}
+                if run.parent_run_id else set())
             for call in message.tool_calls:
                 name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
                 args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
                 call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+                if call_id and call_id in known_child_calls:
+                    # A resumed child stream can replay its saved tool-call
+                    # message before emitting the new tool result.
+                    continue
                 invocation = {"name": name, "args": args, "id": call_id}
                 if node:
                     invocation["node"] = node
                 run.tool_invocations.append(invocation)
                 run.events.append(AgentEvent(at=now, kind="tool_call", detail=invocation))
+                if call_id:
+                    known_child_calls.add(call_id)
                 emitted = True
             run.updated_at = now
             return emitted
@@ -2261,6 +2290,12 @@ class HarnessService:
     def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
         if not telemetry:
             self._persist(run)
+        if run.parent_run_id:
+            # Inline children share the parent's graph thread. Their audit is
+            # durable in the child run, while scoped native events belong in
+            # the parent interaction; a child run must never replace root UI.
+            self._updates.notify_all()
+            return
         if run.id not in self._interaction_failure_runs or not is_run_lifecycle_live(run.status):
             self._observe_interaction(run, None, telemetry=telemetry)
         self._updates.notify_all()

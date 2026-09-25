@@ -76,7 +76,7 @@ export function ConversationSetup(props: {
           )) : null}
         </fieldset>
       </details>
-      {props.conversation && props.tools.length > 0 ? <details><summary>{props.tools.length} {props.tools.length === 1 ? "tool available" : "tools available"}</summary><ul className="plain-list">{props.tools.map(id => { const tool = toolDetails.find(item => item.id === id); return <li key={id}>{tool?.name ?? id}<HoverHelp title={tool?.name ?? id}>{tool?.description ?? "Tool details unavailable"}</HoverHelp></li>; })}</ul></details> : <p className="hint">{props.conversation ? "No tools available." : "Available tools depend on the project you choose."}</p>}
+       <details><summary>{props.tools.length} {props.tools.length === 1 ? "tool" : "tools"} selected for the next message</summary>{props.tools.length ? <ul className="plain-list">{props.tools.map(id => { const tool = toolDetails.find(item => item.id === id); return <li key={id}>{tool?.name ?? id}<HoverHelp title={tool?.name ?? id}>{tool?.description ?? "Tool details unavailable"}</HoverHelp></li>; })}</ul> : <p className="hint">No optional tools selected. Use + beside the message to choose tools.</p>}</details>
       {(props.filesystemToolsAvailable === false || props.shellToolsAvailable === false) ? <p className="hint">{props.filesystemToolsAvailable === false ? "Project files unavailable. " : ""}{props.shellToolsAvailable === false ? "Host shell unavailable." : ""}</p> : null}
     </div>
   );

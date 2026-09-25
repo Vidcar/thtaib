@@ -196,6 +196,9 @@ function makeHarness(options = {}) {
     },
     createdConversation: conversation("conv_new", "New conversation", null),
     windowScope: { scope: "off", selected_window: null, stale: false },
+    browserInstalled: options.browserInstalled ?? true,
+    browserSessionState: options.browserSessionState ?? "active",
+    testIntervals: new Map(),
     requests: {
       commands: [],
       creates: [],
@@ -265,6 +268,10 @@ function makeHarness(options = {}) {
         if (req.method === "GET" && url.pathname === "/v1/projects") { json(res, 200, options.projects ?? []); return; }
         if (req.method === "GET" && url.pathname === "/v1/agent-setups") { json(res, 200, options.agentSetups ?? []); return; }
         if (req.method === "GET" && url.pathname === "/v1/bundles") { json(res, 200, options.bundles ?? []); return; }
+        if (req.method === "GET" && url.pathname === "/v1/browser/runtime") { json(res, 200, { supported: true, installed: state.browserInstalled }); return; }
+        if (req.method === "POST" && url.pathname === "/v1/browser/runtime/install") { state.browserInstalled = true; json(res, 200, { supported: true, installed: true }); return; }
+        if (/^\/v1\/browser\/sessions\/[^/]+$/.test(url.pathname)) { if (req.method === "DELETE") state.browserSessionState = "closed"; json(res, 200, { thread_id: url.pathname.split("/").at(-1), state: state.browserSessionState }); return; }
+        if (req.method === "POST" && /^\/v1\/browser\/sessions\/[^/]+\/reset$/.test(url.pathname)) { state.browserSessionState = "closed"; json(res, 200, { thread_id: url.pathname.split("/").at(-2), state: "closed" }); return; }
         if (req.method === "GET" && url.pathname === "/v1/window-testing/runtime") { json(res, 200, { available: true, installed: true }); return; }
         if (req.method === "GET" && url.pathname === "/v1/window-testing/windows") { json(res, 200, [{ hwnd: 42, title: "Fixture window", process_name: "fixture.exe", process_id: 1234 }]); return; }
         if (/^\/v1\/window-testing\/conversations\/[^/]+\/scope$/.test(url.pathname)) {
@@ -755,8 +762,8 @@ async function renderChat(vite, harness, props = {}) {
   };
   globalThis.window = Object.assign(new EventTarget(), {
     workbench: { backendUrl: `http://127.0.0.1:${port}` },
-    setInterval,
-    clearInterval,
+    setInterval: (callback, delay) => { const id = setInterval(callback, delay); harness.state.testIntervals.set(id, callback); return id; },
+    clearInterval: id => { clearInterval(id); harness.state.testIntervals.delete(id); },
   });
   const { ChatPanel } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
   const { WorkbenchSidebar } = await vite.ssrLoadModule("/src/renderer/WorkbenchSidebar.tsx");
@@ -2444,7 +2451,7 @@ async function testFirstTurnWindowsGrantPreservesDraft(vite) {
     resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: "dep_1", desktop_access: "selected" }, instruction_layers: [] }) });
   const renderer = await renderChat(vite, harness);
   try {
-    await waitFor(() => assert.match(allText(renderer), /Windows access/), "Windows setup available");
+    await waitFor(() => buttonByAriaLabel(renderer, "Add to message"), "tool menu available");
     await waitFor(() => assert.equal(renderer.root.findAll(node => node.props["aria-label"] === "Chat project")[0].props.disabled, false), "fresh chat ready");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Inspect this window" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
@@ -2458,6 +2465,57 @@ async function testFirstTurnWindowsGrantPreservesDraft(vite) {
     await waitFor(() => assert.equal(harness.state.windowScope.scope, "selected"), "live selected-window grant saved");
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "first turn sends after the grant");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+function visualControls(renderer) {
+  return renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "VisualTestingControls");
+}
+
+async function testSingleToolMenuBeforeModelAndRuntimeCleanup(vite) {
+  const harness = makeHarness({ deployments: [], aRun: null, threadARun: null, browserInstalled: false });
+  const renderer = await renderChat(vite, harness);
+  try {
+    const trigger = () => buttonByAriaLabel(renderer, "Add to message");
+    await waitFor(() => assert.equal(trigger().props.disabled, false), "tool menu usable before choosing a model");
+    assert.equal(visualControls(renderer).length, 0, "runtime controls do not mount while the menu is closed");
+    assert.equal(renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Helpers").length, 0, "there is no second top-right helper button");
+    await act(async () => trigger().props.onClick());
+    await waitFor(() => assert.equal(visualControls(renderer).length, 1), "Browser and Windows have one control location in the + menu");
+    await waitFor(() => assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure").length, 2), "both capability rows present");
+    const browserRow = visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0];
+    await act(async () => browserRow.props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "Browser worker installation reachable before model choice");
+    await act(async () => button(renderer, "Install browser worker").props.onClick());
+    await waitFor(() => assert.equal(harness.state.browserInstalled, true), "pre-model worker installation completed");
+    const browserRequests = () => harness.state.outgoingRequests.filter(item => item.path === "/v1/browser/runtime").length;
+    await act(async () => trigger().props.onClick());
+    await waitFor(() => assert.equal(visualControls(renderer).length, 0), "closing + unmounts its runtime controls");
+    const closedCount = browserRequests();
+    await act(async () => { for (const poll of harness.state.testIntervals.values()) poll(); await Promise.resolve(); });
+    assert.equal(browserRequests(), closedCount, "no hidden Browser status polling remains after + closes");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testToolReadinessActionsOpenRecovery(vite) {
+  let issueCode = "browser_worker_missing";
+  const harness = makeHarness({ aRun: null, threadARun: null, browserInstalled: false, browserSessionState: "lost", readiness: () => ({ status: "needs_action", can_send: false, issues: [{ code: issueCode, message: issueCode === "browser_worker_missing" ? "Browser worker needs installation" : "Browser session was lost", action: issueCode === "browser_worker_missing" ? "Install browser worker" : "Reset browser" }], selection: null }) });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "chat list ready");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "worker readiness action visible in chat");
+    await act(async () => button(renderer, "Install browser worker").props.onClick());
+    await waitFor(() => assert.equal(visualControls(renderer).length, 1), "readiness opens + menu");
+    assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "recovery focuses Browser row");
+    assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0].props["aria-expanded"], true, "Browser recovery detail expands");
+    issueCode = "browser_session_lost";
+    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Install browser worker")[0].props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Reset browser").length), "lost-session readiness follows installation");
+    await act(async () => button(renderer, "Reset browser").props.onClick());
+    assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "lost-session recovery keeps Browser focused");
+    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Reset")[0].props.onClick());
+    await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "Reset recovery reaches the Browser session action");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -3242,6 +3300,8 @@ try {
     ["fresh submit shares draft session", testFreshSubmitSharesCreatedDraftSessionAndSendsRevision],
     ["generated display title updates sidebar", testGeneratedDisplayTitleUpdatesSidebar],
     ["first-turn Windows grant preserves draft", testFirstTurnWindowsGrantPreservesDraft],
+    ["single pre-model tool menu and runtime cleanup", testSingleToolMenuBeforeModelAndRuntimeCleanup],
+    ["tool readiness recovery opens focused menu", testToolReadinessActionsOpenRecovery],
     ["accepted draft next save uses incremented revision", testAcceptedDraftNextSaveUsesIncrementedRevision],
     ["queued draft clear preserves later draft", testQueuedDraftClearDoesNotEraseLaterDraft],
     ["attachment-only SDK submit metadata", testAttachmentOnlySdkSubmitKeepsMetadata],
