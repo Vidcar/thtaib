@@ -1,7 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activityLine, groupActivity, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -9,6 +9,8 @@ import remarkGfm from "remark-gfm";
 import { CopyIconButton } from "./CopyIconButton";
 import { Icon } from "./Icon";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
+import { packet03Api } from "./packet03Api";
+import { loadRetainedPreview } from "./retainedFiles";
 import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceReference";
 import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdown";
 import type { MatchedPermissionGrant } from "./packet03Api";
@@ -87,6 +89,30 @@ function toolError(tool: ToolBlock): string | undefined {
   if (tool.status) return undefined;
   const text = resultText;
   return /^\s*(error|failed|exception|traceback)\b/i.test(text) ? text : undefined;
+}
+
+function captureAssetId(text: string): string | null {
+  return /\/captures\/(asset_[0-9a-f]{32})\.(?:png|jpg|webp)\b/i.exec(text)?.[1] ?? null;
+}
+
+function CapturePreview({ assetId }: { assetId: string }) {
+  const scope = useContext(SourceScope);
+  const [thumbnail, setThumbnail] = useState("");
+  const [name, setName] = useState("Screenshot");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!scope.sessionId) return;
+    let stale = false;
+    void loadRetainedPreview(assetId, { sessionId: scope.sessionId }).then(preview => {
+      if (!stale) { setThumbnail(preview.image_data_url ?? ""); setName(preview.filename); setError(""); }
+    }).catch(caught => { if (!stale) setError(caught instanceof Error ? caught.message : String(caught)); });
+    return () => { stale = true; };
+  }, [assetId, scope.sessionId]);
+  if (!scope.sessionId) return null;
+  return <div className="tool-capture-preview"><span className="tool-detail-label">Retained screenshot</span>{thumbnail ? <ImagePreview src={thumbnail} name={name} small loadOriginal={async () => {
+    const content = await packet03Api.contentAsset(assetId, { sessionId: scope.sessionId });
+    return `data:${content.content_type};base64,${content.content_base64 ?? ""}`;
+  }} /> : <span className="hint" role={error ? "status" : undefined}>{error || "Loading image…"}</span>}</div>;
 }
 
 function imageMarker(part: Record<string, unknown>, index: number): { label: string; src?: string } {
@@ -664,6 +690,7 @@ function ToolBlockList({
         </div>}
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
+      {!error && !incomplete && ["browser_take_screenshot", "desktop_screenshot"].includes(tool.name) && captureAssetId(output.answer) ? <CapturePreview assetId={captureAssetId(output.answer)!} /> : null}
       {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
       {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
     </div>;

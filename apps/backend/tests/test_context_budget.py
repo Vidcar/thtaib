@@ -29,6 +29,7 @@ from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
+from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.inference.schemas import SettingsBag
@@ -168,6 +169,13 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         return wait_for_run(self.client, started["id"], timeout=20.0)
 
     def test_tools_off_mock_transport_keeps_structured_user_image_and_switch_is_rejected(self) -> None:
+        deployment = self.manager.get_deployment(self.deployment_id)
+        self.manager.store.put_capability_evidence({
+            "schema_version": 1, "id": "probe_fixture_user_image",
+            "deployment_id": deployment.id, "capability": "image", "status": "passed",
+            "fingerprint": setup_fingerprint(deployment), "setup": {},
+            "tested_at": utc_now(), "inputs": {}, "observations": {},
+        })
         image_url = _fake_png_data_url()
         started = self._start(
             thread_id="thread-image-context",
@@ -273,6 +281,11 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         )
         # The same structured schema is included separately from the tool definitions.
         from workbench_backend.agents.context import estimate_payload
+
+        structured_mcp_schema = {"type": "function", "function": {"parameters": {
+            "type": "object", "properties": {"target": {"type": {"anyOf": ["string", "null"]}}},
+        }}}
+        self.assertGreater(estimate_payload({"tools": [structured_mcp_schema]}), 0)
 
         expected_with_schema = estimate_payload({
             "messages": [HumanMessage(content="Say hello.")],
@@ -437,7 +450,8 @@ class ContextBudgetHarnessTests(unittest.TestCase):
 
         self.assertEqual(completed["status"], "completed", completed.get("error"))
         configured = middleware_factory.call_args.kwargs
-        self.assertEqual(configured["model"].profile, {})
+        self.assertEqual(configured["model"].profile,
+            {"image_inputs": False, "image_tool_message": False})
         self.assertIsNone(configured["trigger"])
         self.assertEqual(configured["keep"], ("messages", 6))
 

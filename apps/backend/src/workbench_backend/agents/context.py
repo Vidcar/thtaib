@@ -156,7 +156,8 @@ def estimate_payload(payload: Any) -> int:
         elif hasattr(value, "args_schema"):
             value = convert_to_openai_tool(value)
         if isinstance(value, dict):
-            if value.get("type") in {"image_url", "image"}:
+            value_type = value.get("type")
+            if isinstance(value_type, str) and value_type in {"image_url", "image"}:
                 images += 1
                 return {"type": "image", "content": "[image]"}
             return {key: simplify(item) for key, item in value.items()}

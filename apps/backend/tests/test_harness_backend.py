@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,8 +18,10 @@ from workbench_backend.agents.harness_backend import (
     sanitize_thread_id,
 )
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, ToolMode
+from workbench_backend.agents.middleware import _allow_projectless_capture_tool
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.inference.probes import _image_fixture
 
 
 def _run(
@@ -59,11 +62,13 @@ class HarnessBackendHelperTests(unittest.TestCase):
                 "/retrieved/",
                 "/memories/",
                 "/skills/",
+                "/captures/",
             ),
         )
         self.assertTrue(is_reserved_framework_path("/retrieved/batch/chunk_1.md"))
         self.assertTrue(is_reserved_framework_path("/memories/user/kn_mem.md"))
         self.assertTrue(is_reserved_framework_path("/skills/review/SKILL.md"))
+        self.assertTrue(is_reserved_framework_path("/captures/asset_123.png"))
 
     def test_recorded_mode_attaches_no_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,6 +155,30 @@ class HarnessBackendHelperTests(unittest.TestCase):
             self.assertIsInstance(backend.default, LocalShellBackend)
             self.assertIn("PATH", getattr(backend.default, "_env", {}))
 
+    def test_project_image_reads_require_verified_vision_and_are_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            image = base64.b64decode(_image_fixture("red").partition(",")[2])
+            (project / "view.png").write_bytes(image)
+            paths = WorkbenchPaths(root).ensure()
+            run = _run(project_path=str(project), presented_tools=["read_file"])
+            blocked = build_run_backend(run, paths)
+            self.assertIn("passing image and tool-image probes", blocked.read("/view.png").error)
+            for presented in (["read_file"], ["read_file", "execute"]):
+                with self.subTest(presented=presented):
+                    backend = build_run_backend(_run(project_path=str(project), presented_tools=presented),
+                        paths, image_inputs_allowed=True)
+                    result = backend.read("/view.png")
+                    self.assertIsNone(result.error)
+                    self.assertEqual(result.file_data["encoding"], "base64")
+                    self.assertEqual(base64.b64decode(result.file_data["content"]), image)
+            (project / "view.png").write_bytes(b"0" * (8 * 1024 * 1024 + 1))
+            self.assertIn("at most", backend.read("/view.png").error)
+            (project / "view.png").write_bytes(b"not an image")
+            self.assertIn("could not be verified", backend.read("/view.png").error)
+
     def test_projectless_run_uses_state_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -159,6 +188,18 @@ class HarnessBackendHelperTests(unittest.TestCase):
             assert isinstance(backend, CompositeBackend)
             self.assertIsInstance(backend.default, StateBackend)
             self.assertFalse((root / "surprise").exists())
+
+    def test_projectless_capture_guard_requires_mount_and_exact_read_path(self) -> None:
+        run = _run(project_path=None, presented_tools=["read_file", "ls"])
+        path = "/captures/asset_" + "a" * 32 + ".png"
+        self.assertFalse(_allow_projectless_capture_tool("read_file", {"file_path": path}, run))
+        run.capture_routes_enabled = True
+        self.assertTrue(_allow_projectless_capture_tool("read_file", {"file_path": path}, run))
+        self.assertTrue(_allow_projectless_capture_tool("ls", {"path": "/captures"}, run))
+        for invalid in ("/captures/../secrets.png", "/captures/asset_" + "b" * 32 + ".pdf",
+                        "//captures/" + path.rsplit("/", 1)[-1], "/memories/user/private.png"):
+            self.assertFalse(_allow_projectless_capture_tool("read_file", {"file_path": invalid}, run))
+        self.assertFalse(_allow_projectless_capture_tool("write_file", {"file_path": path}, run))
 
 
 if __name__ == "__main__":

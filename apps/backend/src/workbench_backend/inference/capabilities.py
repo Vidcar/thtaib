@@ -10,9 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from workbench_backend.inference.schemas import Deployment, SettingsBag
 
-Capability = Literal["text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image"]
+Capability = Literal["text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image", "tool_image"]
 ProbeStatus = Literal["passed", "failed", "untested", "inconclusive"]
-CAPABILITIES: tuple[Capability, ...] = ("text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image")
+CAPABILITIES: tuple[Capability, ...] = ("text_stream", "tools", "structured_native", "structured_tools", "structured_with_tools", "structured_tools_with_tools", "reasoning", "reasoning_replay", "image", "tool_image")
 
 
 class CapabilityProbeRequest(BaseModel):

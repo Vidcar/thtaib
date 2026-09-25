@@ -190,6 +190,16 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
         return patch.object(harness_backend_mod, "LocalShellBackend", side_effect=wrapper)
 
+    def _spy_bounded_project_backend(self) -> Any:
+        constructions = self.fs_constructions
+        real = harness_backend_mod.BoundedImageFilesystemBackend
+
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            constructions.append((args, kwargs))
+            return real(*args, **kwargs)
+
+        return patch.object(harness_backend_mod, "BoundedImageFilesystemBackend", side_effect=wrapper)
+
     def test_recorded_write_file_does_not_use_live_filesystem_backend(self) -> None:
         self._install_script(write_then_reply("/replay.md", "fixture-bytes"))
         with self._spy_filesystem_backend(), self._spy_local_shell_backend():
@@ -329,7 +339,7 @@ class RecordedToolHarnessTests(unittest.TestCase):
 
     def test_live_write_file_still_uses_project_backend_and_is_labelled(self) -> None:
         self._install_script(write_then_reply("/live.md", "live-bytes"))
-        with self._spy_filesystem_backend(), self._spy_local_shell_backend():
+        with self._spy_filesystem_backend(), self._spy_local_shell_backend(), self._spy_bounded_project_backend():
             started = self.client.post(
                 "/v1/agent-runs",
                 json={

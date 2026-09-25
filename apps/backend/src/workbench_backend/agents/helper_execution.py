@@ -37,6 +37,8 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     require_setup_capabilities(config, project_bound=bool(parent.project_path), presented_tools=presented)
     rank = {"ask": 0, "full_access": 1}
     approval = min((parent.approval_mode, config.approval_mode or parent.approval_mode), key=rank.__getitem__)
+    desktop_rank = {"off": 0, "selected": 1, "all": 2}
+    desktop_access = min((parent.desktop_access, config.desktop_access or parent.desktop_access), key=desktop_rank.__getitem__)
     selected_connections = [ident for ident in (config.connection_ids if config.connection_ids is not None else parent.connection_ids) if ident in parent.connection_ids]
     request = AgentStartRequest(deployment_id=deployment.id, task="Helper task",
         memory_version_refs=list(config.memory_version_refs or []), skill_version_refs=list(config.skill_version_refs or []),
@@ -72,6 +74,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         presented_tools=presented, enabled_tools=[name for name in parent.enabled_tools if name != "task"],
         denied_tools=[name for name in selected_tools if name not in presented], approval_mode=approval,
         work_mode=work_mode, helper_agent_ids=[], helper_snapshots=[], child_runs=[],
+        desktop_access=desktop_access,
         requires_project=bool(config.requires_project), requires_host_shell=bool(config.requires_host_shell),
         review=ReviewConfiguration(), review_observation=ReviewObservation(), criteria=TaskCriteria(),
         profile_id=setup.selected_profile_id, effective_setup=setup, system_prompt=setup.system_prompt,
@@ -120,7 +123,7 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
             child, activity = await asyncio.to_thread(admit)
             sink = []
             try:
-                async with owner.connections.open_tools(child) as external:
+                async with owner._worker_tools_context(child) as external:
                     graph = await asyncio.to_thread(owner._create_compiled_agent, child, sink, None,
                         external_tools=external, execution_control=control, is_child=True, inspection_only=inspection_only)
                     result = await graph.ainvoke(payload, config)

@@ -1,4 +1,4 @@
-"""Pinned Deep Agents 0.7.16-0.7.18 behavior used by Workbench."""
+"""Pinned Deep Agents 0.7.19 behavior used by Workbench."""
 
 from __future__ import annotations
 
@@ -11,11 +11,15 @@ from deepagents.backends import FilesystemBackend, StateBackend
 from deepagents.backends.protocol import ExecuteResponse
 from deepagents.backends.sandbox import _parse_capture_execute_output
 from deepagents.backends.utils import create_file_data
-from deepagents.middleware.filesystem import FilesystemMiddleware, _scrub_unsupported_multimodal_content
+from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.subagents import TaskToolSchema
+from deepagents.middleware.unsupported_content import UnsupportedContentMiddleware
+from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
+
+from tests.scripted_model import ScriptedChatModel
 
 
 class DeepAgentsReleaseBehaviorTests(unittest.TestCase):
@@ -74,7 +78,14 @@ class DeepAgentsReleaseBehaviorTests(unittest.TestCase):
         pdf = {"type": "file", "mime_type": "application/pdf", "base64": "JVBERi0="}
         archive = {"type": "file", "mime_type": "application/zip", "base64": "UEs="}
         source = ToolMessage(content=[pdf, archive], tool_call_id="read-document", additional_kwargs={"read_file_path": "/notes.zip"})
-        scrubbed = _scrub_unsupported_multimodal_content([source], model=None)[0]
+        request = ModelRequest(model=ScriptedChatModel([AIMessage(content="done")]),
+            messages=[source], tools=[], model_settings={})
+        seen = []
+        def handler(filtered):
+            seen.extend(filtered.messages)
+            return ModelResponse(result=[AIMessage(content="done")])
+        UnsupportedContentMiddleware().wrap_model_call(request, handler)
+        scrubbed = seen[0]
         self.assertEqual(scrubbed.content_blocks[0]["mime_type"], "application/pdf")
         self.assertEqual(scrubbed.content_blocks[1]["type"], "text")
         self.assertIn("application/zip", scrubbed.content_blocks[1]["text"])

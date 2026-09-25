@@ -98,6 +98,11 @@
               }
             ]
           },
+          "capture_routes_enabled": {
+            "default": false,
+            "title": "Capture Routes Enabled",
+            "type": "boolean"
+          },
           "checkpoint_ids": {
             "items": {
               "type": "string"
@@ -198,6 +203,37 @@
           "deployment_id": {
             "title": "Deployment Id",
             "type": "string"
+          },
+          "desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Desktop Access",
+            "type": "string"
+          },
+          "desktop_window": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desktop Window"
           },
           "dispatched_tool_calls": {
             "default": 0,
@@ -1002,6 +1038,16 @@
             ],
             "title": "Deployment Id"
           },
+          "desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Desktop Access",
+            "type": "string"
+          },
           "embedding_deployment_id": {
             "anyOf": [
               {
@@ -1550,7 +1596,8 @@
               "structured_tools_with_tools",
               "reasoning",
               "reasoning_replay",
-              "image"
+              "image",
+              "tool_image"
             ],
             "title": "Capability",
             "type": "string"
@@ -1646,7 +1693,8 @@
                 "structured_tools_with_tools",
                 "reasoning",
                 "reasoning_replay",
-                "image"
+                "image",
+                "tool_image"
               ]
             },
             "title": "Current Support",
@@ -1685,7 +1733,8 @@
               "structured_tools_with_tools",
               "reasoning",
               "reasoning_replay",
-              "image"
+              "image",
+              "tool_image"
             ],
             "title": "Capability",
             "type": "string"
@@ -1927,6 +1976,16 @@
           },
           "deployment_id": {
             "title": "Deployment Id",
+            "type": "string"
+          },
+          "desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Desktop Access",
             "type": "string"
           },
           "draft": {
@@ -2285,6 +2344,22 @@
               }
             ],
             "title": "Deployment Id"
+          },
+          "desktop_access": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "selected",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desktop Access"
           },
           "embedding_deployment_id": {
             "anyOf": [
@@ -2675,6 +2750,16 @@
           },
           "deployment_id": {
             "title": "Deployment Id",
+            "type": "string"
+          },
+          "desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Desktop Access",
             "type": "string"
           },
           "display_title": {
@@ -3654,6 +3739,22 @@
               }
             ],
             "title": "Deployment Id"
+          },
+          "desktop_access": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "selected",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desktop Access"
           },
           "draft_revision": {
             "anyOf": [
@@ -5078,6 +5179,157 @@
         ],
         "title": "DeploymentStatus",
         "type": "string"
+      },
+      "DesktopRuntimeStatus": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "version": {
+            "default": "0.7.0",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "DesktopRuntimeStatus",
+        "type": "object"
+      },
+      "DesktopScopeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "hwnd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hwnd"
+          },
+          "scope": {
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "DesktopScopeRequest",
+        "type": "object"
+      },
+      "DesktopScopeView": {
+        "properties": {
+          "scope": {
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "selected_window": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesktopWindowView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "DesktopScopeView",
+        "type": "object"
+      },
+      "DesktopWindowView": {
+        "properties": {
+          "class_name": {
+            "title": "Class Name",
+            "type": "string"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "hwnd": {
+            "title": "Hwnd",
+            "type": "integer"
+          },
+          "is_foreground": {
+            "title": "Is Foreground",
+            "type": "boolean"
+          },
+          "owner_hwnd": {
+            "title": "Owner Hwnd",
+            "type": "integer"
+          },
+          "process_created_at": {
+            "title": "Process Created At",
+            "type": "number"
+          },
+          "process_id": {
+            "title": "Process Id",
+            "type": "integer"
+          },
+          "process_name": {
+            "title": "Process Name",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hwnd",
+          "process_id",
+          "process_name",
+          "title",
+          "width",
+          "height",
+          "owner_hwnd",
+          "class_name",
+          "is_foreground",
+          "process_created_at"
+        ],
+        "title": "DesktopWindowView",
+        "type": "object"
       },
       "EffectiveSetup": {
         "description": "Inspectable selected / loaded / applied facts for one run.",
@@ -9568,6 +9820,17 @@
             ],
             "title": "Source Run Id"
           },
+          "source_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Target"
+          },
           "source_tool_call_id": {
             "anyOf": [
               {
@@ -9850,7 +10113,8 @@
       "RetainedAssetOrigin": {
         "enum": [
           "upload",
-          "verified_output"
+          "verified_output",
+          "capture"
         ],
         "title": "RetainedAssetOrigin",
         "type": "string"
@@ -10826,6 +11090,22 @@
               }
             ],
             "title": "Deployment Id"
+          },
+          "desktop_access": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "selected",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desktop Access"
           },
           "embedding_deployment_id": {
             "anyOf": [
@@ -13113,6 +13393,147 @@
           }
         },
         "summary": "Asset Source"
+      }
+    },
+    "/v1/browser/runtime": {
+      "get": {
+        "operationId": "runtime_status_v1_browser_runtime_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Runtime Status"
+      }
+    },
+    "/v1/browser/runtime/install": {
+      "post": {
+        "operationId": "install_runtime_v1_browser_runtime_install_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Install Runtime"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}": {
+      "delete": {
+        "operationId": "close_session_v1_browser_sessions__thread_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close Session"
+      },
+      "get": {
+        "operationId": "session_status_v1_browser_sessions__thread_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Status"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}/reset": {
+      "post": {
+        "operationId": "reset_session_v1_browser_sessions__thread_id__reset_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Session"
       }
     },
     "/v1/bundles": {
@@ -16967,6 +17388,115 @@
         "summary": "Paths"
       }
     },
+    "/v1/previews/{thread_id}": {
+      "delete": {
+        "operationId": "stop_preview_v1_previews__thread_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Preview"
+      },
+      "get": {
+        "operationId": "preview_status_v1_previews__thread_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Status"
+      }
+    },
+    "/v1/previews/{thread_id}/reset": {
+      "post": {
+        "operationId": "reset_lost_preview_v1_previews__thread_id__reset_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Lost Preview"
+      }
+    },
     "/v1/profiles": {
       "get": {
         "operationId": "list_profiles_v1_profiles_get",
@@ -17881,6 +18411,150 @@
         "tags": [
           "shared-contracts"
         ]
+      }
+    },
+    "/v1/window-testing/conversations/{conversation_id}/scope": {
+      "get": {
+        "operationId": "conversation_scope_v1_window_testing_conversations__conversation_id__scope_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopScopeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Conversation Scope"
+      },
+      "put": {
+        "operationId": "set_conversation_scope_v1_window_testing_conversations__conversation_id__scope_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopScopeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopScopeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Conversation Scope"
+      }
+    },
+    "/v1/window-testing/runtime": {
+      "get": {
+        "operationId": "runtime_status_v1_window_testing_runtime_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopRuntimeStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Runtime Status"
+      }
+    },
+    "/v1/window-testing/runtime/install": {
+      "post": {
+        "operationId": "install_runtime_v1_window_testing_runtime_install_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopRuntimeStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Install Runtime"
+      }
+    },
+    "/v1/window-testing/windows": {
+      "get": {
+        "operationId": "picker_windows_v1_window_testing_windows_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DesktopWindowView"
+                  },
+                  "title": "Response Picker Windows V1 Window Testing Windows Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Picker Windows"
       }
     }
   }

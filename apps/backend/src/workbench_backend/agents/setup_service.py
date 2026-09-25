@@ -12,7 +12,7 @@ from workbench_backend.agents.setup_schemas import (
     ProjectFiles, ProjectRecord, ProjectUpdateRequest, ResolvedSetupSelection, SetupConfiguration,
     SetupDependencyIssue, ResolvedSetting,
 )
-from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
+from workbench_backend.agents.tools import enabled_catalogue
 from workbench_backend.errors import HarnessError, KnowledgeError
 from workbench_backend.inference.ids import new_id, utc_now
 
@@ -208,7 +208,7 @@ class SetupService:
                             issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="scope is missing or inactive"))
                 except KnowledgeError:
                     issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="missing"))
-        available_tools = set(ENABLED_TOOL_NAMES)
+        available_tools = set(enabled_catalogue())
         if configuration.embedding_deployment_id:
             # Retrieval is constructed by the harness for the selected embedder,
             # rather than being a permanently enabled catalogue tool.
@@ -240,7 +240,7 @@ class SetupService:
             layers.append(("Turn overrides", None, overrides))
         values = {}
         effective = {}
-        builtin_values = {"approval_mode": "ask", "work_mode": "work", "helper_agent_ids": [], "connection_ids": []}
+        builtin_values = {"approval_mode": "ask", "work_mode": "work", "desktop_access": "off", "helper_agent_ids": [], "connection_ids": []}
         instructions = []
         protected = []
         for name, source_id, configuration in layers:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import threading
 from pathlib import Path
@@ -31,6 +32,12 @@ from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.assets.routes import router as assets_router
 from workbench_backend.assets.lifecycle import AssetLifecycleService
 from workbench_backend.assets.lifecycle_routes import router as asset_lifecycle_router
+from workbench_backend.browser.service import BrowserSessionService
+from workbench_backend.browser.routes import router as browser_router
+from workbench_backend.preview.service import PreviewService
+from workbench_backend.preview.routes import router as preview_router
+from workbench_backend.desktop_automation.service import DesktopAutomationService
+from workbench_backend.desktop_automation.routes import router as desktop_automation_router
 from workbench_backend.state.backup import BackupService, MaintenanceGate, BackupError
 from workbench_backend.state.backup_routes import router as backup_router
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
@@ -44,7 +51,7 @@ from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.lab.routes import router as lab_router
 from workbench_backend.lab.service import LabService
 from workbench_backend.local_trust import ensure_shared_secret, require_local_trust
-from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers
+from workbench_backend.state.checkpointer import close_all_sqlite_checkpointers, submit_checkpoint_task
 from workbench_backend.state.effect_routes import router as effect_router
 from workbench_backend.state.effects import EffectService
 from workbench_backend.state.preferences import PreferenceStore
@@ -109,6 +116,12 @@ async def _app_lifespan(application: FastAPI) -> AsyncIterator[None]:
     if finish.is_alive():
         raise RuntimeError("Chat startup recovery is still using the application store")
     application.state.chat_coordinator.close()
+    browser = getattr(application.state, "browser", None)
+    if browser is not None:
+        await asyncio.wrap_future(submit_checkpoint_task(application.state.manager.paths.checkpoints_db, browser.shutdown()))
+    preview = getattr(application.state, "preview", None)
+    if preview is not None:
+        preview.shutdown()
     harness = getattr(application.state, "harness", None)
     if harness is not None:
         closer = getattr(harness, "close", None)
@@ -151,6 +164,16 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.state.preferences = PreferenceStore(application.state.app_store)
     application.state.maintenance_gate = MaintenanceGate()
     application.state.assets = RetainedAssetService(application.state.app_store)
+    application.state.browser = BrowserSessionService(
+        application.state.manager.paths,
+        capture_publisher=application.state.assets.register_capture,
+        app_store=application.state.app_store,
+    )
+    application.state.preview = PreviewService(application.state.manager.paths)
+    application.state.desktop_automation = DesktopAutomationService(
+        application.state.manager.paths,
+        capture_sink=application.state.assets.register_capture,
+    )
     application.state.asset_lifecycle = AssetLifecycleService(application.state.manager.paths, application.state.app_store,
         harness_provider=lambda: application.state.harness)
 
@@ -197,6 +220,10 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         knowledge_provider=lambda: application.state.knowledge,
         app_store=application.state.app_store,
         interaction_observer=_observe_run,
+        assets=application.state.assets,
+        browser=application.state.browser,
+        preview=application.state.preview,
+        desktop_automation=application.state.desktop_automation,
     )
     application.state.lab = LabService(
         lambda: application.state.manager,
@@ -232,6 +259,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(effect_router)
     application.include_router(preference_router)
     application.include_router(desktop_router)
+    application.include_router(desktop_automation_router)
     application.include_router(agent_router)
     application.include_router(setup_router)
     application.include_router(lab_router)
@@ -239,6 +267,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.include_router(chat_router)
     application.include_router(branch_router)
     application.include_router(assets_router)
+    application.include_router(browser_router)
+    application.include_router(preview_router)
     application.include_router(asset_lifecycle_router)
     application.include_router(backup_router)
     application.include_router(interaction_router)

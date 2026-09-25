@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class RetainedAssetOrigin(str, Enum):
     upload = "upload"
     verified_output = "verified_output"
+    capture = "capture"
 
 
 class RetainedAssetScope(str, Enum):
@@ -62,6 +63,7 @@ class RetainedAsset(BaseModel):
     source_run_id: str | None = None
     source_tool_call_id: str | None = None
     source_tool_name: str | None = None
+    source_target: str | None = None
     mutable_reference: str | None = None
     observation: str | None = None
     deleted_at: str | None = None

@@ -208,6 +208,7 @@ class AgentStartRequest(BaseModel):
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] = "work"
+    desktop_access: Literal["off", "selected", "all"] = "off"
     helper_agent_ids: list[str] = Field(default_factory=list)
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
     task: str
@@ -268,6 +269,9 @@ class AgentRun(BaseModel):
     presented_tools: list[str]
     approval_mode: Literal["ask", "full_access"] = "ask"
     work_mode: Literal["work", "plan"] = "work"
+    desktop_access: Literal["off", "selected", "all"] = "off"
+    desktop_window: dict[str, int | float] | None = None
+    capture_routes_enabled: bool = False
     requires_project: bool = False
     requires_host_shell: bool = False
     helper_agent_ids: list[str] = Field(default_factory=list)

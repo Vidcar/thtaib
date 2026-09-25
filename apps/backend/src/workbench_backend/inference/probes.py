@@ -133,6 +133,47 @@ def _exercise(model: Any, capability: str, record: CapabilityEvidence) -> None:
         record.observations["fixture_answer_correct"] = all(sample["correct"] for sample in samples)
         record.status = "passed" if record.observations["fixture_answer_correct"] else "failed"
         return
+    if capability == "tool_image":
+        prompt = (
+            "Call workbench_probe_echo with text exactly 'image-check'. "
+            "Then identify the dominant colour of the image returned by that tool. "
+            "Reply with one colour."
+        )
+        colours = ("red", "blue")
+        record.inputs = {"prompt": prompt, "tool": PROBE_TOOL,
+            "fixtures": [f"generated-solid-{colour}-png-32x32-v2" for colour in colours]}
+        samples: list[dict[str, Any]] = []
+        record.observations = {"samples": samples}
+        bound = model.bind_tools([PROBE_TOOL], tool_choice="any")
+        for colour in colours:
+            initial = HumanMessage(content=prompt)
+            call = bound.invoke([initial])
+            calls = call.tool_calls
+            valid_call = (len(calls) == 1 and calls[0]["name"] == "workbench_probe_echo"
+                and calls[0].get("id") and calls[0]["args"] == {"text": "image-check"}
+                and not call.invalid_tool_calls)
+            if not valid_call:
+                samples.append({"expected_colour": colour, "valid_harmless_call": False,
+                    "returned_call_names": [item.get("name") for item in calls[:8]]})
+                record.status = "failed"
+                return
+            image_data = _image_fixture(colour).partition(",")[2]
+            image_result = ToolMessage(
+                content_blocks=[{"type": "image", "base64": image_data, "mime_type": "image/png"}],
+                name="workbench_probe_echo",
+                tool_call_id=calls[0]["id"],
+            )
+            # The first call is forced to exercise a real tool exchange. The
+            # answer call must be free to answer rather than be forced to call
+            # another tool by the probe's `tool_choice="any"` setting.
+            result = model.invoke([initial, call, image_result])
+            answer = str(result.content)
+            correct = re.fullmatch(rf"\s*{colour}[.!]?\s*", answer, flags=re.IGNORECASE) is not None
+            samples.append({"expected_colour": colour, "answer": answer[:2048],
+                "valid_harmless_call": True, "tool_call_id": calls[0]["id"], "correct": correct})
+        record.observations["fixture_answer_correct"] = all(sample["correct"] for sample in samples)
+        record.status = "passed" if record.observations["fixture_answer_correct"] else "failed"
+        return
     native = {"type": "json_schema", "json_schema": {"name": "probe_answer", "strict": True, "schema": PROBE_SCHEMA}}
     if capability == "structured_native":
         record.inputs = {"prompt": "Return answer equal to 7.", "schema": PROBE_SCHEMA}

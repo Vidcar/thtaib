@@ -5,7 +5,7 @@ export type ProjectRecord = SchemaProjectRecord;
 export type ProjectFiles = SchemaProjectFiles;
 export type AgentSetup = SchemaAgentSetupView;
 export type AgentSetupVersion = SchemaAgentSetupVersion;
-export type SetupConfiguration = SchemaSetupConfiguration;
+export type SetupConfiguration = SchemaSetupConfiguration & { desktop_access?: "off" | "selected" | "all" | null };
 export type ResolvedSetupSelection = SchemaResolvedSetupSelection;
 
 export const workspaceApi = {
