@@ -78,13 +78,16 @@ async function checkModelPicker(ModelPicker) {
 async function checkSelectedModelOwnsDetails(ModelsPanel) {
   const originalFetch = globalThis.fetch;
   let renderer;
-  const deployment = { id: "gemma-live", bundle_id: "gemma", display_name: "managed:Gemma", scope: "managed", status: "running", health: { healthy: true }, applied_startup: {}, endpoint: "http://localhost:8080/v1" };
+  const deployment = { id: "gemma-live", bundle_id: "gemma", profile_id: "gemma-default", display_name: "managed:Gemma", scope: "managed", status: "running", health: { healthy: true }, applied_startup: {}, endpoint: "http://localhost:8080/v1" };
+  const gemmaProfile = { id: "gemma-default", bundle_id: "gemma", display_name: "Default", revision: 1, bags: { startup: { requested: {} }, per_request: { requested: {} }, agent: { requested: {} } } };
   globalThis.fetch = async url => {
     const address = String(url);
-    if (address.endsWith("/v1/bundles")) return jsonResponse([bundle("qwen", "Selected Qwen"), bundle("gemma", "Loaded Gemma")]);
+    if (address.endsWith("/v1/bundles")) return jsonResponse([bundle("qwen", "Selected Qwen"), { ...bundle("gemma", "Loaded Gemma"), default_configuration_id: "gemma-default" }]);
     if (address.endsWith("/v1/deployments")) return jsonResponse([deployment]);
-    if (address.endsWith("/v1/profiles") || address.endsWith("/v1/imports")) return jsonResponse([]);
+    if (address.endsWith("/v1/profiles")) return jsonResponse([gemmaProfile]);
+    if (address.endsWith("/v1/imports")) return jsonResponse([]);
     if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
     if (address.includes("/configuration-options")) return jsonResponse(configurationOptions());
     if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
@@ -134,6 +137,7 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
     if (address.endsWith("/v1/deployments")) return jsonResponse([]);
     if (address.endsWith("/v1/imports")) return jsonResponse([]);
     if (address.endsWith("/projectors")) return jsonResponse({ bundle_id: "bundle_fast", selected_path: null, candidates: [] });
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (address.endsWith("/v1/runtime")) return runtime.promise;
     if (address.includes("/configuration-options")) return configuration.promise;
     throw new Error(`unexpected fetch ${address}`);
@@ -226,6 +230,7 @@ async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
     if (address.endsWith("/v1/deployments")) return jsonResponse([active]);
     if (address.endsWith("/v1/profiles") || address.endsWith("/v1/imports")) return jsonResponse([]);
     if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
     if (address.includes("/configuration-options")) return jsonResponse(configurationOptions());
     if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
@@ -432,6 +437,7 @@ async function checkRepositorySelectionLoadsFiles(ModelsPanel) {
     if (address.includes("/huggingface/search?")) return jsonResponse([{ repo_id: "publisher/model-GGUF", downloads: 100 }]);
     if (address.endsWith("/huggingface/inspect")) return inspection.promise;
     if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [], managed_bytes: 0, staging_bytes: 0, cache_bytes: 0, metadata_bytes: 0, available_bytes: 1000, reclaimable_bytes: 0 });
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
     if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
     if (["/v1/bundles", "/v1/profiles", "/v1/deployments", "/v1/imports"].some(suffix => address.endsWith(suffix))) return jsonResponse([]);

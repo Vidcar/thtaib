@@ -2,24 +2,26 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./Icon";
 import { MenuPopover } from "./MenuPopover";
-import { CompactSlider, SettingRow } from "./CompactControls";
-import { tokenLabel } from "./ModelControls";
 import { Notice } from "./Notice";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
-import { mergedStartup } from "./deploymentSettings";
 import { errorMessage } from "./errors";
-import { configurationLabel, findConfiguration } from "./configurationLabel";
 import { useSetupPreview } from "./effectiveSettings";
-import type { BundleConfigurationOptions, Deployment, RunProfile } from "./types";
+import { workspaceApi } from "./workspaceApi";
+import type { BundleConfigurationOptions, Deployment, ModelBundle, RunProfile } from "./types";
 import type { SetupConfiguration } from "./workspaceApi";
 import "./ChatModelControls.css";
 
-const modelFields = ["model_configuration_id", "deployment_id", "profile_id", "bundle_id", "inherit_deployment_settings", "startup_overrides", "per_request_overrides"] as const;
-function modelSettings(configuration: SetupConfiguration): SetupConfiguration {
-  return Object.fromEntries(modelFields.filter(key => Object.hasOwn(configuration, key)).map(key => [key, configuration[key]]));
+const thinkingFields = new Set(["reasoning", "reasoning_effort", "reasoning_format"]);
+function thinkingSettings(configuration: SetupConfiguration): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(configuration.per_request_overrides ?? {}).filter(([key]) => thinkingFields.has(key)));
+}
+function modelChoiceConfiguration(configuration: SetupConfiguration, profile: RunProfile | null, connected: Deployment | null): SetupConfiguration {
+  return { ...configuration, model_configuration_id: profile?.id ?? null, deployment_id: connected?.id ?? null,
+    profile_id: null, bundle_id: null, inherit_deployment_settings: null, startup_overrides: {}, per_request_overrides: {} };
 }
 
 export interface ChatModelControlsProps {
+  bundles?: ModelBundle[];
   deployments: Deployment[];
   profiles: RunProfile[];
   selectedDeploymentId: string;
@@ -34,121 +36,135 @@ export interface ChatModelControlsProps {
   onReloaded: () => Promise<void>;
 }
 
-export function ChatModelControls({ deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, onApply, onReloaded }: ChatModelControlsProps) {
-  const [draft, setDraft] = useState(() => modelSettings(configuration));
+export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, onApply, onReloaded }: ChatModelControlsProps) {
+  const [fallbackBundles, setFallbackBundles] = useState<ModelBundle[]>([]);
+  useEffect(() => {
+    if (bundles) return;
+    let cancelled = false;
+    void api.bundles().then(items => { if (!cancelled) setFallbackBundles(items); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [bundles]);
+  const availableBundles = bundles ?? fallbackBundles;
+  const [thinking, setThinking] = useState(() => thinkingSettings(configuration));
   const [busy, setBusy] = useState(false);
-  const pending = useRef(false);
+  const [loadingChoice, setLoadingChoice] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const incoming = JSON.stringify(modelSettings(configuration));
-  const identity = `${conversationId}:${projectId}:${agentSetupVersionId}:${incoming}`;
-  const currentOwner = useRef({ identity });
-  if (currentOwner.current.identity !== identity) currentOwner.current = { identity };
-  const owner = currentOwner.current;
-  const selectionIdentity = JSON.stringify([conversationId, projectId, agentSetupVersionId]);
-  const selectionOwner = useRef({ identity: selectionIdentity, generation: 0 });
-  if (selectionOwner.current.identity !== selectionIdentity) selectionOwner.current = { identity: selectionIdentity, generation: selectionOwner.current.generation + 1 };
-  const selectionGeneration = selectionOwner.current.generation;
-  const latest = useRef({ configuration, onApply }); latest.current = { configuration, onApply };
-  useEffect(() => { setDraft(JSON.parse(incoming) as SetupConfiguration); setError(""); setNotice(""); }, [incoming, conversationId]);
-  const preview = useSetupPreview({ ...configuration, ...draft }, projectId, agentSetupVersionId);
-  const resolved = preview.data?.configuration;
+  const pending = useRef(false);
+  const owner = useRef({ key: `${conversationId}:${projectId}:${agentSetupVersionId}`, generation: 0 });
+  const ownerKey = `${conversationId}:${projectId}:${agentSetupVersionId}`;
+  if (owner.current.key !== ownerKey) owner.current = { key: ownerKey, generation: owner.current.generation + 1 };
+  const currentGeneration = owner.current.generation;
+  const latest = useRef({ configuration, onApply, onReloaded });
+  latest.current = { configuration, onApply, onReloaded };
+  const incomingThinking = JSON.stringify(thinkingSettings(configuration));
+  useEffect(() => { setThinking(JSON.parse(incomingThinking) as Record<string, unknown>); setError(""); }, [incomingThinking, conversationId]);
+
+  const selectedProfile = profiles.find(item => item.id === (configuration.model_configuration_id ?? selectedConfigurationId));
+  const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
+  const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
+  const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
+  const selectedName = selectedBundle?.display_name ?? selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
+  const exactBinding = !selectedProfile || selectedDeployment?.profile_id === selectedProfile.id;
+  const selectedLoaded = exactBinding && selectedDeployment?.status === "running" && selectedDeployment.health?.healthy;
+  const selectedState = loadingChoice ? "Loading…"
+    : !exactBinding ? "Choose configuration"
+      : selectedDeployment?.status === "failed" ? "Needs attention"
+        : selectedDeployment?.status === "unhealthy" || selectedDeployment?.health?.healthy === false ? "Unhealthy"
+          : selectedDeployment?.status === "starting" ? "Loading…"
+            : selectedLoaded ? "Loaded" : selectedBundleId ? "Loads on Send" : selectedDeployment?.status ?? "";
+  const variants = profiles.filter(item => item.bundle_id === selectedBundleId);
+  const preview = useSetupPreview({ ...configuration, per_request_overrides: { ...(configuration.per_request_overrides ?? {}), ...thinking } }, projectId, agentSetupVersionId);
   const facts = preview.data?.effective_values ?? {};
-  const selected = findConfiguration(profiles, resolved?.model_configuration_id ?? draft.model_configuration_id);
-  // A resolved null deployment means this variant has no loaded engine yet.
-  // The previous Chat deployment is only a fallback for automatic selection.
-  const resolvedDeploymentId = resolved ? resolved.deployment_id : draft.deployment_id ?? (draft.model_configuration_id ? null : selectedDeploymentId);
-  const deployment = deployments.find(item => item.id === resolvedDeploymentId);
-  const previousDeployment = deployments.find(item => item.id === selectedDeploymentId);
-  const reconfigureCandidate = !deployment && selected?.bundle_id && previousDeployment?.scope === "managed" && previousDeployment.bundle_id === selected.bundle_id
-    ? previousDeployment : null;
-  const saveTarget = facts.model_configuration_target;
-  const savedConfiguration = findConfiguration(profiles, typeof saveTarget?.value === "string" ? saveTarget.value : null);
-  const bundleId = selected?.bundle_id ?? deployment?.bundle_id;
-  const optionKey = `${bundleId}:${deployment?.id}`;
+  const optionKey = `${selectedBundleId ?? ""}:${selectedDeployment?.id ?? ""}`;
   const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
-    if (!bundleId && !deployment?.id) return;
+    if (!selectedBundleId) return;
     let cancelled = false;
-    const request = bundleId ? api.modelConfiguration(bundleId, deployment?.id) : api.deploymentConfiguration(deployment!.id);
-    void request.then(data => { if (!cancelled) setOptionsResult({ key: optionKey, data }); }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
+    void api.modelConfiguration(selectedBundleId, selectedDeployment?.id).then(data => {
+      if (!cancelled) setOptionsResult({ key: optionKey, data });
+    }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
-  }, [optionKey, bundleId, deployment?.id]);
+  }, [optionKey, selectedBundleId, selectedDeployment?.id]);
   const options = optionsResult?.key === optionKey ? optionsResult.data : null;
-  const modelChoice = draft.model_configuration_id ? `configuration:${findConfiguration(profiles, draft.model_configuration_id)?.id ?? draft.model_configuration_id}` : draft.deployment_id && deployments.find(item => item.id === draft.deployment_id)?.scope === "connected" ? `deployment:${draft.deployment_id}` : "";
-  const inheritedSource = !modelChoice ? facts.model_selection?.source : undefined;
-  const automaticLabel = inheritedSource === "Loaded model" ? "Use loaded model" : inheritedSource?.startsWith("Project:") || inheritedSource?.startsWith("Agent:") ? `Use ${inheritedSource}` : inheritedSource?.startsWith("Application default") ? "Use app default" : "Use chat default";
-  const modelName = configurationLabel(findConfiguration(profiles, configuration.model_configuration_id ?? selectedConfigurationId)) ?? deployments.find(item => item.id === selectedDeploymentId)?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
-  const loadedContext = deployment?.server_props?.n_ctx;
-  const desiredContext = typeof draft.startup_overrides?.ctx_size === "number" ? draft.startup_overrides.ctx_size : typeof facts["startup.ctx_size"]?.value === "number" ? facts["startup.ctx_size"].value as number : loadedContext;
-  const contextChoices = options?.context_size.options.flatMap(item => typeof item.value === "number" && item.value > 0 ? [item.value] : []) ?? [];
-  const contextReason = runtimeBusy ? "Wait for this conversation’s running and queued work to finish." : deployment?.scope === "connected" ? "This server is managed outside Workbench. Change context in the app that runs it." : !deployment?.health?.healthy ? "Load the model to change its active context." : undefined;
-  const startupChange = Object.values(facts).some(item => item.requires_reload);
-  const managedChoice = deployment?.scope === "managed" || (!deployment && Boolean(selected?.bundle_id));
-  const loadNeeded = managedChoice && !deployment?.health?.healthy && !reconfigureCandidate;
-  const reloadNeeded = Boolean(reconfigureCandidate) || (managedChoice && Boolean(deployment?.health?.healthy && startupChange));
-  const lifecycleNeeded = loadNeeded || reloadNeeded;
-  const connectedStartupChange = deployment?.scope === "connected" && startupChange;
-  const stageContext = (value: number) => setDraft(current => ({ ...current, startup_overrides: { ...current.startup_overrides, ctx_size: value } }));
-  const startup = () => mergedStartup(selected?.bags.startup.requested ?? deployment?.requested_startup ?? deployment?.settings?.startup.requested ?? {}, draft.startup_overrides ?? {});
-  async function act(operation: () => Promise<void>) {
-    if (pending.current) return;
-    pending.current = true; setBusy(true); setError(""); setNotice("");
-    try { await operation(); } catch (failure) { if (currentOwner.current === owner) setError(errorMessage(failure)); } finally { pending.current = false; setBusy(false); }
+
+  function preferredConfiguration(bundle: ModelBundle): RunProfile | undefined {
+    return profiles.find(item => item.id === bundle.default_configuration_id)
+      ?? profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
+      ?? profiles.find(item => item.bundle_id === bundle.id);
   }
-  return <MenuPopover label={`Chat model settings: ${modelName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{modelName}</span></>} disabled={disabled}>
-    {close => <><div className="setting-rows chat-model-controls-rows">
-      <SettingRow stacked label="Model" provenance={!modelChoice && typeof facts.model_selection?.value === "string" ? `${facts.model_selection.value} · ${facts.model_selection.source}` : undefined}><select aria-label="Model" value={modelChoice} disabled={busy} onChange={event => {
-      const choice = event.target.value;
-      if (choice === modelChoice) return;
-      setDraft(current => {
-        const request = { ...current.per_request_overrides };
-        for (const key of ["reasoning", "reasoning_effort", "reasoning_format"]) delete request[key];
-        return { ...current, model_configuration_id: choice.startsWith("configuration:") ? choice.slice(14) : null, deployment_id: choice.startsWith("deployment:") ? choice.slice(11) : null, profile_id: null, bundle_id: null, inherit_deployment_settings: null, per_request_overrides: request, startup_overrides: {} };
-      });
-    }}><option value="">{automaticLabel}</option>{profiles.filter(item => item.bundle_id).map(item => <option key={item.id} value={`configuration:${item.id}`}>{configurationLabel(item)}</option>)}{deployments.filter(item => item.scope === "connected").map(item => <option key={item.id} value={`deployment:${item.id}`}>{item.display_name} · connected</option>)}</select></SettingRow>
-      <SettingRow stacked className="chat-context-control" label="Context" help="Larger context uses more memory. Apply reloads an idle managed model and preserves this conversation. Running work and other consumers can block a reload." provenance={loadedContext ? `${tokenLabel(loadedContext)} loaded` : "Not reported"} hint={contextReason}>
-        {desiredContext ? <div className="slider-field"><CompactSlider hideHeading label="Context size" value={desiredContext} values={contextChoices} formatValue={tokenLabel} onChange={stageContext} disabled={busy || !!contextReason} /><span className="number-field"><input aria-label="Exact context size" type="number" min={1} max={options?.context_size.maximum ?? undefined} value={desiredContext} disabled={busy || !!contextReason} onChange={event => { const value = Number(event.target.value); if (value > 0) stageContext(value); }} /></span></div> : null}
-      </SettingRow></div>
-      <ResponseSettingsEditor value={draft.per_request_overrides ?? {}} onChange={per_request_overrides => setDraft(current => ({ ...current, per_request_overrides }))} options={options} facts={facts} disabled={busy || preview.loading} />
-      {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}{notice ? <Notice tone="info">{notice}</Notice> : null}
-      <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={busy || preview.loading || !!preview.error || Boolean(lifecycleNeeded && runtimeBusy) || connectedStartupChange} onClick={() => void act(async () => {
-        let loaded: Deployment | null = null;
-        if (lifecycleNeeded) {
-          try {
-            const target = deployment ?? reconfigureCandidate;
-            if (target && (startupChange || reconfigureCandidate)) {
-              loaded = await api.reconfigure(target.id, { startup: startup(), replace_startup: true, ...(selected ? { model_configuration_id: selected.id, expected_configuration_revision: selected.revision } : {}), expected_updated_at: target.updated_at, conversation_id: conversationId });
-            } else if (deployment) {
-              loaded = await api.start(deployment.id);
-            } else if (selected?.bundle_id) {
-              loaded = await api.startManaged(selected.bundle_id, selected.id, startup());
-            }
-            if (!loaded?.health?.healthy) throw new Error(loaded?.error ?? "Model did not become ready.");
-          } catch (failure) {
-            await onReloaded().catch(() => {});
-            throw failure;
-          }
-          // Existing deployments already own the Chat selection, so refresh
-          // their facts before committing staged settings. A newly loaded
-          // variant has no selection yet: bind its id before refresh can pick
-          // another ready deployment as the Chat fallback.
-          if (deployment || reconfigureCandidate) await onReloaded();
-        }
-        if (currentOwner.current !== owner) return;
-        try {
-          await latest.current.onApply({ ...latest.current.configuration, ...draft, ...(loaded ? { deployment_id: loaded.id } : {}) });
-        } catch (failure) {
-          if (loaded && !deployment && !reconfigureCandidate) await onReloaded().catch(() => {});
-          throw failure;
-        }
-        if (selectionOwner.current.generation === selectionGeneration) close();
-      })}>{busy ? "Applying…" : reloadNeeded || (loadNeeded && startupChange) ? "Apply & reload" : loadNeeded ? "Apply & load" : "Apply"}</button>
-      <button type="button" disabled={busy || preview.loading || !!preview.error || !savedConfiguration?.bundle_id} title={!savedConfiguration ? saveTarget?.unavailable_reason ?? "Choose a saved model configuration first" : `Save to ${saveTarget.source} for future work`} onClick={() => void act(async () => {
-        if (!savedConfiguration?.bundle_id) return;
-        await api.saveModelConfiguration(savedConfiguration.bundle_id, { display_name: savedConfiguration.display_name, configuration_id: savedConfiguration.id, expected_revision: savedConfiguration.revision, startup: startup(), per_request: mergedStartup(selected?.bags.per_request.requested ?? deployment?.settings.per_request.requested ?? {}, draft.per_request_overrides ?? {}) });
-        await onReloaded(); if (currentOwner.current === owner) setNotice("Saved to model. Apply separately to use these chat changes.");
-      })}>Save to model</button></div>
+
+  const connectedChoices = deployments.filter(item => item.scope === "connected");
+  const compatibilityChoices = [
+    ...profiles.filter(item => availableBundles.some(bundle => bundle.id === item.bundle_id && bundle.disk_matches)).map(item => ({ key: item.id, profile: item, connected: null })),
+    ...connectedChoices.map(item => ({ key: item.id, profile: null, connected: item })),
+  ];
+  const compatibilityKey = JSON.stringify([conversationId, agentSetupVersionId, configuration, compatibilityChoices.map(item => item.key)]);
+  const [incompatibleChoices, setIncompatibleChoices] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!conversationId) { setIncompatibleChoices({}); return; }
+    let cancelled = false;
+    void Promise.all(compatibilityChoices.map(async item => {
+      try {
+        const readiness = await workspaceApi.chatReadiness(conversationId, modelChoiceConfiguration(configuration, item.profile, item.connected), agentSetupVersionId);
+        return [item.key, readiness.status === "incompatible" ? readiness.issues[0]?.message ?? "This model cannot continue this chat." : ""] as const;
+      } catch { return [item.key, ""] as const; }
+    })).then(items => { if (!cancelled) setIncompatibleChoices(Object.fromEntries(items)); });
+    return () => { cancelled = true; };
+  }, [compatibilityKey]);
+
+  async function applyChoice(profile: RunProfile | null, connected: Deployment | null, close: () => void) {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true); setLoadingChoice(profile?.id ?? connected?.id ?? ""); setError("");
+    try {
+      const candidate = modelChoiceConfiguration(latest.current.configuration, profile, connected);
+      if (conversationId) {
+        const readiness = await workspaceApi.chatReadiness(conversationId, candidate, agentSetupVersionId);
+        if (readiness.status === "incompatible") throw new Error(readiness.issues[0]?.message ?? "This model cannot continue this chat.");
+      }
+      const loaded = profile?.bundle_id ? await api.startManaged(profile.bundle_id, profile.id, {}) : null;
+      if (loaded && (!loaded.health?.healthy || loaded.status !== "running")) throw new Error(loaded.error ?? "Model did not become ready.");
+      if (owner.current.generation !== currentGeneration) return;
+      const currentChoice = modelChoiceConfiguration(latest.current.configuration, profile, connected);
+      await latest.current.onApply({ ...currentChoice, deployment_id: loaded?.id ?? connected?.id ?? null });
+      await latest.current.onReloaded();
+      if (owner.current.generation === currentGeneration) close();
+    } catch (failure) {
+      if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
+      await latest.current.onReloaded().catch(() => {});
+    } finally {
+      pending.current = false; setBusy(false); setLoadingChoice("");
+    }
+  }
+
+  async function applyThinking(close: () => void) {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError("");
+    try {
+      const existing = latest.current.configuration.per_request_overrides ?? {};
+      const next = Object.fromEntries(Object.entries(existing).filter(([key]) => !thinkingFields.has(key)));
+      await latest.current.onApply({ ...latest.current.configuration, per_request_overrides: { ...next, ...thinking } });
+      if (owner.current.generation === currentGeneration) close();
+    } catch (failure) {
+      if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
+    } finally { pending.current = false; setBusy(false); }
+  }
+
+  return <MenuPopover label={`Chat model: ${selectedName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{selectedName}</span><small className="chat-model-status">{selectedState}</small></>} disabled={disabled}>
+    {close => <>
+      <div className="chat-model-choice-list" role="group" aria-label="Installed models">
+        {availableBundles.filter(item => item.status === "ready" || item.disk_matches).map(bundle => {
+          const profile = preferredConfiguration(bundle);
+          const reason = profile ? incompatibleChoices[profile.id] : "";
+          return <button type="button" className="chat-model-choice" key={bundle.id} disabled={busy || !profile || !bundle.disk_matches || Boolean(reason)} aria-pressed={bundle.id === selectedBundleId} title={reason || (!profile ? "Configure this model in Models first" : !bundle.disk_matches ? "Check this model's files in Models" : bundle.display_name)} onClick={() => { if (profile) void applyChoice(profile, null, close); }}><strong>{bundle.display_name}</strong><span>{reason ? "Incompatible" : loadingChoice === profile?.id ? "Loading…" : bundle.id === selectedBundleId ? selectedState : deployments.some(item => item.bundle_id === bundle.id && item.profile_id === profile?.id && item.status === "running" && item.health?.healthy) ? "Loaded" : "Not loaded"}</span></button>;
+        })}
+        {connectedChoices.map(item => <button type="button" className="chat-model-choice" key={item.id} disabled={busy || Boolean(incompatibleChoices[item.id])} aria-pressed={item.id === selectedDeploymentId} title={incompatibleChoices[item.id] || undefined} onClick={() => void applyChoice(null, item, close)}><strong>{item.display_name.replace(/^connected:/, "")}</strong><span>{incompatibleChoices[item.id] ? "Incompatible" : `Connected · ${item.health?.healthy ? "Ready" : "Unavailable"}`}</span></button>)}
+        {!availableBundles.length && !deployments.length ? <p className="hint">Add a model in Models to start chatting.</p> : null}
+      </div>
+      {selectedBundle && variants.length > 1 ? <label className="chat-variant-choice">Configuration<select aria-label="Model configuration" value={selectedProfile?.id ?? ""} disabled={busy} onChange={event => { const profile = variants.find(item => item.id === event.target.value); if (profile && !incompatibleChoices[profile.id]) void applyChoice(profile, null, close); }}><option value="" disabled>Choose configuration</option>{variants.map(item => <option key={item.id} value={item.id} disabled={Boolean(incompatibleChoices[item.id])} title={incompatibleChoices[item.id] || undefined}>{item.display_name}{item.id === selectedBundle.default_configuration_id ? " · default" : ""}{incompatibleChoices[item.id] ? " · incompatible" : ""}</option>)}</select></label> : null}
+      <div className="chat-thinking-controls"><ResponseSettingsEditor value={thinking} onChange={setThinking} options={options} facts={facts} disabled={busy || preview.loading} /></div>
+      {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
+      {JSON.stringify(thinking) !== incomingThinking ? <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={busy || preview.loading || Boolean(preview.error)} onClick={() => void applyThinking(close)}>{busy ? "Applying…" : "Apply thinking"}</button></div> : null}
     </>}
   </MenuPopover>;
 }

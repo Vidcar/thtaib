@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Request, Query
 
 from workbench_backend.errors import manager_error_handler
@@ -40,7 +42,7 @@ from workbench_backend.inference.schemas import (
 )
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.process_logs import deployment_log_path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DeploymentLogResponse(BaseModel):
@@ -54,6 +56,17 @@ class StorageLocationRequest(BaseModel):
 
 class StorageCleanupResponse(BaseModel):
     removed: list[str]
+
+
+class ManagedModelRuntime(BaseModel):
+    max_loaded_models: int
+    loaded_deployment_ids: list[str]
+    loading_deployment_ids: list[str]
+    router_status: Literal["stopped", "running", "unhealthy"]
+
+
+class ManagedModelRuntimeWrite(BaseModel):
+    max_loaded_models: int = Field(ge=1)
 
 router = APIRouter(prefix="/v1")
 
@@ -273,6 +286,16 @@ def preview_settings(request: Request, body: SettingsPreviewRequest) -> object:
 @router.get("/runtime", response_model=RuntimeManifest | None)
 def get_runtime(request: Request) -> object:
     return get_manager(request).current_runtime()
+
+
+@router.get("/runtime/models", response_model=ManagedModelRuntime)
+def get_managed_model_runtime(request: Request) -> object:
+    return get_manager(request).managed_model_runtime()
+
+
+@router.put("/runtime/models", response_model=ManagedModelRuntime)
+def set_managed_model_runtime(request: Request, body: ManagedModelRuntimeWrite) -> object:
+    return get_manager(request).set_max_loaded_models(body.max_loaded_models)
 
 
 @router.post("/runtime/pin", response_model=RuntimeManifest)

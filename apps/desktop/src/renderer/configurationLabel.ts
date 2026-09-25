@@ -8,5 +8,5 @@ export function configurationLabel(configuration?: RunProfile, bundleName?: stri
 }
 
 export function findConfiguration(configurations: RunProfile[], id: string | null | undefined): RunProfile | undefined {
-  return id ? configurations.find(item => item.id === id || item.equivalent_configuration_ids?.includes(id)) : undefined;
+  return id ? configurations.find(item => item.id === id) : undefined;
 }

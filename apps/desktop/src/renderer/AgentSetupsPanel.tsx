@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { workspaceApi, type AgentSetup, type AgentSetupVersion, type SetupConfiguration } from "./workspaceApi";
-import { SetupConfigurationEditor, useSetupCatalogue, visualSetupCompatibilityIssue } from "./SetupConfigurationEditor";
+import { SetupConfigurationEditor, scopedSetupConfiguration, useSetupCatalogue, visualSetupCompatibilityIssue } from "./SetupConfigurationEditor";
 import { errorMessage } from "./errors";
 import { formatWhen } from "./display";
 import { EmptyState } from "./EmptyState";
@@ -54,13 +54,13 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
     if (!draft.name.trim()) return;
     if (visualCompatibilityIssue) { setError(visualCompatibilityIssue); return; }
     await action(async () => {
-      const payload = { name: draft.name.trim(), role: draft.role.trim() || null, configuration: draft.configuration };
+      const payload = { name: draft.name.trim(), role: draft.role.trim() || null, configuration: scopedSetupConfiguration(draft.configuration, "agent") };
       const next = creating ? await workspaceApi.createAgentSetup(payload) : await workspaceApi.updateAgentSetup(selected!.id, { ...payload, base_version: draft.base_version });
       await refresh(next.id); setCreating(false); setNewDraft(draftOf()); setDrafts(current => { const nextDrafts = { ...current }; delete nextDrafts[next.id]; return nextDrafts; }); setMessage("Agent saved. Select it in Chat for a future turn.");
     });
   }
   return <section className="surface workspace-records-surface">
-    <header className="surface-head"><div className="entity-head"><h2>Agents</h2><HoverHelp title="About reusable agents">Save a role, instructions, model and selected tools or knowledge. Conversations keep the exact version used; edits apply when a newer version is selected for future work.</HoverHelp></div><button type="button" disabled={busy} onClick={() => { setCreating(true); }}><Icon name="plus" size={15} /> New agent</button></header>
+    <header className="surface-head"><div className="entity-head"><h2>Agents</h2><HoverHelp title="About reusable agents">Save a role and instructions. A helper may use its own model; selecting an agent as the main agent keeps Chat's model and access.</HoverHelp></div><button type="button" disabled={busy} onClick={() => { setCreating(true); }}><Icon name="plus" size={15} /> New agent</button></header>
     {error ? <Notice tone="error" action={!records.length && !creating ? <button type="button" onClick={() => void action(() => refresh())}>Retry</button> : undefined}>{error}</Notice> : null}
     {catalogueError ? <Notice tone="warn">Some setup choices could not load: {catalogueError}</Notice> : null}
     {message ? <p className="hint" role="status">{message}</p> : null}
@@ -69,8 +69,9 @@ export function AgentSetupsPanel({ onUse }: { onUse?: (setup: AgentSetup) => voi
       <form className="card workspace-editor" onSubmit={event => { event.preventDefault(); void save(); }}>
         <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3>{!creating && onUse ? <button type="button" disabled={busy || Boolean(selected?.missing_dependencies?.length)} onClick={() => onUse(selected!)}><Icon name="chat" size={15} /> Use in Chat</button> : null}</div>
         {selected?.missing_dependencies?.length && !creating ? <Notice tone="warn">This setup needs attention.<ul>{selected.missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
+        {selected?.helper_missing_dependencies?.length && !creating ? <Notice tone="warn">This agent needs attention before it can run as a helper.<ul>{selected.helper_missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
         <div className="setup-form-grid"><label>Name<input required maxLength={200} value={draft.name} disabled={busy} onChange={event => updateDraft({ name: event.target.value })} placeholder="Research assistant" /></label><label>Purpose<input value={draft.role} disabled={busy} onChange={event => updateDraft({ role: event.target.value })} placeholder="Read sources and compare findings" /></label></div>
-        <SetupConfigurationEditor value={draft.configuration} catalogue={catalogue} disabled={busy} requirements onChange={configuration => updateDraft({ configuration })} />
+        <SetupConfigurationEditor value={draft.configuration} catalogue={catalogue} disabled={busy} requirements agentOptions={records} currentAgentId={creating ? null : selected?.id} onChange={configuration => updateDraft({ configuration })} />
         <div className="actions"><button className="primary-button" disabled={busy || !draft.name.trim() || Boolean(visualCompatibilityIssue)}><Icon name="check" size={14} />{busy ? "Saving…" : "Save agent"}</button>{!creating && drafts[selected!.id] ? <button type="button" disabled={busy} onClick={() => setDrafts(current => { const next = { ...current }; delete next[selected!.id]; return next; })}>Discard edits</button> : null}{creating && records.length ? <button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
       </form>
       {!creating && selected ? <>

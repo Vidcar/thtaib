@@ -15,15 +15,14 @@ const originalFetch = globalThis.fetch;
 try {
   const { DeploymentsPanel } = await vite.ssrLoadModule("/src/renderer/DeploymentsPanel.tsx");
   const { SetupConfigurationEditor } = await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx");
-  const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
   await configurations(DeploymentsPanel);
+  await sameBundleVariantsLoadSeparately(DeploymentsPanel);
   await retainedModelDrafts(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel, true);
-  await chatApplyOwnership(ChatModelControls, false);
-  await chatApplyOwnership(ChatModelControls, true);
-  await failedReloadFacts(DeploymentsPanel, ChatModelControls);
-  await inheritedAccessAndEmptyTools(SetupConfigurationEditor);
+  await failedReloadFacts(DeploymentsPanel);
+  await projectKnowledgeOwnership(SetupConfigurationEditor);
+  await agentOwnedSettings(SetupConfigurationEditor);
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
 console.log("Unified settings save, revision, inheritance and explicit-none checks passed.");
 
@@ -36,6 +35,7 @@ async function configurations(Panel) {
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url), body = init.body ? JSON.parse(init.body) : null;
     calls.push({ path, method: init.method ?? "GET", body });
+    if (path.endsWith("/v1/runtime/models")) return response({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (path.endsWith("/v1/runtime")) return response({ status: "ready" });
     if (path.endsWith("/v1/deployments")) return response([]);
     if (path.includes("/configuration-options")) return response(options);
@@ -116,6 +116,7 @@ async function retainedModelDrafts(Panel) {
   let selected = "first", renderer, dirty = new Set();
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url);
+    if (path.endsWith("/v1/runtime/models")) return response({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
     if (path.endsWith("/v1/runtime")) return response({ status: "ready" });
     if (path.endsWith("/v1/deployments")) return response([]);
     if (path.endsWith("/projectors")) return response({ candidates: [] });
@@ -142,10 +143,10 @@ async function retainedModelDrafts(Panel) {
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
-async function inheritedAccessAndEmptyTools(Editor) {
+async function projectKnowledgeOwnership(Editor) {
   let renderer;
   const edits = [];
-  const catalogue = { bundles: [], profiles: [], deployments: [], knowledge: [], connections: [], tools: [{ id: "read_file", name: "Read file", description: "Reads a project file without changing it." }] };
+  const catalogue = { bundles: [], profiles: [], deployments: [], knowledge: [], connections: [], tools: [] };
   globalThis.fetch = async (url, init) => {
     assert.ok(String(url).endsWith("/v1/setup-resolution"));
     const request = JSON.parse(init.body);
@@ -153,19 +154,12 @@ async function inheritedAccessAndEmptyTools(Editor) {
     return response({ configuration: { approval_mode: "full_access" }, effective_values: { approval_mode: { value: "full_access", source: "Application default", known: true, inherited: true }, presented_tools: { value: ["read_file"], source: "Application default", known: true, inherited: true } }, instruction_layers: [] });
   };
   try {
-    await act(async () => { renderer = create(React.createElement(Editor, { value: {}, scope: "project", projectId: "project", catalogue, onChange: value => edits.push(value) })); await tick(); });
-    const radios = group => group.findAll(node => node.type === "input" && node.props.type === "radio");
-    const choice = label => renderer.root.findAll(node => node.props.role === "radiogroup" && typeof node.type === "string").find(group => text(settingRow(group)).startsWith(label));
-    const access = choice("Access");
-    assert.deepEqual(radios(access).map(radio => radio.props.value), ["", "ask", "full_access"], "access offers an explicit inherited choice");
-    assert.equal(radios(access).find(radio => radio.props.checked).props.value, "", "inherited access stays inherited instead of being coerced to Ask");
-    assert.match(text(settingRow(access)), /Full access.*Application default/, "known inherited permission and its owner are displayed");
-    const tools = choice("Tools");
-    assert.equal(radios(tools).find(radio => radio.props.checked).props.value, "inherit");
-    assert.match(text(settingRow(tools)), /1 selected/, "the inherited tool selection is summarised");
-    await act(async () => radios(tools).find(radio => radio.props.value === "choose").props.onChange());
-    assert.deepEqual(edits.at(-1).presented_tools, [], "explicit None clears inherited tools");
-    assert.equal(text(renderer.root).includes("Inherit preset"), false);
+    await act(async () => { renderer = create(React.createElement(Editor, { value: { approval_mode: "full_access", presented_tools: ["read_file"], model_configuration_id: "stale" }, scope: "project", projectId: "project", catalogue, onChange: value => edits.push(value) })); await tick(); });
+    assert.match(text(renderer.root), /Project knowledge/, "project editor owns knowledge");
+    assert.doesNotMatch(text(renderer.root), /Access|Tools|Helper model|Protected instructions/, "project editor cannot save Chat access, model selection, or agent instructions");
+    const memoryChoice = renderer.root.findAll(node => node.props.role === "radiogroup")[0];
+    await act(async () => memoryChoice.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "choose")[0].props.onChange());
+    assert.deepEqual(edits.at(-1), { memory_version_refs: [] }, "editing knowledge drops stale access, tools, and model fields");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -176,6 +170,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
   let selected = 'first', renderer, releasePreview;
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (path.endsWith('/v1/runtime/models')) return response({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: 'stopped' });
     if (path.endsWith('/v1/runtime')) return response({ status: 'ready' });
     if (path.endsWith('/v1/deployments')) return response([]);
     if (path.endsWith('/projectors')) return response({ candidates: [] });
@@ -210,51 +205,15 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
-async function chatApplyOwnership(Control, navigateAwayAndBack) {
-  const profile = { id: 'config', bundle_id: 'model', display_name: 'Default', revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
-  const deployment = { id: 'deploy', bundle_id: 'model', profile_id: 'config', display_name: 'Model', scope: 'managed', health: { healthy: true }, server_props: { n_ctx: 8192 }, updated_at: 'old', settings: profile.bags };
-  const applied = [];
-  let renderer, releaseReload, conversationId = 'first-chat', configuration = { model_configuration_id: 'config', approval_mode: 'full_access' };
-  globalThis.fetch = async (url, init = {}) => {
-    const path = String(url), body = init.body ? JSON.parse(init.body) : null;
-    if (path.endsWith('/v1/setup-resolution')) return response({ configuration: { ...body.overrides, deployment_id: 'deploy' }, effective_values: { 'startup.ctx_size': { value: body.overrides.startup_overrides?.ctx_size ?? 8192, requires_reload: body.overrides.startup_overrides?.ctx_size === 16384 } }, instruction_layers: [] });
-    if (path.includes('/configuration-options')) return response({ bundle_id: 'model', context_size: { maximum: 32768, options: [8192, 16384].map(value => ({ value, label: String(value) })) }, per_request_defaults: {}, startup_defaults: {} });
-    if (path.endsWith('/reconfigure')) return response({ ...deployment, server_props: { n_ctx: 16384 } });
-    throw new Error(`Unexpected chat settings request ${path}`);
-  };
-  const props = () => ({ profiles: [profile], deployments: [deployment], selectedDeploymentId: 'deploy', conversationId, configuration,
-    onApply: value => applied.push(value), onReloaded: async () => await new Promise(resolve => { releaseReload = resolve; }) });
-  try {
-    await act(async () => { renderer = create(React.createElement(Control, props())); await tick(); });
-    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
-    const apply = renderer.root.findAllByType('button').find(node => text(node) === 'Apply & reload');
-    await act(async () => { apply.props.onClick(); await tick(); });
-    assert.ok(releaseReload, 'Apply reached the model reload completion boundary');
-    if (navigateAwayAndBack) {
-      await act(async () => { conversationId = 'second-chat'; renderer.update(React.createElement(Control, props())); await tick(); });
-      await act(async () => { conversationId = 'first-chat'; renderer.update(React.createElement(Control, props())); await tick(); });
-    } else {
-      await act(async () => { configuration = { ...configuration, approval_mode: 'ask', helper_agent_ids: ['new-helper'] }; renderer.update(React.createElement(Control, props())); await tick(); });
-    }
-    await act(async () => { releaseReload(); await tick(); });
-    if (navigateAwayAndBack) assert.equal(applied.length, 0, 'navigation generation invalidates old Apply even after returning to the same conversation');
-    else {
-      assert.equal(applied.length, 1);
-      assert.equal(applied[0].approval_mode, 'ask', 'model Apply must preserve a newer Access choice');
-      assert.deepEqual(applied[0].helper_agent_ids, ['new-helper'], 'model Apply must preserve newer helper selection');
-      assert.equal(applied[0].startup_overrides.ctx_size, 16384);
-    }
-  } finally { if (renderer) await act(async () => renderer.unmount()); }
-}
-
-async function failedReloadFacts(Panel, ChatControl) {
+async function failedReloadFacts(Panel) {
   const profile = { id: 'config', bundle_id: 'model', display_name: 'Default', revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({}), agent: bag({}) } };
   const bundle = { id: 'model', display_name: 'Example', default_configuration_id: 'config', disk_matches: true, files: [], companions: [] };
   let deployment = { id: 'deploy', bundle_id: 'model', profile_id: 'config', display_name: 'Example', scope: 'managed', status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 }, applied_startup: { ctx_size: 8192 }, settings: profile.bags, updated_at: 'old', startup_overrides: {} };
-  let renderer, reads = 0, reloads = 0;
+  let renderer, reads = 0;
   const originalError = 'The previous configuration is saved; recovery is needed.';
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (path.endsWith('/v1/runtime/models')) return response({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: 'stopped' });
     if (path.endsWith('/v1/runtime')) return response({ status: 'ready' });
     if (path.endsWith('/v1/deployments')) { reads++; return response([deployment]); }
     if (path.endsWith('/projectors')) return response({ candidates: [] });
@@ -277,14 +236,64 @@ async function failedReloadFacts(Panel, ChatControl) {
     assert.ok(text(renderer.root).includes('Needs attention'));
     assert.ok(text(renderer.root).includes(originalError));
     assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'failed reload refresh preserves staged edits');
-    await act(async () => renderer.unmount()); renderer = null;
-    deployment = { ...deployment, status: 'running', health: { healthy: true }, server_props: { n_ctx: 8192 } };
-    await act(async () => { renderer = create(React.createElement(ChatControl, { profiles: [profile], deployments: [deployment], selectedDeploymentId: 'deploy', configuration: { model_configuration_id: 'config' }, onApply: () => assert.fail('failed reload must not apply'), onReloaded: async () => { reloads++; throw new Error('Secondary refresh failure'); } })); await tick(); });
-    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
-    await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Apply & reload').props.onClick(); await tick(); });
-    assert.equal(reloads, 1, 'Chat also refreshes failed reload facts');
-    assert.ok(text(renderer.root).includes(originalError), 'refresh failures retain the actual lifecycle failure');
-    assert.equal(text(renderer.root).includes('Secondary refresh failure'), false);
-    assert.equal(Number(renderer.root.findByProps({ 'aria-label': 'Exact context size' }).props.value), 16384);
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function sameBundleVariantsLoadSeparately(Panel) {
+  const bundle = { id: "model", display_name: "Example", default_configuration_id: "variant-a", disk_matches: true, files: [], companions: [] };
+  const profiles = ["a", "b"].map(name => ({ id: `variant-${name}`, bundle_id: "model", display_name: `Variant ${name.toUpperCase()}`, revision: 1, bags: { startup: bag({ ctx_size: name === "a" ? 8192 : 16384 }), per_request: bag({}), agent: bag({}) } }));
+  const deployment = (name, ctx) => ({ id: `deploy-${name}`, bundle_id: "model", profile_id: `variant-${name}`, display_name: `managed:Variant ${name.toUpperCase()}`, scope: "managed", status: "running", health: { healthy: true }, server_props: { n_ctx: ctx }, applied_startup: { ctx_size: ctx }, settings: profiles.find(profile => profile.id === `variant-${name}`).bags, updated_at: "current", startup_overrides: {} });
+  let deployments = [deployment("a", 8192)];
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url), body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ path, method: init.method ?? "GET", body });
+    if (path.endsWith("/v1/runtime/models")) return response({ max_loaded_models: 2, loaded_deployment_ids: deployments.map(item => item.id), loading_deployment_ids: [], router_status: "running" });
+    if (path.endsWith("/v1/runtime")) return response({ status: "ready" });
+    if (path.endsWith("/v1/deployments")) return response(deployments);
+    if (path.includes("/configuration-options")) return response({ bundle_id: "model", context_size: { maximum: 32768, options: [] }, gpu_layers: { maximum: 32 }, startup_defaults: {}, per_request_defaults: {}, metadata: {} });
+    if (path.endsWith("/projectors")) return response({ candidates: [] });
+    if (path.endsWith("/v1/setup-resolution")) return response({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
+    if (path.endsWith("/v1/settings/preview")) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
+    if (path.endsWith("/v1/deployments/managed")) { deployments = [...deployments, deployment("b", 16384)]; return response(deployments.at(-1)); }
+    if (path.endsWith("/configurations")) return response({ ...profiles[1], revision: 2, display_name: body.display_name });
+    throw new Error(`Unexpected variant request ${path}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: "model", initialBundles: [bundle], initialProfiles: profiles })); await tick(); });
+    await act(async () => renderer.root.findByProps({ id: "model-configuration" }).props.onChange({ target: { value: "variant-b" } }));
+    const submit = () => renderer.root.findByProps({ className: "model-settings" });
+    assert.ok(renderer.root.findAllByType("button").some(item => text(item) === "Load model"), "variant B is offered a separate load while A is running");
+    await act(async () => { submit().props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.ok(calls.some(call => call.path.endsWith("/v1/deployments/managed") && call.body.profile_id === "variant-b"), "Models loads exact variant B");
+    assert.equal(calls.some(call => call.path.endsWith("/reconfigure")), false, "Models does not reconfigure variant A when selecting B");
+    assert.equal(deployments[0].profile_id, "variant-a", "variant A remains bound to its original setup");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function agentOwnedSettings(Editor) {
+  const edits = [];
+  const catalogue = { bundles: [], profiles: [], deployments: [], connections: [], tools: [], knowledge: [{ kind: "protected_instruction", id: "instruction", current_version_id: "instruction_v1", display_name: "Editorial rules", enabled: true }] };
+  globalThis.fetch = async (url, init) => {
+    assert.ok(String(url).endsWith("/v1/setup-resolution"));
+    assert.equal(JSON.parse(init.body).editing_layer, "agent");
+    return response({ configuration: {}, effective_values: {}, instruction_layers: [] });
+  };
+  let renderer;
+  try {
+    const helper = { id: "helper", name: "Research helper", missing_dependencies: [{ kind: "main", id: "main", reason: "Main role unavailable" }], helper_missing_dependencies: [] };
+    await act(async () => { renderer = create(React.createElement(Editor, { value: { approval_mode: "full_access", presented_tools: ["execute"] }, scope: "agent", catalogue, agentOptions: [helper], onChange: value => edits.push(value) })); await tick(); });
+    assert.doesNotMatch(text(renderer.root), /Default access for new chats/, "agent editor cannot assign main Chat access");
+    assert.equal(renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.disabled, false, "helper eligibility uses helper dependencies, not main role dependencies");
+    await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.onClick());
+    assert.deepEqual(edits.at(-1).helper_agent_ids, ["helper"], "agent can select named helpers");
+    assert.equal(edits.at(-1).approval_mode, undefined, "agent edit drops stale access");
+    assert.equal(edits.at(-1).presented_tools, undefined, "agent edit drops stale tools");
+    await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Review before finishing" }).props.onClick());
+    assert.deepEqual(edits.at(-1).review, { enabled: true, criteria: "", max_revisions: 2 }, "agent review has a bounded revision count");
+    const protectedChoice = renderer.root.findAll(node => node.props.role === "radiogroup")[2];
+    await act(async () => protectedChoice.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "choose")[0].props.onChange());
+    assert.deepEqual(edits.at(-1).protected_instruction_version_refs, [], "agent owns protected instructions");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }

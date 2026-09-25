@@ -475,6 +475,8 @@ def _decode_body(content: bytes) -> Any:
 
 
 def _model_name_from_props(deployment: Deployment) -> str | None:
+    if deployment.router_preset_id:
+        return deployment.router_preset_id
     props = deployment.server_props
     if props is not None and props.model_alias:
         return props.model_alias

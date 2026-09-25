@@ -33,6 +33,7 @@ from workbench_backend.chat.schemas import (
     ChatQueueResumeRequest,
     ChatSearchResult,
     ChatStartRequest,
+    ChatReadiness, ChatReadinessIssue, ChatReadinessRequest,
     ChatTranscriptReplaceRequest,
 )
 from workbench_backend.chat.store import ChatStore
@@ -164,7 +165,7 @@ class ChatService:
         selection = selections.resolve(project_id=project.id if project else None, agent_setup_version_id=request.agent_setup_version_id, overrides=overrides, override_cleared_fields=cleared_fields, validate=bool(project or request.agent_setup_version_id), prepare_model=True)
         request = request.model_copy(update={k: v for k, v in selection.configuration.model_dump(exclude_none=True).items() if k in type(request).model_fields})
         if not request.deployment_id:
-            raise ChatError("Choose a model or an agent with a model before starting Chat.", code="setup_deployment_required", status_code=400)
+            raise ChatError("Choose a model before starting Chat.", code="setup_deployment_required", status_code=400)
         workspace_id, project_path = self._resolve_project(request.workspace_id, request.project_path)
         profile_id = self._bind_profile(request.profile_id)
         self.manager.get_deployment(request.deployment_id)
@@ -187,7 +188,18 @@ class ChatService:
             deployment_id=request.deployment_id,
             project_id=project.id if project else None,
             agent_setup_version_id=request.agent_setup_version_id,
-            setup_overrides=overrides,
+            # Freeze Chat-owned choices at creation. Later application access
+            # preferences and a newly chosen main agent cannot move this chat
+            # to another model or silently change its authority.
+            setup_overrides=SetupConfiguration.model_validate({
+                **overrides.model_dump(exclude_none=True),
+                "deployment_id": request.deployment_id,
+                "model_configuration_id": selection.configuration.model_configuration_id,
+                "profile_id": profile_id,
+                "approval_mode": selection.configuration.approval_mode or "ask",
+                "work_mode": selection.configuration.work_mode or "work",
+                "desktop_access": selection.configuration.desktop_access or "off",
+            }),
             setup_cleared_fields=cleared_fields,
             presented_tools=selection.configuration.presented_tools,
             approval_mode=selection.configuration.approval_mode or "ask",
@@ -239,6 +251,78 @@ class ChatService:
             conversation = self._require(conversation_id)
             self._persist_thread_if_missing(conversation)
         return self._view(conversation, persist=True)
+
+    def readiness(self, conversation_id: str, request: ChatReadinessRequest) -> ChatReadiness:
+        """Preview a candidate against the same saved choices used at dispatch.
+
+        This does not load a model, change a conversation, or grant tools. A
+        stopped model with retained history is marked unverified when its
+        compatibility cannot yet be established from saved server properties.
+        """
+        conversation = self._require(conversation_id).model_copy(deep=True)
+        if conversation.current_run_id:
+            try:
+                current = self.harness.get_run(conversation.current_run_id)
+            except HarnessError:
+                current = None
+            if current is not None and is_run_lifecycle_live(current.status):
+                return ChatReadiness(status="needs_action", can_send=False,
+                    issues=[ChatReadinessIssue(code="chat_turn_active",
+                        message="Wait for this chat's current turn to finish.", action="Wait for current turn")])
+        candidate_values = request.overrides.model_dump(exclude_unset=True)
+        if "agent_setup_version_id" in request.model_fields_set:
+            candidate_values["agent_setup_version_id"] = request.agent_setup_version_id
+        candidate = ChatStartRequest.model_validate({"task": "Preview", **candidate_values})
+        selection = None
+        try:
+            if candidate.model_configuration_id and not candidate.deployment_id:
+                matching = self.manager.configuration_deployment(candidate.model_configuration_id)
+                if matching is None:
+                    pending = {**conversation.setup_overrides.model_dump(exclude_none=True),
+                        **request.overrides.model_dump(exclude_none=True)}
+                    pending.pop("deployment_id", None)
+                    pending.pop("profile_id", None)
+                    selection = self._setups().resolve(project_id=conversation.project_id,
+                        agent_setup_version_id=(request.agent_setup_version_id
+                            if "agent_setup_version_id" in request.model_fields_set
+                            else conversation.agent_setup_version_id),
+                        overrides=SetupConfiguration.model_validate(pending), validate=False,
+                        read_only=True)
+                    return ChatReadiness(status="needs_action", can_send=False, selection=selection,
+                        issues=[ChatReadinessIssue(code="model_load_required",
+                            message="Load this model configuration before using it in Chat.", action="Load model")])
+            self._apply_start_configuration(conversation, candidate, prepare_model=False, read_only=True)
+            effective = conversation.setup_overrides.model_dump(exclude_none=True)
+            effective.update(deployment_id=conversation.deployment_id,
+                approval_mode=conversation.approval_mode, work_mode=conversation.work_mode,
+                desktop_access=conversation.desktop_access)
+            selection = self._setups().resolve(project_id=conversation.project_id,
+                agent_setup_version_id=conversation.agent_setup_version_id,
+                overrides=SetupConfiguration.model_validate(effective), validate=True, read_only=True)
+            history_uncertainty = self._preflight_start_request(conversation, candidate)
+            if not conversation.deployment_id:
+                return ChatReadiness(status="needs_action", can_send=False, selection=selection,
+                    issues=[ChatReadinessIssue(code="model_selection_required",
+                        message="Choose a model for this chat.", action="Choose a model")])
+            if history_uncertainty:
+                return ChatReadiness(status="unverified", can_send=True, selection=selection,
+                    issues=[ChatReadinessIssue(code=history_uncertainty,
+                        message="Conversation compatibility will be checked when the model loads.")])
+            return ChatReadiness(status="ready", can_send=True, selection=selection)
+        except (ChatError, HarnessError, ManagerError) as exc:
+            code = getattr(exc, "code", "setup_unavailable")
+            action = {
+                "desktop_grant_required": "Grant Windows access",
+                "desktop_window_required": "Choose a window",
+                "desktop_window_changed": "Choose the window again",
+                "desktop_unavailable": "Set up Windows control",
+                "desktop_worker_error": "Try Windows control again",
+                "deploy_missing": "Choose a model",
+                "deployment_missing": "Choose a model",
+                "setup_deployment_required": "Choose a model",
+            }.get(code)
+            return ChatReadiness(status="needs_action" if action else "incompatible", can_send=False,
+                selection=selection, issues=[ChatReadinessIssue(code=code, message=str(exc), action=action)])
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()
@@ -734,6 +818,13 @@ class ChatService:
                     )
                 else:
                     self.app_store.resolve_chat_submission_cancel(next_conversation.id, input_message_id)
+                    # Keep the pending input identity for an exact retry and
+                    # reject edited reuse of its ID. Restore the prior setup
+                    # selection when a candidate model failed to load.
+                    pending = conversation.model_copy(deep=True)
+                    pending.transcript = next_conversation.transcript
+                    pending.updated_at = now
+                    self.store.put(pending)
                     raise
             except Exception:
                 recovered = self._find_chat_run_by_input(next_conversation, input_message_id)
@@ -1043,9 +1134,9 @@ class ChatService:
         self,
         conversation: ChatConversation,
         request: ChatStartRequest,
-    ) -> None:
+    ) -> str | None:
         try:
-            self.manager.get_deployment(conversation.deployment_id)
+            deployment = self.manager.get_deployment(conversation.deployment_id)
         except ManagerError as exc:
             if exc.code != "deployment_missing":
                 raise
@@ -1099,6 +1190,63 @@ class ChatService:
                 status_code=400,
                 details={"tools": shell_blocked},
             )
+        if conversation.work_mode == "work" and conversation.thread_id:
+            from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
+
+            if set(_presented).intersection(DESKTOP_TOOL_NAMES):
+                desktop = self.harness.desktop_automation
+                if desktop is None:
+                    raise ChatError("Windows control is unavailable.", code="desktop_unavailable", status_code=409)
+                try:
+                    desktop.snapshot_grant(conversation.thread_id, conversation.desktop_access)
+                except DesktopAutomationError as exc:
+                    raise ChatError(str(exc), code=exc.code, status_code=409) from exc
+        if conversation.helper_agent_ids:
+            setups = self._setups()
+            for helper_id in conversation.helper_agent_ids:
+                try:
+                    helper = setups.get_setup(helper_id)
+                except HarnessError as exc:
+                    raise ChatError(f"Selected helper {helper_id} is unavailable.",
+                        code="helper_unavailable", status_code=409) from exc
+                if not helper.active or helper.helper_missing_dependencies:
+                    raise ChatError(f"Helper {helper.name} has unavailable settings.",
+                        code="helper_unavailable", status_code=409,
+                        details={"helper_id": helper_id,
+                                 "missing_dependencies": [issue.model_dump() for issue in helper.helper_missing_dependencies]})
+                if helper.configuration.requires_project and not conversation.project_path:
+                    raise ChatError(f"Helper {helper.name} requires a project folder.",
+                        code="helper_project_required", status_code=409)
+                if helper.configuration.requires_host_shell and (
+                    not conversation.project_path or conversation.work_mode == "plan" or "execute" not in _presented
+                ):
+                    raise ChatError(f"Helper {helper.name} requires Shell enabled in a project.",
+                        code="helper_shell_required", status_code=409)
+        return self._retained_history_preflight(conversation, deployment)
+
+    def _retained_history_preflight(self, conversation: ChatConversation, deployment) -> str | None:
+        """Reject known history incompatibility before Chat records a new turn."""
+        if not (conversation.run_ids or conversation.source_checkpoint_id) or not conversation.thread_id:
+            return None
+        from deepagents.middleware.summarization import SUMMARIZATION_EVENT_KEY, SummarizationMiddleware
+        from langchain_core.messages import SystemMessage
+        from workbench_backend.agents.context import validate_retained_messages
+        from workbench_backend.state.checkpointer import conversation_state
+
+        try:
+            state = conversation_state(self.manager.paths.checkpoints_db, conversation.thread_id)
+            retained = SummarizationMiddleware._apply_event_to_messages(
+                list(state.get("messages", [])), state.get(SUMMARIZATION_EVENT_KEY))
+        except Exception:
+            return "history_unverified"
+        try:
+            validate_retained_messages(deployment, [SystemMessage(content="Chat"), *retained])
+        except HarnessError as exc:
+            raise ChatError(str(exc), code=exc.code, status_code=409) from exc
+        if (deployment.server_props is None or deployment.status.value != "running"
+            or not deployment.health or not deployment.health.healthy):
+            return "model_capabilities_unverified"
+        return None
 
     def _find_chat_run_by_input(
         self,
@@ -1202,6 +1350,9 @@ class ChatService:
         self,
         conversation: ChatConversation,
         request: ChatStartRequest,
+        *,
+        prepare_model: bool = True,
+        read_only: bool = False,
     ) -> None:
         frozen_memory = (
             list(conversation.memory_version_refs)
@@ -1215,7 +1366,7 @@ class ChatService:
         fields_set = request.model_fields_set
         if request.profile_id:
             self._bind_profile(request.profile_id)
-        if not request.deployment_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
+        if not request.deployment_id and not request.model_configuration_id and "agent_setup_version_id" not in fields_set and self.manager.store.get_deployment(conversation.deployment_id) is None:
             raise ChatError("The Chat conversation's model setup is no longer available. Select a model to continue.", code="deploy_missing", status_code=409, details={"deployment_id": conversation.deployment_id})
         has_layered_setup = bool(conversation.project_id or conversation.agent_setup_version_id or "agent_setup_version_id" in fields_set or request.model_configuration_id or conversation.model_configuration_id or self.app_store.get_setup_defaults().model_dump(exclude_none=True))
         if not has_layered_setup and "instructions" in fields_set:
@@ -1236,10 +1387,26 @@ class ChatService:
         if has_layered_setup:
             if "agent_setup_version_id" in fields_set and request.agent_setup_version_id != conversation.agent_setup_version_id:
                 conversation.agent_setup_version_id = request.agent_setup_version_id
-                conversation.setup_overrides = SetupConfiguration()
-                conversation.setup_cleared_fields = []
+                # The agent provides behaviour. Preserve this conversation's
+                # explicitly chosen model and access when changing that role.
+                pinned = conversation.setup_overrides.model_dump(exclude_none=True)
+                pinned.update(deployment_id=conversation.deployment_id,
+                    model_configuration_id=conversation.model_configuration_id,
+                    profile_id=conversation.profile_id,
+                    approval_mode=conversation.approval_mode,
+                    work_mode=conversation.work_mode,
+                    desktop_access=conversation.desktop_access)
+                conversation.setup_overrides = SetupConfiguration.model_validate(pinned)
             explicit = configuration_from_request(request).model_dump(exclude_none=True)
             overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
+            if request.model_configuration_id and "model_configuration_id" in fields_set and "deployment_id" not in fields_set:
+                overrides.pop("deployment_id", None)
+                overrides.pop("profile_id", None)
+            elif "model_configuration_id" in fields_set and request.model_configuration_id is None and "profile_id" not in fields_set:
+                overrides.pop("profile_id", None)
+            elif request.deployment_id and "deployment_id" in fields_set and "model_configuration_id" not in fields_set:
+                overrides.pop("model_configuration_id", None)
+                overrides.pop("profile_id", None)
             for key in fields_set:
                 if key in SetupConfiguration.model_fields and getattr(request, key) is None:
                     overrides.pop(key, None)
@@ -1251,7 +1418,7 @@ class ChatService:
                     conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
                     if getattr(request, key) is None:
                         conversation.setup_cleared_fields.append(key)
-            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=True)
+            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=prepare_model, read_only=read_only)
             values = selection.configuration.model_dump(exclude_none=True)
             values.update({field: None for field in conversation.setup_cleared_fields})
             for key in ("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"):

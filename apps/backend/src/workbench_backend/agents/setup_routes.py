@@ -1,7 +1,7 @@
 """Shared project and reusable-agent configuration API."""
 
 from fastapi import APIRouter, Request
-from workbench_backend.agents.setup_service import cleared_configuration_fields
+from workbench_backend.agents.setup_service import SetupService, cleared_configuration_fields
 from workbench_backend.inference.schemas import DeletePreview
 from workbench_backend.state.dependencies import dependency_preview_for_app
 
@@ -102,11 +102,13 @@ def duplicate_setup(request: Request, setup_id: str, body: AgentSetupDuplicateRe
 
 @router.get("/setup-defaults", response_model=SetupConfiguration)
 def setup_defaults(request: Request):
-    return request.app.state.app_store.get_setup_defaults()
+    saved = request.app.state.app_store.get_setup_defaults()
+    return SetupConfiguration(approval_mode=saved.approval_mode)
 
 
 @router.put("/setup-defaults", response_model=SetupConfiguration)
 def save_setup_defaults(request: Request, body: SetupConfiguration):
+    SetupService.require_application_defaults_only(body)
     return request.app.state.app_store.put_setup_defaults(body)
 
 

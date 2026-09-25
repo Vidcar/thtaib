@@ -448,6 +448,12 @@ class HarnessApiTests(unittest.TestCase):
         bound_body = wait_for_run(self.client, bound["id"])
         self.assertEqual(bound_body["enabled_tools"], [name for name in ENABLED_TOOL_NAMES if name != "read_attachment"])
         self.assertEqual(bound_body["presented_tools"], ["echo"])
+        self.scripted = ScriptedChatModel([AIMessage(content="Shell selection acknowledged.")])
+        shell_bound = self._start(presented_tools=["execute"], project_path=str(project))
+        shell_body = wait_for_run(self.client, shell_bound["id"])
+        self.assertEqual(shell_body["status"], "completed", shell_body.get("error"))
+        self.assertIn("execute", shell_body["enabled_tools"])
+        self.assertIn("execute", shell_body["presented_tools"])
         denied = self.client.post(
             "/v1/agent-runs",
             json={
@@ -486,7 +492,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(with_file, ["read_attachment"])
         self.assertEqual(still_denied, [])
         defaults, denied, filesystem, shell = resolve_presented_tools(None, project_bound=True)
-        self.assertEqual(defaults, [name for name in ENABLED_TOOL_NAMES if name != "read_attachment"])
+        self.assertEqual(defaults, [name for name in ENABLED_TOOL_NAMES if name not in {"read_attachment", "execute"}])
         self.assertEqual((denied, filesystem, shell), ([], [], []))
         visual, denied, filesystem, shell = resolve_presented_tools(
             ["browser_snapshot", "desktop_screenshot", "start_preview"], project_bound=True,

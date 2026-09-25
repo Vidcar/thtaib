@@ -313,9 +313,6 @@ class RunProfile(BaseModel):
     display_name: str
     bundle_id: str | None = None
     bundle_name: str | None = Field(default=None, json_schema_extra={"readOnly": True})
-    equivalent_configuration_ids: list[str] = Field(default_factory=list, json_schema_extra={"readOnly": True})
-    merged_into_configuration_id: str | None = Field(default=None, json_schema_extra={"readOnly": True})
-    configuration_origin: Literal["legacy", "recovered", "named"] = Field(default="legacy", json_schema_extra={"readOnly": True})
     recipe_origin: ResponseRecipeOrigin | None = None
     bags: SettingsBags
     created_at: str
@@ -541,6 +538,7 @@ class Deployment(BaseModel):
     bundle_id: str | None = None
     profile_id: str | None = None
     endpoint: str | None = None
+    router_preset_id: str | None = None
     requested_startup: dict[str, Any] = Field(default_factory=dict)
     applied_startup: dict[str, Any] = Field(default_factory=dict)
     startup_overrides: dict[str, Any] = Field(default_factory=dict)

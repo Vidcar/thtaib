@@ -7,8 +7,8 @@ export function helperApprovalOwner(run: AgentRun | null | undefined, namespace:
   return run?.child_runs?.find(child => child.namespace?.length && child.namespace.every((part, index) => namespace[index] === part))?.name;
 }
 
-export function RunActivitySummary({ run }: { run?: AgentRun | null }) {
-  const children = run?.child_runs ?? [];
+export function RunActivitySummary({ run, showHelpers = true }: { run?: AgentRun | null; showHelpers?: boolean }) {
+  const children = showHelpers ? run?.child_runs ?? [] : [];
   const review = run?.review_observation;
   const evaluation = review?.evaluations?.at(-1);
   const gaps = evaluation?.criteria?.filter(item => !item.passed) ?? [];

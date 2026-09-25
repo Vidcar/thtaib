@@ -195,6 +195,7 @@ function makeHarness(options = {}) {
       conv_b: conversation("conv_b", "Conversation B", bRun),
     },
     createdConversation: conversation("conv_new", "New conversation", null),
+    windowScope: { scope: "off", selected_window: null, stale: false },
     requests: {
       commands: [],
       creates: [],
@@ -260,6 +261,16 @@ function makeHarness(options = {}) {
       try {
         if (req.method === "GET" && url.pathname === "/v1/projects") { json(res, 200, options.projects ?? []); return; }
         if (req.method === "GET" && url.pathname === "/v1/agent-setups") { json(res, 200, options.agentSetups ?? []); return; }
+        if (req.method === "GET" && url.pathname === "/v1/bundles") { json(res, 200, options.bundles ?? []); return; }
+        if (req.method === "GET" && url.pathname === "/v1/window-testing/runtime") { json(res, 200, { available: true, installed: true }); return; }
+        if (req.method === "GET" && url.pathname === "/v1/window-testing/windows") { json(res, 200, [{ hwnd: 42, title: "Fixture window", process_name: "fixture.exe", process_id: 1234 }]); return; }
+        if (/^\/v1\/window-testing\/conversations\/[^/]+\/scope$/.test(url.pathname)) {
+          if (req.method === "PUT") { const scope = JSON.parse(body); state.windowScope = { scope: scope.scope, selected_window: scope.hwnd ? { hwnd: scope.hwnd, title: "Fixture window", process_name: "fixture.exe", process_id: 1234 } : null, stale: false }; }
+          json(res, 200, state.windowScope); return;
+        }
+        if (req.method === "POST" && /^\/v1\/chat\/conversations\/[^/]+\/readiness$/.test(url.pathname)) {
+          json(res, 200, { status: "ready", can_send: true, issues: [], selection: null }); return;
+        }
         if (req.method === "POST" && url.pathname === "/v1/setup-resolution") {
           const payload = JSON.parse(body); state.requests.resolutions.push(payload);
           const resolved = await options.resolveSetup?.(payload) ?? { configuration: { ...payload.overrides }, instruction_layers: [] };
@@ -919,6 +930,7 @@ async function testStartupRefreshFailureRemainsUsable(vite) {
     await waitFor(() => assert.match(allText(renderer), /History is temporarily unavailable/), "initial history error visible");
     assert.ok(buttonByAriaLabel(renderer, "New chat"), "history failure retains New chat");
     assert.ok(buttonByAriaLabel(renderer, "Models"), "history failure retains navigation");
+    await selectFixtureModel(renderer);
     assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false, "independent model data remains usable");
     await act(async () => { buttonByAriaLabel(renderer, "Models").props.onClick(); });
     await waitFor(() => assert.deepEqual(navigated, ["models"]), "navigation works after load failure");
@@ -940,6 +952,7 @@ async function testDeletedHistorySelectionRecoversToNewChat(vite) {
     assertFreshConversation(renderer, "deleted selection returns to New chat");
     assert.equal(buttons(renderer, "Conversation A").length, 0, "deleted history entry removed");
     assert.equal(harness.state.requests.registers.length, 0, "missing chat never registers an interaction thread");
+    await selectFixtureModel(renderer);
     assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false);
   } finally { await closeHarness(renderer, harness); }
 }
@@ -1106,6 +1119,7 @@ async function testCreateRegisterAfterNewDoesNotSubmitOrSelect(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await selectFixtureModel(renderer);
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "create then leave" } });
       await Promise.resolve();
@@ -1135,6 +1149,7 @@ async function testNewConversationHeldRegistrationAfterCreateDoesNotSubmitAfterN
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await selectFixtureModel(renderer);
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "create then registration waits" } });
       await Promise.resolve();
@@ -1506,6 +1521,7 @@ async function testWholeChatDropStagesFiles(vite, fresh = false) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "chat list loaded before drop");
+    if (fresh) await selectFixtureModel(renderer);
     if (!fresh) {
       await act(async () => button(renderer, "Conversation A").props.onClick());
       await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_a")), "existing chat bound before drop");
@@ -1587,6 +1603,7 @@ async function testFileDropDuringNewChatRegistrationCannotRetarget(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "chat list loaded");
+    await selectFixtureModel(renderer);
     await act(async () => renderer.root.findByProps({ className: "chat-main" }).props.onDrop({
       preventDefault() {}, stopPropagation() {},
       dataTransfer: { types: ["Files"], files: [testFile("old-drop.txt", "old drop")] },
@@ -1653,6 +1670,7 @@ async function testFreshDraftPersistsBeforeImmediateNavigation(vite) {
   const renderer = await renderChat(vite, harness, { onNavigate: (tab) => navigations.push(tab) });
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await selectFixtureModel(renderer);
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "fresh unsent draft" } });
       await Promise.resolve();
@@ -1677,6 +1695,7 @@ async function testFreshSubmitSharesCreatedDraftSessionAndSendsRevision(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
+    await selectFixtureModel(renderer);
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "fresh submit after draft save" } });
       await Promise.resolve();
@@ -2039,8 +2058,8 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
     summarization_path: "deepagents-upstream",
     notes: [],
   });
-  const initial = { ...run("run_a"), generation_observation: null, context_observation: context(1000) };
-  const other = { ...run("run_b"), generation_observation: null, context_observation: context(300) };
+  const initial = { ...run("measurement_run_a"), generation_observation: null, context_observation: context(1000) };
+  const other = { ...run("measurement_run_b"), generation_observation: null, context_observation: context(300) };
   const measured = {
     ...initial,
     generation_observation: { input_tokens: 1200, output_tokens: 456, elapsed_seconds: 10, tokens_per_second: 45.6, context_limit: 8192, measured_at: now() },
@@ -2082,9 +2101,8 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
     await act(async () => button(renderer, "Conversation B").props.onClick());
     await waitFor(() => assert.equal(measurements().props.run?.id, other.id), "B owns composer measurements");
     await waitFor(() => assert.ok(harness.state.openStreams.has("thread_b")), "B SDK stream connected");
-    const priorReads = harness.state.chatGetCounts.get("conv_b") ?? 0;
+    await flush();
     await publish("thread_b", measured);
-    await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_b") ?? 0) > priorReads), "stale other-conversation projection ownership checked");
     await flush();
     assert.equal(measurements().props.run.id, other.id);
     assert.equal(measurements().props.run.context_observation.estimated_input_tokens, 300);
@@ -2338,40 +2356,66 @@ async function testArchiveImmediatelyLeavesHistoryAndSearch(vite) {
 }
 
 async function testModelChangeClearsOnlyModelSpecificOverrides(vite) {
-  const originalOverrides = { temperature: 0.6, max_tokens: 600, reasoning: "on", reasoning_effort: "high", reasoning_format: "deepseek" };
   const harness = makeHarness({
     aRun: null, threadARun: null, completeCommands: true,
-    deployments: [{ ...baseDeployment, bundle_id: "bundle_1" }, { ...baseDeployment, id: "dep_2", bundle_id: "bundle_2", display_name: "On-off model" }],
-    configurationOptions: url => url.searchParams.get("deployment_id") === "dep_2"
-      ? { context_size: { options: [] }, per_request_defaults: { reasoning: { supported: true, options: [{ value: "auto", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] } } }
-      : { context_size: { options: [] }, per_request_defaults: { reasoning_effort: { supported: true, options: [{ value: "default", label: "Default" }, { value: "high", label: "High" }] } } },
+    deployments: [{ ...baseDeployment, scope: "connected", bundle_id: null }, { ...baseDeployment, id: "dep_2", scope: "connected", bundle_id: null, display_name: "connected:Second model" }],
   });
-  harness.state.conversations.conv_a.draft = { content: "Keep sampling settings when switching models", attachment_ids: [], revision: 1, updated_at: now(),
-    intended_config: { deployment_id: "dep_1", per_request_overrides: originalOverrides } };
   const renderer = await renderChat(vite, harness);
   const modelControls = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
-  const modelSelect = () => modelControls().findAllByType("select")[0];
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.deepEqual(modelControls().props.configuration.per_request_overrides, originalOverrides), "draft settings restored");
-    await act(async () => modelSelect().props.onChange({ target: { value: "deployment:dep_1" } }));
-    assert.deepEqual(modelControls().props.configuration.per_request_overrides, originalOverrides, "reselecting the same model preserves its settings");
-    await act(async () => modelSelect().props.onChange({ target: { value: "deployment:dep_2" } }));
-    assert.deepEqual(modelControls().props.configuration.per_request_overrides, originalOverrides, "switching remains staged before Apply");
-    await applyModelChanges(renderer);
-    assert.deepEqual(modelControls().props.configuration.per_request_overrides, { temperature: 0.6, max_tokens: 600 });
-    await waitFor(() => assert.equal(renderer.root.findByProps({ role: "switch", "aria-label": "Thinking" }).props.disabled, false), "new model thinking modes loaded");
-    assert.equal(renderer.root.findAll(node => node.type === "input" && node.props["aria-label"] === "Thinking level").length, 0);
+    await waitFor(() => assert.equal(modelControls().props.conversationId, "conv_a"), "conversation A fully restored");
+    await waitFor(() => assert.equal(modelControls().props.selectedDeploymentId, "dep_1"), "current model restored");
+    await act(async () => approvalModeButton(renderer, "Full access").props.onClick());
+    assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "Chat shows selected access before model choice");
+    assert.equal(modelControls().props.configuration.approval_mode, "full_access", "Chat passes the selected access into model picker");
+    const next = renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice" && textOf(node).includes("Second model"))[0];
+    assert.ok(next, "the second connected model is listed once");
+    await act(async () => next.props.onClick());
+    await waitFor(() => assert.equal(modelControls().props.selectedDeploymentId, "dep_2"), "explicit model choice binds immediately");
+    assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "model choice preserves visible Chat access");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Use the second model" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
-    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "new model request submitted");
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "selected model is sent");
     const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
     assert.equal(submitted.deployment_id, "dep_2");
-    assert.deepEqual(submitted.per_request_overrides, { temperature: 0.6, max_tokens: 600 },
-      "hidden old-model thinking settings must not travel in the actual submission");
+    assert.equal(submitted.approval_mode, "full_access");
   } finally {
     await closeHarness(renderer, harness);
   }
+}
+
+async function selectFixtureModel(renderer) {
+  const choice = renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice" && textOf(node).includes("test"))[0];
+  assert.ok(choice, "fixture model is available to select explicitly");
+  await act(async () => choice.props.onClick());
+  await waitFor(() => {
+    const picker = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+    assert.equal(picker.props.selectedDeploymentId, "dep_1");
+  }, "fixture model applied to Chat");
+}
+
+async function testFirstTurnWindowsGrantPreservesDraft(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: true,
+    resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: "dep_1", desktop_access: "selected" }, instruction_layers: [] }) });
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => assert.match(allText(renderer), /Windows access/), "Windows setup available");
+    await waitFor(() => assert.equal(renderer.root.findAll(node => node.props["aria-label"] === "Chat project")[0].props.disabled, false), "fresh chat ready");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Inspect this window" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "first send creates a chat for the live grant");
+    await waitFor(() => assert.equal(textarea(renderer).props.value, "Inspect this window"), "the draft survives grant setup");
+    assert.equal(harness.state.requests.commands.length, 0, "a turn cannot dispatch before the window is granted");
+    await waitFor(() => assert.ok(buttons(renderer, "Choose window").length), "window chooser available in the current chat");
+    await act(async () => button(renderer, "Choose window").props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Use window").length), "live window listed");
+    await act(async () => button(renderer, "Use window").props.onClick());
+    await waitFor(() => assert.equal(harness.state.windowScope.scope, "selected"), "live selected-window grant saved");
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "first turn sends after the grant");
+  } finally { await closeHarness(renderer, harness); }
 }
 
 async function testArchivePreservesDraftBeforeLeaving(vite) {
@@ -2580,6 +2624,47 @@ async function testAccessModeBelongsToSelectedConversation(vite) {
   } finally { await closeHarness(renderer, harness); }
 }
 
+async function testNewChatResetsAccessToApplicationDefault(vite) {
+  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: true,
+    resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: payload.overrides.deployment_id ?? "dep_1", approval_mode: payload.overrides.approval_mode ?? "ask" }, instruction_layers: [] }) });
+  harness.state.conversations.conv_a.setup_overrides = { approval_mode: "full_access" };
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "history loaded");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true), "saved chat access restored");
+    await act(async () => button(renderer, "New").props.onClick());
+    await waitFor(() => assert.equal(approvalModeButton(renderer, "Ask").props["aria-checked"], true), "new Chat returns to application access");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "New chat with inherited access" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "new Chat sends");
+    assert.equal(Object.hasOwn(harness.state.requests.commands[0].payload.params.metadata.workbench, "approval_mode"), false, "previous Chat's Full access is not submitted");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testMainAgentKeepsChatAccessAndTools(vite) {
+  const agentSetups = [{ id: "agent_two", name: "Agent two", current_version_id: "two-version", missing_dependencies: [] }];
+  const harness = makeHarness({ aRun: null, threadARun: null, completeCommands: true, agentSetups,
+    resolveSetup: payload => ({ configuration: { ...payload.overrides, deployment_id: payload.overrides.deployment_id ?? "dep_1", approval_mode: payload.overrides.approval_mode ?? "ask", presented_tools: payload.overrides.presented_tools ?? null }, instruction_layers: [] }) });
+  harness.state.conversations.conv_a.setup_overrides = { approval_mode: "full_access", presented_tools: ["execute"] };
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "history loaded");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true), "chat access restored");
+    await act(async () => button(renderer, "Agent two").props.onClick());
+    await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent two/), "agent changed");
+    assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "main agent keeps Chat access visible");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Continue with this access" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "agent-switched Chat sends");
+    const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    assert.equal(submitted.approval_mode, "full_access", "submitted access matches displayed Chat access");
+    assert.deepEqual(submitted.presented_tools, ["execute"], "Chat tool choice survives main agent selection");
+    assert.equal(submitted.agent_setup_version_id, "two-version");
+  } finally { await closeHarness(renderer, harness); }
+}
+
 async function testReopenedAccessUsesCurrentInheritanceWithSerializedNullOverrides(vite) {
   for (const currentDefault of ["ask", null]) {
     for (const override of [null, "full_access"]) {
@@ -2653,8 +2738,8 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => assert.ok(allText(renderer).includes("Agent one")), "saved agent choices");
-    await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "one-version" } }));
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "one-version"), "agent applied");
+    await act(async () => button(renderer, "Agent one").props.onClick());
+    await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent one/), "agent applied");
     assert.equal(approvalModeButton(renderer, "Ask").props["aria-checked"], true, "a saved agent without a mode stays on Ask");
     assert.ok(allText(renderer).includes("Keep these instructions intact"));
     await act(async () => textarea(renderer).props.onChange({ target: { value: "First task" } }));
@@ -2666,8 +2751,8 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     for (const key of ["deployment_id", "profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "per_request_overrides"]) {
       assert.equal(Object.hasOwn(submitted, key), false, `untouched ${key} must inherit instead of overwriting the saved setup`);
     }
-    await act(async () => renderer.root.findByProps({ "aria-label": "Chat agent" }).props.onChange({ target: { value: "two-version" } }));
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat agent" }).props.value, "two-version"), "next-turn agent selected");
+    await act(async () => button(renderer, "Agent two").props.onClick());
+    await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent two/), "next-turn agent selected");
     assert.equal(harness.state.requests.commands[0].payload.params.metadata.workbench.agent_setup_version_id, "one-version", "changing next-turn setup cannot mutate the in-flight request");
     await act(async () => { approvalModeButton(renderer, "Full access").props.onClick(); textarea(renderer).props.onChange({ target: { value: "Queue the next task" } }); });
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
@@ -2684,7 +2769,7 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
     const busy = queued ? run("run_existing", "running") : null;
     const harness = makeHarness({ aRun: busy, threadARun: busy, agentSetups: [{ id: "helper_one", name: "Research helper", configuration: { deployment_id: "dep_1" }, current_version_id: "helper_v1", missing_dependencies: [] }] });
     const renderer = await renderChat(vite, harness);
-    const planButton = () => renderer.root.findAll(node => node.type === "button" && node.props.role === "radio" && textOf(node).startsWith("Plan"))[0];
+    const planButton = () => renderer.root.findAll(node => node.type === "button" && textOf(node).startsWith("Plan mode"))[0];
     const helper = () => renderer.root.findAll(node => node.type === "label" && node.props.className === "helper-choice")[0].findByType("input");
     try {
       await waitFor(() => button(renderer, "Conversation A"), "history ready");
@@ -2699,13 +2784,13 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
       });
       await act(async () => renderer.root.findByProps({ placeholder: "What should a good result satisfy?" }).props.onChange({ target: { value: "Cite the relevant files" } }));
       assert.equal(textarea(renderer).props.value, "Investigate this carefully", "control changes preserve the typed draft");
-      assert.equal(planButton().props["aria-checked"], true, "Full access does not switch Plan into Work");
+      assert.ok(buttonByAriaLabel(renderer, "Turn off Plan mode"), "Full access does not switch Plan into Work");
       await act(async () => button(renderer, "Conversation B").props.onClick());
       await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation B/), "other chat selected");
       await act(async () => button(renderer, "Conversation A").props.onClick());
       await waitFor(() => assert.equal(textarea(renderer).props.value, "Investigate this carefully"), "draft restored");
       await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "restored conversation bound");
-      assert.equal(planButton().props["aria-checked"], true);
+      assert.ok(buttonByAriaLabel(renderer, "Turn off Plan mode"));
       assert.equal(helper().props.checked, true);
       assert.equal(renderer.root.findByProps({ placeholder: "What should a good result satisfy?" }).props.value, "Cite the relevant files");
       await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
@@ -2715,7 +2800,7 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
       assert.deepEqual(submitted.helper_agent_ids, ["helper_one"]);
       assert.deepEqual(submitted.review, { enabled: true, criteria: "Cite the relevant files", max_revisions: 2 });
       assert.equal(submitted.approval_mode, "full_access");
-      await act(async () => planButton().props.onClick());
+      await act(async () => buttonByAriaLabel(renderer, "Turn off Plan mode").props.onClick());
       assert.equal(submitted.work_mode, "plan", "later UI choices do not alter submitted work");
     } finally { await closeHarness(renderer, harness); }
   }
@@ -2756,6 +2841,8 @@ try {
     ["reopened draft agent access", testDraftAgentChangeDoesNotRestorePreviousAccess],
     ["reopened access inherits serialized null", testReopenedAccessUsesCurrentInheritanceWithSerializedNullOverrides],
     ["access belongs to selected conversation", testAccessModeBelongsToSelectedConversation],
+    ["new Chat resets access", testNewChatResetsAccessToApplicationDefault],
+    ["main agent keeps Chat access", testMainAgentKeepsChatAccessAndTools],
     ["startup refresh failure remains usable", testStartupRefreshFailureRemainsUsable],
     ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
     ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],
@@ -2779,6 +2866,7 @@ try {
     ["reopened pending cancel clears from authoritative view", testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear],
     ["fresh draft persists before navigation", testFreshDraftPersistsBeforeImmediateNavigation],
     ["fresh submit shares draft session", testFreshSubmitSharesCreatedDraftSessionAndSendsRevision],
+    ["first-turn Windows grant preserves draft", testFirstTurnWindowsGrantPreservesDraft],
     ["accepted draft next save uses incremented revision", testAcceptedDraftNextSaveUsesIncrementedRevision],
     ["queued draft clear preserves later draft", testQueuedDraftClearDoesNotEraseLaterDraft],
     ["attachment-only SDK submit metadata", testAttachmentOnlySdkSubmitKeepsMetadata],

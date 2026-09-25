@@ -193,6 +193,34 @@ class DesktopAutomationService:
             state = self._scopes.get(thread_id, _ScopeState(DesktopAccessScope.off))
         return state.scope, state.selected
 
+    def snapshot_grant(self, thread_id: str, desired: DesktopAccessScope | str) -> tuple[DesktopAccessScope, WindowIdentity | None]:
+        """Read the live grant used by both Chat preflight and turn admission.
+
+        Saved access is intent, not a grant. Checking the selected window's
+        current identity here makes a reopened conversation actionable before
+        any model is loaded or a message is committed.
+        """
+        try:
+            requested = DesktopAccessScope(desired)
+        except ValueError as exc:
+            raise DesktopAutomationError("Unknown desktop access scope.", code="desktop_invalid_arguments") from exc
+        current, identity = self.scope_for_thread(thread_id)
+        if requested is DesktopAccessScope.off or current is DesktopAccessScope.off:
+            raise DesktopAutomationError("Choose a window or explicitly grant All windows for this conversation.",
+                code="desktop_grant_required")
+        if current is DesktopAccessScope.selected:
+            if identity is None:
+                raise DesktopAutomationError("Choose a window again.", code="desktop_window_required")
+            window = self._find_window(identity.hwnd)
+            if window.identity != identity:
+                raise DesktopAutomationError("The selected window changed; choose it again.",
+                    code="desktop_window_changed")
+            return DesktopAccessScope.selected, identity
+        if requested is DesktopAccessScope.selected:
+            raise DesktopAutomationError("Choose a specific window for Selected window access.",
+                code="desktop_window_required")
+        return DesktopAccessScope.all, None
+
     def list_windows(self, thread_id: str, *, _bound: _ScopeState | None = None) -> list[DesktopWindow]:
         scope, selected = self._effective_scope(thread_id, _bound)
         if scope is DesktopAccessScope.off:

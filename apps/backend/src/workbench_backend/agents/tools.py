@@ -173,7 +173,9 @@ def resolve_presented_tools(
     enabled = [*enabled_for_project(project_bound, knowledge_routes=knowledge_routes,
         capture_routes=capture_routes, attachment_available=attachment_available), *external]
     if requested is None:
-        return enabled, [], [], []
+        # Project files are a useful default context. Host commands require
+        # an explicit per-conversation capability choice from Chat.
+        return [name for name in enabled if name not in SHELL_TOOL_NAMES], [], [], []
     presented: list[str] = []
     denied: list[str] = []
     filesystem_blocked: list[str] = []

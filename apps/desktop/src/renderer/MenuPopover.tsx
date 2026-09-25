@@ -42,9 +42,13 @@ export function MenuPopover(props: {
     window.addEventListener("scroll", place, true);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
     if (panel.current) observer?.observe(panel.current);
-    panel.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true });
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); observer?.disconnect(); };
   }, [open, props.align, props.placement]);
+
+  useLayoutEffect(() => {
+    if (!open || !position.ready) return;
+    panel.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')?.focus({ preventScroll: true });
+  }, [open, position.ready]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;

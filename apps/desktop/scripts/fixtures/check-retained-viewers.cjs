@@ -48,6 +48,11 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type:'keyDown', keyCode:'ESC' }); win.webContents.sendInputEvent({ type:'keyUp', keyCode:'ESC' });
     await ready(`!document.querySelector('dialog')`);
     assert.equal(await js(`document.activeElement?.getAttribute('aria-label')`),'View image Retained image','Escape restores thumbnail focus');
+    await js(`document.querySelector('button[aria-label="Test actions"]').click()`);
+    await ready(`document.activeElement?.textContent === 'First action'`);
+    win.webContents.sendInputEvent({ type:'keyDown', keyCode:'ESC' }); win.webContents.sendInputEvent({ type:'keyUp', keyCode:'ESC' });
+    await ready(`document.querySelector('button[aria-label="Test actions"]').getAttribute('aria-expanded') === 'false'`);
+    assert.equal(await js(`document.activeElement?.getAttribute('aria-label')`),'Test actions','Escape restores menu trigger focus');
     await js(`window.fixture.showLibrary()`);
     await ready(`document.querySelector('[aria-label="Preview Library image.png"]')`);
     await js(`document.querySelector('[aria-label="Preview Library image.png"]').click()`);

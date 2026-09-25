@@ -313,7 +313,7 @@ class HarnessService:
     ) -> tuple[str, dict[str, int | float] | None]:
         """Freeze the narrower live conversation grant at turn admission."""
 
-        from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAccessScope
+        from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
 
         if not set(presented).intersection(DESKTOP_TOOL_NAMES):
             return "off", None
@@ -322,23 +322,16 @@ class HarnessService:
             or request.tool_mode is not ToolMode.live_tool):
             raise HarnessError("Window tools need a live Work-mode Chat conversation.",
                 code="desktop_grant_required", status_code=409)
-        current, identity = self.desktop_automation.scope_for_thread(request.thread_id)
-        desired = DesktopAccessScope(request.desktop_access)
-        if desired is DesktopAccessScope.off or current is DesktopAccessScope.off:
-            raise HarnessError("Choose a window or explicitly grant All windows for this conversation.",
-                code="desktop_grant_required", status_code=409)
-        if current is DesktopAccessScope.selected:
-            if identity is None:
-                raise HarnessError("The selected window must be chosen again.",
-                    code="desktop_window_required", status_code=409)
+        try:
+            current, identity = self.desktop_automation.snapshot_grant(request.thread_id, request.desktop_access)
+        except DesktopAutomationError as exc:
+            raise HarnessError(str(exc), code=exc.code, status_code=409) from exc
+        if identity is not None:
             return "selected", {
                 "hwnd": identity.hwnd,
                 "process_id": identity.process_id,
                 "process_created_at": identity.process_created_at,
             }
-        if desired is DesktopAccessScope.selected:
-            raise HarnessError("Choose a specific window before using Selected window access.",
-                code="desktop_window_required", status_code=409)
         return "all", None
 
     def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:

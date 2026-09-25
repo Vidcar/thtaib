@@ -211,9 +211,12 @@ class ModelManager:
                     code="template_incompatible", status_code=409)
             endpoint = running.endpoint.removesuffix("/v1")
             try:
-                response = httpx.post(f"{endpoint}/apply-template", json={"messages": [
+                template_request = {"messages": [
                     {"role": "user", "content": "Template compatibility check"}],
-                    "add_generation_prompt": True}, timeout=30)
+                    "add_generation_prompt": True}
+                if self.deployments._router_enabled():
+                    template_request["model"] = probe.id
+                response = httpx.post(f"{endpoint}/apply-template", json=template_request, timeout=30)
                 response.raise_for_status()
                 rendered = response.json().get("prompt")
             except (httpx.HTTPError, ValueError, TypeError) as exc:
@@ -226,6 +229,8 @@ class ModelManager:
             stopped = self.deployments.stop(probe.id)
             if stopped.process_identity is None and stopped.pid is None:
                 self.store.delete_deployment(probe.id)
+                if self.deployments._router_enabled():
+                    self.deployments.router.refresh_presets()
 
     def inspect_bundle(self, bundle_id: str, *, refresh: bool = False) -> InspectReport:
         bundle = self.store.get_bundle(bundle_id)
@@ -292,17 +297,7 @@ class ModelManager:
         defaults = {bundle.default_configuration_id for bundle in self.store.list_bundles()}
         profiles = [self._resolved_profile(profile) for profile in self.store.list_profiles()]
         profiles.sort(key=lambda profile: (profile.id in defaults, profile.updated_at, profile.id), reverse=True)
-        canonical = [profile for profile in profiles if profile.merged_into_configuration_id is None]
-        indexed = {profile.id: profile for profile in profiles}
-        for profile in profiles:
-            owner = profile
-            seen = {profile.id}
-            while owner.merged_into_configuration_id in indexed and owner.merged_into_configuration_id not in seen:
-                seen.add(owner.merged_into_configuration_id)
-                owner = indexed[owner.merged_into_configuration_id]
-            if owner.id != profile.id and owner in canonical:
-                owner.equivalent_configuration_ids.append(profile.id)
-        return canonical
+        return profiles
 
     def list_model_configurations(self, bundle_id: str) -> list[RunProfile]:
         self._require_profile_bundle(bundle_id)
@@ -370,15 +365,7 @@ class ModelManager:
         return result
 
     def canonical_configuration(self, configuration_id: str) -> RunProfile:
-        profile = self.get_profile(configuration_id)
-        if profile.bundle_id:
-            canonical = next((item for item in self.list_model_configurations(profile.bundle_id)
-                if item.id == profile.id or profile.id in item.equivalent_configuration_ids), None)
-            if canonical is not None:
-                return canonical
-            if profile.merged_into_configuration_id:
-                raise ManagerError("This configuration was merged into one that was removed. Choose another configuration.", code="profile_missing", status_code=404)
-        return profile
+        return self.get_profile(configuration_id)
 
     def save_model_configuration(self, bundle_id: str, request: ModelConfigurationWriteRequest) -> RunProfile:
         with self.store.configuration_lock():
@@ -389,14 +376,13 @@ class ModelManager:
             existing = self.canonical_configuration(request.configuration_id) if request.configuration_id else None
             if existing is not None:
                 self._validate_profile_bundle(existing, bundle_id)
-            if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None) and not profile.merged_into_configuration_id
+            if any(profile.bundle_id == bundle_id and profile.id != (existing.id if existing else None)
                     and profile.display_name.strip().casefold() == name.casefold() for profile in self.store.list_profiles()):
                 raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
-            legacy_agent = existing.bags.agent.requested if existing else {}
-            if request.agent and request.agent != legacy_agent:
+            if request.agent:
                 raise ManagerError("Put instructions in an Agent setup. Model configurations save loading and response settings.", code="configuration_agent_instructions", status_code=400)
             body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default"}),
-                "display_name": name, "bundle_id": bundle_id, "agent": legacy_agent})
+                "display_name": name, "bundle_id": bundle_id, "agent": {}})
             if request.configuration_id:
                 profile = self.update_profile(existing.id, body)
             else:
@@ -417,9 +403,10 @@ class ModelManager:
 
     def configuration_deployment(self, configuration_id: str) -> Deployment | None:
         profile = self.get_profile(configuration_id)
-        selected_startup = requested_identity(profile.bags)[0]
-        matches = [d for d in self.store.list_deployments() if d.bundle_id == profile.bundle_id
-            and requested_identity(d.settings)[0] == selected_startup]
+        selected_settings = requested_identity(profile.bags)
+        matches = [d for d in self.store.list_deployments() if d.scope == ManagementScope.managed
+            and d.bundle_id == profile.bundle_id and d.profile_id == profile.id
+            and requested_identity(d.settings) == selected_settings]
         return max(matches, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy and d.process_identity),
             d.status != DeploymentStatus.failed, d.updated_at), default=None)
 
@@ -435,7 +422,6 @@ class ModelManager:
         return profile.model_copy(
             update={
                 "bundle_name": bundle.display_name if bundle else None,
-                "equivalent_configuration_ids": [],
                 "bags": resolve_bags(
                     startup=profile.bags.startup.requested,
                     per_request=profile.bags.per_request.requested,
@@ -452,7 +438,6 @@ class ModelManager:
         profile = RunProfile(
             id=new_id("profile"),
             display_name=request.display_name,
-            configuration_origin="named",
             bundle_id=request.bundle_id,
             bags=resolve_bags(
                 startup=request.startup,
@@ -484,7 +469,6 @@ class ModelManager:
                 ),
                 "updated_at": utc_now(),
                 "revision": existing.revision + 1,
-                "configuration_origin": "named",
             }
         )
         return self.store.put_profile(updated)
@@ -493,8 +477,7 @@ class ModelManager:
         display_name = request if isinstance(request, str) else request.display_name
         existing = self.get_profile(profile_id)
         return self.store.put_profile(
-            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1,
-                "configuration_origin": "named"})
+            existing.model_copy(update={"display_name": display_name, "updated_at": utc_now(), "revision": existing.revision + 1})
         )
 
     def duplicate_profile(
@@ -512,9 +495,7 @@ class ModelManager:
                 "created_at": now,
                 "updated_at": now,
                 "revision": 1,
-                "configuration_origin": "named",
                 "recipe_origin": None,
-                "merged_into_configuration_id": None,
             },
             deep=True,
         )
@@ -571,8 +552,12 @@ class ModelManager:
                         code="runtime_pin_busy",
                         status_code=409,
                     )
-                for deployment in running:
-                    self.deployments.stop(deployment.id)
+                if self.deployments._router_enabled():
+                    self._require_no_live_runs(deployment_ids=deployment_ids, code="runtime_pin_busy")
+                    self.deployments.router.stop_router()
+                else:
+                    for deployment in running:
+                        self.deployments.stop(deployment.id)
             return self.runtime.pin(request)
 
     def reconcile_deployments(self) -> list[Deployment]:
@@ -609,7 +594,19 @@ class ModelManager:
         return self.deployments.attach_connected(request)
 
     def list_deployments(self) -> list[Deployment]:
+        if self.deployments._router_enabled():
+            self.deployments.router.status()
         return self.store.list_deployments()
+
+    def managed_model_runtime(self) -> dict[str, object]:
+        return self.deployments.router.status()
+
+    def set_max_loaded_models(self, value: int) -> dict[str, object]:
+        managed_ids = {item.id for item in self.store.list_deployments()
+                       if item.scope == ManagementScope.managed}
+        with self.lifecycle.mutate("set_max_loaded_models", deployment_ids=managed_ids):
+            self._require_no_live_runs(deployment_ids=managed_ids, code="deployment_active")
+            return self.deployments.router.set_max_loaded_models(value)
 
     def get_deployment(self, deployment_id: str) -> Deployment:
         deployment = self.store.get_deployment(deployment_id)
@@ -643,6 +640,15 @@ class ModelManager:
             )
             return self.deployments.stop(deployment_id)
 
+    def stop_legacy_owned_deployment(self, deployment_id: str) -> Deployment:
+        """Safely stop a verified older per-model process during local cutover."""
+        deployment = self.get_deployment(deployment_id)
+        with self.lifecycle.mutate("stop_legacy_owned_deployment", deployment_ids={deployment.id},
+                                   profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+                                   bundle_ids={deployment.bundle_id} if deployment.bundle_id else set()):
+            self._require_no_live_runs(deployment_ids={deployment.id}, code="deployment_active")
+            return self.deployments.stop_legacy_owned(deployment.id)
+
     def detach_deployment(self, deployment_id: str) -> Deployment:
         deployment = self.get_deployment(deployment_id)
         with self.lifecycle.mutate("detach_deployment", deployment_ids={deployment.id}):
@@ -657,6 +663,16 @@ class ModelManager:
             if not deployment.endpoint:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
             return deployment
+        if self.deployments._router_enabled():
+            if deployment.bundle_id:
+                self._require_deployable_bundle(deployment.bundle_id)
+            # The selected preset may have been evicted since the last turn.
+            # Ask the native scheduler to load it again, even if the saved
+            # deployment record still says running.
+            return self._wait_deployment_ready(
+                deployment.id, first=self.deployments.start(deployment.id),
+                timeout_seconds=180.0,
+            )
         if (
             deployment.status == DeploymentStatus.running
             and deployment.endpoint

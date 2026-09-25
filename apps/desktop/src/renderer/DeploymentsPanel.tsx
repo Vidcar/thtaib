@@ -15,7 +15,7 @@ import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { effectiveSettingDisplay, settingValue } from "./effectiveSettings";
 import { useSetupPreview } from "./effectiveSettings";
 import { ModelProjectorControls } from "./ModelProjectorControls";
-import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
+import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ManagedModelsRuntime, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
 import "./deploymentReadouts.css";
 
 const cacheTypes = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
@@ -81,6 +81,8 @@ export function DeploymentsPanel({
   const actionPending = useRef(false);
   const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
+  const [modelsRuntime, setModelsRuntime] = useState<ManagedModelsRuntime | null>(null);
+  const [maxLoadedDraft, setMaxLoadedDraft] = useState(1);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profileId, setProfileId] = useState("");
   const [configurationName, setConfigurationName] = useState("");
@@ -118,13 +120,14 @@ export function DeploymentsPanel({
   const current = deployments.filter(d => d.status !== "stopped");
   const extraConnections = current.filter(d => d.scope === "connected" && current.some(other => other.scope === "managed" && other.endpoint === d.endpoint && other.health?.healthy));
   const visibleCurrent = current.filter(d => !extraConnections.includes(d));
-  const selectedCurrent = visibleCurrent.filter(d => d.bundle_id === selectedBundleId);
+  const selectedCurrent = visibleCurrent.filter(d => d.bundle_id === selectedBundleId && d.profile_id === profileId);
+  const otherVariants = visibleCurrent.filter(d => d.bundle_id === selectedBundleId && d.profile_id !== profileId);
   const otherCurrent = visibleCurrent.filter(d => d.bundle_id !== selectedBundleId && bundles.some(bundle => bundle.id === d.bundle_id));
   const externalCurrent = visibleCurrent.filter(d => d.bundle_id !== selectedBundleId && !bundles.some(bundle => bundle.id === d.bundle_id));
   const selectedConnections = extraConnections.filter(d => selectedCurrent.some(model => model.endpoint === d.endpoint));
   const history = deployments.filter(d => d.status === "stopped" && d.bundle_id === selectedBundleId);
-  const selectedRunning = current.find(d => d.bundle_id === selectedBundleId && d.health?.healthy);
-  const selectedActive = current.find(d => d.bundle_id === selectedBundleId && d.scope === "managed" && d.status !== "failed");
+  const selectedRunning = current.find(d => d.bundle_id === selectedBundleId && d.profile_id === profileId && d.status === "running" && d.health?.healthy);
+  const selectedActive = current.find(d => d.bundle_id === selectedBundleId && d.profile_id === profileId && d.scope === "managed" && d.status !== "failed");
   const connectedAlready = current.some(d => d.endpoint?.replace(/\/$/, "") === endpoint.trim().replace(/\/$/, ""));
   const engineInUse = current.some(d => d.scope === "managed" && d.status !== "failed");
   const runtimeReady = loaded && runtime?.status === "ready";
@@ -194,8 +197,9 @@ export function DeploymentsPanel({
   }
 
   async function refresh() {
-    const [r, d] = await Promise.all([api.runtime(), api.deployments()]);
+    const [r, d, modelRuntime] = await Promise.all([api.runtime(), api.deployments(), api.managedModelsRuntime()]);
     setRuntime(r); setDeployments(d); setLoaded(true); setLoadError("");
+    setModelsRuntime(modelRuntime); setMaxLoadedDraft(modelRuntime.max_loaded_models);
   }
   useEffect(() => { void refresh().catch(error => setLoadError(errorMessage(error))); }, [bundlesVersion]);
   useEffect(() => {
@@ -382,7 +386,7 @@ export function DeploymentsPanel({
         {Object.keys(sampling).length ? <><h4>Response settings reported by server</h4>{readout(sampling)}</> : null}
         <SettingsNotes unsupported={d.settings?.startup.unsupported} retired={d.settings?.startup.retired} />
         {d.profile_id ? <><button type="button" disabled={Boolean(busy)} onClick={() => void action(`profile-${d.id}`, async () => { const result = await api.deploymentProfileChanges(d.id); setProfileChanges(previous => ({ ...previous, [d.id]: result })); })}>Compare with saved configuration</button>
-          {profileChanges[d.id] ? <p className="hint">{profileChanges[d.id].has_pending_startup_changes ? "The saved configuration has different startup settings. This deployment keeps its original configuration; unload and start a new setup to apply the edited settings." : "No pending startup differences."}{profileChanges[d.id].has_pending_per_request_changes || profileChanges[d.id].has_pending_agent_changes ? " Response or agent settings have changed for future work." : ""}</p> : null}</> : null}
+          {profileChanges[d.id] ? <p className="hint">{profileChanges[d.id].has_pending_startup_changes ? "The saved configuration has different startup settings. This deployment keeps its original configuration; unload and start a new setup to apply the edited settings." : "No pending startup differences."}{profileChanges[d.id].has_pending_per_request_changes ? " Response settings have changed for future work." : ""}</p> : null}</> : null}
         {d.health?.detail ? <p className="hint">Health check: {d.health.detail}</p> : null}
         {d.error && d.status === "stopped" ? <p className="hint">Last event: {d.error}</p> : null}
         {d.scope === "managed" ? <><button type="button" disabled={Boolean(busy)} onClick={() => void action(`logs-${d.id}`, async () => { const result = await api.deploymentLogs(d.id); setLogs(previous => ({ ...previous, [d.id]: result.text })); })}>Read recent engine log</button>{logs[d.id] ? <pre className="engine-log">{logs[d.id]}</pre> : null}</> : null}
@@ -392,6 +396,7 @@ export function DeploymentsPanel({
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
     {otherCurrent.length ? <aside className="other-active-models" aria-label="Other active models"><span className="hint">Also active</span>{otherCurrent.map(d => <button type="button" key={d.id} disabled={!onSelectBundle} onClick={() => onSelectBundle?.(d.bundle_id!)}><span>{bundles.find(bundle => bundle.id === d.bundle_id)?.display_name}</span><StatusBadge {...stateOf(d)} /></button>)}</aside> : null}
+    {otherVariants.length ? <aside className="other-active-models" aria-label="Other loaded configurations"><span className="hint">Other configurations loaded</span>{otherVariants.map(d => <div key={d.id}><span>{profiles.find(profile => profile.id === d.profile_id)?.display_name ?? d.display_name}</span><StatusBadge {...stateOf(d)} /></div>)}</aside> : null}
     {selectedCurrent.length ? <div className="model-run-summary" aria-label="Loaded model status"><StatusBadge {...stateOf(selectedCurrent[0])} /><span>{selectedRunning?.server_props?.n_ctx ? `${tokenLabel(selectedRunning.server_props.n_ctx)} context loaded` : selectedCurrent[0].status === "starting" ? "Starting engine" : "Engine state available in details"}</span>{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(selectedActive.id, async () => { await api.stop(selectedActive.id); await refresh(); })}>Unload</button> : null}<details><summary>Diagnostics</summary><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul> : null}</details></div> : null}
     {selected ? <section className="model-setup"><div className="model-setup-head"><div><h3>Model settings</h3><p className="hint model-capacity">{modelInfo}</p></div><span className="badge model-edit-state" data-dirty={dirty.current}>{dirty.current ? "Unsaved" : "Saved configuration"}</span><button type="button" className="icon-button" aria-label="Refresh model details" title="Re-read model metadata and supported controls" disabled={Boolean(busy)} onClick={() => void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true)); })}><Icon name="refresh" size={16} /></button></div><form ref={formRef} className="model-settings" onSubmit={event => {
       event.preventDefault(); void action("start", async () => {
@@ -500,6 +505,16 @@ export function DeploymentsPanel({
     <details className="card engine-settings"><summary>Local engine <span>{!loaded ? "Checking" : runtimeReady ? "Ready" : "Setup required"}</span></summary><p className="hint">Runs models on this computer using your NVIDIA GPU.</p>
       {runtime ? <dl className="model-facts"><div><dt>Engine</dt><dd>llama.cpp {runtime.release_tag}</dd></div><div><dt>Platform</dt><dd>{runtime.platform} · {runtime.flavor}</dd></div><div><dt>Executable</dt><dd><code>{runtime.executable}</code></dd></div></dl> : null}
       {runtime?.error ? <Notice tone="error">{runtime.error}</Notice> : null}
+      <form className="model-runtime-cap" onSubmit={event => { event.preventDefault(); void action("model-limit", async () => {
+        const saved = await api.setManagedModelsRuntime(maxLoadedDraft);
+        setModelsRuntime(saved); setMaxLoadedDraft(saved.max_loaded_models);
+        setMessageTone("ok"); setMessage(`Up to ${saved.max_loaded_models} model ${saved.max_loaded_models === 1 ? "configuration" : "configurations"} can be loaded together.`);
+      }); }}>
+        <label>Maximum loaded models <input type="number" min={1} step={1} value={maxLoadedDraft} disabled={Boolean(busy)} onChange={event => setMaxLoadedDraft(Number(event.target.value))} /></label>
+        <p className="hint">One loaded configuration uses one slot. A limit of 1 switches between models; 2 allows two to remain loaded. Concurrent requests for one model are configured above.</p>
+        {modelsRuntime ? <p className="hint" role="status">{modelsRuntime.loaded_deployment_ids.length} loaded · {modelsRuntime.loading_deployment_ids.length} loading</p> : null}
+        <button type="submit" disabled={Boolean(busy) || !Number.isSafeInteger(maxLoadedDraft) || maxLoadedDraft < 1 || maxLoadedDraft === modelsRuntime?.max_loaded_models}>{busy === "model-limit" ? "Saving…" : "Save limit"}</button>
+      </form>
       {engineInUse ? <p className="hint">Stop your local models before changing the engine installation.</p> : null}
       <button type="button" disabled={Boolean(busy) || engineInUse} onClick={() => void action("engine", async () => { const result = await api.pinRuntime(); setRuntime(result); setMessageTone(result.error ? "error" : "ok"); setMessage(result.error ?? "Local engine is ready."); })}>{busy === "engine" ? "Setting up…" : runtime?.status === "ready" ? "Verify engine installation" : "Set up local engine"}</button>
     </details>

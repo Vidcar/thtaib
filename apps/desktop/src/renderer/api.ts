@@ -28,6 +28,7 @@ import type {
   RedactionMode,
   RunProfile,
   RuntimeManifest,
+  ManagedModelsRuntime,
   SettingsBags,
   ChatSearchResult,
   BrowserRuntimeStatus,
@@ -196,6 +197,8 @@ export const api = {
   smoke: (id: string) => request<{ ok: boolean; detail: string | null }>(`/v1/deployments/${id}/smoke`, { method: "POST" }),
   deploymentLogs: (id: string) => request<{ text: string; available: boolean }>(`/v1/deployments/${id}/logs`),
   runtime: () => request<RuntimeManifest | null>("/v1/runtime"),
+  managedModelsRuntime: () => request<ManagedModelsRuntime>("/v1/runtime/models"),
+  setManagedModelsRuntime: (max_loaded_models: number) => request<ManagedModelsRuntime>("/v1/runtime/models", { method: "PUT", body: JSON.stringify({ max_loaded_models }) }),
   pinRuntime: () => request<RuntimeManifest>("/v1/runtime/pin", { method: "POST", body: "{}" }),
   deployments: () => request<Deployment[]>("/v1/deployments"),
   startManaged: (bundle_id: string, profile_id?: string, startup?: object) =>

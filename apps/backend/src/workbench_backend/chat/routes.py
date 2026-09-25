@@ -16,6 +16,7 @@ from workbench_backend.chat.schemas import (
     ChatQueueResumeRequest,
     ChatSearchResult,
     ChatStartRequest,
+    ChatReadiness, ChatReadinessRequest,
     ChatTranscriptReplaceRequest,
 )
 from workbench_backend.chat.service import ChatService
@@ -53,6 +54,11 @@ def search_conversations(
 @router.get("/conversations/{conversation_id}")
 def get_conversation(request: Request, conversation_id: str) -> ChatConversationView:
     return get_chat(request).get(conversation_id)
+
+
+@router.post("/conversations/{conversation_id}/readiness", response_model=ChatReadiness)
+def conversation_readiness(request: Request, conversation_id: str, body: ChatReadinessRequest) -> ChatReadiness:
+    return get_chat(request).readiness(conversation_id, body)
 
 
 @router.patch("/conversations/{conversation_id}")

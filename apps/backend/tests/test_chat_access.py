@@ -57,7 +57,7 @@ class ChatAccessTests(unittest.TestCase):
             time.sleep(0.02)
         self.fail("Chat did not reach a decision or finish")
 
-    def test_switching_away_from_full_access_uses_resolved_ask_and_blocks_edit(self):
+    def test_switching_main_agent_preserves_chat_owned_full_access(self):
         full = self.setup(approval_mode="full_access", presented_tools=["edit_file"])
         ordinary = self.setup(presented_tools=["edit_file"])
         for replacement in (ordinary["current_version_id"], None):
@@ -69,7 +69,9 @@ class ChatAccessTests(unittest.TestCase):
                     "args": {"file_path": source.name, "old_string": "keep until approved", "new_string": "edited"},
                 }]), AIMessage(content="done")]
                 chat = self.post("/v1/chat/conversations", {
-                    "project_path": str(self.project), "agent_setup_version_id": full["current_version_id"],
+                    "project_path": str(self.project), "deployment_id": self.deployment.id,
+                    "approval_mode": "full_access", "presented_tools": ["edit_file"],
+                    "agent_setup_version_id": full["current_version_id"],
                 })
                 self.assertEqual(chat["approval_mode"], "full_access")
                 resolved = self.post("/v1/setup-resolution", {
@@ -81,12 +83,10 @@ class ChatAccessTests(unittest.TestCase):
                     "deployment_id": self.deployment.id, "presented_tools": ["edit_file"],
                 })
                 settled = self.settled(chat["id"])
-                self.assertEqual(source.read_text(encoding="utf-8"), "keep until approved")
-                self.assertEqual(settled["approval_mode"], "ask")
-                self.assertEqual(settled["current_run"]["approval_mode"], "ask")
-                self.assertIsNotNone(settled["current_run"]["pending_interrupt"])
-                self.post(f"/v1/chat/conversations/{chat['id']}/cancel", {})
-                wait_for_chat(self.client, chat["id"])
+                self.assertEqual(source.read_text(encoding="utf-8"), "edited")
+                self.assertEqual(settled["approval_mode"], "full_access")
+                self.assertEqual(settled["current_run"]["approval_mode"], "full_access")
+                self.assertIsNone(settled["current_run"]["pending_interrupt"])
 
     def test_general_chat_access_override_survives_later_application_defaults(self):
         chat = self.post("/v1/chat/conversations", {
@@ -122,7 +122,7 @@ class ChatAccessTests(unittest.TestCase):
         updated = self.client.patch(f"/v1/projects/{chat['project_id']}", json={
             "defaults": {"approval_mode": "full_access"},
         })
-        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.status_code, 400, updated.text)
         self.post(f"/v1/chat/conversations/{chat['id']}/queue/resume", {})
         paused = self.settled(chat["id"])
         self.assertEqual(paused["current_run"]["approval_mode"], "ask")
@@ -198,16 +198,15 @@ class ChatAccessTests(unittest.TestCase):
         self.script = [AIMessage(content="", tool_calls=[{
             "name": "execute", "id": "queued-full", "args": {"command": host_shell_marker_command(filename)},
         }]), AIMessage(content="done")]
-        project = self.post("/v1/projects", {
-            "path": str(self.project), "defaults": {"approval_mode": "full_access"},
-        })
+        project = self.post("/v1/projects", {"path": str(self.project)})
         chat = self.post("/v1/chat/conversations", {
-            "deployment_id": self.deployment.id, "project_id": project["id"], "presented_tools": ["execute"],
+            "deployment_id": self.deployment.id, "project_id": project["id"],
+            "approval_mode": "full_access", "presented_tools": ["execute"],
         })
         queued = self.post(f"/v1/chat/conversations/{chat['id']}/queue", {"task": "Create a marker later."})
         self.assertEqual(queued["queue"][0]["intended_config"]["approval_mode"], "full_access")
         changed = self.client.patch(f"/v1/projects/{project['id']}", json={"defaults": {"approval_mode": "ask"}})
-        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.status_code, 400, changed.text)
         self.post(f"/v1/chat/conversations/{chat['id']}/queue/resume", {})
         completed = wait_for_chat(self.client, chat["id"])
         self.assertEqual(completed["current_run"]["status"], "completed", completed["current_run"].get("error"))

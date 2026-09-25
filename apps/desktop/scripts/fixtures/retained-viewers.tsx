@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { SourceLink, SourceScope } from "../../src/renderer/SourceReference";
 import { ImagePreview } from "../../src/renderer/ImagePreview";
 import { LibraryPanel } from "../../src/renderer/LibraryPanel";
+import { MenuPopover } from "../../src/renderer/MenuPopover";
 import "../../src/renderer/appearanceDefaults.css";
 import "../../src/renderer/styles.css";
 
@@ -21,4 +22,4 @@ window.fetch = async (url, init) => {
 };
 const root = createRoot(document.getElementById("root")!);
 window.fixture.showLibrary = () => root.render(<main style={{ padding: 20 }}><LibraryPanel /></main>);
-root.render(<main style={{ padding: 20 }}><SourceScope.Provider value={{ sessionId: "chat_fixture" }}><p><SourceLink href={`workbench-source://asset_ready/${sha}?source=Paragraph%2024&line=24&start=12&end=120`}>Read selected passage</SourceLink></p><p><SourceLink href={`workbench-source://asset_error/${sha}?source=Page%203&line=3&start=0&end=100`}>Read missing passage</SourceLink></p></SourceScope.Provider><button type="button">Next focus target</button><ImagePreview name="Retained image" src={imageData} /></main>);
+root.render(<main style={{ padding: 20 }}><SourceScope.Provider value={{ sessionId: "chat_fixture" }}><p><SourceLink href={`workbench-source://asset_ready/${sha}?source=Paragraph%2024&line=24&start=12&end=120`}>Read selected passage</SourceLink></p><p><SourceLink href={`workbench-source://asset_error/${sha}?source=Page%203&line=3&start=0&end=100`}>Read missing passage</SourceLink></p></SourceScope.Provider><button type="button">Next focus target</button><ImagePreview name="Retained image" src={imageData} /><MenuPopover label="Test actions" trigger="Actions"><button type="button">First action</button></MenuPopover></main>);

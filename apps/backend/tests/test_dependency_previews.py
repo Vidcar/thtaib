@@ -6,7 +6,6 @@ import unittest
 
 from tests import test_project_agent_setups as setup_tests
 from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
-from workbench_backend.agents.setup_schemas import SetupConfiguration
 from workbench_backend.connections.schemas import ConnectionSnapshot, ConnectionTool
 from workbench_backend.inference.ids import utc_now
 
@@ -40,7 +39,8 @@ class DependencyPreviewTests(unittest.TestCase):
         setup = self.setup(presented_tools=[])
         scoped = self.memory(scope='project', scope_id=project['id'])
         agent_memory = self.memory(scope='agent', scope_id=setup['id'])
-        chat = self.post('/v1/chat/conversations', {'project_id': project['id'], 'agent_setup_version_id': setup['current_version_id']})
+        chat = self.post('/v1/chat/conversations', {'project_id': project['id'],
+            'agent_setup_version_id': setup['current_version_id'], 'deployment_id': self.deployment.id})
         run = self.run_record(status=AgentRunStatus.running, project_id=project['id'], project_path=project['path'],
             agent_setup_id=setup['id'], agent_setup_version_id=setup['current_version_id'])
         preview = self.preview('/v1/projects/' + project['id'])
@@ -56,21 +56,22 @@ class DependencyPreviewTests(unittest.TestCase):
         self.assertEqual(self.app.state.app_store.get_run(run.id).project_id, project['id'])
         setup_preview = self.preview('/v1/agent-setups/' + setup['id'])
         self.assertTrue(any(item['kind'] == 'knowledge' and item['id'] == agent_memory['id'] for item in setup_preview['consumers']))
-        self.assertEqual(self.client.delete('/v1/agent-setups/' + setup['id']).status_code, 200)
+        removed_setup = self.client.delete('/v1/agent-setups/' + setup['id'])
+        self.assertEqual(removed_setup.status_code, 200, removed_setup.text)
         self.assertEqual(len(self.client.get(f"/v1/agent-setups/{setup['id']}/versions").json()), 1)
         self.assertEqual(self.app.state.app_store.get_run(run.id).status, AgentRunStatus.running)
 
     def test_all_knowledge_versions_and_packages_have_truthful_retention_preview(self):
         memory = self.memory()
         newer = self.post(f"/v1/knowledge/entries/{memory['id']}/edit", {'base_version': memory['current_version_id'], 'content': 'NEW-PRIVATE-CONTENT'})
-        self.app.state.app_store.put_setup_defaults(SetupConfiguration(memory_version_refs=[memory['current_version_id']]))
         project = self.project(defaults={'memory_version_refs': [newer['current_version_id']]})
         setup = self.setup(memory_version_refs=[memory['current_version_id']])
-        selected = self.post('/v1/chat/conversations', {'agent_setup_version_id': setup['current_version_id']})
+        selected = self.post('/v1/chat/conversations', {'agent_setup_version_id': setup['current_version_id'],
+            'deployment_id': self.deployment.id})
         cleared = self.post('/v1/chat/conversations', {'deployment_id': self.deployment.id, 'memory_version_refs': []})
         preview = self.preview('/v1/knowledge/entries/' + memory['id'])
         consumers = {(item['kind'], item['id']): item for item in preview['consumers']}
-        self.assertTrue(consumers['setup_defaults', 'application']['future_use'])
+        self.assertNotIn(('setup_defaults', 'application'), consumers)
         self.assertTrue(consumers['project', project['id']]['future_use'])
         self.assertTrue(consumers['agent_setup_version', setup['current_version_id']]['future_use'])
         self.assertTrue(consumers['chat', selected['id']]['future_use'])
