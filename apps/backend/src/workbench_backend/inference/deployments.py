@@ -223,11 +223,11 @@ class DeploymentService:
         )
         return self.store.put_deployment(deployment)
 
-    def start(self, deployment_id: str) -> Deployment:
+    def start(self, deployment_id: str, *, verify_before_load: Callable[[], None] | None = None) -> Deployment:
         deployment = self._require(deployment_id)
         if deployment.scope == ManagementScope.managed and self._router_enabled():
             with self.lifecycle.reserve(deployment):
-                return self.router.start(deployment_id)
+                return self.router.start(deployment_id, verify_before_load=verify_before_load)
         with self.lifecycle.reserve(deployment):
             with self._lock_for(deployment_id):
                 # Serialize port selection through listen ownership verification.

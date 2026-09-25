@@ -21,6 +21,7 @@ from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStar
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.app import create_app
+from workbench_backend.chat.coordinator import ChatCoordinator
 from workbench_backend.chat.schemas import ChatConversation, ChatConversationView, ChatMessage, ChatStartRequest
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.service import ManagerError
@@ -163,6 +164,35 @@ class ChatHarnessTests(unittest.TestCase):
         )
         self.assertEqual(queued.status_code, 200, queued.text)
         self.assertEqual(queued.json()["queue"][0]["intended_config"]["approval_mode"], "ask")
+
+    def test_direct_start_records_prepared_setup_without_resolving_it_twice(self) -> None:
+        self.scripted = ScriptedChatModel([AIMessage(content="Prepared setup used.")])
+        agent = self.client.post("/v1/agent-setups", json={"name": "Prepared agent",
+            "configuration": {"instructions": "Answer directly."}}).json()
+        created = self._create(agent_setup_version_id=agent["current_version_id"],
+            presented_tools=[])
+        request = ChatStartRequest(task="Use the prepared setup.", profile_id=None,
+            per_request_overrides={"temperature": 0.4}, presented_tools=[])
+        chat = self.app.state.chat
+        expected = chat._resolved_config(chat.store.get(created["id"]), request)
+        original = chat._apply_start_configuration
+        resolutions = 0
+
+        def counted(conversation, request, **kwargs):
+            nonlocal resolutions
+            resolutions += 1
+            return original(conversation, request, **kwargs)
+
+        with patch.object(chat, "_apply_start_configuration", side_effect=counted):
+            started = self.client.post(f"/v1/chat/conversations/{created['id']}/start",
+                json=request.model_dump(mode="json", exclude_unset=True))
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(resolutions, 1)
+        submitted = next(block["submission"] for block in started.json()["transcript"][0]["content_blocks"]
+            if block["type"] == "workbench_submission")
+        self.assertEqual(submitted["intended_config"], expected)
+        self.assertIsNone(submitted["intended_config"]["profile_id"])
+        wait_for_chat(self.client, created["id"])
 
     def test_listing_skips_conversation_deleted_after_list_snapshot(self) -> None:
         removed = self._create(title='Deleted during refresh')
@@ -1884,6 +1914,7 @@ class ChatHarnessTests(unittest.TestCase):
             f"/v1/chat/conversations/{conversation['id']}/queue",
             json={
                 "task": "Queued second.",
+                "queue_after_run_id": first["current_run_id"],
                 "deployment_id": self.deployment_id,
                 "per_request_overrides": {"temperature": 0.2},
             },
@@ -2073,6 +2104,69 @@ class ChatHarnessTests(unittest.TestCase):
             resumed.json()["queue"][0]["frozen_config"]["per_request_overrides"],
             {"temperature": 0.3},
         )
+
+    def test_queue_tied_to_completed_run_dispatches_after_terminal_observer_passed(self) -> None:
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="First completed."),
+            AIMessage(content="Queued reply."),
+        ])
+        conversation = self._create(presented_tools=[])
+        first = self._start(conversation["id"], "First turn.")
+        first_run_id = first["current_run_id"]
+        wait_for_chat(self.client, conversation["id"])
+        first_run = self.app.state.app_store.get_run(first_run_id)
+        self.assertIsNotNone(first_run)
+        assert first_run is not None
+        self.app.state.chat.observe_terminal_run(first_run)
+        self.app.state.chat_coordinator = ChatCoordinator(self.app)
+        try:
+            collect = self.app.state.asset_lifecycle.collect_verified_outputs_for_run
+            observe = self.app.state.chat_coordinator.observe
+
+            def observe_and_drain(run):
+                observe(run)
+                deadline = time.monotonic() + 5
+                while len(self.app.state.chat.store.get(conversation["id"]).run_ids) < 2:
+                    if time.monotonic() >= deadline:
+                        self.fail("terminal Queue notification did not dispatch")
+                    time.sleep(0.01)
+
+            with patch.object(self.app.state.asset_lifecycle,
+                    "collect_verified_outputs_for_run", wraps=collect) as collected, \
+                    patch.object(self.app.state.chat_coordinator,
+                        "observe", side_effect=observe_and_drain):
+                admitted = self.client.post(
+                    f"/v1/chat/conversations/{conversation['id']}/queue",
+                    json={"task": "Queued after completion.",
+                        "input_message_id": "queue-terminal-race",
+                        "queue_after_run_id": first_run_id},
+                )
+                self.assertEqual(admitted.status_code, 200, admitted.text)
+                self.assertEqual(len(admitted.json()["run_ids"]), 2)
+                self.assertNotEqual(admitted.json()["current_run_id"], first_run_id)
+                self.assertNotEqual(admitted.json()["queue"][0]["status"], "queued")
+                collected.assert_called_once_with(conversation["id"], first_run_id)
+                finished = wait_for_chat(self.client, conversation["id"])
+                self.assertEqual(finished["current_run"]["status"], "completed")
+                self.assertEqual([message["content"] for message in finished["transcript"]
+                    if message["role"] == "user"], ["First turn.", "Queued after completion."])
+        finally:
+            self.app.state.chat_coordinator.close()
+            del self.app.state.chat_coordinator
+
+    def test_queue_rejects_stale_predecessor_without_saving_input(self) -> None:
+        conversation = self._create(presented_tools=[])
+        rejected = self.client.post(
+            f"/v1/chat/conversations/{conversation['id']}/queue",
+            json={"task": "Must not queue behind another run.",
+                "input_message_id": "queue-stale-run",
+                "queue_after_run_id": "agent_run_stale"},
+        )
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertEqual(rejected.json()["code"], "queue_predecessor_changed")
+        saved = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
+        self.assertEqual(saved["queue"], [])
+        self.assertEqual(saved["transcript"], [])
 
     def test_queue_partial_intended_config_edit_keeps_frozen_selector(self) -> None:
         other = self.client.post(

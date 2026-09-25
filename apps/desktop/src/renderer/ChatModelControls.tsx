@@ -36,14 +36,15 @@ export interface ChatModelControlsProps {
   onReloaded: () => Promise<void>;
 }
 
-export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, onApply, onReloaded }: ChatModelControlsProps) {
+export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, onApply, onReloaded }: ChatModelControlsProps) {
   const [fallbackBundles, setFallbackBundles] = useState<ModelBundle[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => {
-    if (bundles) return;
+    if (bundles || !pickerOpen) return;
     let cancelled = false;
     void api.bundles().then(items => { if (!cancelled) setFallbackBundles(items); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [bundles]);
+  }, [bundles, pickerOpen]);
   const availableBundles = bundles ?? fallbackBundles;
   const [thinking, setThinking] = useState(() => thinkingSettings(configuration));
   const [busy, setBusy] = useState(false);
@@ -73,55 +74,55 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           : selectedDeployment?.status === "starting" ? "Loading…"
             : selectedLoaded ? "Loaded" : selectedBundleId ? "Loads on Send" : selectedDeployment?.status ?? "";
   const variants = profiles.filter(item => item.bundle_id === selectedBundleId);
-  const preview = useSetupPreview({ ...configuration, per_request_overrides: { ...(configuration.per_request_overrides ?? {}), ...thinking } }, projectId, agentSetupVersionId);
+  const preview = useSetupPreview({ ...configuration, per_request_overrides: { ...(configuration.per_request_overrides ?? {}), ...thinking } }, projectId, agentSetupVersionId, "conversation", "", pickerOpen);
   const facts = preview.data?.effective_values ?? {};
   const optionKey = `${selectedBundleId ?? ""}:${selectedDeployment?.id ?? ""}`;
   const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
-    if (!selectedBundleId) return;
+    if (!pickerOpen || !selectedBundleId) return;
     let cancelled = false;
     void api.modelConfiguration(selectedBundleId, selectedDeployment?.id).then(data => {
       if (!cancelled) setOptionsResult({ key: optionKey, data });
     }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
-  }, [optionKey, selectedBundleId, selectedDeployment?.id]);
+  }, [pickerOpen, optionKey, selectedBundleId, selectedDeployment?.id]);
   const options = optionsResult?.key === optionKey ? optionsResult.data : null;
 
   function preferredConfiguration(bundle: ModelBundle): RunProfile | undefined {
-    return profiles.find(item => item.id === bundle.default_configuration_id)
-      ?? profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
+    return profiles.find(item => item.bundle_id === bundle.id && item.id === selectedProfile?.id)
+      ?? profiles.find(item => item.id === bundle.default_configuration_id)
       ?? profiles.find(item => item.bundle_id === bundle.id);
   }
 
   const connectedChoices = deployments.filter(item => item.scope === "connected");
-  const compatibilityChoices = [
-    ...profiles.filter(item => availableBundles.some(bundle => bundle.id === item.bundle_id && bundle.disk_matches)).map(item => ({ key: item.id, profile: item, connected: null })),
-    ...connectedChoices.map(item => ({ key: item.id, profile: null, connected: item })),
-  ];
-  const compatibilityKey = JSON.stringify([conversationId, agentSetupVersionId, configuration, compatibilityChoices.map(item => item.key)]);
-  const [incompatibleChoices, setIncompatibleChoices] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!conversationId) { setIncompatibleChoices({}); return; }
-    let cancelled = false;
-    void Promise.all(compatibilityChoices.map(async item => {
-      try {
-        const readiness = await workspaceApi.chatReadiness(conversationId, modelChoiceConfiguration(configuration, item.profile, item.connected), agentSetupVersionId);
-        return [item.key, readiness.status === "incompatible" ? readiness.issues[0]?.message ?? "This model cannot continue this chat." : ""] as const;
-      } catch { return [item.key, ""] as const; }
-    })).then(items => { if (!cancelled) setIncompatibleChoices(Object.fromEntries(items)); });
-    return () => { cancelled = true; };
-  }, [compatibilityKey]);
+  const compatibilityContext = JSON.stringify([conversationId, projectId, agentSetupVersionId, configuration, runtimeBusy]);
+  const [incompatibleResult, setIncompatibleResult] = useState<{ context: string; reasons: Record<string, string> }>({ context: "", reasons: {} });
+  const incompatibleChoices = incompatibleResult.context === compatibilityContext ? incompatibleResult.reasons : {};
 
   async function applyChoice(profile: RunProfile | null, connected: Deployment | null, close: () => void) {
     if (pending.current) return;
+    const choiceKey = profile?.id ?? connected?.id ?? "";
+    if (incompatibleChoices[choiceKey]) { setError(incompatibleChoices[choiceKey]); return; }
+    const exactHealthyChoice = profile
+      ? selectedProfile?.id === profile.id && selectedDeployment?.profile_id === profile.id && selectedLoaded
+      : connected?.id === selectedDeployment?.id && selectedLoaded;
+    if (exactHealthyChoice) { close(); return; }
     pending.current = true;
     setBusy(true); setLoadingChoice(profile?.id ?? connected?.id ?? ""); setError("");
+    let loadAttempted = false;
     try {
       const candidate = modelChoiceConfiguration(latest.current.configuration, profile, connected);
       if (conversationId) {
-        const readiness = await workspaceApi.chatReadiness(conversationId, candidate, agentSetupVersionId);
-        if (readiness.status === "incompatible") throw new Error(readiness.issues[0]?.message ?? "This model cannot continue this chat.");
+        const readiness = await workspaceApi.chatReadiness(conversationId, candidate, agentSetupVersionId)
+          .catch(failure => { throw new Error(`Compatibility unknown. ${errorMessage(failure)} Try again.`); });
+        if (readiness.status === "incompatible") {
+          const reason = readiness.issues[0]?.message ?? "This model cannot continue this chat.";
+          setIncompatibleResult(current => ({ context: compatibilityContext,
+            reasons: { ...(current.context === compatibilityContext ? current.reasons : {}), [choiceKey]: reason } }));
+          throw new Error(reason);
+        }
       }
+      loadAttempted = Boolean(profile?.bundle_id);
       const loaded = profile?.bundle_id ? await api.startManaged(profile.bundle_id, profile.id, {}) : null;
       if (loaded && (!loaded.health?.healthy || loaded.status !== "running")) throw new Error(loaded.error ?? "Model did not become ready.");
       if (owner.current.generation !== currentGeneration) return;
@@ -131,7 +132,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       if (owner.current.generation === currentGeneration) close();
     } catch (failure) {
       if (owner.current.generation === currentGeneration) setError(errorMessage(failure));
-      await latest.current.onReloaded().catch(() => {});
+      if (loadAttempted) await latest.current.onReloaded().catch(() => {});
     } finally {
       pending.current = false; setBusy(false); setLoadingChoice("");
     }
@@ -150,7 +151,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { pending.current = false; setBusy(false); }
   }
 
-  return <MenuPopover label={`Chat model: ${selectedName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{selectedName}</span><small className="chat-model-status">{selectedState}</small></>} disabled={disabled}>
+  return <MenuPopover label={`Chat model: ${selectedName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{selectedName}</span><small className="chat-model-status">{selectedState}</small></>} disabled={disabled} onOpenChange={setPickerOpen}>
     {close => <>
       <div className="chat-model-choice-list" role="group" aria-label="Installed models">
         {availableBundles.filter(item => item.status === "ready" || item.disk_matches).map(bundle => {

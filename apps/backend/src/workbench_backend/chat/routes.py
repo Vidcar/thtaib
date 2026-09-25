@@ -20,6 +20,7 @@ from workbench_backend.chat.schemas import (
     ChatTranscriptReplaceRequest,
 )
 from workbench_backend.chat.service import ChatService
+from workbench_backend.errors import HarnessError
 
 router = APIRouter(prefix="/v1/chat")
 
@@ -99,7 +100,23 @@ def enqueue_conversation_turn(
     conversation_id: str,
     body: ChatStartRequest,
 ) -> ChatConversationView:
-    return get_chat(request).enqueue(conversation_id, body)
+    queued = get_chat(request).enqueue(conversation_id, body)
+    if body.queue_after_run_id and queued.current_run_id == body.queue_after_run_id:
+        # A terminal event can be observed before this Queue request acquires
+        # the conversation lock. Re-notify the normal coordinator after saving
+        # the item; it owns retained-output collection and terminal draining.
+        coordinator = getattr(request.app.state, "chat_coordinator", None)
+        if coordinator is not None:
+            try:
+                predecessor = request.app.state.harness.get_run(body.queue_after_run_id)
+            except HarnessError:
+                pass
+            else:
+                coordinator.observe(predecessor)
+                # The observer can finish a terminal run and admit this item
+                # before the response is built. Return the latest saved view.
+                return get_chat(request).get(conversation_id)
+    return queued
 
 
 @router.post("/conversations/{conversation_id}/queue/resume")

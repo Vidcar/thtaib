@@ -4043,6 +4043,19 @@
             ],
             "title": "Protected Instruction Version Refs"
           },
+          "queue_after_run_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue After Run Id"
+          },
           "retrieval_project_paths": {
             "anyOf": [
               {

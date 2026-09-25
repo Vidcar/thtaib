@@ -8,10 +8,11 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage
 from workbench_backend.app import create_app
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.setup_service import SetupService
 from workbench_backend.agents.tools import resolve_presented_tools
 from workbench_backend.desktop_automation.service import DesktopAccessScope
 from workbench_backend.errors import ManagerError
-from workbench_backend.inference.schemas import ConnectedDeploymentRequest, ServerProperties
+from workbench_backend.inference.schemas import ConnectedDeploymentRequest, ProfileWriteRequest, ServerProperties
 from tests.scripted_model import ScriptedChatModel
 from tests.support import close_workbench_sqlite, offline_workbench_client
 from tests.test_chat import wait_for_chat
@@ -33,6 +34,60 @@ class ChatSetupReadinessTests(unittest.TestCase):
     def tearDown(self):
         close_workbench_sqlite(self.app, self.client)
         self.tmp.cleanup()
+
+    def test_nullable_setup_preview_keeps_explicit_clears_without_loading_or_saving(self):
+        profile = self.app.state.manager.create_profile(ProfileWriteRequest(display_name="Optional profile"))
+        agent = self.client.post("/v1/agent-setups", json={"name": "Assistant",
+            "configuration": {"instructions": "Answer carefully."}}).json()
+        created = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.first.id, "profile_id": profile.id,
+            "embedding_deployment_id": self.second.id,
+            "agent_setup_version_id": agent["current_version_id"]})
+        self.assertEqual(created.status_code, 200, created.text)
+        chat = created.json()
+        url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        original_resolve = SetupService.resolve
+        resolution_count = 0
+
+        def counted_resolve(service, **kwargs):
+            nonlocal resolution_count
+            resolution_count += 1
+            return original_resolve(service, **kwargs)
+
+        with patch.object(self.app.state.manager, "ensure_deployment_ready",
+            side_effect=AssertionError("a preview must not load a model")), \
+            patch.object(SetupService, "resolve", counted_resolve):
+            preview = self.client.post(url, json={"overrides": {
+                "bundle_id": None,
+                "inherit_deployment_settings": None,
+                "profile_id": None,
+                "embedding_deployment_id": None,
+            }})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["status"], "ready")
+        self.assertEqual(resolution_count, 1)
+        self.assertIsNone(preview.json()["selection"]["configuration"]["profile_id"])
+        self.assertIsNone(preview.json()["selection"]["configuration"]["embedding_deployment_id"])
+        explicit_false = self.client.post(url, json={"overrides": {
+            "inherit_deployment_settings": False}})
+        self.assertEqual(explicit_false.status_code, 200, explicit_false.text)
+        self.assertFalse(explicit_false.json()["selection"]["configuration"]["inherit_deployment_settings"])
+        saved = self.client.get(f"/v1/chat/conversations/{chat['id']}").json()
+        self.assertEqual(saved["profile_id"], profile.id)
+        self.assertEqual(saved["embedding_deployment_id"], self.second.id)
+        self.assertEqual(saved["setup_cleared_fields"], [])
+        self.assertEqual(saved["transcript"], [])
+
+    def test_unsupported_non_null_setup_preview_returns_structured_client_error(self):
+        chat = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.first.id}).json()
+        url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        rejected = self.client.post(url, json={"overrides": {
+            "bundle_id": "bundle_other", "requires_project": False}})
+        self.assertEqual(rejected.status_code, 400, rejected.text)
+        self.assertEqual(rejected.json()["code"], "readiness_override_unsupported")
+        self.assertEqual(rejected.json()["fields"], ["bundle_id", "requires_project"])
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
 
     def test_project_cannot_save_execution_setup_and_agent_does_not_switch_main_model(self):
         rejected = self.client.post("/v1/projects", json={"path": str(self.folder),

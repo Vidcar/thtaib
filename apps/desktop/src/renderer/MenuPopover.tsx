@@ -12,6 +12,7 @@ export function MenuPopover(props: {
   placement?: "above" | "below";
   disabled?: boolean;
   role?: "dialog" | "menu" | "group";
+  onOpenChange?: (open: boolean) => void;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -19,6 +20,8 @@ export function MenuPopover(props: {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ left: 8, top: 8, ready: false });
   const close = () => { setOpen(false); trigger.current?.focus({ preventScroll: true }); };
+
+  useEffect(() => { props.onOpenChange?.(open); }, [open, props.onOpenChange]);
 
   useLayoutEffect(() => {
     if (!open || typeof window === "undefined") return;

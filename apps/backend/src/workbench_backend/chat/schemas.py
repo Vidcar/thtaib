@@ -65,6 +65,9 @@ class ChatStartRequest(BaseModel):
     review: ReviewConfiguration | None = None
     task: str
     input_message_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # Queue admission can be tied to the run the user was watching. If it
+    # finishes before the request arrives, the queue must still advance.
+    queue_after_run_id: str | None = Field(default=None, min_length=1, max_length=200)
     draft_revision: int | None = Field(default=None, ge=0)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)

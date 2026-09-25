@@ -2,7 +2,7 @@
 
 ### Requirement: API-007 - Launch locally and keep desktop state honest
 
-The Windows launcher SHALL reuse a healthy product backend or start it hidden, then open the built Electron desktop. The first screen SHALL request projects and chats independently. Each list SHALL be readable before either request finishes. A list that has not finished SHALL NOT be presented as empty. Failure to reach the service SHALL retry until the first success. Chat SHALL keep the composer visible while transcript and history scroll independently. Recent conversations SHALL appear first. New Chat SHOULD prefer a running chat deployment and MUST NOT apply unrelated saved profiles. Stopped deployments MUST NOT gain healthy labels from stale probes.
+The Windows launcher SHALL reuse a healthy product backend or start it hidden, then open the built Electron desktop. The first screen SHALL request projects and chats independently. Each list SHALL be readable before either request finishes. A list that has not finished SHALL NOT be presented as empty. Failure to reach the service SHALL retry until the first success. Chat SHALL keep the composer visible while transcript and history scroll independently. Recent conversations SHALL appear first. New Chat SHALL retain an explicit current Chat model choice. When no choice exists, it SHALL select the sole healthy running chat deployment; with several healthy running choices it SHALL request an explicit choice. It MUST NOT apply unrelated saved profiles. Stopped deployments MUST NOT gain healthy labels from stale probes.
 
 The lower-left status dot is the only startup status. Its hover is one short phrase for reading the catalogue, starting the model, ready, or the service being unavailable. The visible word stays "Local" while the service is up, including while the rail is collapsed down to the dot.
 
@@ -20,3 +20,13 @@ Opening a finished chat SHALL show its saved transcript and latest display snaps
 - WHEN a person opens a chat whose answer is already saved
 - THEN the saved answer is shown
 - AND the token log is not read to paint it
+
+#### Scenario: New Chat with a running model
+
+- **WHEN** no Chat model has been chosen and exactly one healthy chat deployment is running
+- **THEN** New Chat shows and submits that deployment's exact configuration without starting it again.
+
+#### Scenario: Several running models
+
+- **WHEN** no Chat model has been chosen and several healthy chat deployments are running
+- **THEN** New Chat asks for an explicit model choice rather than silently selecting one.
