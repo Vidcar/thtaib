@@ -28,6 +28,7 @@ try {
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
   await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
+  await checkPinnedCardViewer((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkSelectedModelOwnsDetails(ModelsPanel);
   await checkCardRefreshRetainsNewSelection(ModelsPanel);
   await checkRepositorySelectionLoadsFiles(ModelsPanel);
@@ -220,6 +221,8 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
 async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
   const originalFetch = globalThis.fetch;
   const pendingCard = createDeferred();
+  const pendingView = createDeferred();
+  const card = (model, markdown) => ({ bundle_id: model.id, repo_id: model.source.repo_id, revision: model.source.resolved_revision, sha256: "b".repeat(64), markdown, origin: "saved" });
   const hfBundle = (id, name) => ({ ...bundle(id, name), source: { kind: "huggingface", repo_id: `org/${id}`, resolved_revision: "a".repeat(40) },
     huggingface_configuration: { source_verified: false, template_origin: "gguf", generation_defaults: {}, unsupported: {}, response_recipes: [] } });
   const first = hfBundle("first", "First model"), second = hfBundle("second", "Second model");
@@ -237,17 +240,58 @@ async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
     if (address.endsWith("/probes")) return jsonResponse({ evidence: [], current_support: {}, current_fingerprint: "now", image_setup: {} });
     if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
     if (address.endsWith("/v1/bundles/first/response-recipes/refresh")) return pendingCard.promise;
+    if (address.endsWith("/v1/bundles/first/model-card")) return pendingView.promise;
+    if (address.endsWith("/v1/bundles/second/model-card")) return jsonResponse(card(second, "Second card content"));
     throw new Error(`unexpected fetch ${address}`);
   };
   let renderer;
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
     assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "first");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Show model card").props.onClick(); await tick(); });
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
     await act(async () => { renderer.root.findByProps({ "aria-label": "Other active models" }).findByType("button").props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Show model card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Second card content"), "the newly selected model loads its own pinned card");
+    await act(async () => { pendingView.resolve(jsonResponse(card(first, "First card content"))); await tick(); });
+    assert.ok(!textOf(renderer.root).includes("First card content"), "a late card response cannot appear after switching models");
     await act(async () => { pendingCard.resolve(jsonResponse(first)); await tick(); });
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Second model"), "late card refresh retains the newly selected model");
     assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "second");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkPinnedCardViewer(ModelResponseRecipes) {
+  const originalFetch = globalThis.fetch;
+  const model = { ...bundle("card-only", "Card without recipes"), source: { kind: "huggingface", repo_id: "org/selected", resolved_revision: "c".repeat(40) },
+    huggingface_configuration: { response_recipes: [] } };
+  let attempts = 0;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url); calls.push({ address, method: init.method ?? "GET" });
+    if (address.endsWith("/model-card")) {
+      if (attempts++ === 0) throw new Error("Pinned README unavailable");
+      return jsonResponse({ bundle_id: model.id, repo_id: model.source.repo_id, revision: model.source.resolved_revision, sha256: "d".repeat(64), origin: "fetched",
+        markdown: "# Selected card\n\n[relative](./guide.md) [outside](../../other/README.md) [unsafe](javascript:alert(1))\n\n![remote image](https://example.com/remote.png)\n\n<script>alert('unsafe')</script>" });
+    }
+    throw new Error(`unexpected fetch ${address}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelResponseRecipes, { bundle: model, profiles: [], onChanged: async () => {} })); });
+    assert.equal(calls.length, 0, "model cards load only after opening the viewer");
+    assert.ok(renderer.root.findAllByType("a").some(node => node.props.href.endsWith(`/org/selected/blob/${"c".repeat(40)}/README.md`)), "the pinned source link remains available without recipes");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Show model card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Model card unavailable: Pinned README unavailable"), "card loading errors are visible");
+    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Retry card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Selected card"));
+    assert.ok(textOf(renderer.root).includes("Fetched from pinned Hugging Face revision"));
+    assert.equal(renderer.root.findAllByType("img").length, 0, "remote Markdown images cannot load");
+    assert.equal(renderer.root.findAllByType("script").length, 0, "raw HTML cannot become active content");
+    const links = renderer.root.findAllByType("a");
+    assert.ok(links.some(node => textOf(node) === "relative" && node.props.href === `https://huggingface.co/org/selected/blob/${"c".repeat(40)}/guide.md`), "relative card links stay on the installed revision");
+    assert.ok(!links.some(node => textOf(node) === "outside" || textOf(node) === "unsafe"), "escaped and unsafe links stay inert");
+    assert.equal(calls.filter(call => call.method !== "GET").length, 0, "card viewing cannot save configurations or refresh metadata");
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
 
@@ -259,6 +303,7 @@ async function checkExistingBundleRecipes(ModelResponseRecipes) {
     huggingface_configuration: { response_recipes: [
       { id: "general", name: "General thinking", section: "Suggested settings", per_request: { temperature: 1, min_p: 0 }, reasoning: "on", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
       { id: "coding", name: "Precise coding", section: "Coding guidance", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+      { id: "recommended", name: "Recommended response", section: "Recommended settings", per_request: { temperature: 0.7, top_p: 0.9 }, reasoning: "preserve", notes: ["Not copied: Prompt format is guidance only"], source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
     ] } };
   const saved = [{ id: "profile-general", bundle_id: model.id, display_name: "General thinking edited", recipe_origin: { recipe_id: "general", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) } }];
   globalThis.fetch = async (url, init = {}) => {
@@ -275,6 +320,8 @@ async function checkExistingBundleRecipes(ModelResponseRecipes) {
     await act(async () => { renderer = create(React.createElement(ModelResponseRecipes, { bundle: model, profiles: saved, onChanged: async () => { refreshed++; } })); });
     assert.ok(textOf(renderer.root).includes("Created from model card as “General thinking edited”"), "edited configurations keep origin without claiming their current values match the card");
     assert.ok(textOf(renderer.root).includes("Coding guidance"), "each recipe displays its own source section");
+    assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "mode-neutral recipes do not claim a thinking override");
+    assert.ok(textOf(renderer.root).includes("Not copied: Prompt format is guidance only"), "omitted guidance is labelled in My models");
     const checks = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
     for (const checkbox of checks) await act(async () => checkbox.props.onChange({ target: { checked: true } }));
     const defaultChoice = renderer.root.findByProps({ id: "model-recipe-default-bundle-card" });
@@ -283,7 +330,7 @@ async function checkExistingBundleRecipes(ModelResponseRecipes) {
     const createButton = renderer.root.findAllByType("button").find(node => textOf(node) === "Create selected configurations");
     assert.equal(createButton.props.disabled, false, "a missing guidance file does not block metadata-only configuration creation");
     await act(async () => { createButton.props.onClick(); await tick(); });
-    assert.deepEqual(calls[0].body, { recipe_ids: ["general", "coding"], default_recipe_id: "general" });
+    assert.deepEqual(calls[0].body, { recipe_ids: ["general", "coding", "recommended"], default_recipe_id: "general" });
     assert.equal(refreshed, 1, "recipe creation refreshes the saved model and configurations");
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
     assert.ok(textOf(renderer.root).includes("Card refresh failed: pinned card temporarily unavailable"), "refresh errors are visible without losing saved recipe choices");
@@ -303,6 +350,7 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     { id: "general", name: "General thinking", section: "Suggested settings", per_request: { temperature: 1, min_p: 0 }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
     { id: "coding", name: "Precise coding", section: "Suggested settings", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
     { id: "instruct", name: "Non-thinking", section: "Suggested settings", per_request: { temperature: 0.7, presence_penalty: 1.5 }, reasoning: "off", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
+    { id: "recommended", name: "Recommended response", section: "Recommended settings", per_request: { temperature: 0.7, top_p: 0.9 }, reasoning: "preserve", notes: ["Not copied: Launch flags are guidance only"], source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
     { id: "invalid", name: "Invalid", section: "Suggested settings", per_request: { temperature: "high" }, reasoning: "on", source_repo_id: repo_id, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
   ] };
   const calls = [], downloads = [];
@@ -326,11 +374,13 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.ok(choices.find(node => node.props.value === files[1]).props["aria-label"].includes("LOW-MTP"), "the variant kind is accessible");
     assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "the selected kind and exact file are shown before download");
     const recipes = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
-    assert.equal(recipes.length, 3, "malformed card settings are hidden rather than offered as selectable recipes");
+    assert.equal(recipes.length, 4, "mode-neutral recipes are offered and malformed card settings remain hidden");
+    assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "Add models shows that the recipe preserves thinking mode");
+    assert.ok(textOf(renderer.root).includes("Not copied: Launch flags are guidance only"), "Add models labels omitted card guidance");
     await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
     await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.onChange());
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct"], default_recipe_id: "general" }], "download retains exact LOW-MTP file and explicit recipe/default choices");
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: "general" }], "download retains exact LOW-MTP file and explicit recipe/default choices");
     inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
     await act(async () => query.props.onChange({ target: { value: `https://huggingface.co/${repo_id}?show_file_info=missing-IQ4_XS.gguf` } }));
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -37,6 +38,12 @@ CARD = """# Demo
 - Thinking mode for general tasks: temperature=1.0, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
 - Thinking mode for precise coding: temperature=0.6, top_p=0.95, top_k=20, min_p=0.0, presence_penalty=0.0, repetition_penalty=1.0
 - Instruct (or non-thinking) mode: temperature=0.7, top_p=0.80, top_k=20, min_p=0.0, presence_penalty=1.5, repetition_penalty=1.0
+"""
+NEUTRAL_CARD = """# Demo
+## Recommended Inference Settings
+- **Temperature**: `0.6`
+- **Top-P**: `0.95`
+- **Flash Attention**: Enable `-fa` in llama.cpp.
 """
 
 
@@ -85,6 +92,50 @@ class RecipeWorkflowTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def test_mode_neutral_recipe_preserves_thinking_and_other_requested_settings(self) -> None:
+        plain = _weight(Path(self.tmp.name) / "plain.gguf", template="{{ messages }}")
+        neutral = parse_model_card_recipes(NEUTRAL_CARD, repo_id=REPO,
+            revision=REVISION, sha256=hashlib.sha256(NEUTRAL_CARD.encode()).hexdigest())
+        self.assertEqual(len(neutral), 1)
+        self.assertEqual(neutral[0]["reasoning"], "preserve")
+        base = self.base.model_copy(update={"bags": resolve_bags(
+            startup={"ctx_size": 8192, "n_gpu_layers": 8},
+            per_request={"reasoning": "off", "max_tokens": 128,
+                "temperature": 0.2, "repeat_penalty": 1.1})})
+        self.manager.store.put_profile(base)
+        bundle = self.bundle.model_copy(update={"primary_path": str(plain), "files": [
+            self.bundle.files[0].model_copy(update={"name": "plain.gguf", "path": str(plain),
+                "sha256": sha256_file(plain), "size_bytes": plain.stat().st_size}), self.bundle.files[1]],
+            "huggingface_configuration": HuggingFaceConfiguration(response_recipes=neutral)})
+        self.manager.store.put_bundle(bundle)
+        self.assertEqual([item.id for item in self.manager.list_model_configurations(bundle.id)], [base.id])
+
+        result = self.manager.create_response_recipe_configurations(bundle.id,
+            [neutral[0]["id"]], neutral[0]["id"])
+        created = result.configurations[0]
+        self.assertEqual(created.bags.startup.requested, base.bags.startup.requested)
+        self.assertEqual(created.bags.per_request.requested, {
+            "reasoning": "off", "max_tokens": 128, "temperature": 0.6,
+            "repeat_penalty": 1.1, "top_p": 0.95})
+        self.assertEqual(result.bundle.default_configuration_id, created.id)
+        self.assertEqual(self.manager.store.get_profile(base.id), base)
+
+        restarted = ModelManager(self.paths)
+        again = restarted.create_response_recipe_configurations(bundle.id,
+            [neutral[0]["id"]], neutral[0]["id"])
+        self.assertEqual(again.configurations[0].id, created.id)
+        self.assertEqual(len(restarted.list_model_configurations(bundle.id)), 2)
+
+    def test_mode_neutral_recipe_does_not_add_thinking_when_default_inherits_it(self) -> None:
+        neutral = parse_model_card_recipes(NEUTRAL_CARD, repo_id=REPO,
+            revision=REVISION, sha256=hashlib.sha256(NEUTRAL_CARD.encode()).hexdigest())
+        bundle = self.bundle.model_copy(update={"huggingface_configuration":
+            HuggingFaceConfiguration(response_recipes=neutral)})
+        self.manager.store.put_bundle(bundle)
+        result = self.manager.create_response_recipe_configurations(bundle.id, [neutral[0]["id"]])
+        self.assertNotIn("reasoning", result.configurations[0].bags.per_request.requested)
+        self.assertEqual(result.bundle.default_configuration_id, self.base.id)
 
     def test_create_all_recipes_with_default_is_idempotent_and_copies_launch_settings(self) -> None:
         collision = self.base.model_copy(update={"id": "config_named",

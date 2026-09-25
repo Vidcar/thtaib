@@ -31,6 +31,36 @@ CARD = """# Model card
 > - Thinking Mode: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=0.0`, `repetition_penalty=1.0`
 """
 
+GEMMA_CARD = """# Gemma 4
+## Recommended Settings
+
+From the official Google Gemma 4 authors:
+
+- `temperature=1.0, top_p=0.95, top_k=64`
+
+**Important:**
+- Use `--jinja` flag with llama.cpp for proper chat template handling
+- Vision/audio support requires the `mmproj` file alongside the main GGUF
+
+## Usage
+- `temperature=0.2, top_p=0.5`
+"""
+
+JICA_CARD = """# Qwen 3.5
+## Recommended Inference Settings
+
+For the best balance of reasoning depth and formatting precision, use the following generation parameters:
+
+- **Temperature**: `0.6`
+- **Top-P**: `0.95`
+- **Top-K**: `20`
+- **Min-P**: `0.0`
+- **Flash Attention**: Enable `-fa` in llama.cpp/llama-cli for optimal speeds.
+- **System Prompt**: Set system prompt to guide the assistant (e.g. `You are a helpful coding assistant.`).
+
+## Benchmarks
+"""
+
 
 def _parse(card: str):
     return parse_model_card_recipes(card, repo_id=REPO, revision=REVISION,
@@ -38,6 +68,47 @@ def _parse(card: str):
 
 
 class ModelCardRecipeTests(TestCase):
+    def test_gemma_inline_recommendation_preserves_mode_and_labels_omissions(self):
+        recipes = _parse(GEMMA_CARD)
+        self.assertEqual(len(recipes), 1)
+        recipe = recipes[0]
+        self.assertEqual(recipe["name"], "Recommended response settings")
+        self.assertEqual(recipe["section"], "Recommended Settings")
+        self.assertEqual(recipe["reasoning"], "preserve")
+        self.assertEqual(recipe["per_request"], {"temperature": 1.0, "top_p": 0.95, "top_k": 64})
+        self.assertEqual(len(recipe["notes"]), 2)
+        self.assertTrue(any("--jinja" in note and note.startswith("Not copied:") for note in recipe["notes"]))
+        self.assertTrue(any("mmproj" in note for note in recipe["notes"]))
+        self.assertEqual(_parse(GEMMA_CARD.replace("## Recommended Settings", "## Example Settings")), [])
+
+    def test_jica_per_field_recommendation_does_not_copy_launch_or_prompt_guidance(self):
+        recipes = _parse(JICA_CARD)
+        self.assertEqual(len(recipes), 1)
+        recipe = recipes[0]
+        self.assertEqual(recipe["section"], "Recommended Inference Settings")
+        self.assertEqual(recipe["reasoning"], "preserve")
+        self.assertEqual(recipe["per_request"], {"temperature": 0.6, "top_p": 0.95,
+            "top_k": 20, "min_p": 0.0})
+        self.assertEqual(len(recipe["notes"]), 2)
+        self.assertTrue(any("Flash Attention" in note for note in recipe["notes"]))
+        self.assertTrue(any("System Prompt" in note for note in recipe["notes"]))
+
+    def test_neutral_recommendation_rejects_ambiguous_or_unsupported_sampler_advice(self):
+        self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=64, top_k=32")), [])
+        self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=64, top_a=0.5")), [])
+        self.assertEqual(_parse(GEMMA_CARD.replace("top_p=0.95", "top_p=0")), [])
+        self.assertEqual(_parse(GEMMA_CARD.replace("top_k=64", "top_k=bad")), [])
+        self.assertEqual(_parse(JICA_CARD.replace("- **Top-K**: `20`", "- **Top-K**: `20`\n- **Top-K**: `40`")), [])
+        self.assertEqual(_parse(JICA_CARD.replace("**Top-K**", "**Mirostat**")), [])
+        self.assertEqual(_parse(JICA_CARD.replace("**Top-K**: `20`", "**Top-K**: `20.5`")), [])
+        second_set = GEMMA_CARD.replace("## Usage", "## Recommended Inference Settings\n- `temperature=0.7, top_p=0.9`\n\n## Usage")
+        self.assertEqual(_parse(second_set), [])
+
+    def test_named_modes_take_precedence_over_neutral_recommendation(self):
+        recipes = _parse(CARD + "\n" + GEMMA_CARD)
+        self.assertEqual([item["name"] for item in recipes],
+            ["General thinking", "Precise coding", "Non-thinking"])
+
     def test_explicit_section_yields_three_distinct_recipes_not_copied_guidance(self):
         recipes = _parse(CARD)
         self.assertEqual([recipe["name"] for recipe in recipes],
@@ -137,5 +208,9 @@ To achieve optimal performance, we recommend the following settings:
                 card.write_text(CARD + "tampered", encoding="utf-8")
                 changed = configuration_from_download(bundle, download)
                 self.assertEqual(changed.response_recipes, [])
-                self.assertIn("hash", changed.unsupported["README.md"])
+                self.assertIn("size", changed.unsupported["README.md"])
                 self.assertEqual(response_recipes_from_bundle_card(bundle)[0], [])
+                card.write_text(CARD.replace("temperature=1.0", "temperature=1.1"), encoding="utf-8")
+                changed = configuration_from_download(bundle, download)
+                self.assertEqual(changed.response_recipes, [])
+                self.assertIn("hash", changed.unsupported["README.md"])

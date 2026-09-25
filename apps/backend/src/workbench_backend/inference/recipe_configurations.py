@@ -50,7 +50,7 @@ def create_recipe_configurations(
             raise ManagerError("Selected response recipes no longer match this pinned model card. Refresh the card and choose again.",
                 code="recipe_stale", status_code=409)
         selected = [available[recipe_id] for recipe_id in recipe_ids]
-        if selected:
+        if any(recipe.reasoning != "preserve" for recipe in selected):
             _require_template_toggle(bundle, selected)
         ensure_model_configurations(store)
         bundle = store.get_bundle(bundle_id)
@@ -66,7 +66,9 @@ def create_recipe_configurations(
             origin_key = _recipe_key(recipe)
             profile = by_recipe.get(origin_key)
             if profile is None:
-                requested = {**base.bags.per_request.requested, **recipe.per_request, "reasoning": recipe.reasoning}
+                requested = {**base.bags.per_request.requested, **recipe.per_request}
+                if recipe.reasoning != "preserve":
+                    requested["reasoning"] = recipe.reasoning
                 now = utc_now()
                 profile = RunProfile(
                     id=new_id("profile"),

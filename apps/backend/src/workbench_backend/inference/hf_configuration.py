@@ -8,13 +8,25 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from workbench_backend.inference.hf_fetch import HuggingFaceDownload, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
+from workbench_backend.errors import ManagerError
+from workbench_backend.inference.hf_fetch import HuggingFaceDownload, HuggingFaceFetcher, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
 from workbench_backend.inference.hf_recipes import MAX_CARD_BYTES, normalize_sampling_value, parse_model_card_recipes
 from workbench_backend.inference.inspect import read_gguf_runtime_metadata, _RuntimeMetadataReader, _close_reader
 from workbench_backend.inference.schemas import HuggingFaceConfiguration, ModelBundle
+
+
+@dataclass(frozen=True)
+class VerifiedModelCard:
+    repo_id: str
+    revision: str
+    sha256: str
+    markdown: str
+    origin: Literal["saved", "fetched"]
 
 
 def configuration_from_download(bundle: ModelBundle, download: HuggingFaceDownload) -> HuggingFaceConfiguration:
@@ -101,24 +113,82 @@ def response_recipes_from_bundle_card(bundle: ModelBundle) -> tuple[list[dict[st
         repo_id=bundle.source.repo_id, revision=bundle.source.resolved_revision)
 
 
+def read_bundle_model_card(bundle: ModelBundle, hf: HuggingFaceFetcher) -> tuple[VerifiedModelCard, str | None]:
+    """Read one installed bundle's verified root README, without touching weights or setup."""
+    source = bundle.source
+    if source.kind.value != "huggingface" or not source.repo_id or not source.resolved_revision:
+        raise ManagerError("Only revision-pinned Hugging Face models have a model card.",
+            code="model_card_source", status_code=400)
+    if re.fullmatch(r"[0-9a-fA-F]{40}", source.resolved_revision) is None:
+        raise ManagerError("This model has no immutable Hugging Face card revision.",
+            code="model_card_revision", status_code=409)
+    by_name = {item.name: item for item in bundle.files}
+    record = _root_card_record(by_name)
+    card, local_note = _read_local_card(by_name, repo_id=source.repo_id,
+        revision=source.resolved_revision)
+    if card is not None:
+        return card, None
+
+    if record is None:
+        listing = hf.inspect(repo_id=source.repo_id, revision=source.resolved_revision)
+        if listing.resolved_revision != source.resolved_revision:
+            raise ManagerError("The model card listing differs from this model's pinned revision.",
+                code="recipe_source_changed", status_code=409)
+        card_name = next((name for name in listing.guidance_files
+            if "/" not in name and "\\" not in name and name.casefold() == "readme.md"), None)
+        if card_name is None:
+            raise ManagerError("The pinned repository has no root model card.",
+                code="recipe_card_missing", status_code=404)
+    else:
+        card_name = record.name
+    expected_sha256 = record.sha256 if record and record.sha256 else None
+    markdown, digest = hf.read_pinned_card(source.repo_id, source.resolved_revision,
+        filename=card_name, expected_sha256=expected_sha256)
+    payload = markdown.encode("utf-8")
+    if len(payload) > MAX_CARD_BYTES:
+        raise ManagerError("Model card exceeds the supported size.",
+            code="hf_card_size", status_code=400)
+    if expected_sha256 and digest.casefold() != expected_sha256.casefold():
+        raise ManagerError("The pinned model card does not match the installed card checksum.",
+            code="hf_card_checksum", status_code=409)
+    return VerifiedModelCard(source.repo_id, source.resolved_revision, digest, markdown, "fetched"), local_note
+
+
 def _response_recipes(by_name: dict[str, Any], *, repo_id: str,
     revision: str) -> tuple[list[dict[str, Any]], str | None]:
-    record = by_name.get("README.md") or next(
-        (item for name, item in by_name.items() if name.casefold() == "readme.md"), None)
+    card, note = _read_local_card(by_name, repo_id=repo_id, revision=revision)
+    if card is None:
+        return [], note
+    return parse_model_card_recipes(card.markdown, repo_id=repo_id,
+        revision=revision, sha256=card.sha256), None
+
+
+def _root_card_record(by_name: dict[str, Any]) -> Any | None:
+    return by_name.get("README.md") or next(
+        (item for name, item in by_name.items()
+            if "/" not in name and "\\" not in name and name.casefold() == "readme.md"), None)
+
+
+def _read_local_card(by_name: dict[str, Any], *, repo_id: str,
+    revision: str) -> tuple[VerifiedModelCard | None, str | None]:
+    record = _root_card_record(by_name)
     if record is None:
-        return [], None
+        return None, None
     try:
         path = Path(record.path)
         if path.stat().st_size > MAX_CARD_BYTES:
-            return [], "Model card exceeds the supported recipe-inspection size."
+            return None, "Model card exceeds the supported size."
         payload = path.read_bytes()
+        if len(payload) > MAX_CARD_BYTES:
+            return None, "Model card exceeds the supported size."
+        if len(payload) != record.size_bytes:
+            return None, "Model card size does not match the installed file record."
         if hashlib.sha256(payload).hexdigest().casefold() != record.sha256.casefold():
-            return [], "Model card hash does not match the installed file record."
+            return None, "Model card hash does not match the installed file record."
         card = payload.decode("utf-8-sig")
     except (OSError, UnicodeError, AttributeError):
-        return [], "Model card could not be read and verified as UTF-8."
-    return parse_model_card_recipes(card, repo_id=repo_id,
-        revision=revision, sha256=record.sha256), None
+        return None, "Model card could not be read and verified as UTF-8."
+    return VerifiedModelCard(repo_id, revision, record.sha256, card, "saved"), None
 
 
 def _generation_defaults(config: Any) -> tuple[dict[str, Any], dict[str, str]]:

@@ -623,6 +623,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bundles/{bundle_id}/model-card": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Card */
+        get: operations["get_model_card_v1_bundles__bundle_id__model_card_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bundles/{bundle_id}/projector": {
         parameters: {
             query?: never;
@@ -5143,6 +5160,24 @@ export interface components {
             /** @default complete */
             status: components["schemas"]["ImportStatus"];
         };
+        /** ModelCardResponse */
+        ModelCardResponse: {
+            /** Bundle Id */
+            bundle_id: string;
+            /** Markdown */
+            markdown: string;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "saved" | "fetched";
+            /** Repo Id */
+            repo_id: string;
+            /** Revision */
+            revision: string;
+            /** Sha256 */
+            sha256: string;
+        };
         /** ModelConfigurationWriteRequest */
         ModelConfigurationWriteRequest: {
             /** Agent */
@@ -5667,7 +5702,7 @@ export interface components {
              * Reasoning
              * @enum {string}
              */
-            reasoning: "on" | "off";
+            reasoning: "on" | "off" | "preserve";
             /** Section */
             section: string;
             /** Source Repo Id */
@@ -6723,6 +6758,7 @@ export type SchemaManagementScope = components['schemas']['ManagementScope'];
 export type SchemaMatchedPermissionGrant = components['schemas']['MatchedPermissionGrant'];
 export type SchemaMaterializedKnowledgeFact = components['schemas']['MaterializedKnowledgeFact'];
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
+export type SchemaModelCardResponse = components['schemas']['ModelCardResponse'];
 export type SchemaModelConfigurationWriteRequest = components['schemas']['ModelConfigurationWriteRequest'];
 export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
 export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
@@ -8147,6 +8183,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InspectReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_card_v1_bundles__bundle_id__model_card_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCardResponse"];
                 };
             };
             /** @description Validation Error */

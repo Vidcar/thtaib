@@ -8477,6 +8477,48 @@
         "title": "ModelBundle",
         "type": "object"
       },
+      "ModelCardResponse": {
+        "properties": {
+          "bundle_id": {
+            "title": "Bundle Id",
+            "type": "string"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "saved",
+              "fetched"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "repo_id": {
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bundle_id",
+          "repo_id",
+          "revision",
+          "sha256",
+          "markdown",
+          "origin"
+        ],
+        "title": "ModelCardResponse",
+        "type": "object"
+      },
       "ModelConfigurationWriteRequest": {
         "properties": {
           "agent": {
@@ -9732,7 +9774,8 @@
           "reasoning": {
             "enum": [
               "on",
-              "off"
+              "off",
+              "preserve"
             ],
             "title": "Reasoning",
             "type": "string"
@@ -14164,6 +14207,45 @@
           }
         },
         "summary": "Inspect Bundle"
+      }
+    },
+    "/v1/bundles/{bundle_id}/model-card": {
+      "get": {
+        "operationId": "get_model_card_v1_bundles__bundle_id__model_card_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCardResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Model Card"
       }
     },
     "/v1/bundles/{bundle_id}/projector": {

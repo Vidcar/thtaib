@@ -52,8 +52,11 @@ _BOLD_HEADING = re.compile(r"^\s*(?:<b>|<strong>)(.+?)(?:</b>|</strong>)\s*$", r
 _MARKDOWN_BOLD_HEADING = re.compile(r"^\s*\*\*(.+?)\*\*\s*$")
 _NUMBERED_SECTION = re.compile(r"^\s*\d+[.)]\s+\*\*(.+?)\*\*:\s*(.*?)\s*$")
 _BULLET = re.compile(r"^\s*[-*]\s+(.{3,160}?):\s*(.+?)\s*$")
+_BULLET_TEXT = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 _ASSIGNMENT = re.compile(r"^([a-z][a-z0-9_]*)\s*=\s*(\S+)$", re.I)
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$", re.I)
+_OTHER_GUIDANCE = re.compile(r"\b(?:flash attention|system prompt|context|jinja|mmproj|projector|vision|audio|prompt)\b", re.I)
+_SAMPLER_MENTION = re.compile(r"\b(?:temperature|top[-_ ]?[pk]|min[-_ ]?p|typical[-_ ]?p|repetition[-_ ]?penalty|repeat[-_ ]?penalty|presence[-_ ]?penalty|frequency[-_ ]?penalty|mirostat)\b", re.I)
 
 
 def _heading(line: str) -> str | None:
@@ -68,7 +71,7 @@ def _is_recommendation_heading(value: str) -> bool:
     lowered = value.casefold()
     subject = re.search(r"\b(?:model|sampling|generation)\s+(?:default\s+)?(?:settings|parameters|recommendations?)\b", lowered)
     recommendation = re.search(r"\b(?:suggested|recommended|recommendations?)\b", lowered)
-    return bool(subject and recommendation)
+    return bool(subject and recommendation or re.fullmatch(r"(?:recommended|suggested)(?: inference)? settings", lowered))
 
 
 def _label(label: str) -> tuple[str, str] | None:
@@ -88,42 +91,104 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")[:48]
 
 
-def _recipe_line(line: str) -> tuple[str, str, dict[str, int | float], list[str]] | None:
-    match = _BULLET.match(line)
-    if not match:
+def _sampling_value(key: str, literal: str) -> tuple[str, int | float] | None:
+    key = key.casefold()
+    literal = literal.strip().strip("` ").rstrip(".;")
+    if key not in _SAMPLING_FIELDS or not _NUMBER.fullmatch(literal):
         return None
-    labelled = _label(match[1])
-    if labelled is None:
+    try:
+        parsed_value = float(literal)
+    except (ValueError, OverflowError):
         return None
+    value = normalize_sampling_value(key, parsed_value)
+    if value is None:
+        return None
+    return ("repeat_penalty" if key == "repetition_penalty" else key), value
+
+
+def _assignment_set(text: str) -> dict[str, int | float] | None:
     settings: dict[str, int | float] = {}
-    notes: list[str] = []
-    for raw in match[2].split(","):
+    for raw in text.strip().strip("` ").split(","):
         part = raw.strip().strip("` ")
         assignment = _ASSIGNMENT.fullmatch(part)
         if not assignment:
             # A partly parsed recommendation is unsafe to offer as a recipe.
             return None
-        key, literal = assignment[1].casefold(), assignment[2].rstrip("`.;")
-        if key not in _SAMPLING_FIELDS:
-            # A selectable recipe must not imply that an unsupported part of
-            # the card's recommended combination will be applied.
+        parsed = _sampling_value(assignment[1], assignment[2])
+        if parsed is None:
             return None
-        if not _NUMBER.fullmatch(literal):
-            return None
-        try:
-            parsed_value = float(literal)
-        except (ValueError, OverflowError):
-            return None
-        value = normalize_sampling_value(key, parsed_value)
-        if value is None:
-            return None
-        canonical = "repeat_penalty" if key == "repetition_penalty" else key
+        canonical, value = parsed
         if canonical in settings and settings[canonical] != value:
             return None
         settings[canonical] = value
-    if len(settings) < 2:
+    return settings if len(settings) >= 2 else None
+
+
+def _recipe_line(line: str) -> tuple[str, str, dict[str, int | float], list[str]] | None:
+    match = _BULLET.match(line)
+    if not match:
         return None
-    return labelled[0], labelled[1], settings, notes
+    labelled = _label(match[1])
+    settings = _assignment_set(match[2]) if labelled is not None else None
+    if labelled is None or settings is None:
+        return None
+    return labelled[0], labelled[1], settings, []
+
+
+def _omitted_guidance(text: str) -> str:
+    # The UI displays notes as plain text, never as actionable settings.
+    return "Not copied: " + re.sub(r"[`*]", "", text).strip()
+
+
+def _neutral_recipe(lines: list[str]) -> tuple[dict[str, int | float], list[str]] | None:
+    """Parse one recommendation, expressed inline or as one sampler per bullet."""
+    settings: dict[str, int | float] = {}
+    notes: list[str] = []
+    format_used: str | None = None
+    for line in lines:
+        bullet = _BULLET_TEXT.match(line)
+        if bullet is None:
+            continue
+        body = bullet[1].strip()
+        field = _BULLET.match(line)
+        if field is not None:
+            label = re.sub(r"[`*]", "", field[1]).strip().casefold()
+            key = re.sub(r"[\s-]+", "_", label)
+            if key in _SAMPLING_FIELDS:
+                if format_used == "inline":
+                    return None
+                format_used = "fields"
+                parsed = _sampling_value(key, field[2])
+                if parsed is None:
+                    return None
+                canonical, value = parsed
+                if canonical in settings and settings[canonical] != value:
+                    return None
+                settings[canonical] = value
+                continue
+            if _OTHER_GUIDANCE.search(label) and not _SAMPLER_MENTION.search(label):
+                notes.append(_omitted_guidance(body))
+                continue
+            # Unknown labelled values may be unsupported samplers.
+            return None
+        if "=" in body:
+            if _OTHER_GUIDANCE.search(body) and not _SAMPLER_MENTION.search(body):
+                notes.append(_omitted_guidance(body))
+                continue
+            if format_used == "fields":
+                return None
+            format_used = "inline"
+            parsed = _assignment_set(body)
+            if parsed is None or settings and settings != parsed:
+                return None
+            settings = parsed
+            continue
+        if _SAMPLER_MENTION.search(body):
+            # A second qualitative or invalid sampler instruction makes the
+            # supposedly single set ambiguous.
+            return None
+        notes.append(_omitted_guidance(body))
+    return (settings, notes) if len(settings) >= 2 else None
 
 
 def parse_model_card_recipes(
@@ -143,14 +208,29 @@ def parse_model_card_recipes(
     ambiguous: set[str] = set()
     section: str | None = None
     parent_heading: str | None = None
+    section_lines: list[str] = []
+    neutral_sections: list[tuple[str, list[str]]] = []
+
+    def finish_section() -> None:
+        if section is not None:
+            neutral_sections.append((section, section_lines.copy()))
+            section_lines.clear()
+
     for line in card_text.splitlines():
         heading = _heading(line)
         if heading is not None:
+            if section is not None and heading.casefold() == "important":
+                # This bold label can introduce launch guidance without
+                # ending the recommended response-settings section.
+                section_lines.append(line)
+                continue
+            finish_section()
             parent_heading = heading
             section = heading if _is_recommendation_heading(heading) else None
             continue
         numbered = _NUMBERED_SECTION.match(line)
         if numbered is not None:
+            finish_section()
             title, description = numbered.groups()
             recommended_context = bool(parent_heading and re.search(r"\b(?:best practices|recommendations?)\b", parent_heading, re.I))
             explicit_sampling = bool(title.casefold() == "sampling parameters"
@@ -160,6 +240,7 @@ def parse_model_card_recipes(
             continue
         if section is None:
             continue
+        section_lines.append(line)
         bullet = _BULLET.match(line)
         labelled = _label(bullet[1]) if bullet else None
         parsed = _recipe_line(line)
@@ -192,4 +273,27 @@ def parse_model_card_recipes(
             recipes[mode_key] = candidate
         elif (previous["per_request"], previous["reasoning"]) != (settings, reasoning):
             ambiguous.add(mode_key)
-    return [recipe for key, recipe in recipes.items() if key not in ambiguous]
+    finish_section()
+    named = [recipe for key, recipe in recipes.items() if key not in ambiguous]
+    if recipes or ambiguous:
+        return named
+    # There must be just one recommended section, and every setting in it
+    # must validate. Never choose between competing or partly invalid sets.
+    if len(neutral_sections) != 1:
+        return []
+    title, lines = neutral_sections[0]
+    parsed = _neutral_recipe(lines)
+    if parsed is None:
+        return []
+    settings, notes = parsed
+    return [{
+        "id": f"card-{revision[:12]}-{sha256[:12]}-{_slug(title)}-recommended-response-settings",
+        "name": "Recommended response settings",
+        "per_request": settings,
+        "reasoning": "preserve",
+        "source_repo_id": repo_id,
+        "source_revision": revision,
+        "card_sha256": sha256,
+        "section": title,
+        "notes": notes,
+    }]

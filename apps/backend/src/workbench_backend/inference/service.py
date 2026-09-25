@@ -303,6 +303,17 @@ class ModelManager:
         self._require_profile_bundle(bundle_id)
         return [profile for profile in self.list_profiles() if profile.bundle_id == bundle_id]
 
+    def get_model_card(self, bundle_id: str) -> dict[str, str]:
+        """Return only the selected bundle's verified, pinned root README."""
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ManagerError("Unknown model.", code="bundle_missing", status_code=404)
+        from workbench_backend.inference.hf_configuration import read_bundle_model_card
+
+        card, _ = read_bundle_model_card(bundle, self.bundles.hf)
+        return {"bundle_id": bundle.id, "repo_id": card.repo_id, "revision": card.revision,
+            "sha256": card.sha256, "markdown": card.markdown, "origin": card.origin}
+
     def refresh_response_recipes(self, bundle_id: str) -> ModelBundle:
         """Refresh only a pinned model card; weights and saved setups stay untouched."""
         bundle = self.store.get_bundle(bundle_id)
@@ -312,27 +323,11 @@ class ModelManager:
         if source.kind.value != "huggingface" or not source.repo_id or not source.resolved_revision:
             raise ManagerError("Only revision-pinned Hugging Face models can refresh response recipes.",
                 code="recipe_source", status_code=400)
-        from workbench_backend.inference.hf_configuration import response_recipes_from_bundle_card
+        from workbench_backend.inference.hf_configuration import read_bundle_model_card
         from workbench_backend.inference.hf_recipes import parse_model_card_recipes
-        card_record = next((item for item in bundle.files if item.name.casefold() == "readme.md"), None)
-        recipes, local_note = response_recipes_from_bundle_card(bundle)
-        if card_record is None or local_note is not None:
-            card_name = card_record.name if card_record else None
-            if card_name is None:
-                listing = self.bundles.hf.inspect(repo_id=source.repo_id, revision=source.resolved_revision)
-                if listing.resolved_revision != source.resolved_revision:
-                    raise ManagerError("The model card listing differs from this model's pinned revision.",
-                        code="recipe_source_changed", status_code=409)
-                card_name = next((name for name in listing.guidance_files
-                    if "/" not in name and name.casefold() == "readme.md"), None)
-                if card_name is None:
-                    raise ManagerError("The pinned repository has no root model card.",
-                        code="recipe_card_missing", status_code=404)
-            card_text, digest = self.bundles.hf.read_pinned_card(source.repo_id, source.resolved_revision,
-                filename=card_name,
-                expected_sha256=card_record.sha256 if card_record else None)
-            recipes = parse_model_card_recipes(card_text, repo_id=source.repo_id,
-                revision=source.resolved_revision, sha256=digest)
+        card, local_note = read_bundle_model_card(bundle, self.bundles.hf)
+        recipes = parse_model_card_recipes(card.markdown, repo_id=card.repo_id,
+            revision=card.revision, sha256=card.sha256)
         with self.store.configuration_lock():
             current = self.store.get_bundle(bundle_id)
             if current is None or current.source != source:

@@ -39,11 +39,20 @@ export interface ResponseRecipe {
   name: string;
   section: string;
   per_request: Record<string, number>;
-  reasoning: "on" | "off";
+  reasoning: "on" | "off" | "preserve";
   source_repo_id: string;
   source_revision: string;
   card_sha256: string;
   notes?: string[];
+}
+
+export interface ModelCard {
+  bundle_id: string;
+  repo_id: string;
+  revision: string;
+  sha256: string;
+  markdown: string;
+  origin: "saved" | "fetched";
 }
 
 export interface ResponseRecipeOrigin {

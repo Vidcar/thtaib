@@ -99,6 +99,17 @@
 /* Recipes */
 .models-surface .model-recipe-library {display: grid; gap: var(--space-compact); margin-top: var(--space-stack); min-width: 0;}
 .models-surface .model-recipe-library :is(p, h3) {margin: 0;}
+.models-surface .model-card-heading {display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-compact); min-width: 0;}
+.models-surface .model-card-heading > div:first-child {min-width: 0; overflow-wrap: anywhere;}
+.models-surface .model-card-actions {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact);}
+.models-surface .model-card-content {display: grid; gap: var(--space-tight); min-width: 0;}
+.models-surface .model-card-provenance {overflow-wrap: anywhere;}
+.models-surface .model-card-markdown {max-height: min(560px, 60vh); overflow: auto; min-width: 0; padding: var(--pad-card); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-raised); line-height: var(--leading-body); overflow-wrap: anywhere;}
+.models-surface .model-card-markdown :is(h1, h2, h3, h4, h5, h6) {margin: var(--space-stack) 0 var(--space-tight);}
+.models-surface .model-card-markdown > :first-child {margin-top: 0;}
+.models-surface .model-card-markdown pre {max-width: 100%; overflow: auto; padding: var(--pad-compact); background: var(--bg-input); border-radius: var(--radius-control);}
+.models-surface .model-card-markdown table {display: block; max-width: 100%; overflow: auto; border-collapse: collapse;}
+.models-surface .model-card-markdown :is(th, td) {border: var(--line-hairline) solid var(--border); padding: var(--pad-tight) var(--pad-compact);}
 .models-surface .model-recipe-library .section-heading {align-items: start; flex-wrap: wrap;}
 .models-surface .model-recipe-library .section-heading > div {min-width: min(var(--layout-control), 100%); flex: 1;}
 .models-surface .model-recipe-choices {display: grid; gap: var(--space-tight); margin: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); min-width: 0;}

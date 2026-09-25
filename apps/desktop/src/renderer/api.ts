@@ -22,6 +22,7 @@ import type {
   LabToolMode,
   LabWorkspace,
   ModelBundle,
+  ModelCard,
   ModelStorageSummary,
   PathsInfo,
   PresentationSettings,
@@ -151,6 +152,7 @@ export const api = {
       body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id }),
     }),
   refreshResponseRecipes: (bundleId: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST" }),
+  modelCard: (bundleId: string) => request<ModelCard>(`/v1/bundles/${encodeURIComponent(bundleId)}/model-card`),
   createRecipeConfigurations: (bundleId: string, recipe_ids: string[], default_recipe_id: string | null = null) =>
     request<{ bundle: ModelBundle; configurations: RunProfile[] }>(`/v1/bundles/${bundleId}/response-recipes/configurations`, {
       method: "POST",
