@@ -359,6 +359,7 @@ class InteractionApiTests(unittest.TestCase):
 
     def test_command_content_list_preserves_text_once_image_order_and_tools_off(self) -> None:
         self._set_server_props(vision=True)
+        self._record_capabilities("image")
         reset_received_prompts()
         model = self._install_model(_scripted_reply("listed image answer"))
         thread_id = self._register_agent()
@@ -393,6 +394,7 @@ class InteractionApiTests(unittest.TestCase):
 
     def test_chat_content_blocks_preserved_in_interaction_state_with_tools_off(self) -> None:
         self._set_server_props(vision=True)
+        self._record_capabilities("image")
         model = self._install_model(_scripted_reply("vision answer"))
         conversation_id, thread_id = self._register_chat()
         image_url = _fake_png_data_url()

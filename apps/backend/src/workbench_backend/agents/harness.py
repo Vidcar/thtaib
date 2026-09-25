@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,8 @@ from workbench_backend.agents.host_shell import (
     validated_decision_payloads,
 )
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+from workbench_backend.assets.capture_backend import CaptureBackend
+from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin
 from workbench_backend.agents.replay import FixtureBank
 from workbench_backend.agents.schemas import (
     AgentEvent,
@@ -113,6 +115,7 @@ from workbench_backend.inference.adapter import (
     RecordingTransport,
     chat_model_for_deployment,
 )
+from workbench_backend.inference.capabilities import capability_support
 from workbench_backend.inference.user_content import user_message_content
 from workbench_backend.inference.connection_errors import (
     clarify_connection_error,
@@ -163,6 +166,10 @@ class HarnessService:
         app_store: ApplicationStore | None = None,
         embeddings_factory: EmbeddingsFactory | None = None,
         interaction_observer: InteractionObserver | None = None,
+        assets: Any = None,
+        browser: Any = None,
+        preview: Any = None,
+        desktop_automation: Any = None,
     ) -> None:
         self._manager_provider = manager_provider
         self._model_factory = model_factory or self._deployment_model
@@ -170,6 +177,10 @@ class HarnessService:
         self._app_store = app_store
         self._embeddings_factory = embeddings_factory or openai_embeddings_for_deployment
         self._interaction_observer = interaction_observer
+        self.assets = assets
+        self.browser = browser
+        self.preview = preview
+        self.desktop_automation = desktop_automation
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -297,6 +308,39 @@ class HarnessService:
         with self._lock:
             self._start_cancel_guards.pop((thread_id, input_message_id), None)
 
+    def _desktop_scope_snapshot(
+        self, request: AgentStartRequest, presented: list[str],
+    ) -> tuple[str, dict[str, int | float] | None]:
+        """Freeze the narrower live conversation grant at turn admission."""
+
+        from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAccessScope
+
+        if not set(presented).intersection(DESKTOP_TOOL_NAMES):
+            return "off", None
+        if (self.desktop_automation is None or request.source_surface != "chat"
+            or not request.thread_id or request.work_mode != "work"
+            or request.tool_mode is not ToolMode.live_tool):
+            raise HarnessError("Window tools need a live Work-mode Chat conversation.",
+                code="desktop_grant_required", status_code=409)
+        current, identity = self.desktop_automation.scope_for_thread(request.thread_id)
+        desired = DesktopAccessScope(request.desktop_access)
+        if desired is DesktopAccessScope.off or current is DesktopAccessScope.off:
+            raise HarnessError("Choose a window or explicitly grant All windows for this conversation.",
+                code="desktop_grant_required", status_code=409)
+        if current is DesktopAccessScope.selected:
+            if identity is None:
+                raise HarnessError("The selected window must be chosen again.",
+                    code="desktop_window_required", status_code=409)
+            return "selected", {
+                "hwnd": identity.hwnd,
+                "process_id": identity.process_id,
+                "process_created_at": identity.process_created_at,
+            }
+        if desired is DesktopAccessScope.selected:
+            raise HarnessError("Choose a specific window before using Selected window access.",
+                code="desktop_window_required", status_code=409)
+        return "all", None
+
     def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self._reconcile_startup_once()
         selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.connections.available, connection_tools=lambda ident: [tool.name for tool in self.connections.get(ident).tools])
@@ -319,6 +363,9 @@ class HarnessService:
         if instruction_snapshot is not None:
             selection = selection.model_copy(update={"instruction_layers": instruction_snapshot})
         selected = selection.configuration.model_dump(exclude_none=True, exclude={"instructions", "requires_project", "requires_host_shell", "bundle_id"})
+        if execution_snapshot is not None:
+            # A queued turn cannot broaden live-desktop access beyond its frozen setup.
+            selected["desktop_access"] = selection.configuration.desktop_access or "off"
         if selection.configuration.review is not None:
             selected["review"] = selection.configuration.review
         if request.project_id:
@@ -377,10 +424,26 @@ class HarnessService:
                 thread_id=request.thread_id, project_path=str(project_path) if project_path else None)
             connection_snapshots = self.connections.snapshot(request.connection_ids or [], tools_enabled=request.presented_tools != [])
             external_names = [tool.name for connection in connection_snapshots for tool in connection.tools]
+            capture_session = (
+                self.assets.session_for_thread(request.thread_id)
+                if self.assets is not None and request.source_surface == "chat" and request.thread_id
+                else None
+            )
+            capture_routes = bool(
+                capture_session is not None
+                and request.tool_mode is ToolMode.live_tool
+                and (
+                    any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (request.presented_tools or []))
+                    or self.assets.list_assets(RetainedAssetListFilters(
+                        session_id=capture_session.id, origin=RetainedAssetOrigin.capture,
+                    ))
+                )
+            )
             presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
                 request.presented_tools,
                 project_bound=project_path is not None,
                 knowledge_routes=knowledge_plan.has_knowledge_routes,
+                capture_routes=capture_routes,
                 external_names=external_names,
                 attachment_available=bool(request.retained_asset_ids),
             )
@@ -426,7 +489,7 @@ class HarnessService:
                 )
             if shell_blocked:
                 raise HarnessError(
-                    "The host shell requires a bound project folder as cwd. "
+                    "The host shell and project preview require a bound project folder. "
                     "A home-directory default is not invented.",
                     code="shell_requires_project",
                     status_code=400,
@@ -438,6 +501,8 @@ class HarnessService:
                 for name in KNOWLEDGE_ROUTE_READ_TOOLS:
                     if name not in presented:
                         presented = [*presented, name]
+            if capture_routes and request.presented_tools != [] and "read_file" not in presented:
+                presented = [*presented, "read_file"]
             framework_read_paths = (
                 ["/large_tool_results/", "/conversation_history/"]
                 if presented and "read_file" not in presented and not recorded else []
@@ -452,6 +517,7 @@ class HarnessService:
                 presented = [*presented, "task"]
             if request.work_mode == "plan":
                 presented = [name for name in presented if name in PLAN_TOOLS]
+            desktop_scope, desktop_window = self._desktop_scope_snapshot(request, presented)
             require_setup_capabilities(selection.configuration,
                 project_bound=project_path is not None, presented_tools=presented)
             if request.resume_checkpoint_id:
@@ -467,8 +533,6 @@ class HarnessService:
                         code="checkpoint_resume_tools_forbidden",
                         status_code=400,
                     )
-            if request.content_blocks:
-                self._validate_content_capabilities(deployment, request)
             if presented and deployment.server_props and (
                 deployment.server_props.chat_template_caps.get("supports_tools") is False
                 or deployment.server_props.chat_template_caps.get("supports_tool_calls") is False
@@ -477,9 +541,11 @@ class HarnessService:
             enabled = enabled_for_project(
                 project_path is not None,
                 knowledge_routes=knowledge_plan.has_knowledge_routes,
+                capture_routes=capture_routes,
                 attachment_available=bool(request.retained_asset_ids),
             )
             enabled = [*enabled, *external_names]
+            enabled.extend(name for name in presented if name not in enabled)
             if helpers and request.presented_tools != []:
                 enabled.append("task")
             if framework_read_paths and "read_file" not in enabled:
@@ -518,6 +584,8 @@ class HarnessService:
                 setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
             if execution_snapshot is not None and execution_snapshot.system_prompt is not None:
                 setup.system_prompt = execution_snapshot.system_prompt
+            if request.content_blocks:
+                self._validate_content_capabilities(deployment, request, setup.bags.per_request)
             _, structured_output = response_format_for_run(
                 output_schema=request.output_schema,
                 deployment=deployment,
@@ -537,6 +605,9 @@ class HarnessService:
                     connection_ids=list(request.connection_ids or []),
                     connection_snapshots=connection_snapshots,
                     retained_asset_ids=list(request.retained_asset_ids),
+                    desktop_access=desktop_scope,
+                    desktop_window=desktop_window,
+                    capture_routes_enabled=capture_session is not None and request.tool_mode is ToolMode.live_tool,
                     task=request.task,
                     content_blocks=request.content_blocks,
                     enabled_tools=enabled,
@@ -621,6 +692,9 @@ class HarnessService:
                     connection_ids=list(request.connection_ids or []),
                     connection_snapshots=connection_snapshots,
                     retained_asset_ids=list(request.retained_asset_ids),
+                    desktop_access=desktop_scope,
+                    desktop_window=desktop_window,
+                    capture_routes_enabled=capture_session is not None and request.tool_mode is ToolMode.live_tool,
                 task=request.task,
                 content_blocks=request.content_blocks,
                 enabled_tools=enabled,
@@ -1041,10 +1115,20 @@ class HarnessService:
             self._close_model_client(run_id)
 
     @asynccontextmanager
-    async def _compiled_agent_context(self, run, http_sink, fixture_bank):
+    async def _worker_tools_context(self, run):
         # Session-bound tools enter here on the common loop and stay open across
         # native approval waits. Synchronous setup/file work cannot block it.
-        async with self.connections.open_tools(run) as external_tools:
+        async with AsyncExitStack() as stack:
+            external_tools = await stack.enter_async_context(self.connections.open_tools(run))
+            browser_tools = (
+                await stack.enter_async_context(self.browser.open_tools(run))
+                if self.browser is not None else []
+            )
+            yield [*external_tools, *browser_tools]
+
+    @asynccontextmanager
+    async def _compiled_agent_context(self, run, http_sink, fixture_bank):
+        async with self._worker_tools_context(run) as external_tools:
             agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
                 external_tools=external_tools)
             yield agent
@@ -1084,8 +1168,23 @@ class HarnessService:
     ) -> Any:
         execution_control = execution_control or ExecutionControl(run, lambda: self._publish_control_update(run))
         model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
+        media_profile = dict(model.profile) if isinstance(model.profile, dict) else {}
+        image_inputs_allowed = (
+            media_profile.get("image_inputs") is True
+            and media_profile.get("image_tool_message") is True
+        )
         agent_kwargs: dict[str, Any] = {}
-        backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only)
+        capture_backend = None
+        if self.assets is not None and run.capture_routes_enabled:
+            session = self.assets.session_for_run(run)
+            if session is not None:
+                capture_backend = CaptureBackend(self.assets, session.id,
+                    image_inputs_allowed=image_inputs_allowed)
+        # A tool image must be retained before the graph checkpoint; runs with
+        # no Chat asset owner cannot safely expose a raw image result.
+        image_inputs_allowed = image_inputs_allowed and capture_backend is not None
+        backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only,
+            image_inputs_allowed=image_inputs_allowed, capture_backend=capture_backend)
         knowledge_plan = self._knowledge_plan_for_run(run)
         if backend is not None:
             agent_kwargs["backend"] = backend
@@ -1095,7 +1194,7 @@ class HarnessService:
         observation = run.context_observation
         usable = observation.usable_input_tokens if observation is not None else None
         # Override provider-name defaults; only observed runtime capacity is a fact.
-        model.profile = {"max_input_tokens": usable} if usable else {}
+        model.profile = {**media_profile, **({"max_input_tokens": usable} if usable else {})}
         if not inspection_only and callable(getattr(model, "set_generation_observer", None)):
             latest_request_id: str | None = None
 
@@ -1156,6 +1255,13 @@ class HarnessService:
         if interrupt_on:
             agent_kwargs["interrupt_on"] = interrupt_on
         tools = [*tools_for_names(run.presented_tools), *(external_tools or [])]
+        if not inspection_only:
+            if self.preview is not None:
+                tools.extend(tool for tool in self.preview.tools_for_run(run)
+                    if tool.name in run.presented_tools)
+            if self.desktop_automation is not None:
+                tools.extend(tool for tool in self.desktop_automation.tools_for_run(run)
+                    if tool.name in run.presented_tools)
         if "propose_memory" in run.presented_tools and self._knowledge_provider is not None:
             tools.append(memory_proposal_tool(run.id, self._knowledge_provider()))
         if "read_attachment" in run.presented_tools and run.retained_asset_ids:
@@ -1205,6 +1311,8 @@ class HarnessService:
                     settings_provider=self._capture_settings,
                     fixture_bank=fixture_bank,
                     execution_control=execution_control,
+                    asset_service=self.assets,
+                    capture_backend=capture_backend,
                 )
             ],
             name="workbench-embedded-harness",
@@ -1720,8 +1828,9 @@ class HarnessService:
                     kind="tool_result",
                     detail={
                         "name": message.name,
-                        "content": message.content,
+                        "content": _safe_tool_event_content(message),
                         "tool_call_id": message.tool_call_id,
+                        **_tool_media_reference(message),
                         **tool_authorization_metadata(run, message.tool_call_id),
                         **({"node": node} if node else {}),
                     },
@@ -1966,6 +2075,7 @@ class HarnessService:
         self,
         deployment: Deployment,
         request: AgentStartRequest,
+        per_request: Any,
     ) -> None:
         has_image = any(getattr(block, "type", None) == "image_url" for block in request.content_blocks or [])
         if not has_image:
@@ -1977,6 +2087,14 @@ class HarnessService:
                 code="image_input_unavailable",
                 status_code=409,
                 details={"constraint": "server_props.modalities.vision=false"},
+            )
+        support = capability_support(deployment, "image", per_request)
+        if support != "passed":
+            raise HarnessError(
+                "Image input needs a passing image probe for this exact model setup. Text tasks remain available.",
+                code="image_input_unverified" if support in {"untested", "inconclusive"} else "image_input_unavailable",
+                status_code=409,
+                details={"probe_status": support},
             )
 
     def _collect_related_files(self, run: AgentRun) -> None:
@@ -2278,6 +2396,35 @@ def _assistant_event_detail(message: AIMessage, node: str | None) -> dict[str, A
     elif content:
         detail["content_blocks"] = [{"type": "text", "text": str(content)}]
     return detail
+
+
+def _safe_tool_event_content(message: ToolMessage) -> Any:
+    """Retain useful tool text without streaming or storing inline media."""
+
+    content = message.content
+    if isinstance(content, str):
+        return "[inline media omitted]" if content.startswith("data:") else content
+    if not isinstance(content, list):
+        return content
+    safe: list[Any] = []
+    for block in content:
+        if isinstance(block, dict) and (block.get("type") in {"image", "image_url", "audio", "input_audio", "video"}
+            or any(key in block for key in ("base64", "image_url", "data"))):
+            safe.append({"type": "text", "text": "[inline media omitted; use its retained path to inspect again]"})
+        else:
+            safe.append(block)
+    return safe
+
+
+def _tool_media_reference(message: ToolMessage) -> dict[str, str]:
+    if message.name != "read_file":
+        return {}
+    path = message.additional_kwargs.get("read_file_path")
+    media_type = message.additional_kwargs.get("read_file_media_type")
+    return {
+        **({"media_path": path} if isinstance(path, str) else {}),
+        **({"media_type": media_type} if isinstance(media_type, str) else {}),
+    }
 
 
 def _readable_assistant_content(content: Any) -> Any:

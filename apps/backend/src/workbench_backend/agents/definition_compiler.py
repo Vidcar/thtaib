@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
+from workbench_backend.agents.tools import enabled_catalogue
 from workbench_backend.errors import DefinitionCompileError
 
 REQUIRED_SETUP_ASPECTS = (
@@ -285,7 +285,7 @@ def _resolve_setup(
             details={"missing": missing},
         )
     tools = list(resolved["tools"])
-    denied = [name for name in tools if name not in ENABLED_TOOL_NAMES]
+    denied = [name for name in tools if name not in enabled_catalogue()]
     if denied:
         raise DefinitionCompileError(
             f"Tools are not in the enabled catalogue: {', '.join(denied)}",

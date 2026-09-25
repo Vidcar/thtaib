@@ -399,6 +399,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/browser/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Runtime Status */
+        get: operations["runtime_status_v1_browser_runtime_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/runtime/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install Runtime */
+        post: operations["install_runtime_v1_browser_runtime_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/sessions/{thread_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Status */
+        get: operations["session_status_v1_browser_sessions__thread_id__get"];
+        put?: never;
+        post?: never;
+        /** Close Session */
+        delete: operations["close_session_v1_browser_sessions__thread_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/sessions/{thread_id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Session */
+        post: operations["reset_session_v1_browser_sessions__thread_id__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/bundles": {
         parameters: {
             query?: never;
@@ -1774,6 +1843,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/previews/{thread_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Status */
+        get: operations["preview_status_v1_previews__thread_id__get"];
+        put?: never;
+        post?: never;
+        /** Stop Preview */
+        delete: operations["stop_preview_v1_previews__thread_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/previews/{thread_id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Lost Preview */
+        post: operations["reset_lost_preview_v1_previews__thread_id__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/profiles": {
         parameters: {
             query?: never;
@@ -2087,6 +2191,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/window-testing/conversations/{conversation_id}/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Conversation Scope */
+        get: operations["conversation_scope_v1_window_testing_conversations__conversation_id__scope_get"];
+        /** Set Conversation Scope */
+        put: operations["set_conversation_scope_v1_window_testing_conversations__conversation_id__scope_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/window-testing/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Runtime Status */
+        get: operations["runtime_status_v1_window_testing_runtime_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/window-testing/runtime/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install Runtime */
+        post: operations["install_runtime_v1_window_testing_runtime_install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/window-testing/windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Picker Windows */
+        get: operations["picker_windows_v1_window_testing_windows_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2125,6 +2298,11 @@ export interface components {
              */
             approval_mode: "ask" | "full_access";
             budgets?: components["schemas"]["AgentBudgets"] | null;
+            /**
+             * Capture Routes Enabled
+             * @default false
+             */
+            capture_routes_enabled: boolean;
             /** Checkpoint Ids */
             checkpoint_ids?: string[];
             /** Child Runs */
@@ -2146,6 +2324,16 @@ export interface components {
             denied_tools?: string[];
             /** Deployment Id */
             deployment_id: string;
+            /**
+             * Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            desktop_access: "off" | "selected" | "all";
+            /** Desktop Window */
+            desktop_window?: {
+                [key: string]: number;
+            } | null;
             /**
              * Dispatched Tool Calls
              * @default 0
@@ -2384,6 +2572,12 @@ export interface components {
             criteria?: components["schemas"]["TaskCriteria"] | null;
             /** Deployment Id */
             deployment_id?: string | null;
+            /**
+             * Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            desktop_access: "off" | "selected" | "all";
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
             /** Helper Agent Ids */
@@ -2551,7 +2745,7 @@ export interface components {
              * Capability
              * @enum {string}
              */
-            capability: "text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image";
+            capability: "text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image" | "tool_image";
             /** Deployment Id */
             deployment_id: string;
             /** Fingerprint */
@@ -2607,7 +2801,7 @@ export interface components {
              * Capability
              * @enum {string}
              */
-            capability: "text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image";
+            capability: "text_stream" | "tools" | "structured_native" | "structured_tools" | "structured_with_tools" | "structured_tools_with_tools" | "reasoning" | "reasoning_replay" | "image" | "tool_image";
             /** Per Request */
             per_request?: {
                 [key: string]: unknown;
@@ -2702,6 +2896,12 @@ export interface components {
             current_run_id?: string | null;
             /** Deployment Id */
             deployment_id: string;
+            /**
+             * Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            desktop_access: "off" | "selected" | "all";
             draft?: components["schemas"]["ChatDraft"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
@@ -2812,6 +3012,8 @@ export interface components {
             connection_ids?: string[] | null;
             /** Deployment Id */
             deployment_id?: string | null;
+            /** Desktop Access */
+            desktop_access?: ("off" | "selected" | "all") | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
             /** Helper Agent Ids */
@@ -2908,6 +3110,12 @@ export interface components {
             deploy_health?: components["schemas"]["ChatDeployHealth"] | null;
             /** Deployment Id */
             deployment_id: string;
+            /**
+             * Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            desktop_access: "off" | "selected" | "all";
             /**
              * Display Title
              * @description Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.
@@ -3223,6 +3431,8 @@ export interface components {
             content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
             /** Deployment Id */
             deployment_id?: string | null;
+            /** Desktop Access */
+            desktop_access?: ("off" | "selected" | "all") | null;
             /** Draft Revision */
             draft_revision?: number | null;
             /** Embedding Deployment Id */
@@ -3701,6 +3911,65 @@ export interface components {
          * @enum {string}
          */
         DeploymentStatus: "starting" | "running" | "unhealthy" | "stopped" | "failed";
+        /** DesktopRuntimeStatus */
+        DesktopRuntimeStatus: {
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Version
+             * @default 0.7.0
+             */
+            version: string;
+        };
+        /** DesktopScopeRequest */
+        DesktopScopeRequest: {
+            /** Hwnd */
+            hwnd?: number | null;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "off" | "selected" | "all";
+        };
+        /** DesktopScopeView */
+        DesktopScopeView: {
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "off" | "selected" | "all";
+            selected_window?: components["schemas"]["DesktopWindowView"] | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+        };
+        /** DesktopWindowView */
+        DesktopWindowView: {
+            /** Class Name */
+            class_name: string;
+            /** Height */
+            height: number;
+            /** Hwnd */
+            hwnd: number;
+            /** Is Foreground */
+            is_foreground: boolean;
+            /** Owner Hwnd */
+            owner_hwnd: number;
+            /** Process Created At */
+            process_created_at: number;
+            /** Process Id */
+            process_id: number;
+            /** Process Name */
+            process_name: string;
+            /** Title */
+            title: string;
+            /** Width */
+            width: number;
+        };
         /**
          * EffectiveSetup
          * @description Inspectable selected / loaded / applied facts for one run.
@@ -5387,6 +5656,8 @@ export interface components {
             size_bytes: number;
             /** Source Run Id */
             source_run_id?: string | null;
+            /** Source Target */
+            source_target?: string | null;
             /** Source Tool Call Id */
             source_tool_call_id?: string | null;
             /** Source Tool Name */
@@ -5476,7 +5747,7 @@ export interface components {
          * RetainedAssetOrigin
          * @enum {string}
          */
-        RetainedAssetOrigin: "upload" | "verified_output";
+        RetainedAssetOrigin: "upload" | "verified_output" | "capture";
         /** RetainedAssetPreview */
         RetainedAssetPreview: {
             /** Content Type */
@@ -5875,6 +6146,8 @@ export interface components {
             connection_ids?: string[] | null;
             /** Deployment Id */
             deployment_id?: string | null;
+            /** Desktop Access */
+            desktop_access?: ("off" | "selected" | "all") | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
             /** Helper Agent Ids */
@@ -6309,6 +6582,10 @@ export type SchemaDeployment = components['schemas']['Deployment'];
 export type SchemaDeploymentLogResponse = components['schemas']['DeploymentLogResponse'];
 export type SchemaDeploymentProfileChanges = components['schemas']['DeploymentProfileChanges'];
 export type SchemaDeploymentStatus = components['schemas']['DeploymentStatus'];
+export type SchemaDesktopRuntimeStatus = components['schemas']['DesktopRuntimeStatus'];
+export type SchemaDesktopScopeRequest = components['schemas']['DesktopScopeRequest'];
+export type SchemaDesktopScopeView = components['schemas']['DesktopScopeView'];
+export type SchemaDesktopWindowView = components['schemas']['DesktopWindowView'];
 export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaExtractedSection = components['schemas']['ExtractedSection'];
 export type SchemaFileRole = components['schemas']['FileRole'];
@@ -7302,6 +7579,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceRange"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runtime_status_v1_browser_runtime_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    install_runtime_v1_browser_runtime_install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    session_status_v1_browser_sessions__thread_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_session_v1_browser_sessions__thread_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_session_v1_browser_sessions__thread_id__reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -10280,6 +10690,99 @@ export interface operations {
             };
         };
     };
+    preview_status_v1_previews__thread_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_preview_v1_previews__thread_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_lost_preview_v1_previews__thread_id__reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_profiles_v1_profiles_get: {
         parameters: {
             query?: never;
@@ -11013,6 +11516,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkbenchInteractionMetadata"];
+                };
+            };
+        };
+    };
+    conversation_scope_v1_window_testing_conversations__conversation_id__scope_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopScopeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_conversation_scope_v1_window_testing_conversations__conversation_id__scope_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesktopScopeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopScopeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runtime_status_v1_window_testing_runtime_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopRuntimeStatus"];
+                };
+            };
+        };
+    };
+    install_runtime_v1_window_testing_runtime_install_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopRuntimeStatus"];
+                };
+            };
+        };
+    };
+    picker_windows_v1_window_testing_windows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopWindowView"][];
                 };
             };
         };

@@ -575,9 +575,49 @@ export interface ChatConversation {
   filesystem_tools_available?: boolean;
   shell_tools_available?: boolean;
   approval_mode?: "ask" | "full_access";
+  desktop_access?: "off" | "selected" | "all";
   enabled_tools?: string[];
   created_at: string;
   updated_at: string;
+}
+
+export type DesktopAccess = "off" | "selected" | "all";
+
+export interface BrowserRuntimeStatus {
+  supported: boolean;
+  installed: boolean;
+  node_version: string;
+  playwright_mcp_version: string;
+  reason: string | null;
+}
+
+export interface BrowserSessionStatus {
+  thread_id: string;
+  state: "active" | "lost" | "closed";
+  worker: BrowserRuntimeStatus;
+}
+
+export interface WindowRuntimeStatus {
+  available?: boolean;
+  installed?: boolean;
+  version?: string;
+  reason?: string | null;
+}
+
+export interface TestWindow {
+  hwnd: number;
+  title: string;
+  process_name: string;
+  process_id: number;
+  width?: number;
+  height?: number;
+}
+
+export interface WindowAccessStatus {
+  scope: DesktopAccess;
+  hwnd?: number | null;
+  selected_window?: TestWindow | null;
+  stale?: boolean;
 }
 
 export interface KnowledgeProvenance {

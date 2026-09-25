@@ -23,6 +23,8 @@ from pydantic import PrivateAttr
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.configuration_options import reasoning_history_descriptor, validate_model_reasoning
+from workbench_backend.inference.capabilities import capability_support
+from workbench_backend.inference.image_validation import MAX_TOOL_IMAGE_BYTES_PER_REQUEST, validate_image_data_url
 from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
 from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry
@@ -210,6 +212,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
 
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         payload = super()._get_request_payload(*args, **kwargs)
+        _project_tool_images(payload)
         if payload.get("tools") == []:
             payload.pop("tools")
             payload.pop("tool_choice", None)
@@ -543,15 +546,87 @@ def _reasoning_replay_supported(deployment: Deployment) -> bool:
 
 
 def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:
+    props = deployment.server_props
+    image_input = (
+        (props is None or props.modalities.get("vision") is not False)
+        and capability_support(deployment, "image", per_request) == "passed"
+    )
+    tool_image = image_input and capability_support(deployment, "tool_image", per_request) == "passed"
+    profile = ModelProfile(image_inputs=image_input, image_tool_message=tool_image)
     capacity = deployment.server_props.n_ctx if deployment.server_props is not None else None
     if not isinstance(capacity, int) or capacity <= 0:
-        return ModelProfile()
+        return profile
     reservation = per_request.applied.get("max_tokens")
     if not isinstance(reservation, int) or reservation <= 0:
         reservation = DEFAULT_OUTPUT_RESERVATION
     margin = int(capacity * TOKEN_MARGIN_RATIO)
     max_input_tokens = max(0, capacity - reservation - margin)
-    return ModelProfile(max_input_tokens=max_input_tokens)
+    profile["max_input_tokens"] = max_input_tokens
+    return profile
+
+
+def _project_tool_images(payload: dict[str, Any]) -> None:
+    """Move tool images behind a complete tool-result batch for chat-completions.
+
+    LangChain converts image blocks to `image_url`, but leaves them inside a
+    `tool` message. llama.cpp's OpenAI-compatible endpoint receives the image
+    as a following `user` message, while the tool result and call ID remain in
+    their original order. This changes only the outbound request, not graph
+    state or checkpoint messages.
+    """
+
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    projected: list[dict[str, Any]] = []
+    pending: list[tuple[str, dict[str, Any]]] = []
+    image_bytes = 0
+
+    def flush() -> None:
+        if not pending:
+            return
+        sources = ", ".join(dict.fromkeys(source for source, _ in pending))
+        projected.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"Image result from tool call(s) {sources}:"},
+                *(block for _, block in pending),
+            ],
+        })
+        pending.clear()
+
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            flush()
+            projected.append(message)
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            projected.append(message)
+            continue
+        kept: list[Any] = []
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "image_url":
+                kept.append(block)
+                continue
+            image_url = block.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else image_url
+            if not isinstance(url, str):
+                raise HarnessError("A tool returned an invalid image block.", code="tool_image_invalid", status_code=422)
+            try:
+                image_bytes += validate_image_data_url(url)
+            except ValueError as exc:
+                raise HarnessError(str(exc), code="tool_image_invalid", status_code=422) from exc
+            if image_bytes > MAX_TOOL_IMAGE_BYTES_PER_REQUEST:
+                raise HarnessError("Too many image bytes for one model request. Read fewer images or summarize the conversation.",
+                    code="tool_images_too_large", status_code=422)
+            pending.append((str(message.get("tool_call_id") or "unknown"), block))
+        if len(kept) == len(content):
+            projected.append(message)
+        else:
+            projected.append({**message, "content": kept or "Image delivered in the following message."})
+    flush()
+    payload["messages"] = projected
 
 
 def _add_reasoning_replay(payload: dict[str, Any], input_: Any) -> None:

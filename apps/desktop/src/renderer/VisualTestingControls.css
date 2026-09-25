@@ -1,0 +1,14 @@
+.visual-testing-controls { display: grid; gap: var(--space-compact); padding: var(--pad-compact) 0; border-top: var(--line-hairline) solid var(--border); min-width: 0; container-type: inline-size; }
+.visual-testing-controls h3 { margin: 0; font-size: var(--text-body); }
+.visual-testing-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); min-width: 0; }
+.visual-testing-description { display: grid; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.visual-testing-description strong { font-size: var(--text-body); font-weight: var(--weight-medium); }
+.visual-testing-description span { font-size: var(--text-small); color: var(--muted); line-height: var(--leading-tight); }
+.visual-testing-controls :is(button, select) { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.visual-testing-switch { display: inline-flex; align-items: center; gap: var(--space-tight); white-space: nowrap; font-size: var(--text-small); }
+.visual-testing-session, .visual-testing-picker { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-tight); min-width: 0; font-size: var(--text-small); }
+.visual-testing-session span { min-width: 0; flex: 1; }
+.visual-testing-picker select { flex: 1 1 14rem; }
+.visual-testing-controls .hint { margin: 0; font-size: var(--text-small); }
+.visual-testing-error { margin: 0; color: var(--danger); overflow-wrap: anywhere; font-size: var(--text-small); }
+@container (max-width: 260px) { .visual-testing-row { align-items: stretch; flex-direction: column; } .visual-testing-row :is(button, select) { align-self: stretch; } }

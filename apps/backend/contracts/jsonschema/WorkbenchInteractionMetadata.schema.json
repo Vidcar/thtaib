@@ -103,6 +103,11 @@
           ],
           "default": null
         },
+        "capture_routes_enabled": {
+          "default": false,
+          "title": "Capture Routes Enabled",
+          "type": "boolean"
+        },
         "checkpoint_ids": {
           "items": {
             "type": "string"
@@ -206,6 +211,38 @@
         "deployment_id": {
           "title": "Deployment Id",
           "type": "string"
+        },
+        "desktop_access": {
+          "default": "off",
+          "enum": [
+            "off",
+            "selected",
+            "all"
+          ],
+          "title": "Desktop Access",
+          "type": "string"
+        },
+        "desktop_window": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Desktop Window"
         },
         "dispatched_tool_calls": {
           "default": 0,
@@ -2405,6 +2442,23 @@
           ],
           "default": null,
           "title": "Deployment Id"
+        },
+        "desktop_access": {
+          "anyOf": [
+            {
+              "enum": [
+                "off",
+                "selected",
+                "all"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Desktop Access"
         },
         "embedding_deployment_id": {
           "anyOf": [

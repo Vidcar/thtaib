@@ -31,6 +31,7 @@ class ChatConversationCreateRequest(BaseModel):
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] | None = None
+    desktop_access: Literal["off", "selected", "all"] | None = None
     helper_agent_ids: list[str] | None = None
     review: ReviewConfiguration | None = None
     deployment_id: str | None = None
@@ -59,6 +60,7 @@ class ChatStartRequest(BaseModel):
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] | None = None
+    desktop_access: Literal["off", "selected", "all"] | None = None
     helper_agent_ids: list[str] | None = None
     review: ReviewConfiguration | None = None
     task: str
@@ -224,6 +226,7 @@ class ChatConversation(BaseModel):
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] = "work"
+    desktop_access: Literal["off", "selected", "all"] = "off"
     helper_agent_ids: list[str] = Field(default_factory=list)
     review: ReviewConfiguration = Field(default_factory=ReviewConfiguration)
     connection_ids: list[str] | None = None

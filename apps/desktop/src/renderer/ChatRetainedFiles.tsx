@@ -27,6 +27,11 @@ export interface ChatRetainedFilesProps {
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
 function originLabel(asset: RetainedAsset): string {
+  if ((asset.origin as string) === "capture") {
+    if (asset.source_tool_name === "desktop_screenshot") return "Windows screenshot";
+    if (asset.source_tool_name === "read_file") return "Project image";
+    return "Browser screenshot";
+  }
   if (asset.origin === "verified_output") {
     return asset.source_tool_name ? `Verified ${asset.source_tool_name} output` : "Verified output";
   }

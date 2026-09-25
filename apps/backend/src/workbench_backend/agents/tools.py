@@ -8,6 +8,7 @@ built-ins, bound to project storage. ``execute`` is the host-shell tool from
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any, Literal
 from langchain_core.tools import BaseTool, ToolException, tool
 from workbench_backend.inference.ids import utc_now
@@ -21,6 +22,21 @@ INPUT_TOOL_NAMES = ("ask_user",)
 MEMORY_TOOL_NAMES = ("propose_memory",)
 ATTACHMENT_TOOL_NAMES = ("read_attachment",)
 ENABLED_TOOL_NAMES = (*VISIBILITY_TOOL_NAMES, *FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES, *ATTACHMENT_TOOL_NAMES)
+
+
+@lru_cache(maxsize=1)
+def _optional_visual_tool_groups() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Load owned worker tool names only when catalogue discovery needs them.
+
+    The workers import harness modules, so eager imports here would couple the
+    core tool definitions to optional runtime initialization.
+    """
+
+    from workbench_backend.browser.service import BROWSER_TOOL_NAMES
+    from workbench_backend.preview.service import PREVIEW_TOOL_NAMES
+    from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES
+
+    return BROWSER_TOOL_NAMES, PREVIEW_TOOL_NAMES, DESKTOP_TOOL_NAMES
 
 
 @tool("echo")
@@ -57,7 +73,8 @@ ENABLED_TOOLS: dict[str, BaseTool] = {
 def enabled_catalogue() -> list[str]:
     """Product discovery catalogue. Independent of whether a run has a project."""
 
-    return list(ENABLED_TOOL_NAMES)
+    browser, preview, desktop = _optional_visual_tool_groups()
+    return [*ENABLED_TOOL_NAMES, *browser, *preview, *desktop]
 
 
 def tool_descriptions() -> list[dict[str, str]]:
@@ -65,7 +82,7 @@ def tool_descriptions() -> list[dict[str, str]]:
         "echo": ("Echo", "Return supplied text unchanged for a connection check."),
         "time_now": ("Current time", "Read the current time."),
         "ls": ("List files", "List files in the authorized project or selected knowledge."),
-        "read_file": ("Read files", "Read authorized text files with line ranges."),
+        "read_file": ("Read files", "Read authorized text files with line ranges and supported images with a verified vision setup."),
         "write_file": ("Create files", "Write a project file; Access determines approval."),
         "edit_file": ("Edit files", "Replace matching text in an authorized project file."),
         "glob": ("Find files", "Find file paths matching a pattern."),
@@ -75,14 +92,43 @@ def tool_descriptions() -> list[dict[str, str]]:
         "ask_user": ("Ask questions", "Pause for your answer to a task question."),
         "propose_memory": ("Suggest memory", "Propose a durable memory change for separate review."),
         "read_attachment": ("Read attachments", "Read the retained files attached to this conversation."),
+        "browser_navigate": ("Open page", "Navigate the isolated test browser to a URL."),
+        "browser_navigate_back": ("Go back", "Go back in the isolated test browser."),
+        "browser_tabs": ("Browser tabs", "List, create, close, or select test browser tabs."),
+        "browser_snapshot": ("Page structure", "Inspect a page's accessibility snapshot."),
+        "browser_find": ("Find on page", "Find an element in the current page."),
+        "browser_click": ("Click on page", "Click an element in the test browser."),
+        "browser_hover": ("Hover on page", "Hover over an element in the test browser."),
+        "browser_press_key": ("Press browser key", "Send a key to the test browser."),
+        "browser_type": ("Type on page", "Type into the test browser."),
+        "browser_select_option": ("Select page option", "Choose an option in a page control."),
+        "browser_fill_form": ("Fill page form", "Fill controls in a page form."),
+        "browser_resize": ("Resize browser", "Set the test browser viewport size."),
+        "browser_console_messages": ("Page console", "Inspect page console messages."),
+        "browser_network_requests": ("Page requests", "Inspect requests made by the page."),
+        "browser_take_screenshot": ("Page screenshot", "Save a screenshot from the test browser."),
+        "browser_wait_for": ("Wait for page", "Wait for a page element or condition."),
+        "browser_handle_dialog": ("Handle page dialog", "Respond to a page dialog."),
+        "start_preview": ("Start project preview", "Start an owned local server for the bound project."),
+        "stop_preview": ("Stop project preview", "Stop the owned local project server."),
+        "preview_status": ("Project preview status", "Read the preview state, localhost health and recent bounded server log."),
+        "desktop_list_windows": ("List windows", "List windows allowed by this conversation's desktop access."),
+        "desktop_inspect": ("Inspect window", "Inspect accessible controls in the selected window."),
+        "desktop_search": ("Find window control", "Find an accessible control in the selected window."),
+        "desktop_wait": ("Wait for window", "Wait for a window or control state."),
+        "desktop_invoke": ("Invoke window control", "Invoke an accessible control in the selected window."),
+        "desktop_set_value": ("Set window value", "Set the value of an accessible control."),
+        "desktop_send_keys": ("Send window keys", "Send keys to the selected window."),
+        "desktop_screenshot": ("Window screenshot", "Save a screenshot of an authorized window or element."),
     }
-    return [{"id": name, "name": descriptions[name][0], "description": descriptions[name][1]} for name in ENABLED_TOOL_NAMES]
+    return [{"id": name, "name": descriptions[name][0], "description": descriptions[name][1]} for name in enabled_catalogue()]
 
 
 def enabled_for_project(
     project_bound: bool,
     *,
     knowledge_routes: bool = False,
+    capture_routes: bool = False,
     attachment_available: bool = False,
 ) -> list[str]:
     """Tools enabled for one run.
@@ -95,7 +141,7 @@ def enabled_for_project(
     if project_bound:
         return [name for name in ENABLED_TOOL_NAMES if name not in ATTACHMENT_TOOL_NAMES or attachment_available]
     enabled = [*VISIBILITY_TOOL_NAMES, *PLANNING_TOOL_NAMES, *INPUT_TOOL_NAMES, *MEMORY_TOOL_NAMES]
-    if knowledge_routes:
+    if knowledge_routes or capture_routes:
         enabled.extend(KNOWLEDGE_ROUTE_READ_TOOLS)
     if attachment_available:
         enabled.extend(ATTACHMENT_TOOL_NAMES)
@@ -107,20 +153,25 @@ def resolve_presented_tools(
     *,
     project_bound: bool,
     knowledge_routes: bool = False,
+    capture_routes: bool = False,
     external_names: list[str] | None = None,
     attachment_available: bool = False,
 ) -> tuple[list[str], list[str], list[str], list[str]]:
     """Return (presented, denied, filesystem_blocked, shell_blocked).
 
-    Denied names are not in the product catalogue. Project filesystem names
+    Denied names are not in the product catalogue. Optional browser, preview,
+    and desktop tools are presented only when explicitly requested. Project filesystem names
     requested without a project are ``filesystem_requires_project``.
     ``ls`` / ``read_file`` are allowed without a project only when knowledge
-    routes are attached. ``execute`` without a project is
-    ``shell_requires_project``.
+    or retained capture routes are attached. ``execute`` without a project is
+    ``shell_requires_project``. Project preview uses the same project requirement.
     """
 
     external = list(dict.fromkeys(external_names or []))
-    enabled = [*enabled_for_project(project_bound, knowledge_routes=knowledge_routes, attachment_available=attachment_available), *external]
+    browser, preview, desktop = _optional_visual_tool_groups()
+    optional = set((*browser, *preview, *desktop))
+    enabled = [*enabled_for_project(project_bound, knowledge_routes=knowledge_routes,
+        capture_routes=capture_routes, attachment_available=attachment_available), *external]
     if requested is None:
         return enabled, [], [], []
     presented: list[str] = []
@@ -132,10 +183,14 @@ def resolve_presented_tools(
         if name in seen:
             continue
         seen.add(name)
-        if name not in ENABLED_TOOL_NAMES and name not in external:
+        if name not in ENABLED_TOOL_NAMES and name not in optional and name not in external:
             denied.append(name)
+        elif name in preview and not project_bound:
+            shell_blocked.append(name)
+        elif name in optional:
+            presented.append(name)
         elif name in FILESYSTEM_TOOL_NAMES and not project_bound:
-            if knowledge_routes and name in KNOWLEDGE_ROUTE_READ_TOOLS:
+            if (knowledge_routes or capture_routes) and name in KNOWLEDGE_ROUTE_READ_TOOLS:
                 presented.append(name)
             else:
                 filesystem_blocked.append(name)

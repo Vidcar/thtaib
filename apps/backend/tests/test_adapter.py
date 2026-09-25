@@ -19,6 +19,8 @@ from workbench_backend.inference.adapter import (
     adapter_target,
     chat_model_for_deployment,
 )
+from workbench_backend.inference.capabilities import setup_fingerprint
+from workbench_backend.inference.probes import _image_fixture
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import (
     Deployment,
@@ -307,7 +309,7 @@ class AdapterTests(unittest.TestCase):
             self.assertTrue(sink[0]["response_received"])
             self.assertEqual(sink[0]["response_status_code"], 200)
             self.assertTrue(sink[0]["observations"]["converted_messages"])
-            self.assertEqual(model.profile, {})
+            self.assertEqual(model.profile, {"image_inputs": False, "image_tool_message": False})
         finally:
             model.close()
 
@@ -570,6 +572,53 @@ class AdapterTests(unittest.TestCase):
             model.close()
 
         self.assertEqual(_RecordingHandler.requests[0]["body"]["model"], "observed-qwen")
+
+    def test_tool_image_is_sent_after_all_tool_results_and_keeps_call_ids(self) -> None:
+        deployment = self._deployment(server_props=ServerProperties(fetched=utc_now(),
+            source_url=f"{self.endpoint}/props", modalities={"vision": True}))
+        fingerprint = setup_fingerprint(deployment)
+        deployment.capability_evidence = [
+            {"capability": name, "status": "passed", "fingerprint": fingerprint}
+            for name in ("image", "tool_image")
+        ]
+        model = chat_model_for_deployment(deployment, capture_sink=[])
+        image = _image_fixture("red").partition(",")[2]
+        try:
+            self.assertTrue(model.profile["image_inputs"])
+            self.assertTrue(model.profile["image_tool_message"])
+            model.invoke([
+                HumanMessage(content="Read the image and text."),
+                AIMessage(content="", tool_calls=[
+                    {"name": "read_file", "args": {"file_path": "view.png"}, "id": "image-call"},
+                    {"name": "echo", "args": {"text": "done"}, "id": "text-call"},
+                ]),
+                ToolMessage(content_blocks=[{"type": "image", "base64": image,
+                    "mime_type": "image/png"}], name="read_file", tool_call_id="image-call"),
+                ToolMessage(content="done", name="echo", tool_call_id="text-call"),
+            ])
+        finally:
+            model.close()
+        messages = _RecordingHandler.requests[0]["body"]["messages"]
+        self.assertEqual([item["role"] for item in messages],
+            ["user", "assistant", "tool", "tool", "user"])
+        self.assertEqual([item["tool_call_id"] for item in messages if item["role"] == "tool"],
+            ["image-call", "text-call"])
+        self.assertIn("following message", messages[2]["content"])
+        self.assertEqual(messages[-1]["content"][1]["image_url"]["url"], _image_fixture("red"))
+
+    def test_invalid_tool_image_fails_before_network_request(self) -> None:
+        model = chat_model_for_deployment(self._deployment())
+        try:
+            with self.assertRaises(HarnessError) as raised:
+                model.invoke([
+                    AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "image-call"}]),
+                    ToolMessage(content_blocks=[{"type": "image", "base64": "AAAA", "mime_type": "image/png"}],
+                        tool_call_id="image-call"),
+                ])
+            self.assertEqual(raised.exception.code, "tool_image_invalid")
+            self.assertEqual(_RecordingHandler.requests, [])
+        finally:
+            model.close()
 
     def test_adapter_rejects_ambiguous_endpoint_model_identity(self) -> None:
         class AmbiguousHandler(_RecordingHandler):

@@ -153,6 +153,118 @@ class RetainedAssetService:
         self.store.add_consumer(asset.id, kind="run", consumer_id=run.id, recorded_at=asset.observed_at)
         return asset
 
+    def register_capture(
+        self,
+        run: AgentRun,
+        source_path: Path,
+        *,
+        source_tool_name: str,
+        source_tool_call_id: str | None,
+        target: str,
+        controlled_root: Path,
+    ) -> tuple[RetainedAsset, str]:
+        """Retain a screenshot produced by a trusted, scoped worker.
+
+        The worker supplies a path only within its owned capture directory. No
+        caller-controlled filename is accepted as a destination or asset path.
+        """
+
+        if source_tool_name not in {"browser_take_screenshot", "desktop_screenshot"}:
+            raise HTTPException(status_code=422, detail="Unknown capture source tool.")
+        try:
+            root = controlled_root.resolve(strict=True)
+            path = source_path.resolve(strict=True)
+            path.relative_to(root)
+            if not path.is_file():
+                raise OSError("Capture is not a file.")
+            content_type = _guess_content_type(path.name)
+            if content_type not in IMAGE_TYPES:
+                raise HTTPException(status_code=415, detail="Captures must be PNG, JPEG or WebP images.")
+            if path.stat().st_size > MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=413, detail="Capture exceeds the 8 MB image limit.")
+            content = path.read_bytes()
+        except HTTPException:
+            raise
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail="Capture is outside the owned worker directory or unavailable.") from exc
+        dimensions = inspect_image(content, content_type)
+        conversation = self.session_for_run(run)
+        if conversation is None:
+            raise HTTPException(status_code=409, detail="Capture run has no owning conversation.")
+        asset = self._create_asset(
+            origin=RetainedAssetOrigin.capture,
+            session_id=conversation.id,
+            project_path=_conversation_project_path(conversation),
+            filename=path.name,
+            content_type=content_type,
+            content_kind=AssetContentKind.image,
+            content=content,
+            text="",
+            dimensions=dimensions,
+            source_run_id=run.id,
+            source_tool_call_id=source_tool_call_id,
+            source_tool_name=source_tool_name,
+            source_target=target[:2048],
+            observation=f"Captured {dimensions[0]} × {dimensions[1]} pixels from {target[:300]}.",
+        )
+        self.store.add_consumer(asset.id, kind="run", consumer_id=run.id, recorded_at=asset.observed_at)
+        return asset, capture_virtual_path(asset)
+
+    def retain_tool_image(
+        self,
+        run: AgentRun,
+        content: bytes,
+        *,
+        content_type: str,
+        source_path: str,
+        source_tool_call_id: str,
+    ) -> tuple[RetainedAsset, str]:
+        """Offload a successful native image read before its graph checkpoint."""
+
+        if content_type not in IMAGE_TYPES:
+            raise HTTPException(status_code=415, detail="Only PNG, JPEG and WebP tool images are supported.")
+        dimensions = inspect_image(content, content_type)
+        conversation = self.session_for_run(run)
+        if conversation is None:
+            raise HTTPException(status_code=409, detail="Tool image has no owning conversation.")
+        filename = Path(source_path.replace("\\", "/")).name or f"tool-image.{IMAGE_TYPES[content_type].lower()}"
+        asset = self._create_asset(
+            origin=RetainedAssetOrigin.capture,
+            session_id=conversation.id,
+            project_path=_conversation_project_path(conversation),
+            filename=filename,
+            content_type=content_type,
+            content_kind=AssetContentKind.image,
+            content=content,
+            text="",
+            dimensions=dimensions,
+            source_run_id=run.id,
+            source_tool_call_id=source_tool_call_id,
+            source_tool_name="read_file",
+            source_target=source_path[:2048],
+            observation=f"Read {dimensions[0]} × {dimensions[1]} pixel image from {source_path[:300]}.",
+        )
+        self.store.add_consumer(asset.id, kind="run", consumer_id=run.id, recorded_at=asset.observed_at)
+        return asset, capture_virtual_path(asset)
+
+    def session_for_run(self, run: AgentRun) -> ChatConversation | None:
+        """Resolve a durable Chat owner before granting retained capture access."""
+
+        if run.source_surface != "chat" or not run.thread_id:
+            return None
+        return self.session_for_thread(run.thread_id)
+
+    def session_for_thread(self, thread_id: str) -> ChatConversation | None:
+        """Map a Chat thread to its sole retained-asset owner."""
+
+        matches = [
+            item for item in self.app_store.list_conversations(include_archived=True)
+            if item.thread_id == thread_id
+        ]
+        # The chat dispatcher may still be appending run_ids when a very fast
+        # first tool returns. Thread identity is already the frozen owner.
+        return matches[0] if len(matches) == 1 else None
+
     def list_assets(self, filters: RetainedAssetListFilters | None = None) -> list[RetainedAsset]:
         filters = filters or RetainedAssetListFilters()
         return self.store.list(
@@ -437,6 +549,7 @@ class RetainedAssetService:
         source_run_id: str | None = None,
         source_tool_call_id: str | None = None,
         source_tool_name: str | None = None,
+        source_target: str | None = None,
         mutable_reference: str | None = None,
         observation: str | None = None,
     ) -> RetainedAsset:
@@ -463,6 +576,7 @@ class RetainedAssetService:
             source_run_id=source_run_id,
             source_tool_call_id=source_tool_call_id,
             source_tool_name=source_tool_name,
+            source_target=source_target,
             mutable_reference=mutable_reference,
             observation=observation,
         )
@@ -671,6 +785,15 @@ def _guess_content_type(filename: str) -> str:
         ".ps1": "application/x-powershell",
         ".sh": "application/x-sh",
     }.get(suffix, "text/plain")
+
+
+def capture_virtual_path(asset: RetainedAsset) -> str:
+    """Stable read-only path recognized by the native Deep Agents file tool."""
+
+    if asset.origin is not RetainedAssetOrigin.capture:
+        raise ValueError("Only retained captures have a capture path.")
+    suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}[asset.content_type]
+    return f"/captures/{asset.id}{suffix}"
 
 
 def _tool_invocation_succeeded(invocation: dict[str, Any]) -> bool:

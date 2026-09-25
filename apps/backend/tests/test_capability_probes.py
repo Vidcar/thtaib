@@ -341,6 +341,46 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.assertEqual(evidence.status, expected)
                 self.assertEqual(len(set(model.images)), 2)
 
+    def test_tool_image_probe_uses_a_complete_tool_exchange_and_distinct_images(self) -> None:
+        red = _image_fixture("red").partition(",")[2]
+        blue = _image_fixture("blue").partition(",")[2]
+
+        class ToolImages:
+            def __init__(self, wrong: bool = False):
+                self.wrong = wrong
+                self.exchanges = []
+                self.forced_calls = 0
+            def bind_tools(self, tools, **kwargs):
+                self.asserted_tools = tools
+                assert kwargs == {"tool_choice": "any"}
+                owner = self
+                class ForcedToolCall:
+                    def invoke(self, messages):
+                        owner.forced_calls += 1
+                        assert len(messages) == 1
+                        return owner.invoke(messages)
+                return ForcedToolCall()
+            def invoke(self, messages):
+                if len(messages) == 1:
+                    return AIMessage(content="", tool_calls=[{"name": "workbench_probe_echo",
+                        "args": {"text": "image-check"}, "id": f"image-{len(self.exchanges)}"}])
+                self.exchanges.append(messages)
+                self.asserted_result = messages[-1]
+                assert isinstance(self.asserted_result, ToolMessage)
+                assert self.asserted_result.tool_call_id == messages[-2].tool_calls[0]["id"]
+                data = self.asserted_result.content_blocks[0]["base64"]
+                return AIMessage(content="red" if self.wrong or data == red else "blue" if data == blue else "unknown")
+
+        for wrong, expected in ((False, "passed"), (True, "failed")):
+            with self.subTest(wrong=wrong):
+                model = ToolImages(wrong)
+                evidence = run_capability_probe(FakeManager(self.store, self.deployment), self.deployment.id,
+                    CapabilityProbeRequest(capability="tool_image"), model_factory=lambda *args, **kwargs: model)
+                self.assertEqual(evidence.status, expected)
+                self.assertEqual(len(model.exchanges), 2)
+                self.assertEqual(model.forced_calls, 2)
+                self.assertEqual(len(model.asserted_tools), 1)
+
     def test_cleanup_failure_still_saves_rerunnable_inconclusive_evidence(self) -> None:
         class CloseFailure:
             def stream(self, messages):

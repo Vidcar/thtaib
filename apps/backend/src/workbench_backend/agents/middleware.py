@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import re
 from collections.abc import Callable
 from typing import Any
 import time
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
 from workbench_backend.agents.context import observe_payload, require_context_fit
-from workbench_backend.agents.harness_backend import is_reserved_framework_path
+from workbench_backend.agents.harness_backend import CAPTURES_PREFIX, is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
     is_knowledge_route_path,
     is_memory_route_path,
@@ -32,6 +35,11 @@ from workbench_backend.agents.tools import (
     tool_name,
 )
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.image_validation import (
+    MAX_IMAGE_BYTES,
+    MAX_TOOL_IMAGE_BYTES_PER_REQUEST,
+    validate_image_bytes,
+)
 from workbench_backend.knowledge.diagnostics import apply_capture_policy
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, CURRENT_TOOL_CALL
@@ -53,6 +61,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         *,
         fixture_bank: FixtureBank | None = None,
         execution_control: ExecutionControl | None = None,
+        asset_service: Any = None,
+        capture_backend: Any = None,
     ) -> None:
         super().__init__()
         self.run = run
@@ -60,6 +70,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._settings_provider = settings_provider
         self.fixture_bank = fixture_bank
         self.execution_control = execution_control or ExecutionControl(run)
+        self.asset_service = asset_service
+        self.capture_backend = capture_backend
 
     def wrap_model_call(
         self,
@@ -67,7 +79,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         self._require_dispatch_allowed()
-        filtered = request.override(tools=self._presented(request.tools))
+        filtered = self._with_current_tool_images(request.override(tools=self._presented(request.tools)))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -102,7 +114,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     async def _awrap_model_call(self, request, handler):
         self._require_dispatch_allowed()
-        filtered = request.override(tools=self._presented(request.tools))
+        filtered = await asyncio.to_thread(self._with_current_tool_images,
+            request.override(tools=self._presented(request.tools)))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -154,7 +167,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if blocked is not None:
             return blocked
         with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
-            return self._authorization_result(self._wrap_tool_call(request, handler))
+            result = self._wrap_tool_call(request, handler)
+            return self._authorization_result(self._offload_read_file_image(result))
 
     def _authorization_result(self, result):
         if isinstance(result, ToolMessage):
@@ -168,14 +182,12 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _wrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
-            name, _, call_id = _tool_call_parts(request)
-            if name == "task":
-                token = CURRENT_TOOL_CALL.set(call_id)
-                try:
-                    return handler(request)
-                finally:
-                    CURRENT_TOOL_CALL.reset(token)
-            return handler(request)
+            _, _, call_id = _tool_call_parts(request)
+            token = CURRENT_TOOL_CALL.set(call_id)
+            try:
+                return handler(request)
+            finally:
+                CURRENT_TOOL_CALL.reset(token)
         return self._replay_tool_call(request)
 
     async def awrap_tool_call(
@@ -188,19 +200,112 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if blocked is not None:
             return blocked
         with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
-            return self._authorization_result(await self._awrap_tool_call(request, handler))
+            result = await self._awrap_tool_call(request, handler)
+            return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
+
+    def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:
+        """Replace a successful native image result with a durable asset path."""
+
+        if (not isinstance(result, ToolMessage) or result.name != "read_file"
+            or result.status == "error" or self.asset_service is None
+            or self.capture_backend is None or not self.run.capture_routes_enabled):
+            return result
+        source_path = result.additional_kwargs.get("read_file_path")
+        media_type = result.additional_kwargs.get("read_file_media_type")
+        if not isinstance(source_path, str) or not isinstance(media_type, str):
+            return result
+        images = [block for block in result.content_blocks
+            if isinstance(block, dict) and block.get("type") == "image"]
+        if not images:
+            return result
+        if len(images) != 1 or media_type not in {"image/png", "image/jpeg", "image/webp"}:
+            from workbench_backend.errors import HarnessError
+            raise HarnessError("Only one PNG, JPEG, or WebP image can be read at a time.",
+                code="tool_image_invalid", status_code=422)
+        if _CAPTURE_FILE_PATH.fullmatch(source_path):
+            # The read-only backend already verified session ownership; reuse
+            # the same retained asset instead of creating another capture.
+            path = source_path
+            asset_id = source_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            digest = None
+        else:
+            encoded = images[0].get("base64")
+            if not isinstance(encoded, str) or len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4:
+                from workbench_backend.errors import HarnessError
+                raise HarnessError("The image result exceeds the supported size.",
+                    code="tool_image_invalid", status_code=422)
+            try:
+                content = base64.b64decode(encoded, validate=True)
+                validate_image_bytes(content, media_type)
+            except (ValueError, binascii.Error) as exc:
+                from workbench_backend.errors import HarnessError
+                raise HarnessError("The image result could not be verified.",
+                    code="tool_image_invalid", status_code=422) from exc
+            asset, path = self.asset_service.retain_tool_image(self.run, content,
+                content_type=media_type, source_path=source_path,
+                source_tool_call_id=result.tool_call_id)
+            asset_id = asset.id
+            digest = asset.sha256
+        text = "\n".join(block["text"] for block in result.content_blocks
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
+        reference = f"Image retained at {path}. Use read_file on that path to inspect it again."
+        return result.model_copy(update={
+            "content": f"{text}\n{reference}" if text else reference,
+            "additional_kwargs": {**result.additional_kwargs,
+                "capture_path": path, "capture_asset_id": asset_id,
+                "capture_media_type": media_type,
+                **({"capture_sha256": digest} if digest is not None else {})},
+        })
+
+    def _with_current_tool_images(self, request: ModelRequest) -> ModelRequest:
+        """Attach only the trailing tool batch's images to this model request."""
+
+        if self.capture_backend is None or not self.run.capture_routes_enabled:
+            return request
+        messages = list(request.messages)
+        batch_start = len(messages)
+        while batch_start > 0 and isinstance(messages[batch_start - 1], ToolMessage):
+            batch_start -= 1
+        if (batch_start == len(messages) or batch_start == 0
+            or not isinstance(messages[batch_start - 1], AIMessage)
+            or not messages[batch_start - 1].tool_calls):
+            return request
+        content: list[dict[str, Any]] = []
+        image_bytes = 0
+        for message in messages[batch_start:]:
+            path = message.additional_kwargs.get("capture_path")
+            mime_type = message.additional_kwargs.get("capture_media_type")
+            if not isinstance(path, str) or _CAPTURE_FILE_PATH.fullmatch(path) is None:
+                continue
+            if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+                continue
+            loaded = self.capture_backend.read(path.removeprefix("/captures"))
+            if loaded.error or loaded.file_data is None:
+                from workbench_backend.errors import HarnessError
+                raise HarnessError("The retained image is unavailable. Read or capture it again.",
+                    code="capture_unavailable", status_code=409)
+            image_bytes += len(loaded.file_data["content"]) * 3 // 4
+            if image_bytes > MAX_TOOL_IMAGE_BYTES_PER_REQUEST:
+                from workbench_backend.errors import HarnessError
+                raise HarnessError("Too many image bytes for one model request. Read fewer images.",
+                    code="tool_images_too_large", status_code=422)
+            content.extend([
+                {"type": "text", "text": f"Image from tool call {message.tool_call_id} at {path}:"},
+                {"type": "image", "base64": loaded.file_data["content"], "mime_type": mime_type},
+            ])
+        if not content:
+            return request
+        return request.override(messages=[*messages, HumanMessage(content=content)])
 
     async def _awrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
             name, _, call_id = _tool_call_parts(request)
             async def invoke() -> Any:
-                if name == "task":
-                    token = CURRENT_TOOL_CALL.set(call_id)
-                    try:
-                        return await handler(request)
-                    finally:
-                        CURRENT_TOOL_CALL.reset(token)
-                return await handler(request)
+                token = CURRENT_TOOL_CALL.set(call_id)
+                try:
+                    return await handler(request)
+                finally:
+                    CURRENT_TOOL_CALL.reset(token)
             if name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
                 # These upstream async backends run synchronous local work in
                 # an executor. Cancelling the await cannot stop that work.
@@ -243,11 +348,15 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 return None
             return ToolMessage(content="This reader can only open framework-saved tool results or conversation history, not project or knowledge files.", name=name, tool_call_id=call_id, status="error")
         if name not in self.run.presented_tools:
-            if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path and not _allow_projectless_knowledge_tool(name, args, self.run):
+            if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path and not (
+                _allow_projectless_knowledge_tool(name, args, self.run)
+                or _allow_projectless_capture_tool(name, args, self.run)
+            ):
                 return ToolMessage(content="Filesystem tools require a bound project folder or selected knowledge. The unselected action was not executed.", name=name, tool_call_id=call_id, status="error")
             return ToolMessage(content="This tool was not selected for this run. The action was not executed.", name=name, tool_call_id=call_id, status="error")
         if name in FILESYSTEM_TOOL_NAMES and not self.run.project_path:
-            if _allow_projectless_knowledge_tool(name, args, self.run):
+            if (_allow_projectless_knowledge_tool(name, args, self.run)
+                or _allow_projectless_capture_tool(name, args, self.run)):
                 return None
             return ToolMessage(
                 content=(
@@ -434,11 +543,31 @@ def _allow_projectless_knowledge_tool(
     if not knowledge_routes_selected(run.memory_version_refs, run.skill_version_refs):
         return False
     path = _filesystem_tool_path(name, args)
+    normalized = path if path.startswith("/") else f"/{path.lstrip('/')}"
+    is_capture_path = normalized == CAPTURES_PREFIX.rstrip("/") or normalized.startswith(CAPTURES_PREFIX)
     if name in KNOWLEDGE_ROUTE_READ_TOOLS:
-        return path == "/" or is_knowledge_route_path(path) or is_reserved_framework_path(path)
+        return path == "/" or is_knowledge_route_path(path) or (
+            is_reserved_framework_path(path) and not is_capture_path
+        )
     if name in {"write_file", "edit_file"}:
         return is_memory_route_path(path)
     return False
+
+
+_CAPTURE_FILE_PATH = re.compile(r"^/captures/asset_[0-9a-f]{32}\.(png|jpg|webp)$")
+
+
+def _allow_projectless_capture_tool(name: str, args: dict[str, Any], run: AgentRun) -> bool:
+    """Permit only session-backed capture reads through the mounted backend."""
+
+    if not run.capture_routes_enabled or name not in KNOWLEDGE_ROUTE_READ_TOOLS:
+        return False
+    path = _filesystem_tool_path(name, args).replace("\\", "/")
+    if path.startswith("//") or any(part in {".", ".."} or ":" in part for part in path.split("/")):
+        return False
+    if name == "ls":
+        return path in {"/", "/captures", "/captures/"}
+    return _CAPTURE_FILE_PATH.fullmatch(path) is not None
 
 
 def _filesystem_tool_path(name: str, args: dict[str, Any]) -> str:

@@ -30,6 +30,12 @@ import type {
   RuntimeManifest,
   SettingsBags,
   ChatSearchResult,
+  BrowserRuntimeStatus,
+  BrowserSessionStatus,
+  WindowRuntimeStatus,
+  TestWindow,
+  WindowAccessStatus,
+  DesktopAccess,
 } from "./types";
 
 export const DEFAULT_GPU_STARTUP = {
@@ -213,6 +219,16 @@ export const api = {
   detach: (id: string) => request<Deployment>(`/v1/deployments/${id}/detach`, { method: "POST" }),
   healthOf: (id: string) => request<Deployment>(`/v1/deployments/${id}/health`),
   agentTools: () => request<{ enabled: string[]; tools?: Array<{ id: string; name: string; description: string; available?: boolean; unavailable_reason?: string | null }> }>("/v1/agent-tools"),
+  browserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime"),
+  installBrowserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime/install", { method: "POST", body: "{}" }),
+  browserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}`),
+  resetBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/reset`, { method: "POST", body: "{}" }),
+  closeBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
+  windowRuntime: () => request<WindowRuntimeStatus>("/v1/window-testing/runtime"),
+  installWindowRuntime: () => request<WindowRuntimeStatus>("/v1/window-testing/runtime/install", { method: "POST", body: "{}" }),
+  testWindows: () => request<TestWindow[]>("/v1/window-testing/windows"),
+  windowAccess: (conversationId: string) => request<WindowAccessStatus>(`/v1/window-testing/conversations/${encodeURIComponent(conversationId)}/scope`),
+  setWindowAccess: (conversationId: string, scope: DesktopAccess, hwnd?: number) => request<WindowAccessStatus>(`/v1/window-testing/conversations/${encodeURIComponent(conversationId)}/scope`, { method: "PUT", body: JSON.stringify({ scope, ...(hwnd ? { hwnd } : {}) }) }),
   startAgentRun: (
     deployment_id: string,
     task: string,

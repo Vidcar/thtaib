@@ -2,7 +2,33 @@ import type { SetupConfiguration } from "./workspaceApi";
 
 export interface ChatWorkspaceLaunch { id: string; projectId?: string | null; agentSetupVersionId?: string | null }
 
-export const chatSetupFields = ["deployment_id", "model_configuration_id", "profile_id", "inherit_deployment_settings", "startup_overrides", "embedding_deployment_id", "presented_tools", "approval_mode", "per_request_overrides", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs", "connection_ids", "instructions", "work_mode", "helper_agent_ids", "review"] as const;
+export const chatSetupFields = ["deployment_id", "model_configuration_id", "profile_id", "inherit_deployment_settings", "startup_overrides", "embedding_deployment_id", "presented_tools", "approval_mode", "per_request_overrides", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs", "connection_ids", "instructions", "work_mode", "desktop_access", "helper_agent_ids", "review"] as const;
+
+export const browserToolNames = ["browser_navigate", "browser_navigate_back", "browser_tabs", "browser_snapshot", "browser_find", "browser_click", "browser_hover", "browser_press_key", "browser_type", "browser_select_option", "browser_fill_form", "browser_resize", "browser_console_messages", "browser_network_requests", "browser_take_screenshot", "browser_wait_for", "browser_handle_dialog"] as const;
+export const desktopToolNames = ["desktop_list_windows", "desktop_inspect", "desktop_search", "desktop_wait", "desktop_invoke", "desktop_set_value", "desktop_send_keys", "desktop_screenshot"] as const;
+export const previewToolNames = ["start_preview", "stop_preview", "preview_status"] as const;
+export const optionalVisualToolNames = new Set<string>([...browserToolNames, ...desktopToolNames, ...previewToolNames]);
+
+export function withBrowserTools(current: string[], enabled: boolean, projectBound: boolean, _hasKnowledgeRoutes: boolean): string[] {
+  const selected = new Set(current.filter(name => !browserToolNames.some(browserName => browserName === name)));
+  if (enabled) {
+    browserToolNames.forEach(name => selected.add(name));
+    if (projectBound) previewToolNames.forEach(name => selected.add(name));
+    selected.add("read_file");
+  } else {
+    previewToolNames.forEach(name => selected.delete(name));
+  }
+  return [...selected];
+}
+
+export function withDesktopTools(current: string[], enabled: boolean, _projectBound: boolean, _hasKnowledgeRoutes: boolean): string[] {
+  const selected = new Set(current.filter(name => !desktopToolNames.some(desktopName => desktopName === name)));
+  if (enabled) {
+    desktopToolNames.forEach(name => selected.add(name));
+    selected.add("read_file");
+  }
+  return [...selected];
+}
 
 // The backend resolves omitted fields from the immutable selected setup. Empty
 // lists are deliberate overrides; serializing every control's default would

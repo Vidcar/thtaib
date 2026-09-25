@@ -8,13 +8,14 @@ import { HoverHelp } from "./HoverHelp";
 
 import { api, ApiError } from "./api";
 import { workspaceApi, type ProjectRecord, type AgentSetup, type SetupConfiguration, type ResolvedSetupSelection } from "./workspaceApi";
-import { setupOverrides, sparseChatSetup, type ChatWorkspaceLaunch } from "./chatSetup";
+import { browserToolNames, optionalVisualToolNames, setupOverrides, sparseChatSetup, withBrowserTools, withDesktopTools, type ChatWorkspaceLaunch } from "./chatSetup";
 import { ApprovalModeControl, approvalModeLabel, approvalModeOf, type ApprovalMode } from "./ApprovalModeControl";
 import { Icon } from "./Icon";
 import type { ChatLaunch, ConversationListActions, HistoryNotice } from "./WorkbenchSidebar";
 import { ComposerAttachments } from "./ComposerAttachments";
 import { ChatDock, type DockPage } from "./ChatDock";
 import { ConversationSetup } from "./ConversationSetup";
+import { VisualTestingControls } from "./VisualTestingControls";
 
 type RailPage = "setup" | DockPage | "actions";
 
@@ -53,6 +54,7 @@ import {
   type KnowledgeEntry,
   type PresentationSettings,
   type RunProfile,
+  type DesktopAccess,
   type WorkbenchTab,
 } from "./types";
 import "./ChatPanel.css";
@@ -95,7 +97,7 @@ interface PendingChatSubmit {
   review?: { enabled: boolean; criteria: string; max_revisions: 2 };
 }
 
-type ExecutionPreferences = { work_mode?: "work" | "plan"; helper_agent_ids?: string[]; review?: { enabled?: boolean; criteria?: string; max_revisions?: number } };
+type ExecutionPreferences = { work_mode?: "work" | "plan"; desktop_access?: DesktopAccess; helper_agent_ids?: string[]; review?: { enabled?: boolean; criteria?: string; max_revisions?: number } };
 
 function ChatInteractionStream(props: {
   detailedStreams?: boolean;
@@ -635,6 +637,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const filePicker = useRef<HTMLInputElement>(null);
   const [workMode, setWorkMode] = useState<"work" | "plan">("work");
+  const [desktopAccess, setDesktopAccess] = useState<DesktopAccess>("off");
+  const [selectedTools, setSelectedTools] = useState<string[] | null>(null);
   const [helperAgentIds, setHelperAgentIds] = useState<string[]>([]);
   const [review, setReview] = useState({ enabled: false, criteria: "", max_revisions: 2 as const });
   const [incomingDrop, setIncomingDrop] = useState<{ id: string; sessionId: string; files: File[] } | null>(null);
@@ -835,7 +839,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       model_configuration_id: profileId || null,
       startup_overrides: startupOverrides,
       embedding_deployment_id: embeddingDeploymentId || null,
-      ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: conversation?.draft?.intended_config?.presented_tools ?? conversation?.setup_overrides?.presented_tools ?? null } : {}),
+      ...(setupEditedFields.current.has("presented_tools") ? { presented_tools: selectedTools } : {}),
+      ...(setupEditedFields.current.has("desktop_access") ? { desktop_access: desktopAccess } : {}),
       ...(setupEditedFields.current.has("approval_mode") ? { approval_mode: approvalMode } : {}),
       per_request_overrides: perRequestOverrides,
       ...selectedKnowledge,
@@ -855,6 +860,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     profileIdRef.current = config.model_configuration_id ?? config.profile_id ?? "";
     setProfileId(profileIdRef.current);
     setStartupOverrides(config.startup_overrides ?? {});
+    setSelectedTools(config.presented_tools ?? null);
     setEmbeddingDeploymentId(config.embedding_deployment_id ?? "");
     if (!setupEditedFields.current.has("approval_mode")) setApprovalMode(approvalModeOf(config.approval_mode));
     setPerRequestOverrides(config.per_request_overrides ?? {});
@@ -865,6 +871,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function applyExecutionPreferences(config: ExecutionPreferences) {
     setWorkMode(config.work_mode === "plan" ? "plan" : "work");
+    setDesktopAccess(config.desktop_access ?? "off");
     setHelperAgentIds(config.helper_agent_ids ?? []);
     setReview({ enabled: config.review?.enabled === true, criteria: config.review?.criteria ?? "", max_revisions: 2 });
   }
@@ -1003,7 +1010,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     task,
     attachmentIds,
     approvalMode,
-    workMode, helperAgentIds, review,
+    workMode, desktopAccess, selectedTools, helperAgentIds, review,
     perRequestOverrides,
     selectedKnowledgeIds,
     knowledgeEntries,
@@ -1037,6 +1044,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
+    setSelectedTools(null);
     applyExecutionPreferences({});
     setMessage("");
   }
@@ -1131,6 +1139,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setStartupOverrides(overrides.startup_overrides ?? {});
         setApprovalMode(approvalModeOf(overrides.approval_mode ?? (resolved ? resolved.configuration.approval_mode : next.approval_mode)));
         setPerRequestOverrides(draftConfig.per_request_overrides && typeof draftConfig.per_request_overrides === "object" ? draftConfig.per_request_overrides as Record<string, unknown> : {});
+        setSelectedTools(overrides.presented_tools ?? null);
         applyExecutionPreferences({ ...(next as ExecutionPreferences), ...draftConfig } as ExecutionPreferences);
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
@@ -1240,6 +1249,27 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     const text = task.trim();
     if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
       return;
+    }
+    if (desktopAccess !== "off") {
+      if (!conversation) {
+        setMessage("Create this chat, then choose its Windows access before sending.");
+        openRail("setup");
+        return;
+      }
+      const grantConversationId = conversation.id;
+      const grantGeneration = selectionRequest.current;
+      try {
+        const grant = await api.windowAccess(grantConversationId);
+        if (selectionRequest.current !== grantGeneration || activeOwner.current.conversationId !== grantConversationId) return;
+        if (grant.scope !== desktopAccess || grant.stale || (desktopAccess === "selected" && !grant.selected_window?.hwnd)) {
+          setMessage("Choose this chat’s live Windows access in Setup before sending.");
+          openRail("setup");
+          return;
+        }
+      } catch (error) {
+        fail(error);
+        return;
+      }
     }
     const requestId = selectionRequest.current;
     const originConversationId = conversation?.id ?? null;
@@ -1686,6 +1716,22 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               filesystemToolsAvailable={conversation?.filesystem_tools_available}
               shellToolsAvailable={conversation?.shell_tools_available}
             /></div>
+            {railPage === "setup" ? <VisualTestingControls conversationId={conversation?.id ?? null} threadId={interactionThreadId} browserEnabled={Boolean(selectedTools?.some(name => browserToolNames.some(browserName => browserName === name)))} desktopAccess={desktopAccess} workMode={workMode} disabled={selectionBusy || sending || runBusy} onPrepareConversation={async () => {
+                if (!hasModelChoice) throw new Error("Choose a model before creating this chat.");
+                const created = await createDraftConversation();
+                cacheConversation(created);
+                selectConversation(created);
+              }}
+              onBrowserEnabled={enabled => {
+                const inherited = enabledTools.filter(name => !optionalVisualToolNames.has(name) && (Boolean(projectId || projectPath) || !["ls", "glob", "grep", "write_file", "edit_file", "execute"].includes(name)));
+                setSelectedTools(withBrowserTools(selectedTools ?? inherited, enabled, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
+                markSetupEdited("presented_tools");
+              }}
+              onDesktopAccess={scope => {
+                const inherited = enabledTools.filter(name => !optionalVisualToolNames.has(name) && (Boolean(projectId || projectPath) || !["ls", "glob", "grep", "write_file", "edit_file", "execute"].includes(name)));
+                setSelectedTools(withDesktopTools(selectedTools ?? inherited, scope !== "off", Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length)));
+                setDesktopAccess(scope); markSetupEdited("desktop_access", "presented_tools");
+              }} /> : null}
             {railPage === "actions" ? conversation ? <ChatHistoryActions
               key={conversation.id}
               conversation={conversation}

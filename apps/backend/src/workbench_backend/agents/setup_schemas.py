@@ -37,6 +37,7 @@ class SetupConfiguration(BaseModel):
     requires_project: bool | None = None
     requires_host_shell: bool | None = None
     work_mode: Literal["work", "plan"] | None = None
+    desktop_access: Literal["off", "selected", "all"] | None = None
     helper_agent_ids: list[str] | None = None
     review: ReviewConfiguration | None = None
 

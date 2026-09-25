@@ -39,6 +39,9 @@ def create_shared_contract_app() -> FastAPI:
     from workbench_backend.knowledge.routes import router as knowledge_router
     from workbench_backend.connections.routes import router as connections_router
     from workbench_backend.chat.routes import router as chat_router
+    from workbench_backend.browser.routes import router as browser_router
+    from workbench_backend.preview.routes import router as preview_router
+    from workbench_backend.desktop_automation.routes import router as desktop_automation_router
     from workbench_backend.agents.routes import router as agent_router
     from workbench_backend.interaction.routes import router as interaction_router
     from workbench_backend.interaction.schemas import WorkbenchInteractionMetadata
@@ -90,6 +93,9 @@ def create_shared_contract_app() -> FastAPI:
     application.include_router(knowledge_router)
     application.include_router(connections_router)
     application.include_router(chat_router)
+    application.include_router(browser_router)
+    application.include_router(preview_router)
+    application.include_router(desktop_automation_router)
     application.include_router(agent_router)
     application.include_router(interaction_router)
 

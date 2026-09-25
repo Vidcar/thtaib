@@ -1,10 +1,10 @@
-"""Windows host shell policy on Deep Agents 0.7.18.
+"""Host action approval policy for the embedded Deep Agents harness.
 
 Uses ``LocalShellBackend``, ``permissions=``, and ``interrupt_on=``. The
 framework pauses selected ``execute`` calls in Ask mode; the application persists native
 interrupts and surfaces them through shared Chat.
 
-Sources consulted for pinned ``deepagents==0.7.18``:
+Sources consulted for pinned Deep Agents:
 
 - https://docs.langchain.com/oss/python/deepagents/backends
 - https://docs.langchain.com/oss/python/deepagents/human-in-the-loop
@@ -39,6 +39,17 @@ from workbench_backend.agents.schemas import (
 from pydantic import ValidationError
 
 SKILLS_WRITE_DENY_PATHS = ("/skills/**",)
+
+# These names belong to Workbench-owned adapters. Target inspection and
+# screenshot capture are read operations once the browser/window scope is
+# granted; actions still pass through the existing exact-argument Ask flow.
+VISUAL_ACTION_TOOLS = frozenset({
+    "browser_navigate", "browser_navigate_back", "browser_tabs",
+    "browser_click", "browser_hover", "browser_press_key", "browser_type",
+    "browser_select_option", "browser_fill_form", "browser_resize",
+    "browser_handle_dialog", "desktop_invoke", "desktop_set_value",
+    "desktop_send_keys", "start_preview", "stop_preview",
+})
 
 HOST_SHELL_NOTE = (
     "Host shell has no isolation. Commands run through Deep Agents "
@@ -134,6 +145,22 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
             return not saved_permission(name, args, request)
         result[name] = {"allowed_decisions": ["approve", "reject"], "when": file_approval,
             "description": "Change a file in this project. Review the exact source and destination before allowing it."}
+    for name in VISUAL_ACTION_TOOLS.intersection(run.presented_tools):
+        def visual_approval(request: ToolCallRequest, name=name) -> bool:
+            call = request.tool_call
+            args = call.get("args", {}) if isinstance(call, dict) else getattr(call, "args", {})
+            # Listing tabs does not navigate or mutate the browser. Other tab
+            # actions can open, select, or close tabs.
+            if name == "browser_tabs" and isinstance(args, dict) and args.get("action") == "list":
+                return False
+            if auto_external:
+                return False
+            return not saved_permission(name, args, request)
+        result[name] = {
+            "allowed_decisions": ["approve", "reject"],
+            "when": visual_approval,
+            "description": "Use the authorized browser, window, or project preview with these exact inputs.",
+        }
     for connection in run.connection_snapshots:
         if connection.kind != "mcp":
             continue

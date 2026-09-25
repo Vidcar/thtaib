@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import http.server
+import json
 import os
 import socketserver
 import tempfile
@@ -16,7 +18,7 @@ from unittest.mock import patch
 
 import httpx
 from langgraph.checkpoint.base import empty_checkpoint
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from workbench_backend.agents.harness import HarnessService, _graph_checkpoint_snapshot
 from workbench_backend.agents.schemas import (
@@ -30,11 +32,13 @@ from workbench_backend.agents.schemas import (
 from workbench_backend.app import create_app
 from workbench_backend.errors import HarnessError, InteractionPersistenceError
 from workbench_backend.inference.capabilities import setup_fingerprint
+from workbench_backend.inference.probes import _image_fixture
 from workbench_backend.inference.adapter import RecordingTransport
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.lab.snapshot import capture_project_snapshot
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.state.checkpointer import open_sqlite_checkpointer
+from workbench_backend.state.checkpointer import conversation_state
 
 from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests.support import close_workbench_sqlite, offline_workbench_client, wait_for_run, wait_for_status
@@ -213,6 +217,41 @@ class HarnessApiTests(unittest.TestCase):
         names = [item["name"] for item in body["tool_invocations"]]
         self.assertIn("echo", names)
 
+    def test_native_read_file_image_reaches_model_without_inline_event_bytes(self) -> None:
+        project = self.root / "image-project"
+        project.mkdir()
+        image = base64.b64decode(_image_fixture("red").partition(",")[2])
+        (project / "view.png").write_bytes(image)
+        self.app.state.harness.assets = self.app.state.assets
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"file_path": "/view.png"}, "id": "image-read"}]),
+            AIMessage(content="The image is red."),
+        ], profile={"image_inputs": True, "image_tool_message": True})
+        created = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.deployment_id, "project_path": str(project),
+            "presented_tools": ["read_file"], "approval_mode": "full_access",
+        })
+        self.assertEqual(created.status_code, 200, created.text)
+        conversation = created.json()
+        started = self.client.post(f"/v1/chat/conversations/{conversation['id']}/start",
+            json={"task": "Inspect /view.png"})
+        self.assertEqual(started.status_code, 200, started.text)
+        finished = wait_for_run(self.client, started.json()["current_run_id"])
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        tool_events = [event for event in finished["events"] if event["kind"] == "tool_result"]
+        self.assertEqual(len(tool_events), 1)
+        self.assertEqual(tool_events[0]["detail"]["media_path"], "/view.png")
+        self.assertEqual(tool_events[0]["detail"]["tool_call_id"], "image-read")
+        self.assertIn("/captures/asset_", json.dumps(tool_events[0]))
+        self.assertNotIn(_image_fixture("red").partition(",")[2], json.dumps(finished["events"]))
+        checkpoint = conversation_state(self.manager.paths.checkpoints_db,
+            conversation["thread_id"])
+        retained = [message for message in checkpoint.get("messages", [])
+            if isinstance(message, ToolMessage) and message.tool_call_id == "image-read"]
+        self.assertEqual(len(retained), 1)
+        self.assertIn("/captures/asset_", retained[0].content)
+        self.assertNotIn(_image_fixture("red").partition(",")[2], json.dumps(checkpoint, default=str))
+
     def test_native_driver_observer_and_audit_details(self) -> None:
         observed: list[tuple[str, str | None]] = []
 
@@ -372,9 +411,10 @@ class HarnessApiTests(unittest.TestCase):
         self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("name") == "write_todos" for event in body["events"]))
 
     def test_enabled_tools_are_not_silently_removed(self) -> None:
+        from workbench_backend.agents.tools import ENABLED_TOOL_NAMES
         catalogue = self.client.get("/v1/agent-tools").json()["enabled"]
         self.assertEqual(
-            catalogue,
+            list(ENABLED_TOOL_NAMES),
             [
                 "echo",
                 "time_now",
@@ -391,6 +431,10 @@ class HarnessApiTests(unittest.TestCase):
                 "read_attachment",
             ],
         )
+        self.assertTrue(set(ENABLED_TOOL_NAMES) < set(catalogue))
+        self.assertIn("browser_take_screenshot", catalogue)
+        self.assertIn("start_preview", catalogue)
+        self.assertIn("desktop_screenshot", catalogue)
         started = self._start(presented_tools=["echo"])
         body = wait_for_run(self.client, started["id"])
         self.assertEqual(body["enabled_tools"], ["echo", "time_now", "write_todos", "ask_user", "propose_memory", "read_file"])
@@ -402,7 +446,7 @@ class HarnessApiTests(unittest.TestCase):
         project.mkdir()
         bound = self._start(presented_tools=["echo"], project_path=str(project))
         bound_body = wait_for_run(self.client, bound["id"])
-        self.assertEqual(bound_body["enabled_tools"], [name for name in catalogue if name != "read_attachment"])
+        self.assertEqual(bound_body["enabled_tools"], [name for name in ENABLED_TOOL_NAMES if name != "read_attachment"])
         self.assertEqual(bound_body["presented_tools"], ["echo"])
         denied = self.client.post(
             "/v1/agent-runs",
@@ -441,6 +485,19 @@ class HarnessApiTests(unittest.TestCase):
         )
         self.assertEqual(with_file, ["read_attachment"])
         self.assertEqual(still_denied, [])
+        defaults, denied, filesystem, shell = resolve_presented_tools(None, project_bound=True)
+        self.assertEqual(defaults, [name for name in ENABLED_TOOL_NAMES if name != "read_attachment"])
+        self.assertEqual((denied, filesystem, shell), ([], [], []))
+        visual, denied, filesystem, shell = resolve_presented_tools(
+            ["browser_snapshot", "desktop_screenshot", "start_preview"], project_bound=True,
+        )
+        self.assertEqual(visual, ["browser_snapshot", "desktop_screenshot", "start_preview"])
+        self.assertEqual((denied, filesystem, shell), ([], [], []))
+        projectless, denied, filesystem, shell = resolve_presented_tools(
+            ["browser_snapshot", "desktop_screenshot", "start_preview"], project_bound=False,
+        )
+        self.assertEqual(projectless, ["browser_snapshot", "desktop_screenshot"])
+        self.assertEqual((denied, filesystem, shell), ([], [], ["start_preview"]))
         from workbench_backend.agents.tools import ENABLED_TOOLS
         self.assertFalse(set(ENABLED_TOOLS) & {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete", "task"})
 

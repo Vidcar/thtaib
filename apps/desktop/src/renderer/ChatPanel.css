@@ -187,6 +187,8 @@
 .tool-call-details {margin: var(--space-tight) 0 var(--space-compact) var(--space-stack); font-size: var(--text-small);}
 .tool-detail-label {font-size: var(--text-small); color: var(--muted); margin: var(--space-compact) 0 var(--space-tight);}
 .tool-call-error {color: var(--danger); white-space: pre-wrap;}
+.tool-capture-preview {display: grid; justify-items: start; gap: var(--space-tight); margin: var(--space-tight) 0 var(--space-compact) var(--space-stack); min-width: 0;}
+.tool-capture-preview .image-preview-button {max-width: min(260px, 100%);}
 .compact-dialog .delete-chat-name {color: var(--text); font-weight: var(--weight-medium); overflow-wrap: anywhere;}
 @media (max-width: 760px) {
   .compose {margin-bottom: var(--space-compact); width: calc(100% - 24px); padding: var(--pad-compact);}

@@ -13,7 +13,7 @@ from workbench_backend.agents.setup_service import SetupService, configuration_f
 from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection
 from workbench_backend.agents.helpers import freeze_helpers, freeze_settings
 from contextlib import ExitStack
-from workbench_backend.assets.schemas import RetainedAssetReuseRequest
+from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin, RetainedAssetReuseRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.chat.deploy_health import report_chat_deploy_health
 from workbench_backend.chat.schemas import (
@@ -55,6 +55,8 @@ CHAT_SYSTEM_PROMPT = (
     "such as hello.txt with read_file, write_file and edit_file; you do not "
     "need to discover the operating-system working directory for a file task. "
     "Prefer these file tools over shell commands for reading and editing files. "
+    "Page and window accessibility snapshots provide text evidence. Judge visual "
+    "appearance only after this model has successfully read an image. "
     "The host shell execute tool "
     "runs on this machine in the project working directory with no isolation; "
     "the application's per-turn Access policy controls permission decisions. Do not invent durable knowledge "
@@ -63,9 +65,12 @@ CHAT_SYSTEM_PROMPT = (
 CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT = (
     "You are the Local AI Workbench Chat surface. Complete the user's task "
     "using the embedded Deep Agents harness. This conversation has no project "
-    "folder. Filesystem and host-shell tools are unavailable. Use visibility "
-    "tools only. Do not invent a project directory, a home-directory cwd, or "
-    "durable knowledge."
+    "folder. Project filesystem and host-shell tools are unavailable. "
+    "An authorized test browser or window may produce retained captures under "
+    "/captures/; read_file can inspect those only when this model setup has "
+    "verified image support. Accessibility snapshots can be read as text. "
+    "Do not claim to judge visual appearance from text alone. Do not invent "
+    "a project directory, a home-directory cwd, or durable knowledge."
 )
 
 
@@ -187,6 +192,7 @@ class ChatService:
             presented_tools=selection.configuration.presented_tools,
             approval_mode=selection.configuration.approval_mode or "ask",
             work_mode=selection.configuration.work_mode or "work",
+            desktop_access=selection.configuration.desktop_access or "off",
             helper_agent_ids=selection.configuration.helper_agent_ids or [],
             review=selection.configuration.review or {},
             model_configuration_id=selection.configuration.model_configuration_id,
@@ -682,6 +688,7 @@ class ChatService:
                         presented_tools=next_conversation.presented_tools,
                         approval_mode=next_conversation.approval_mode,
                         work_mode=next_conversation.work_mode,
+                        desktop_access=next_conversation.desktop_access,
                         helper_agent_ids=next_conversation.helper_agent_ids,
                         review=next_conversation.review,
                         model_configuration_id=next_conversation.model_configuration_id,
@@ -1050,11 +1057,18 @@ class ChatService:
                 details={"deployment_id": conversation.deployment_id},
             ) from exc
         connection_snapshots = self.harness.connections.snapshot(conversation.connection_ids, tools_enabled=conversation.presented_tools != [])
+        capture_routes = (
+            any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (conversation.presented_tools or []))
+            or bool(self.assets.list_assets(RetainedAssetListFilters(
+                session_id=conversation.id, origin=RetainedAssetOrigin.capture,
+            )))
+        )
         _presented, denied, filesystem_blocked, shell_blocked = resolve_presented_tools(
             conversation.presented_tools,
             project_bound=conversation.project_path is not None,
             external_names=[tool.name for connection in connection_snapshots for tool in connection.tools],
             attachment_available=bool(request.attachment_ids),
+            capture_routes=capture_routes,
             knowledge_routes=bool(
                 conversation.memory_version_refs
                 or conversation.skill_version_refs
@@ -1080,7 +1094,7 @@ class ChatService:
             )
         if shell_blocked:
             raise ChatError(
-                "The host shell requires a bound project folder as cwd. A home-directory default is not invented.",
+                "The host shell and project preview require a bound project folder. A home-directory default is not invented.",
                 code="shell_requires_project",
                 status_code=400,
                 details={"tools": shell_blocked},
@@ -1211,11 +1225,11 @@ class ChatService:
             # a setup layer to an existing General conversation.
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update={"approval_mode": request.approval_mode})
         if not has_layered_setup:
-            additions = {key: getattr(request, key) for key in ("work_mode", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides") if key in fields_set and getattr(request, key) is not None}
+            additions = {key: getattr(request, key) for key in ("work_mode", "desktop_access", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides") if key in fields_set and getattr(request, key) is not None}
             conversation.setup_overrides = conversation.setup_overrides.model_copy(update=additions)
             resets = {key for key in fields_set if key in SetupConfiguration.model_fields and getattr(request, key) is None}
             conversation.setup_overrides = SetupConfiguration.model_validate({key: value for key, value in conversation.setup_overrides.model_dump(exclude_none=True).items() if key not in resets})
-            defaults = {'work_mode': 'work', 'helper_agent_ids': [], 'review': ReviewConfiguration(), 'approval_mode': 'ask'}
+            defaults = {'work_mode': 'work', 'desktop_access': 'off', 'helper_agent_ids': [], 'review': ReviewConfiguration(), 'approval_mode': 'ask'}
             for key in resets:
                 if key in defaults:
                     setattr(conversation, key, defaults[key])
@@ -1252,6 +1266,7 @@ class ChatService:
             values.setdefault("connection_ids", None)
             values.setdefault("per_request_overrides", None)
             values.setdefault("work_mode", "work")
+            values.setdefault("desktop_access", "off")
             values.setdefault("helper_agent_ids", [])
             values["review"] = selection.configuration.review or ReviewConfiguration()
             request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
@@ -1264,7 +1279,7 @@ class ChatService:
             conversation.connection_ids = request.connection_ids
         if "per_request_overrides" in fields_set:
             conversation.per_request_overrides = request.per_request_overrides
-        for key in ("work_mode", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides"):
+        for key in ("work_mode", "desktop_access", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides"):
             if key in fields_set and (getattr(request, key) is not None or key in {"model_configuration_id", "startup_overrides"}):
                 setattr(conversation, key, getattr(request, key))
         if request.deployment_id:
@@ -1356,6 +1371,7 @@ class ChatService:
             "presented_tools": clone.presented_tools,
             "approval_mode": clone.approval_mode,
             "work_mode": clone.work_mode,
+            "desktop_access": clone.desktop_access,
             "helper_agent_ids": clone.helper_agent_ids,
             "review": clone.review.model_dump(mode="json"),
             "model_configuration_id": clone.model_configuration_id,

@@ -11,14 +11,18 @@ official ``memory=`` / ``skills=`` can ``download_files`` (LAB-003).
 
 from __future__ import annotations
 
+import base64
+import os
 import re
+import stat
 from pathlib import Path
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
-from deepagents.backends.protocol import BackendProtocol
+from deepagents.backends.protocol import BackendProtocol, FileData, ReadResult
 
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.agents.schemas import AgentRun, ToolMode
+from workbench_backend.inference.image_validation import MAX_IMAGE_BYTES, validate_image_bytes
 from workbench_backend.paths import WorkbenchPaths
 
 # Deep Agents 0.7.15 FilesystemMiddleware / summarization write these when
@@ -33,12 +37,57 @@ RESERVED_FRAMEWORK_PREFIXES = (
     "/retrieved/",
     "/memories/",
     "/skills/",
+    "/captures/",
 )
 RETRIEVED_PREFIX = "/retrieved/"
 MEMORIES_PREFIX = "/memories/"
 SKILLS_PREFIX = "/skills/"
+CAPTURES_PREFIX = "/captures/"
 HARNESS_SCRATCH_DIRNAME = "harness"
 _UNSAFE_THREAD_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_IMAGE_SUFFIX_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+_OTHER_IMAGE_SUFFIXES = {".gif", ".heic", ".heif"}
+
+
+class _BoundedImageReads:
+    """Keep upstream `read_file`, but validate still-image bytes before encoding."""
+
+    def __init__(self, *args, image_inputs_allowed: bool = False, **kwargs) -> None:
+        self.image_inputs_allowed = image_inputs_allowed
+        super().__init__(*args, **kwargs)
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        mime_type = _IMAGE_SUFFIX_MIME.get(Path(file_path).suffix.lower())
+        if mime_type is None:
+            if Path(file_path).suffix.lower() in _OTHER_IMAGE_SUFFIXES:
+                return ReadResult(error="Only PNG, JPEG, and WebP images are supported in Chat.")
+            return super().read(file_path, offset, limit)
+        if not self.image_inputs_allowed:
+            return ReadResult(error="Image reading needs passing image and tool-image probes for this exact model setup.")
+        try:
+            resolved = self._resolve_path(file_path)
+        except (OSError, RuntimeError, ValueError):
+            return ReadResult(error="Image path is unavailable or outside the authorized project.")
+        try:
+            descriptor = os.open(resolved, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    return ReadResult(error="Image path is not a regular file.")
+                raw = handle.read(MAX_IMAGE_BYTES + 1)
+            validate_image_bytes(raw, mime_type)
+        except ValueError as exc:
+            return ReadResult(error=f"Cannot read image '{file_path}': {exc}")
+        except (OSError, RuntimeError):
+            return ReadResult(error=f"Cannot read image '{file_path}': file unavailable.")
+        return ReadResult(file_data=FileData(content=base64.b64encode(raw).decode("ascii"), encoding="base64"))
+
+
+class BoundedImageFilesystemBackend(_BoundedImageReads, FilesystemBackend):
+    """Project file backend with bounded, verified image reads."""
+
+
+class BoundedImageLocalShellBackend(_BoundedImageReads, LocalShellBackend):
+    """Host-shell backend with the same image-read policy."""
 
 
 def sanitize_thread_id(thread_id: str) -> str:
@@ -62,7 +111,14 @@ def harness_scratch_root(paths: WorkbenchPaths, thread_id: str) -> Path:
     return paths.state / HARNESS_SCRATCH_DIRNAME / sanitize_thread_id(thread_id)
 
 
-def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: bool = True) -> BackendProtocol | None:
+def build_run_backend(
+    run: AgentRun,
+    paths: WorkbenchPaths,
+    *,
+    prepare_storage: bool = True,
+    image_inputs_allowed: bool = False,
+    capture_backend: BackendProtocol | None = None,
+) -> BackendProtocol | None:
     """Attach a CompositeBackend, or none for recorded-tool without knowledge.
 
     Default backend is the bound project (virtual ``/``) when one exists,
@@ -79,6 +135,8 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: 
         run.memory_version_refs,
         run.skill_version_refs,
     )
+    if run.tool_mode is ToolMode.recorded_tool:
+        capture_backend = None
     if run.tool_mode is ToolMode.recorded_tool and not knowledge_routes:
         return None
     scratch = harness_scratch_root(paths, run.id if run.parent_run_id else run.thread_id or run.id)
@@ -97,6 +155,8 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: 
         MEMORIES_PREFIX: FilesystemBackend(root_dir=memories, virtual_mode=True),
         SKILLS_PREFIX: FilesystemBackend(root_dir=skills, virtual_mode=True),
     }
+    if capture_backend is not None:
+        routes[CAPTURES_PREFIX] = capture_backend
     default: BackendProtocol
     if run.tool_mode is ToolMode.recorded_tool:
         default = StateBackend()
@@ -104,13 +164,15 @@ def build_run_backend(run: AgentRun, paths: WorkbenchPaths, *, prepare_storage: 
         # Host shell cwd is the user-chosen project. inherit_env so PATH and
         # the Windows host environment are the real machine, not an empty env.
         # virtual_mode does not restrict execute() (LocalShellBackend docs).
-        default = LocalShellBackend(
+        default = BoundedImageLocalShellBackend(
             root_dir=run.project_path,
             virtual_mode=True,
             inherit_env=True,
+            image_inputs_allowed=image_inputs_allowed,
         )
     elif run.project_path:
-        default = FilesystemBackend(root_dir=run.project_path, virtual_mode=True)
+        default = BoundedImageFilesystemBackend(root_dir=run.project_path, virtual_mode=True,
+            image_inputs_allowed=image_inputs_allowed)
     else:
         default = StateBackend()
     return CompositeBackend(default=default, routes=routes, artifacts_root="/")

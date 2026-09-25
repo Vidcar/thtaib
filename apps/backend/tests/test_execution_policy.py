@@ -146,3 +146,20 @@ class ExecutionPolicyTests(unittest.TestCase):
             with self.subTest(tool=name):
                 self.assertFalse(gates[name]["when"](request(name, {"file_path": "notes.txt"})))
         self.assertEqual(gates["ask_user"]["allowed_decisions"], ["respond", "reject"])
+
+    def test_visual_actions_use_access_approval_but_inspection_does_not(self):
+        run = run_fixture(project_path=".", approval_mode="ask")
+        run.presented_tools = [
+            "browser_navigate", "browser_tabs", "browser_snapshot", "browser_take_screenshot",
+            "desktop_invoke", "desktop_inspect", "desktop_screenshot", "start_preview",
+        ]
+        gates = interrupt_on_for_run(run)
+        self.assertTrue(gates["browser_navigate"]["when"](request("browser_navigate", {"url": "http://localhost:3000"})))
+        self.assertTrue(gates["browser_tabs"]["when"](request("browser_tabs", {"action": "close"})))
+        self.assertFalse(gates["browser_tabs"]["when"](request("browser_tabs", {"action": "list"})))
+        self.assertTrue(gates["desktop_invoke"]["when"](request("desktop_invoke", {"selector": "Button"})))
+        self.assertTrue(gates["start_preview"]["when"](request("start_preview", {"port": 3000})))
+        self.assertFalse({"browser_snapshot", "browser_take_screenshot", "desktop_inspect", "desktop_screenshot"} & gates.keys())
+        run.approval_mode = "full_access"
+        gates = interrupt_on_for_run(run)
+        self.assertFalse(gates["browser_navigate"]["when"](request("browser_navigate", {"url": "http://localhost:3000"})))
