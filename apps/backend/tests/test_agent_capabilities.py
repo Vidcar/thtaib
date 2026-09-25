@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import unittest
 import asyncio
-from contextlib import asynccontextmanager
+import threading
+from contextlib import asynccontextmanager, contextmanager
 from unittest.mock import patch, PropertyMock
 
 from langchain_core.messages import AIMessage
 from workbench_backend.agents.harness import HarnessService
-from tests.scripted_model import ScriptedChatModel
+from workbench_backend.interaction.service import InteractionService
+from tests.scripted_model import ScriptedChatModel, set_generate_hold, wait_for_generate_hold
 from tests import test_project_agent_setups as fixtures
 from tests.support import wait_for_run
 from tests import test_host_shell as approval_fixtures
@@ -28,9 +30,10 @@ class AgentCapabilitiesTests(unittest.TestCase):
     project = fixtures.ProjectSetupTests.project
 
     def harness(self, factory):
+        observer = self.app.state.harness._interaction_observer
         self.app.state.harness = HarnessService(lambda: self.app.state.manager,
             app_store=self.app.state.app_store, knowledge_provider=lambda: self.app.state.knowledge,
-            model_factory=factory)
+            model_factory=factory, interaction_observer=observer)
 
     def start(self, **changes):
         return self.post("/v1/agent-runs", {"deployment_id": self.deployment.id, "task": "Do the requested work", **changes})
@@ -77,7 +80,10 @@ class AgentCapabilitiesTests(unittest.TestCase):
                 final = wait_for_run(self.client, self.start(project_path=path, presented_tools=['echo'], helper_agent_ids=[helper['id']])['id'])
                 self.assertEqual(final['status'], 'failed', final)
                 self.assertIn(error, final['error'])
-                self.assertEqual(final['child_runs'], [])
+                self.assertEqual(len(final['child_runs']), 1)
+                self.assertEqual(final['child_runs'][0]['tool_call_id'], 'delegate')
+                self.assertEqual(final['child_runs'][0]['status'], 'failed')
+                self.assertIn(error, final['child_runs'][0]['error'])
         self.assertEqual(child_calls, [])
 
     def test_plan_cannot_silently_drop_required_shell_and_run_keeps_requirements(self):
@@ -112,6 +118,62 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(saved["agent_setup_version_id"], helper["current_version_id"])
         self.assertTrue(any(item["kind"] == "tool_result" for item in saved["events"]))
 
+    def test_helper_messages_and_tools_replay_under_its_owned_namespace(self):
+        helper = self.setup(presented_tools=["echo"])
+        main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Report the echo"}, "delegate"), AIMessage(content="Parent done.")])
+        child = ScriptedChatModel([call("echo", {"text": "child result"}, "echo"), AIMessage(content="Child done.")])
+        self.harness(lambda run, _sink: child if run.parent_run_id else main)
+        chat = self.post('/v1/chat/conversations', {"deployment_id": self.deployment.id, "presented_tools": ["echo"]})
+        thread = self.post('/v1/agent-interaction/threads', {"source_surface": "chat", "conversation_id": chat["id"]})["thread_id"]
+        self.post(f'/v1/chat/conversations/{chat["id"]}/start', {"task": "Delegate", "helper_agent_ids": [helper["id"]]})
+        finished = chat_fixtures.wait_for_chat(self.client, chat["id"])["current_run"]
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        activity, = finished["child_runs"]
+        namespace = activity["namespace"]
+        self.assertTrue(namespace and namespace[0].startswith("tools:"), activity)
+        last_seq = self.app.state.app_store.get_interaction(thread)["seq"]
+        reopened = InteractionService(self.app.state.app_store, lambda: self.app.state.harness, lambda: self.app.state.chat)
+        replay = list(reopened.replay(thread, 0, last_seq))
+        scoped = [item for item in replay if item["params"].get("namespace", [])[:len(namespace)] == namespace]
+        self.assertTrue(any(item["method"] == "tools" for item in scoped), scoped)
+        self.assertTrue(any(item["method"] == "values" and item["params"].get("namespace") == namespace
+            and any(message.get("content") == "Child done." for message in item["params"]["data"].get("messages", []))
+            for item in scoped), scoped)
+        root_values = [item for item in replay if item["method"] == "values" and not item["params"].get("namespace")]
+        self.assertTrue(root_values)
+        self.assertTrue(all(((item["params"]["data"].get("workbench") or {}).get("run") or {}).get("id") in {None, finished["id"]}
+            for item in root_values))
+        self.assertFalse(any(message.get("type") == "ai" and message.get("content") == "Child done."
+            for item in root_values for message in item["params"]["data"].get("messages", [])))
+
+    def test_parallel_helpers_keep_separate_replayed_transcripts(self):
+        helper = self.setup(presented_tools=[])
+        main = ScriptedChatModel([AIMessage(content="", tool_calls=[
+            {"name": "task", "args": {"subagent_type": helper["id"], "description": "Alpha"}, "id": "alpha"},
+            {"name": "task", "args": {"subagent_type": helper["id"], "description": "Beta"}, "id": "beta"},
+        ]), AIMessage(content="Both done.")])
+        self.harness(lambda run, _sink: ScriptedChatModel([AIMessage(content=f"Child {run.task} done.")])
+            if run.parent_run_id else main)
+        chat = self.post('/v1/chat/conversations', {"deployment_id": self.deployment.id, "presented_tools": ["echo"]})
+        thread = self.post('/v1/agent-interaction/threads', {"source_surface": "chat", "conversation_id": chat["id"]})["thread_id"]
+        self.post(f'/v1/chat/conversations/{chat["id"]}/start', {"task": "Delegate twice", "helper_agent_ids": [helper["id"]]})
+        finished = chat_fixtures.wait_for_chat(self.client, chat["id"])["current_run"]
+        self.assertEqual(finished["status"], "completed", finished.get("error"))
+        activities = {item["tool_call_id"]: item for item in finished["child_runs"]}
+        self.assertEqual(set(activities), {"alpha", "beta"}, (finished["child_runs"], finished["events"], finished.get("error")))
+        self.assertNotEqual(activities["alpha"]["namespace"], activities["beta"]["namespace"])
+        events = self.app.state.app_store.interaction_events_after(thread, 0)
+        for call_id, own_text, other_text, other_request in (("alpha", "Child Alpha done.", "Child Beta done.", "Beta"),
+                                                             ("beta", "Child Beta done.", "Child Alpha done.", "Alpha")):
+            namespace = activities[call_id]["namespace"]
+            scoped = [item for item in events if item["params"].get("namespace", [])[:len(namespace)] == namespace]
+            content = [message.get("content") for item in scoped if item["method"] == "values"
+                and item["params"].get("namespace") == namespace
+                for message in item["params"]["data"].get("messages", [])]
+            self.assertIn(own_text, content)
+            self.assertNotIn(other_text, content)
+            self.assertNotIn(other_request, content)
+
     def test_helper_uses_its_explicit_other_connected_model(self):
         other = self.app.state.manager.attach_connected(ConnectedDeploymentRequest(display_name='Other model', endpoint='http://127.0.0.1:10/v1'))
         helper = self.setup(deployment_id=other.id, presented_tools=['echo'])
@@ -122,6 +184,122 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(finished['status'], 'completed', finished.get('error'))
         saved = self.client.get('/v1/agent-runs/' + finished['child_runs'][0]['run_id']).json()
         self.assertEqual(saved['deployment_id'], other.id)
+
+    def test_helper_activity_is_visible_before_model_reservation_finishes(self):
+        helper = self.setup(presented_tools=["echo"])
+        parent_gate = threading.Event()
+        reserve_gate = threading.Event()
+        entered_reserve = threading.Event()
+        main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Report"}, "delegate"),
+            AIMessage(content="Done")], hold=parent_gate)
+        child = ScriptedChatModel([AIMessage(content="Reported")])
+        self.harness(lambda run, _sink: child if run.parent_run_id else main)
+        original_reserve = self.app.state.manager.reserve_deployment
+
+        @contextmanager
+        def held_reservation(*args, **kwargs):
+            entered_reserve.set()
+            if not reserve_gate.wait(timeout=10):
+                raise AssertionError("Helper reservation was not released")
+            with original_reserve(*args, **kwargs) as admitted:
+                yield admitted
+
+        try:
+            set_generate_hold(parent_gate)
+            run = self.start(presented_tools=["echo"], helper_agent_ids=[helper["id"]])
+            wait_for_generate_hold()
+            with patch.object(self.app.state.manager, "reserve_deployment", side_effect=held_reservation):
+                parent_gate.set()
+                self.assertTrue(entered_reserve.wait(timeout=10))
+                live = self.client.get('/v1/agent-runs/' + run['id']).json()
+                activity, = live['child_runs']
+                self.assertEqual(activity['tool_call_id'], 'delegate')
+                self.assertEqual(activity['status'], 'waiting for model')
+                self.assertIsNone(self.app.state.app_store.get_run(activity['run_id']))
+                reserve_gate.set()
+                finished = wait_for_run(self.client, run['id'])
+                self.assertEqual(finished['status'], 'completed', finished.get('error'))
+        finally:
+            parent_gate.set()
+            reserve_gate.set()
+            set_generate_hold(None)
+
+    def test_failed_helper_settles_activity_and_child_record(self):
+        helper = self.setup(presented_tools=["echo"])
+        main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Report"}, "delegate"),
+            AIMessage(content="The helper failed.")])
+
+        class FailingModel(ScriptedChatModel):
+            def _generate(self, *args, **kwargs):
+                raise RuntimeError("helper model failed")
+
+        self.harness(lambda run, _sink: FailingModel([]) if run.parent_run_id else main)
+        finished = wait_for_run(self.client, self.start(presented_tools=["echo"], helper_agent_ids=[helper["id"]])['id'])
+        activity, = finished['child_runs']
+        self.assertEqual(activity['status'], 'failed')
+        self.assertIn('helper model failed', activity['error'])
+        saved = self.client.get('/v1/agent-runs/' + activity['run_id']).json()
+        self.assertEqual(saved['status'], 'failed')
+        self.assertIn('helper model failed', saved['error'])
+
+    def test_cancel_while_helper_waits_for_model_settles_unadmitted_activity(self):
+        helper = self.setup(presented_tools=["echo"])
+        parent_gate = threading.Event()
+        reserve_gate = threading.Event()
+        entered_reserve = threading.Event()
+        main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Report"}, "delegate"),
+            AIMessage(content="Must not continue")], hold=parent_gate)
+        self.harness(lambda run, _sink: ScriptedChatModel([AIMessage(content="Must not run")])
+            if run.parent_run_id else main)
+        original_reserve = self.app.state.manager.reserve_deployment
+
+        @contextmanager
+        def held_reservation(*args, **kwargs):
+            entered_reserve.set()
+            if not reserve_gate.wait(timeout=10):
+                raise AssertionError("Helper reservation was not released")
+            with original_reserve(*args, **kwargs) as admitted:
+                yield admitted
+
+        cancel_error = []
+        cancel_thread = None
+        try:
+            set_generate_hold(parent_gate)
+            run = self.start(presented_tools=["echo"], helper_agent_ids=[helper["id"]])
+            wait_for_generate_hold()
+            with patch.object(self.app.state.manager, "reserve_deployment", side_effect=held_reservation):
+                parent_gate.set()
+                self.assertTrue(entered_reserve.wait(timeout=10))
+                before = self.app.state.harness.get_run(run['id'])
+                activity, = before.child_runs
+                self.assertEqual(activity.status, 'waiting for model')
+
+                def cancel_run():
+                    try:
+                        self.app.state.harness.cancel(run['id'])
+                    except BaseException as exc:
+                        cancel_error.append(exc)
+
+                cancel_thread = threading.Thread(target=cancel_run, daemon=True)
+                cancel_thread.start()
+                cancelling, _events = self.app.state.harness.wait_after(run['id'], len(before.events), timeout=10)
+                self.assertIn(cancelling.status.value, {'cancel_requested', 'cancelled'})
+                reserve_gate.set()
+                cancel_thread.join(timeout=10)
+                self.assertFalse(cancel_thread.is_alive())
+                self.assertEqual(cancel_error, [])
+                finished = wait_for_run(self.client, run['id'])
+                self.assertEqual(finished['status'], 'cancelled')
+                activity, = finished['child_runs']
+                self.assertEqual(activity['status'], 'cancelled')
+                self.assertIsNone(activity['error'])
+                self.assertIsNone(self.app.state.app_store.get_run(activity['run_id']))
+        finally:
+            parent_gate.set()
+            reserve_gate.set()
+            set_generate_hold(None)
+            if cancel_thread is not None:
+                cancel_thread.join(timeout=10)
 
     def test_review_is_distinct_and_stops_after_two_revisions(self):
         verdict = {"result": "needs_revision", "explanation": "The requested evidence is missing.",
@@ -156,12 +334,22 @@ class AgentCapabilitiesTests(unittest.TestCase):
         waiting = approval_fixtures.wait_for_interrupt(self.client, run["id"])
         self.assertFalse((self.folder / "child.txt").exists())
         self.assertTrue(waiting["pending_interrupt"]["namespace"])
+        self.assertEqual(waiting["pending_interrupt"]["namespace"], waiting['child_runs'][0]['namespace'])
         self.assertEqual(waiting['child_runs'][0]['status'], 'waiting for approval or answer')
+        paused_child = self.client.get('/v1/agent-runs/' + waiting['child_runs'][0]['run_id']).json()
+        self.assertEqual(paused_child['pending_interrupt']['interrupt_id'], waiting['pending_interrupt']['interrupt_id'])
         self.post(f'/v1/agent-runs/{run["id"]}/interrupt-decision', approval_fixtures.run_direct_interrupt_decision(waiting, "approve"))
         finished = wait_for_run(self.client, run["id"])
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         self.assertEqual((self.folder / "child.txt").read_text(), "approved child")
         self.assertEqual(len(finished["child_runs"]), 1)
+        resumed_child = self.client.get('/v1/agent-runs/' + finished['child_runs'][0]['run_id']).json()
+        self.assertIsNone(resumed_child['pending_interrupt'])
+        self.assertEqual([item['id'] for item in resumed_child['tool_invocations'] if item['id'] == 'child-write'], ['child-write'])
+        self.assertEqual(sum(item['kind'] == 'tool_call' and item['detail'].get('id') == 'child-write'
+            for item in resumed_child['events']), 1)
+        self.assertEqual(sum(item['kind'] == 'tool_result' and item['detail'].get('tool_call_id') == 'child-write'
+            for item in resumed_child['events']), 1)
 
     def test_queued_helpers_freeze_version_mode_and_review(self):
         helper = self.setup(presented_tools=["echo"], instructions="ORIGINAL HELPER")
@@ -301,6 +489,7 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertEqual(finished["child_runs"][0]["status"], "cancelled")
         saved = self.client.get('/v1/agent-runs/' + waiting["child_runs"][0]["run_id"]).json()
         self.assertEqual(saved["status"], "cancelled")
+        self.assertIsNone(saved['pending_interrupt'])
 
     def test_shared_tool_budget_includes_helper_dispatch(self):
         helper = self.setup(presented_tools=["echo"])

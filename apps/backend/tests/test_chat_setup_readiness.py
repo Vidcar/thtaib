@@ -144,6 +144,59 @@ class ChatSetupReadinessTests(unittest.TestCase):
         self.assertEqual(granted.status_code, 200, granted.text)
         self.assertTrue(granted.json()["can_send"])
 
+    def test_browser_worker_and_lost_session_block_readiness_and_send_before_saving_message(self):
+        chat = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.first.id,
+            "presented_tools": ["browser_snapshot", "browser_take_screenshot"],
+        }).json()
+        readiness_url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        send_url = f"/v1/chat/conversations/{chat['id']}/start"
+        missing = self.client.post(readiness_url, json={})
+        self.assertEqual(missing.status_code, 200, missing.text)
+        self.assertEqual(missing.json()["status"], "needs_action")
+        self.assertFalse(missing.json()["can_send"])
+        self.assertEqual(missing.json()["issues"][0]["code"], "browser_worker_missing")
+        self.assertEqual(missing.json()["issues"][0]["action"], "Install browser worker")
+        denied = self.client.post(send_url, json={"task": "Inspect the page"})
+        self.assertEqual(denied.status_code, 409, denied.text)
+        self.assertEqual(denied.json()["code"], "browser_worker_missing")
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
+
+        browser = self.app.state.browser
+        with patch.object(browser.runtime, "require_installed", return_value=(self.root / "node", self.root / "cli")):
+            available = self.client.post(readiness_url, json={})
+            self.assertEqual(available.status_code, 200, available.text)
+            self.assertTrue(available.json()["can_send"])
+            with patch.object(browser, "status", return_value={"state": "lost"}):
+                lost = self.client.post(readiness_url, json={})
+                self.assertEqual(lost.status_code, 200, lost.text)
+                self.assertEqual(lost.json()["status"], "needs_action")
+                self.assertEqual(lost.json()["issues"][0]["code"], "browser_session_lost")
+                self.assertEqual(lost.json()["issues"][0]["action"], "Reset browser")
+                denied = self.client.post(send_url, json={"task": "Inspect the page"})
+                self.assertEqual(denied.status_code, 409, denied.text)
+                self.assertEqual(denied.json()["code"], "browser_session_lost")
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
+
+    def test_browser_tool_override_is_checked_for_the_intended_next_turn(self):
+        chat = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.first.id, "presented_tools": [],
+        }).json()
+        chosen_tools = ["browser_snapshot"]
+        preview = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={
+            "overrides": {"presented_tools": chosen_tools},
+        })
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["issues"][0]["code"], "browser_worker_missing")
+        rejected = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={
+            "task": "Inspect the page", "presented_tools": chosen_tools,
+        })
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertEqual(rejected.json()["code"], "browser_worker_missing")
+        saved = self.client.get(f"/v1/chat/conversations/{chat['id']}").json()
+        self.assertEqual(saved["transcript"], [])
+        self.assertEqual(saved["presented_tools"], [])
+
     def test_known_history_incompatibility_rejects_send_before_saving_message(self):
         self.app.state.harness = HarnessService(
             lambda: self.app.state.manager, app_store=self.app.state.app_store,

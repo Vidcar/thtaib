@@ -807,6 +807,45 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("data:image", preview)
         self.assertNotIn("AAAA", preview)
 
+    def test_browser_tool_schema_with_type_property_reaches_model_and_keeps_media_redacted(self) -> None:
+        sink: list[dict[str, Any]] = []
+        model = chat_model_for_deployment(self._deployment(), capture_sink=sink)
+        media_url = "data:image/png;base64," + ("C" * 400)
+        browser_tool = {
+            "type": "function",
+            "function": {
+                "name": "browser_fill_form",
+                "description": "Fill browser form fields.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "description": "Form field type."},
+                        "fields": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["fields"],
+                },
+            },
+        }
+        try:
+            result = model.bind_tools([browser_tool]).invoke([
+                HumanMessage(content=[
+                    {"type": "text", "text": "Fill the form."},
+                    {"type": "image_url", "image_url": {"url": media_url}},
+                ]),
+            ])
+        finally:
+            model.close()
+
+        self.assertEqual(result.content, "pong")
+        self.assertEqual(len(_RecordingHandler.requests), 1)
+        posted_tool = _RecordingHandler.requests[0]["body"]["tools"][0]
+        self.assertIsInstance(posted_tool["function"]["parameters"]["properties"]["type"], dict)
+        self.assertTrue(sink[0]["response_received"])
+        self.assertEqual(sink[0]["response_status_code"], 200)
+        self.assertIsInstance(sink[0]["body"]["tools"][0]["function"]["parameters"]["properties"]["type"], dict)
+        self.assertNotIn(media_url, json.dumps(sink))
+        self.assertIn("embedded-media-redacted", json.dumps(sink))
+
     def test_capture_redacts_reasoning_and_tool_argument_previews(self) -> None:
         secret = "sk-test-secret-value"
         media_url = "data:image/png;base64," + ("B" * 400)

@@ -4,8 +4,10 @@ import { SourceLink, SourceScope } from "../../src/renderer/SourceReference";
 import { ImagePreview } from "../../src/renderer/ImagePreview";
 import { LibraryPanel } from "../../src/renderer/LibraryPanel";
 import { MenuPopover } from "../../src/renderer/MenuPopover";
+import { VisualTestingControls } from "../../src/renderer/VisualTestingControls";
 import "../../src/renderer/appearanceDefaults.css";
 import "../../src/renderer/styles.css";
+import "../../src/renderer/ChatPanel.css";
 
 const sha = "a".repeat(64);
 const imageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9kAAAAASUVORK5CYII=";
@@ -15,6 +17,8 @@ window.fetch = async (url, init) => {
   if (address.pathname === "/v1/assets") return { ok: true, json: async () => [{ id: "asset_image", filename: "Library image.png", session_id: "chat_fixture", content_kind: "image", content_type: "image/png", size_bytes: 90, origin: "upload", observed_at: "2026-09-22T12:00:00Z" }] } as Response;
   if (address.pathname === "/v1/assets/asset_image/preview") return { ok: true, json: async () => ({ id: "asset_image", filename: "Library image.png", size_bytes: 90, source_status: "retained_only", image_data_url: imageData }) } as Response;
   if (address.pathname === "/v1/assets/asset_image/content") return { ok: true, json: () => new Promise(resolve => { window.fixture.resolveOriginal = () => resolve({ content_type: "image/png", content_base64: imageData.split(",")[1] }); }) } as Response;
+  if (address.pathname === "/v1/browser/runtime") return { ok: true, json: async () => ({ supported: true, installed: true, reason: null }) } as Response;
+  if (address.pathname === "/v1/window-testing/runtime") return { ok: true, json: async () => ({ available: true, installed: true, reason: null }) } as Response;
   const input = JSON.parse(init?.body as string);
   window.fixture.calls.push(input);
   if (String(url).includes("asset_error")) return { ok: false, status: 404, json: async () => ({ error: "This source is unavailable in the selected conversation." }) } as Response;
@@ -22,4 +26,11 @@ window.fetch = async (url, init) => {
 };
 const root = createRoot(document.getElementById("root")!);
 window.fixture.showLibrary = () => root.render(<main style={{ padding: 20 }}><LibraryPanel /></main>);
+function ToolMenuFixture() {
+  const [open, setOpen] = React.useState(false);
+  const [browserEnabled, setBrowserEnabled] = React.useState(true);
+  const [desktopAccess, setDesktopAccess] = React.useState<"off" | "selected" | "all">("selected");
+  return <main style={{ padding: 12, display: "flex", justifyContent: "flex-end", height: "100vh" }}><MenuPopover label="Add to message" trigger="+" placement="below" panelClassName="chat-tools-popover-panel" onOpenChange={setOpen}><div className="menu-section chat-capability-group"><div className="chat-capability-summary">Project files <small>Choose a project</small></div><button type="button" className="menu-action">Shell <small>Off</small></button>{open ? <VisualTestingControls conversationId={null} threadId={null} browserEnabled={browserEnabled} onBrowserEnabled={setBrowserEnabled} desktopAccess={desktopAccess} onDesktopAccess={setDesktopAccess} /> : null}</div></MenuPopover></main>;
+}
+window.fixture.showToolMenu = () => root.render(<ToolMenuFixture />);
 root.render(<main style={{ padding: 20 }}><SourceScope.Provider value={{ sessionId: "chat_fixture" }}><p><SourceLink href={`workbench-source://asset_ready/${sha}?source=Paragraph%2024&line=24&start=12&end=120`}>Read selected passage</SourceLink></p><p><SourceLink href={`workbench-source://asset_error/${sha}?source=Page%203&line=3&start=0&end=100`}>Read missing passage</SourceLink></p></SourceScope.Provider><button type="button">Next focus target</button><ImagePreview name="Retained image" src={imageData} /><MenuPopover label="Test actions" trigger="Actions"><button type="button">First action</button></MenuPopover></main>);

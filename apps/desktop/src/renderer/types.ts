@@ -351,6 +351,7 @@ export interface StructuredOutputResult {
 export interface AgentRun {
   id: string;
   child_runs?: Array<{ run_id: string; agent_id: string; version_id: string; name: string; namespace: string[]; tool_call_id?: string; status: string; error?: string }>;
+  helper_snapshots?: SchemaAgentRun["helper_snapshots"];
   tool_authorizations?: Record<string, string>;
   tool_authorization_grants?: Record<string, MatchedPermissionGrant>;
   review_observation?: { enabled: boolean; max_revisions: number; status: string; evidence_scope?: string; evaluations: Array<{ iteration?: number; grading_run_id?: string; result?: unknown; explanation?: string; criteria?: Array<{ name: string; passed: boolean; gap?: string }> }> };

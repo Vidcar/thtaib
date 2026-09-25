@@ -8,24 +8,38 @@ export const browserToolNames = ["browser_navigate", "browser_navigate_back", "b
 export const desktopToolNames = ["desktop_list_windows", "desktop_inspect", "desktop_search", "desktop_wait", "desktop_invoke", "desktop_set_value", "desktop_send_keys", "desktop_screenshot"] as const;
 export const previewToolNames = ["start_preview", "stop_preview", "preview_status"] as const;
 export const optionalVisualToolNames = new Set<string>([...browserToolNames, ...desktopToolNames, ...previewToolNames]);
+// Keep this preview of the next turn in step with the backend's PLAN_TOOLS.
+const planToolNames = new Set(["ls", "read_file", "glob", "grep", "read_attachment", "search_knowledge", "web_search", "write_todos", "ask_user", "echo", "time_now", "task"]);
 
-export function withBrowserTools(current: string[], enabled: boolean, projectBound: boolean, _hasKnowledgeRoutes: boolean): string[] {
+export function effectiveNextTurnTools(selected: string[], workMode: "work" | "plan"): string[] {
+  return workMode === "plan" ? selected.filter(name => planToolNames.has(name)) : selected;
+}
+
+export function defaultNextTurnTools(catalogue: string[], projectBound: boolean, hasKnowledgeRoutes: boolean, hasAttachments: boolean): string[] {
+  const fileTools = new Set(["read_file", "ls", "glob", "grep", "write_file", "edit_file"]);
+  return catalogue.filter(name => !optionalVisualToolNames.has(name) && name !== "execute" &&
+    (name !== "read_attachment" || hasAttachments) &&
+    (!fileTools.has(name) || projectBound || (hasKnowledgeRoutes && (name === "read_file" || name === "ls"))));
+}
+
+export function withBrowserTools(current: string[], enabled: boolean, projectBound: boolean, hasKnowledgeRoutes: boolean): string[] {
   const selected = new Set(current.filter(name => !browserToolNames.some(browserName => browserName === name)));
   if (enabled) {
     browserToolNames.forEach(name => selected.add(name));
     if (projectBound) previewToolNames.forEach(name => selected.add(name));
-    selected.add("read_file");
   } else {
     previewToolNames.forEach(name => selected.delete(name));
+    if (!projectBound && !hasKnowledgeRoutes && !desktopToolNames.some(name => selected.has(name))) selected.delete("read_file");
   }
   return [...selected];
 }
 
-export function withDesktopTools(current: string[], enabled: boolean, _projectBound: boolean, _hasKnowledgeRoutes: boolean): string[] {
+export function withDesktopTools(current: string[], enabled: boolean, projectBound: boolean, hasKnowledgeRoutes: boolean): string[] {
   const selected = new Set(current.filter(name => !desktopToolNames.some(desktopName => desktopName === name)));
   if (enabled) {
     desktopToolNames.forEach(name => selected.add(name));
-    selected.add("read_file");
+  } else if (!projectBound && !hasKnowledgeRoutes && !browserToolNames.some(name => selected.has(name))) {
+    selected.delete("read_file");
   }
   return [...selected];
 }

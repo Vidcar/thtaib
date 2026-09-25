@@ -43,14 +43,61 @@ function tick() {
 
 try {
   const feedModule = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
-  const { AgentMessageFeed, resetPaintCounters } = feedModule;
-  const helperHidden = renderToStaticMarkup(React.createElement(AgentMessageFeed, { hideHelperTasks: true, messages: [
-    new AIMessage({ id: "helper-call", content: "", tool_calls: [{ id: "helper-task-1", name: "task", args: { description: "Research" } }] }),
+  const { AgentMessageFeed, helperKey, resetPaintCounters } = feedModule;
+  const helperRun = { id: "parent-1", input_message_id: "human-1" };
+  const helperShown = renderToStaticMarkup(React.createElement(AgentMessageFeed, { onHelperOpen: () => {}, helperName: () => "Research helper", helperStatus: () => "waiting for model", helperRuns: [helperRun], currentRunId: helperRun.id, hiddenHelperResultIds: new Set([helperKey("parent-1", "helper-task-1")]), messages: [
+    new HumanMessage({ id: "human-1", content: "Please research" }),
+    new AIMessage({ id: "helper-call", content: "", tool_calls: [{ id: "helper-task-1", name: "task", args: { subagent_type: "research", description: "Research the exact request" } }] }),
     new ToolMessage({ id: "helper-result", content: "Helper private result", tool_call_id: "helper-task-1" }),
+    new AIMessage({ id: "ordinary-call", content: "", tool_calls: [{ id: "ordinary-tool-1", name: "grep", args: { pattern: "current" } }] }),
+    new ToolMessage({ id: "ordinary-result", content: "Unrelated result", tool_call_id: "ordinary-tool-1" }),
     new AIMessage({ id: "parent-answer", content: "Parent summary" }),
   ] }));
-  assert.doesNotMatch(helperHidden, /Helper private result|helper-task-1/, "helper task and result stay out of the main transcript");
-  assert.match(helperHidden, /Parent summary/, "parent answer remains in the main transcript");
+  assert.match(helperShown, /Research helper/, "delegation shows the frozen helper name");
+  assert.match(helperShown, /Research the exact request/, "delegation shows the exact child request");
+  assert.match(helperShown, /waiting for model/, "delegation shows live status");
+  assert.doesNotMatch(helperShown, /Helper private result/, "raw child result stays out of the main transcript");
+  assert.match(helperShown, /Unrelated result/, "unrelated tool results remain visible");
+  assert.match(helperShown, /Parent summary/, "parent answer remains in the main transcript");
+  const legacyHelper = renderToStaticMarkup(React.createElement(AgentMessageFeed, { onHelperOpen: () => {}, helperRuns: [helperRun, { id: "parent-2", input_message_id: "human-2" }], currentRunId: "parent-2", hiddenHelperResultIds: new Set([helperKey("parent-1", "helper-task-1")]), messages: [
+    new HumanMessage({ id: "human-1", content: "Older turn" }),
+    new ToolMessage({ id: "legacy-child-result", content: "Older helper raw result", tool_call_id: "helper-task-1" }),
+    new HumanMessage({ id: "human-2", content: "Later turn" }),
+    new AIMessage({ id: "other-call", content: "", tool_calls: [{ id: "helper-task-1", name: "grep", args: { pattern: "safe" } }] }),
+    new ToolMessage({ id: "other-result", content: "Other tool output", tool_call_id: "helper-task-1" }),
+  ] }));
+  assert.doesNotMatch(legacyHelper, /Older helper raw result/, "older unmatched helper result stays out of the parent feed");
+  assert.match(legacyHelper, /Other tool output/, "a later unrelated tool result reusing the helper id remains visible");
+  const { helperEntries, helperIsActive } = await vite.ssrLoadModule("/src/renderer/HelperRail.tsx");
+  const live = { id: "helper-task-1", name: "research", namespace: ["tools"], parentId: null, status: "running", taskInput: "Research the exact request" };
+  assert.equal(helperEntries([], [live], "parent-1")[0].request, "Research the exact request", "early SDK discovery lists the helper before a child run exists");
+  const scoped = helperEntries([{ id: "parent-1", helper_snapshots: [{ agent_id: "research", version_id: "v1", name: "Research helper" }], child_runs: [{ run_id: "child-1", tool_call_id: "helper-task-1", agent_id: "research", version_id: "v1", name: "research", namespace: ["tools:child-1"], status: "waiting for approval or answer" }] }], [live], "parent-1")[0];
+  assert.equal(scoped.name, "Research helper");
+  assert.deepEqual(scoped.namespace, ["tools:child-1"], "child output uses the saved unique namespace, not generic tools");
+  assert.equal(helperIsActive(scoped.status), true, "waiting helpers remain in the active list");
+  const twoTurns = helperEntries([
+    { id: "parent-1", helper_snapshots: [{ agent_id: "research", version_id: "v1", name: "Research helper" }], child_runs: [{ run_id: "child-1", tool_call_id: "reused", agent_id: "research", version_id: "v1", name: "research", namespace: ["tools:child-1"], status: "completed" }] },
+    { id: "parent-2", helper_snapshots: [{ agent_id: "research", version_id: "v2", name: "Renamed helper" }], child_runs: [{ run_id: "child-2", tool_call_id: "reused", agent_id: "research", version_id: "v2", name: "research", namespace: ["tools:child-2"], status: "working" }] },
+  ], [], "parent-2");
+  assert.deepEqual(twoTurns.map(entry => [entry.key, entry.name, entry.namespace]), [["parent-1:reused", "Research helper", ["tools:child-1"]], ["parent-2:reused", "Renamed helper", ["tools:child-2"]]], "reopen keeps both parent runs and frozen helper names when call ids repeat");
+  const staleDiscovery = helperEntries([{ id: "parent-3", status: "running", events: [{ kind: "started", at: "2026-09-25T12:00:00Z" }], child_runs: [] }], [{ ...live, id: "reused", startedAt: new Date("2026-09-25T11:00:00Z") }], "parent-3");
+  assert.equal(staleDiscovery.length, 0, "an earlier SDK discovery cannot attach to a later parent run that reuses its call id");
+  const clicked = [];
+  let helperRenderer;
+  await act(async () => { helperRenderer = create(React.createElement(AgentMessageFeed, { onHelperOpen: (runId, id) => clicked.push([runId, id]), helperName: (_tool, runId) => runId === "parent-1" ? "Research helper" : "Renamed helper", helperRuns: [{ id: "parent-1", input_message_id: "human-1" }, { id: "parent-2", input_message_id: "human-2" }], currentRunId: "parent-2", messages: [
+    new HumanMessage({ id: "human-1", content: "First" }), new AIMessage({ id: "first-helper", content: "", tool_calls: [{ id: "reused", name: "task", args: { subagent_type: "research", description: "First request" } }] }), new ToolMessage({ id: "first-result", content: "First raw child output", tool_call_id: "reused" }),
+    new HumanMessage({ id: "human-2", content: "Second" }), new AIMessage({ id: "second-helper", content: "", tool_calls: [{ id: "reused", name: "task", args: { subagent_type: "research", description: "Second request" } }] }), new ToolMessage({ id: "second-result", content: "Second raw child output", tool_call_id: "reused" }),
+  ] })); });
+  const rows = helperRenderer.root.findAll(node => node.type === "button" && node.props.className === "helper-delegation");
+  assert.equal(rows.length, 2, "both repeated-id helper calls remain visible");
+  await act(async () => { rows[0].props.onClick(); rows[1].props.onClick(); });
+  assert.deepEqual(clicked, [["parent-1", "reused"], ["parent-2", "reused"]], "each row navigates to its own parent run");
+  await act(async () => helperRenderer.unmount());
+  const repeatedLive = renderToStaticMarkup(React.createElement(AgentMessageFeed, { onHelperOpen: () => {}, helperRuns: [{ id: "parent-1", input_message_id: "human-1" }, { id: "parent-3", input_message_id: "human-3" }], currentRunId: "parent-3", messages: [
+    new HumanMessage({ id: "human-1", content: "Earlier" }), new AIMessage({ id: "old-call", content: "", tool_calls: [{ id: "reused", name: "task", args: { description: "Old request" } }] }),
+    new HumanMessage({ id: "human-3", content: "Current" }),
+  ], toolCalls: [{ callId: "reused", id: "reused", name: "task", namespace: [], input: { subagent_type: "research", description: "Current live request" }, status: "running" }] }));
+  assert.match(repeatedLive, /Current live request/, "an earlier turn's matching call id cannot hide the current live helper before its AI message projects");
   const { splitStreamingMarkdown } = await vite.ssrLoadModule("/src/renderer/streamingMarkdown.ts");
   const answerBody = (text, live) => renderToStaticMarkup(React.createElement(AgentMessageFeed, {
     messages: [new AIMessage({ id: "semantic-answer", content: text })],
