@@ -77,6 +77,27 @@ class ModelCardRecipeTests(TestCase):
         self.assertEqual(_parse(bad), [])
         self.assertEqual(_parse("- Thinking mode: temperature=1, top_p=.95"), [])
 
+    def test_best_practices_numbered_sampling_section_yields_only_its_recipes(self):
+        card = """## Best Practices
+
+To achieve optimal performance, we recommend the following settings:
+
+1. **Sampling Parameters**: We suggest using the following sets of sampling parameters:
+
+    - Thinking Mode: `temperature=1.0`, `top_p=0.95`, `top_k=20`, `min_p=0.0`, `presence_penalty=0.0`, `repetition_penalty=1.0`
+    - Instruct (or non-thinking) mode: `temperature=0.7`, `top_p=0.80`, `top_k=20`, `min_p=0.0`, `presence_penalty=1.5`, `repetition_penalty=1.0`
+
+2. **Adequate Output Length**: Use enough space for a complete answer.
+    - Thinking Mode: temperature=0.2, top_p=0.5
+"""
+        recipes = _parse(card)
+        self.assertEqual([item["name"] for item in recipes], ["Thinking", "Non-thinking"])
+        self.assertEqual([item["section"] for item in recipes], ["Sampling Parameters"] * 2)
+        self.assertEqual([item["per_request"]["temperature"] for item in recipes], [1.0, 0.7])
+        self.assertEqual([item["per_request"]["presence_penalty"] for item in recipes], [0.0, 1.5])
+        self.assertEqual(_parse(card.replace("We suggest", "Examples of")), [])
+        self.assertEqual(_parse(card.replace("## Best Practices", "## Other details")), [])
+
     def test_json_sampling_validation_accepts_zero_and_penalties(self):
         defaults, unsupported = _generation_defaults({"temperature": 0, "top_k": 0,
             "min_p": 0, "presence_penalty": 1.5, "frequency_penalty": -0.5,
