@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import { installAppearancePreview } from "./appearancePreviewWindow";
+import { probeBackendCompatibility } from "./backendCompatibility";
 import { installBackground, retainWindowInBackground } from "./background";
 import { configureWindowsNotificationIdentity, ensureWindowsNotificationShortcut, WINDOWS_LAUNCH_BACKEND_ARG } from "./windowsNotificationIdentity";
 
@@ -21,6 +22,7 @@ import {
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const ownsSingleInstance = app.requestSingleInstanceLock();
 let mainWindow: BrowserWindow | undefined;
+const STALE_BACKEND_NOTIFIED_ARG = "--workbench-stale-backend-notified";
 
 configureWindowsNotificationIdentity();
 
@@ -101,7 +103,8 @@ async function ensureBackendFromShortcut(argv = process.argv): Promise<boolean> 
   if (!shouldLaunchBackendFromShortcut(argv)) {
     return false;
   }
-  if (await backendHealthy()) {
+  const current = await backendCompatibility();
+  if (current === "compatible" || current === "incompatible") {
     return false;
   }
   const launcher = localLauncherPath();
@@ -110,7 +113,7 @@ async function ensureBackendFromShortcut(argv = process.argv): Promise<boolean> 
     return false;
   }
   await runLauncherNoDesktop(launcher);
-  return await backendHealthy();
+  return await backendCompatibility() === "compatible";
 }
 
 function localLauncherPath(): string | null {
@@ -150,17 +153,21 @@ async function runLauncherNoDesktop(launcher: string): Promise<void> {
   });
 }
 
-async function backendHealthy(): Promise<boolean> {
-  try {
-    const response = await fetch(`${WORKBENCH_BACKEND_ORIGIN}/health`, { signal: AbortSignal.timeout(1500) });
-    if (!response.ok) {
-      return false;
-    }
-    const health = await response.json() as { status?: string; product?: string };
-    return health.status === "ok" && health.product === "Local AI Workbench";
-  } catch {
-    return false;
-  }
+async function backendCompatibility() {
+  return probeBackendCompatibility(
+    WORKBENCH_BACKEND_ORIGIN,
+    ensureSharedSecret(resolveProductDataRoot()),
+  );
+}
+
+async function showIncompatibleBackend(): Promise<void> {
+  await dialog.showMessageBox({
+    type: "warning",
+    title: "Local AI Workbench",
+    message: "The local Workbench service needs a restart",
+    detail: "It does not provide the visual testing tools in this desktop build. The service and any running model were left untouched. Copy any unfinished edits, then use Quit from the Workbench tray and reopen it. Quit unloads managed models and stops active work after confirmation.",
+    buttons: ["OK"],
+  });
 }
 
 if (ownsSingleInstance) {
@@ -171,6 +178,9 @@ if (ownsSingleInstance) {
           installApplicationTrust();
           for (const window of BrowserWindow.getAllWindows()) window.reload();
         }
+        void backendCompatibility().then((status) => {
+          if (status === "incompatible" && !argv.includes(STALE_BACKEND_NOTIFIED_ARG)) void showIncompatibleBackend();
+        });
         focusExistingWindow();
       });
     }
@@ -183,6 +193,7 @@ if (ownsSingleInstance) {
       console.warn("Windows notification shortcut setup failed", error);
     });
     await ensureBackendFromShortcut();
+    const compatibility = await backendCompatibility();
     await installBackground(focusExistingWindow);
     installAppearancePreview({
       preloadPath: preloadScriptPath(),
@@ -201,6 +212,9 @@ if (ownsSingleInstance) {
       },
     });
     createWindow();
+    if (compatibility === "incompatible" && !process.argv.includes(STALE_BACKEND_NOTIFIED_ARG)) {
+      await showIncompatibleBackend();
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

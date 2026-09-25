@@ -34,6 +34,7 @@ New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 $launcherLog = Join-Path $logRoot "workbench-launcher.log"
 $backendOutLog = Join-Path $logRoot "workbench-backend-launcher.out.log"
 $backendErrLog = Join-Path $logRoot "workbench-backend-launcher.err.log"
+$staleBackendMessage = 'The running Workbench service does not provide this desktop build''s visual testing tools. It and any running model were left untouched. Copy any unfinished edits before using Quit from the tray; Quit unloads managed models. Reopen Workbench afterward.'
 
 function Write-LaunchLog($message) {
   $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -71,6 +72,37 @@ function Test-BackendHealth {
   }
 }
 
+function Show-Warning($message) {
+  Write-LaunchLog "WARNING $message"
+  if (-not $ShowConsole) {
+    try {
+      $shell = New-Object -ComObject WScript.Shell
+      $null = $shell.Popup($message, 0, "Local AI Workbench", 48)
+    } catch {
+      Write-Host $message
+    }
+  } else {
+    Write-Host $message
+  }
+}
+
+function Test-BackendCompatibility {
+  $secretPath = Join-Path $dataRoot 'state\desktop_backend_shared_secret'
+  $compatible = $false
+  if (Test-Path -LiteralPath $secretPath) {
+    try {
+      $token = [System.IO.File]::ReadAllText($secretPath).Trim()
+      $catalogue = Invoke-RestMethod -Uri "$backendUrl/v1/agent-tools" -Headers @{ 'X-Workbench-Local-Token' = $token } -TimeoutSec 3
+      $required = @('browser_take_screenshot', 'desktop_screenshot', 'start_preview')
+      $enabled = @($catalogue.enabled)
+      $compatible = @($required | Where-Object { $_ -notin $enabled }).Count -eq 0
+    } catch {
+      $compatible = $false
+    }
+  }
+  return $compatible
+}
+
 function Wait-BackendHealth($timeoutSeconds) {
   $deadline = (Get-Date).AddSeconds($timeoutSeconds)
   while ((Get-Date) -lt $deadline) {
@@ -92,8 +124,12 @@ function Assert-BuiltDesktop {
 
 function Start-BackendIfNeeded {
   if (Test-BackendHealth) {
+    if (-not (Test-BackendCompatibility)) {
+      Write-LaunchLog "Existing backend lacks visual testing tools; left running"
+      return $false
+    }
     Write-LaunchLog "Reusing healthy backend at $backendUrl"
-    return
+    return $true
   }
 
   $mutex = New-Object System.Threading.Mutex($false, "LocalAIWorkbench.LaunchBackend")
@@ -104,8 +140,12 @@ function Start-BackendIfNeeded {
       throw "Another launcher is starting the backend and did not finish in time."
     }
     if (Test-BackendHealth) {
+      if (-not (Test-BackendCompatibility)) {
+        Write-LaunchLog "Backend became healthy but lacks visual testing tools; left running"
+        return $false
+      }
       Write-LaunchLog "Backend became healthy while waiting for launch lock"
-      return
+      return $true
     }
 
     $uv = Assert-Command "uv"
@@ -122,7 +162,12 @@ function Start-BackendIfNeeded {
     if (-not (Wait-BackendHealth 45)) {
       throw "The backend did not become healthy on 127.0.0.1:8000. See $backendErrLog"
     }
+    if (-not (Test-BackendCompatibility)) {
+      Write-LaunchLog "Started backend lacks visual testing tools; left running"
+      return $false
+    }
     Write-LaunchLog "Backend is healthy"
+    return $true
   } finally {
     if ($hasMutex) {
       $mutex.ReleaseMutex()
@@ -131,7 +176,7 @@ function Start-BackendIfNeeded {
   }
 }
 
-function Open-Desktop {
+function Open-Desktop([bool]$backendCompatible) {
   if ($NoDesktop) {
     Write-LaunchLog "NoDesktop requested; backend check complete"
     return
@@ -142,9 +187,11 @@ function Open-Desktop {
     throw "Electron is missing at $electron. The existing desktop dependencies are not installed."
   }
   Write-LaunchLog "Opening Electron desktop"
+  $arguments = @(".")
+  if (-not $backendCompatible) { $arguments += "--workbench-stale-backend-notified" }
   Start-Process `
     -FilePath $electron `
-    -ArgumentList @(".") `
+    -ArgumentList $arguments `
     -WorkingDirectory $desktopDir `
     -WindowStyle Normal | Out-Null
 }
@@ -153,13 +200,17 @@ try {
   Write-LaunchLog "Launcher started"
   Assert-Command "uv" | Out-Null
   Assert-BuiltDesktop
-  Start-BackendIfNeeded
+  $backendCompatible = Start-BackendIfNeeded
+  if (-not $backendCompatible) {
+    if ($CheckOnly -or $NoDesktop) { throw $staleBackendMessage }
+    Show-Warning $staleBackendMessage
+  }
   if ($CheckOnly) {
     Write-LaunchLog "CheckOnly passed"
     Write-Host "Local AI Workbench launcher checks passed."
     exit 0
   }
-  Open-Desktop
+  Open-Desktop $backendCompatible
   Write-LaunchLog "Launcher finished"
 } catch {
   Show-Error $_.Exception.Message

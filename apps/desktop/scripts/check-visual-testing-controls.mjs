@@ -90,6 +90,9 @@ try {
   await act(async () => { button(renderer, "Create chat").props.onClick(); });
   assert.equal(prepared, 1, "the first-turn flow must offer to create a chat for its grant");
   await act(async () => { renderer.unmount(); });
+  const { AgentSetupsPanel } = await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx");
+  const { visualSetupCompatibilityIssue } = await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx");
+  await savedAgentWithOldBackend(AgentSetupsPanel, visualSetupCompatibilityIssue, browserToolNames, desktopToolNames);
 } finally {
   globalThis.fetch = previousFetch;
   await vite.close();
@@ -105,4 +108,52 @@ function button(renderer, label) {
 function textOf(node) {
   if (typeof node === "string") return node;
   return node?.children?.map(textOf).join("") ?? "";
+}
+
+async function savedAgentWithOldBackend(Panel, compatibilityIssue, browserNames, desktopNames) {
+  const core = ["echo", "time_now", "ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "write_todos", "ask_user", "propose_memory", "read_attachment"];
+  const selected = [...core, ...browserNames, ...desktopNames];
+  assert.equal(selected.length, 38, "the saved selection matches the reported 38-tool case");
+  const configuration = { presented_tools: selected, desktop_access: "selected" };
+  const record = { id: "agent_old", name: "Visual tester", role: null, current_version_id: "version_1", configuration, missing_dependencies: [] };
+  const catalogue = names => ({ deployments: [], bundles: [], profiles: [], knowledge: [], connections: [], tools: names.map(id => ({ id, name: id })) });
+  assert.ok(compatibilityIssue(configuration, catalogue(core)), "an old backend blocks saving the still-selected visual tools");
+  assert.equal(compatibilityIssue(configuration, catalogue(selected)), null, "the matching backend accepts the saved choices");
+  let advertised = core;
+  const writes = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const path = new URL(String(url)).pathname;
+    const method = init.method ?? "GET";
+    if (path === "/v1/agent-setups") return { ok: true, json: async () => [record] };
+    if (path === "/v1/agent-setups/agent_old" && method === "PATCH") {
+      writes.push(JSON.parse(init.body));
+      return { ok: true, json: async () => record };
+    }
+    if (path === "/v1/agent-setups/agent_old/versions") return { ok: true, json: async () => [] };
+    if (["/v1/deployments", "/v1/bundles", "/v1/profiles", "/v1/knowledge/entries", "/v1/connections"].includes(path)) return { ok: true, json: async () => [] };
+    if (path === "/v1/agent-tools") return { ok: true, json: async () => ({ enabled: advertised, tools: advertised.map(id => ({ id, name: id, description: "" })) }) };
+    if (path === "/v1/setup-resolution") return { ok: true, json: async () => ({ configuration, effective_values: {}, instruction_layers: [] }) };
+    throw new Error(`Unexpected setup endpoint: ${method} ${path}`);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel)); await new Promise(resolve => setTimeout(resolve, 0)); });
+    const save = button(renderer, "Save agent");
+    assert.equal(save.props.disabled, true, "a stale backend cannot receive the unsupported setup payload");
+    assert.match(textOf(renderer.toJSON()), /Restart Workbench to load the updated backend/);
+    const unavailable = renderer.root.findAll(node => node.type === "summary" && textOf(node) === "25 unavailable selections");
+    assert.equal(unavailable.length, 1, "the 25 newer tools are grouped instead of repeated generic rows");
+    assert.equal(renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Unavailable selection").length, 0);
+    assert.ok(renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "browser navigate").length);
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+    assert.equal(writes.length, 0, "form submit also refuses the unsupported payload");
+    await act(async () => { renderer.unmount(); });
+    renderer = null;
+    advertised = selected;
+    await act(async () => { renderer = create(React.createElement(Panel)); await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.equal(button(renderer, "Save agent").props.disabled, false, "the updated catalogue restores saving without changing the draft");
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].configuration, configuration, "the compatible save keeps all selected tools and desktop scope");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
