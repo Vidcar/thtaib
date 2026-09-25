@@ -184,6 +184,7 @@ class ProcessSupervisor:
         *,
         cwd: Path | None = None,
         log_path: Path | None = None,
+        env: dict[str, str] | None = None,
     ) -> ProcessIdentity:
         stdout: IO[bytes] | int = subprocess.DEVNULL
         stderr: IO[bytes] | int = subprocess.DEVNULL
@@ -202,6 +203,7 @@ class ProcessSupervisor:
             cwd=str(cwd) if cwd else None,
             stdout=stdout,
             stderr=stderr,
+            env=env,
         )
         pid = int(process.pid)
         self._children[pid] = process
@@ -425,7 +427,7 @@ class HttpProbe:
             detail=last_error,
         )
 
-    def props(self, endpoint: str) -> ServerProperties | None:
+    def props(self, endpoint: str, *, model: str | None = None) -> ServerProperties | None:
         """Read llama-server ``GET /props``; ``None`` when the endpoint does not offer it.
 
         Only a healthy deployment is asked. A non-llama OpenAI-compatible
@@ -433,6 +435,12 @@ class HttpProbe:
         recorded as "nothing reported", never as a failure of the deployment.
         """
         url = _props_url(endpoint)
+        if model is not None:
+            # Router GET endpoints require an exact preset ID. Never let a
+            # diagnostic property probe load an evicted model.
+            from urllib.parse import urlencode
+
+            url += "?" + urlencode({"model": model, "autoload": "false"})
         try:
             response = httpx.get(url, timeout=self.timeout)
         except httpx.HTTPError:

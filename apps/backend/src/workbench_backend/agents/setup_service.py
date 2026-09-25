@@ -24,6 +24,17 @@ if TYPE_CHECKING:
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
+# A project supplies context, never execution authority or a model choice. A
+# main agent supplies its behaviour; its optional model choice is reserved for
+# use when that agent is invoked as a named helper.
+PROJECT_CONTEXT_FIELDS = frozenset({"memory_version_refs", "skill_version_refs", "embedding_deployment_id"})
+APPLICATION_DEFAULT_FIELDS = frozenset({"approval_mode"})
+MAIN_AGENT_FIELDS = frozenset({
+    "instructions", "memory_version_refs", "skill_version_refs",
+    "protected_instruction_version_refs", "requires_project", "requires_host_shell",
+    "helper_agent_ids", "review",
+})
+
 
 def _image_preview(path: Path) -> str | None:
     if path.suffix.casefold() not in _IMAGE_SUFFIXES:
@@ -56,6 +67,7 @@ class SetupService:
         return self._project_view(record)
 
     def create_project(self, request: ProjectCreateRequest) -> ProjectRecord:
+        self._require_project_context_only(request.defaults)
         path = Path(request.path).expanduser().resolve()
         if not path.is_dir():
             raise HarnessError("Choose an existing project folder.", code="project_missing", status_code=400)
@@ -73,6 +85,8 @@ class SetupService:
             return self.store.put_project(project)
 
     def update_project(self, project_id: str, request: ProjectUpdateRequest) -> ProjectRecord:
+        if request.defaults is not None:
+            self._require_project_context_only(request.defaults)
         with self.store._lock:
             project = self.get_project(project_id, require_active=True)
             updates = {"updated_at": utc_now()}
@@ -142,8 +156,21 @@ class SetupService:
         version = self.get_version(record.current_version_id)
         # The standalone preview inherits application defaults just as a run
         # does. Project-specific changes are validated by the scoped resolver.
-        effective = self.resolve(overrides=version.configuration, validate=False).configuration
-        return AgentSetupView(**record.model_dump(), name=version.name, role=version.role, configuration=version.configuration, missing_dependencies=self.dependencies(effective))
+        # An inactive setup remains inspectable after removal. The resolver
+        # rightly rejects it for new work, so inspect its saved dependencies
+        # directly instead of treating the removal response as a new choice.
+        if record.active:
+            main = self.resolve(agent_setup_version_id=version.id, validate=False,
+                read_only=True).configuration
+            helper = self.resolve(agent_setup_version_id=version.id, validate=False,
+                helper_role=True, read_only=True).configuration
+        else:
+            main = SetupConfiguration.model_validate({key: value for key, value in
+                version.configuration.model_dump(exclude_none=True).items() if key in MAIN_AGENT_FIELDS})
+            helper = version.configuration
+        return AgentSetupView(**record.model_dump(), name=version.name, role=version.role,
+            configuration=version.configuration, missing_dependencies=self.dependencies(main),
+            helper_missing_dependencies=self.dependencies(helper))
 
     def get_version(self, version_id: str, *, require_active: bool = False) -> AgentSetupVersion:
         version = self.store.get_agent_setup_version(version_id)
@@ -224,29 +251,49 @@ class SetupService:
                 issues.append(SetupDependencyIssue(kind="tool", id=tool, reason="not in the current selected catalogue"))
         return issues
 
-    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False) -> ResolvedSetupSelection:
+    @staticmethod
+    def _require_project_context_only(configuration: SetupConfiguration) -> None:
+        other = sorted(set(configuration.model_dump(exclude_none=True)) - PROJECT_CONTEXT_FIELDS)
+        if other:
+            raise HarnessError("Projects can save folder and knowledge context only.",
+                code="project_setup_scope", status_code=400, details={"fields": other})
+
+    @staticmethod
+    def require_application_defaults_only(configuration: SetupConfiguration) -> None:
+        other = sorted(set(configuration.model_dump(exclude_none=True)) - APPLICATION_DEFAULT_FIELDS)
+        if other:
+            raise HarnessError("App preferences can seed new chats' Access choice only.",
+                code="application_setup_scope", status_code=400, details={"fields": other})
+
+    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False, helper_role: bool = False, read_only: bool = False) -> ResolvedSetupSelection:
         project = self.get_project(project_id, require_active=True) if project_id else None
         version = self.get_version(agent_setup_version_id, require_active=True) if agent_setup_version_id else None
-        layers = [("Application defaults", None, overrides or SetupConfiguration())] if editing_layer == "application" else [("Application defaults", None, self.store.get_setup_defaults())]
+        layers = [("Application defaults", None, overrides or SetupConfiguration(), "application")] if editing_layer == "application" else [("Application defaults", None, self.store.get_setup_defaults(), "application")]
         if project and editing_layer != "application":
-            layers.append((f"Project: {project.name}", project.id, (overrides or SetupConfiguration()) if editing_layer == "project" else project.defaults))
+            layers.append((f"Project: {project.name}", project.id, (overrides or SetupConfiguration()) if editing_layer == "project" else project.defaults, "project"))
         elif editing_layer == "project":
-            layers.append(("Project", None, overrides or SetupConfiguration()))
+            layers.append(("Project", None, overrides or SetupConfiguration(), "project"))
         if version and editing_layer not in {"application", "project"}:
-            layers.append((f"Agent: {version.name}", version.id, (overrides or SetupConfiguration()) if editing_layer == "agent" else version.configuration))
+            layers.append((f"Agent: {version.name}", version.id, (overrides or SetupConfiguration()) if editing_layer == "agent" else version.configuration, "agent"))
         elif editing_layer == "agent":
-            layers.append(("Agent", None, overrides or SetupConfiguration()))
+            layers.append(("Agent", None, overrides or SetupConfiguration(), "agent"))
         if overrides is not None and editing_layer == "conversation":
-            layers.append(("Turn overrides", None, overrides))
+            layers.append(("Turn overrides", None, overrides, "conversation"))
         values = {}
         effective = {}
         builtin_values = {"approval_mode": "ask", "work_mode": "work", "desktop_access": "off", "helper_agent_ids": [], "connection_ids": []}
         instructions = []
         protected = []
-        for name, source_id, configuration in layers:
+        for name, source_id, configuration, scope in layers:
             explicit = configuration.model_dump(exclude_none=True)
+            if scope == "application":
+                explicit = {key: value for key, value in explicit.items() if key in APPLICATION_DEFAULT_FIELDS}
+            elif scope == "project":
+                explicit = {key: value for key, value in explicit.items() if key in PROJECT_CONTEXT_FIELDS}
+            elif scope == "agent" and not helper_role:
+                explicit = {key: value for key, value in explicit.items() if key in MAIN_AGENT_FIELDS}
             self._resolve_model_selector_layer(values, effective, explicit)
-            if configuration.inherit_deployment_settings is False and configuration.profile_id is None:
+            if explicit.get("inherit_deployment_settings") is False and "profile_id" not in explicit:
                 values.pop("profile_id", None)
             for key, value in explicit.items():
                 prior = effective.get(key)
@@ -282,15 +329,11 @@ class SetupService:
             if key in {"profile_id", "embedding_deployment_id"}:
                 values[key] = None
         configuration_id = values.get("model_configuration_id")
-        if not any(values.get(key) for key in ("bundle_id", "profile_id", "deployment_id", "model_configuration_id")) and hasattr(self, "manager") and editing_layer == "conversation":
-            ready = [item for item in self.manager.store.list_deployments() if item.status.value == "running" and item.health and item.health.healthy
-                and (item.scope.value == "connected" or item.process_identity is not None)]
-            if ready:
-                selected = max(ready, key=lambda item: item.updated_at)
-                values.update(deployment_id=selected.id, bundle_id=selected.bundle_id)
-                effective["deployment_id"] = ResolvedSetting(value=selected.id, source="Loaded model", source_id=selected.id, inherited=True)
         if not configuration_id and values.get("bundle_id") and not values.get("deployment_id") and hasattr(self, "manager"):
-            self.manager.list_model_configurations(values["bundle_id"])
+            # A preview may inspect this bundle but must not synthesize or
+            # persist its default configuration. Actual apply may prepare it.
+            if not read_only:
+                self.manager.list_model_configurations(values["bundle_id"])
             bundle = self.manager.store.get_bundle(values["bundle_id"])
             configuration_id = bundle.default_configuration_id if bundle else None
             if configuration_id:
@@ -299,15 +342,32 @@ class SetupService:
         if configuration_id and hasattr(self, "manager"):
             profile = self.manager.store.get_profile(configuration_id)
             if profile is not None:
+                from workbench_backend.inference.configurations import requested_identity
+                from workbench_backend.inference.settings import resolve_bags
+
                 profile = self.manager.canonical_configuration(profile.id)
+                if profile.bundle_id is None:
+                    raise HarnessError("A model configuration must belong to an installed model. Choose a model or a connected server.",
+                        code="model_configuration_unbound", status_code=409)
                 values["model_configuration_id"] = profile.id
                 if "model_configuration_id" in effective:
                     effective["model_configuration_id"].value = profile.id
                 values.update(profile_id=profile.id, bundle_id=profile.bundle_id, inherit_deployment_settings=True)
+                requested_startup = dict(profile.bags.startup.requested)
+                for key, value in (values.get("startup_overrides") or {}).items():
+                    if value is None:
+                        requested_startup.pop(key, None)
+                    else:
+                        requested_startup[key] = value
+                wanted_startup = requested_identity(resolve_bags(startup=requested_startup))[0]
+                def exact_selection(deployment) -> bool:
+                    return bool(deployment and deployment.bundle_id == profile.bundle_id
+                        and deployment.profile_id == profile.id
+                        and requested_identity(deployment.settings)[0] == wanted_startup)
                 selected = self.manager.store.get_deployment(values.get("deployment_id") or "")
                 matching = self.manager.configuration_deployment(profile.id)
-                if selected is None or selected.bundle_id != profile.bundle_id:
-                    selected = matching
+                if not exact_selection(selected):
+                    selected = matching if exact_selection(matching) else None
                 if selected is None and prepare_model:
                     from workbench_backend.inference.schemas import ManagedDeploymentRequest
                     selected = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=profile.bundle_id,
@@ -323,7 +383,8 @@ class SetupService:
                 effective[key] = ResolvedSetting(value=value, source="Application default", inherited=True)
         if hasattr(self, "manager"):
             from workbench_backend.agents.effective_setup import effective_setting_values
-            effective.update(effective_setting_values(self.manager, configuration, effective))
+            if not read_only:
+                effective.update(effective_setting_values(self.manager, configuration, effective))
             effective.update(self._model_selection_facts(configuration, effective))
         if prepare_model and any(value.requires_reload for value in effective.values()):
             raise HarnessError("Apply the changed model settings before sending a message.", code="model_reload_required", status_code=409)
@@ -344,9 +405,6 @@ class SetupService:
         execution continues to use the loaded snapshot. In particular, looking
         up that destination must not apply a subsequently edited model default.
         """
-        from workbench_backend.inference.configurations import requested_identity
-        from workbench_backend.inference.settings import resolve_bags
-
         deployment = self.manager.store.get_deployment(configuration.deployment_id or "")
         profile = self.manager.store.get_profile(configuration.model_configuration_id or configuration.profile_id or "")
         bundle_id = profile.bundle_id if profile and profile.bundle_id else deployment.bundle_id if deployment else configuration.bundle_id
@@ -368,22 +426,13 @@ class SetupService:
                 source_id=deployment.id, inherited=True)
         target = None
         if bundle:
-            configurations = self.manager.list_model_configurations(bundle.id)
-            bundle = self.manager.store.get_bundle(bundle.id)
+            configurations = [item for item in self.manager.store.list_profiles() if item.bundle_id == bundle.id]
             if profile and profile.bundle_id == bundle.id:
                 target = self.manager.canonical_configuration(profile.id)
             elif deployment and deployment.profile_id:
                 bound = self.manager.store.get_profile(deployment.profile_id)
                 if bound and bound.bundle_id == bundle.id:
-                    target = next((item for item in configurations
-                        if item.id == bound.id or bound.id in item.equivalent_configuration_ids), None)
-            if target is None and deployment:
-                loaded_bags = resolve_bags(startup=deployment.requested_startup,
-                    per_request=deployment.settings.per_request.requested, agent=deployment.settings.agent.requested)
-                matching = [item for item in configurations if requested_identity(item.bags) == requested_identity(loaded_bags)]
-                target = next((item for item in matching if item.id == bundle.default_configuration_id), next(iter(matching), None))
-            if target is None:
-                target = next((item for item in configurations if item.id == bundle.default_configuration_id), None)
+                    target = next((item for item in configurations if item.id == bound.id), None)
         result["model_configuration_target"] = ResolvedSetting(value=target.id if target else None,
             source=f"{bundle.display_name} · {target.display_name}" if target and bundle else "No saved model configuration",
             source_id=target.id if target else None, inherited=True, supported=bool(target),

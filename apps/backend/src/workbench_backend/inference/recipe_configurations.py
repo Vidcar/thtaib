@@ -72,7 +72,6 @@ def create_recipe_configurations(
                     id=new_id("profile"),
                     display_name=_unique_name(recipe.name, names),
                     bundle_id=bundle_id,
-                    configuration_origin="named",
                     recipe_origin=ResponseRecipeOrigin(
                         recipe_id=recipe.id,
                         name=recipe.name,

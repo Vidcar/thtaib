@@ -67,7 +67,7 @@ class RecipeWorkflowTests(unittest.TestCase):
         self.digest = sha256_file(self.card)
         self.recipes = parse_model_card_recipes(CARD, repo_id=REPO, revision=REVISION, sha256=self.digest)
         self.base = RunProfile(id="config_base", display_name="Default", bundle_id="bundle",
-            configuration_origin="recovered", bags=resolve_bags(
+            bags=resolve_bags(
                 startup={"ctx_size": 8192, "n_gpu_layers": 8},
                 per_request={"max_tokens": 128, "temperature": 0.2}),
             created_at=utc_now(), updated_at=utc_now())
@@ -88,7 +88,7 @@ class RecipeWorkflowTests(unittest.TestCase):
 
     def test_create_all_recipes_with_default_is_idempotent_and_copies_launch_settings(self) -> None:
         collision = self.base.model_copy(update={"id": "config_named",
-            "display_name": "General thinking", "configuration_origin": "named"})
+            "display_name": "General thinking"})
         self.manager.store.put_profile(collision)
         deployment = Deployment(id="deployment", display_name="Prior", bundle_id=self.bundle.id,
             scope=ManagementScope.managed, status=DeploymentStatus.stopped,

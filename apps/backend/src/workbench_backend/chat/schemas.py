@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.inference.user_content import UserContentBlock
 from workbench_backend.agents.structured import OutputSchemaRequest
-from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection
+from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
 
@@ -87,6 +87,27 @@ class ChatStartRequest(BaseModel):
     knowledge_version_refs: list[str] | None = None
     embedding_deployment_id: str | None = None
     retrieval_project_paths: list[str] | None = None
+
+
+class ChatReadinessRequest(BaseModel):
+    """Preview a saved conversation or one candidate choice without changing it."""
+
+    model_config = ConfigDict(extra="forbid")
+    overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
+    agent_setup_version_id: str | None = None
+
+
+class ChatReadinessIssue(BaseModel):
+    code: str
+    message: str
+    action: str | None = None
+
+
+class ChatReadiness(BaseModel):
+    status: Literal["ready", "needs_action", "incompatible", "unverified"]
+    can_send: bool
+    issues: list[ChatReadinessIssue] = Field(default_factory=list)
+    selection: ResolvedSetupSelection | None = None
 
 
 class ChatConversationUpdateRequest(BaseModel):

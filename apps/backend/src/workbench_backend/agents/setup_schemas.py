@@ -152,6 +152,7 @@ class AgentSetupView(AgentSetupRecord):
     role: str | None = None
     configuration: SetupConfiguration
     missing_dependencies: list[SetupDependencyIssue] = Field(default_factory=list)
+    helper_missing_dependencies: list[SetupDependencyIssue] = Field(default_factory=list)
 
 
 class AgentSetupCreateRequest(BaseModel):

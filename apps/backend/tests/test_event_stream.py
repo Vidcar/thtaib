@@ -185,6 +185,34 @@ class InteractionStreamTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["result"]
 
+    def test_completed_helper_messages_replay_for_scoped_rail_after_reopen(self) -> None:
+        thread_id = self._register_agent()
+        namespace = ["tools:helper-call"]
+        child_messages = [
+            {"type": "human", "id": "helper-input", "content": "Inspect the issue"},
+            {"type": "ai", "id": "helper-answer", "content": "Found the cause"},
+        ]
+        self.app.state.app_store.append_interaction(
+            thread_id, [event("values", {"messages": child_messages}, namespace)],
+        )
+        self.app.state.app_store.discard_finished_token_log(thread_id)
+
+        # The pinned SDK opens a new namespace-scoped subscription without a
+        # cursor when the helper rail mounts. Finished child values must remain
+        # in the one durable interaction log for that reopened subscription.
+        interaction = self.app.state.interaction
+        options = interaction.subscription(thread_id, {
+            "channels": ["messages", "values"], "namespaces": [namespace],
+        })
+        self.assertEqual(options.get("since", 0), 0)
+        wires, _cursor, gap = interaction.stream_page(
+            thread_id, 0, options, interaction.resume_view(thread_id, 0),
+        )
+        self.assertFalse(gap)
+        child_values = [wire["params"]["data"]["messages"] for wire in wires
+                        if wire["method"] == "values" and wire["params"]["namespace"] == namespace]
+        self.assertEqual(child_values[-1], child_messages)
+
     def test_native_write_failure_publishes_terminal_chat_and_pauses_queue(self) -> None:
         hold = threading.Event()
         set_generate_hold(hold)

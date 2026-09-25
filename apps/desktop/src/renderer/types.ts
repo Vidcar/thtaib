@@ -149,7 +149,6 @@ export interface RunProfile {
   display_name: string;
   bundle_id: string | null;
   bundle_name?: string | null;
-  equivalent_configuration_ids?: string[];
   recipe_origin?: ResponseRecipeOrigin | null;
   bags: SettingsBags;
 }
@@ -220,6 +219,13 @@ export interface RuntimeManifest {
   status: "ready" | "failed" | "interrupted";
   error: string | null;
   companion_asset_name?: string | null;
+}
+
+export interface ManagedModelsRuntime {
+  max_loaded_models: number;
+  loaded_deployment_ids: string[];
+  loading_deployment_ids: string[];
+  router_status: "stopped" | "running" | "unhealthy";
 }
 
 export type LabToolMode = "live-tool" | "recorded-tool";

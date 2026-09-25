@@ -44,6 +44,13 @@ function tick() {
 try {
   const feedModule = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
   const { AgentMessageFeed, resetPaintCounters } = feedModule;
+  const helperHidden = renderToStaticMarkup(React.createElement(AgentMessageFeed, { hideHelperTasks: true, messages: [
+    new AIMessage({ id: "helper-call", content: "", tool_calls: [{ id: "helper-task-1", name: "task", args: { description: "Research" } }] }),
+    new ToolMessage({ id: "helper-result", content: "Helper private result", tool_call_id: "helper-task-1" }),
+    new AIMessage({ id: "parent-answer", content: "Parent summary" }),
+  ] }));
+  assert.doesNotMatch(helperHidden, /Helper private result|helper-task-1/, "helper task and result stay out of the main transcript");
+  assert.match(helperHidden, /Parent summary/, "parent answer remains in the main transcript");
   const { splitStreamingMarkdown } = await vite.ssrLoadModule("/src/renderer/streamingMarkdown.ts");
   const answerBody = (text, live) => renderToStaticMarkup(React.createElement(AgentMessageFeed, {
     messages: [new AIMessage({ id: "semantic-answer", content: text })],

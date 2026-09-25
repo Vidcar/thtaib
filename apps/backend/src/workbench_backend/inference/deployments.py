@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+import psutil
+
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import mmproj_companion
 from workbench_backend.inference.ids import new_id, utc_now
@@ -22,6 +24,7 @@ from workbench_backend.inference.process import (
     PROCESS_IDENTITY_UNPROVEN,
     HttpProbe,
     ProcessSupervisor,
+    _python_fixture,
     wait_for_owned_health,
 )
 from workbench_backend.inference.process_logs import deployment_log_path
@@ -83,8 +86,21 @@ class DeploymentService:
         self._locks: dict[str, threading.RLock] = {}
         self.lifecycle = lifecycle or LifecycleCoordinator()
         self.require_no_live_dependencies = require_no_live_dependencies
+        # Real managed runtimes use one owned router. The direct supervisor is
+        # retained solely for Python test fixtures exercising process ownership.
+        from workbench_backend.inference.router_runtime import ManagedRouter
+
+        self.router = ManagedRouter(
+            store, runtime, self.processes, self.probe,
+            require_idle=lambda deployment: self._require_no_live_dependencies(deployment, "deployment_active"),
+        )
         if reconcile_on_init:
             self.reconcile()
+
+    def _router_enabled(self) -> bool:
+        manifest = self.runtime.current()
+        return (manifest is not None and manifest.status == "ready"
+                and not _python_fixture(Path(manifest.executable)))
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
         with self.lifecycle.mutate(
@@ -209,6 +225,9 @@ class DeploymentService:
 
     def start(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
+        if deployment.scope == ManagementScope.managed and self._router_enabled():
+            with self.lifecycle.reserve(deployment):
+                return self.router.start(deployment_id)
         with self.lifecycle.reserve(deployment):
             with self._lock_for(deployment_id):
                 # Serialize port selection through listen ownership verification.
@@ -218,6 +237,14 @@ class DeploymentService:
 
     def stop(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
+        if deployment.scope == ManagementScope.managed and self._router_enabled():
+            with self.lifecycle.mutate(
+                "stop_deployment", deployment_ids={deployment.id},
+                profile_ids={deployment.profile_id} if deployment.profile_id else set(),
+                bundle_ids={deployment.bundle_id} if deployment.bundle_id else set(),
+            ):
+                self._require_no_live_dependencies(deployment, "deployment_active")
+                return self.router.stop(deployment_id)
         with self.lifecycle.mutate(
             "stop_deployment",
             deployment_ids={deployment.id},
@@ -227,6 +254,44 @@ class DeploymentService:
             self._require_no_live_dependencies(deployment, "deployment_active")
             with self._lock_for(deployment_id):
                 return self._stop_locked(deployment_id)
+
+    def stop_legacy_owned(self, deployment_id: str) -> Deployment:
+        """One-time development cutover for an old verified per-model process.
+
+        The router's ordinary unload must never erase or kill an old deployment
+        PID. This method is intentionally not an HTTP route: a local operator
+        may use it only after checking current work and the exact saved identity.
+        """
+        deployment = self._require(deployment_id)
+        if deployment.scope != ManagementScope.managed or deployment.process_identity is None:
+            raise ManagerError("No verified older managed process is recorded.",
+                               code="legacy_managed_process_missing", status_code=409)
+        if self.require_no_live_dependencies is not None:
+            self.require_no_live_dependencies(deployment, "deployment_active")
+        router_record = self.router._owned_record()
+        if router_record is not None and deployment.process_identity == router_record["identity"]:
+            raise ManagerError("This process is the shared router; unload its model instead.",
+                               code="legacy_managed_process_missing", status_code=409)
+        if self.processes.classify(deployment.process_identity) != "match":
+            raise ManagerError("The older process identity cannot be verified.",
+                               code=PROCESS_IDENTITY_UNPROVEN, status_code=409)
+        try:
+            argv = psutil.Process(deployment.process_identity.pid).cmdline()
+        except (psutil.Error, OSError) as exc:
+            raise ManagerError("The older process command line cannot be verified.",
+                               code=PROCESS_IDENTITY_UNPROVEN, status_code=409) from exc
+        model_args = [argv[index + 1] for index, value in enumerate(argv[:-1])
+                      if value in {"-m", "--model"}]
+        bundle = self.store.get_bundle(deployment.bundle_id or "")
+        expected_model = bundle.primary_path if bundle else None
+        if (len(model_args) != 1 or not expected_model
+                or Path(model_args[0]).resolve() != Path(expected_model).resolve()
+                or "--models-preset" in argv):
+            raise ManagerError("The recorded process is not this older single-model launch.",
+                               code="legacy_process_command_mismatch", status_code=409)
+        self.processes.stop(deployment.process_identity)
+        return self._clear_ownership(deployment, status=DeploymentStatus.stopped,
+                                     error=None, usage_reason="older managed process stopped")
 
     def detach(self, deployment_id: str) -> Deployment:
         deployment = self._require(deployment_id)
@@ -251,6 +316,9 @@ class DeploymentService:
             self.require_no_live_dependencies(deployment, code)
 
     def health(self, deployment_id: str) -> Deployment:
+        deployment = self._require(deployment_id)
+        if deployment.scope == ManagementScope.managed and self._router_enabled():
+            return self.router.health(deployment_id)
         with self._lock_for(deployment_id):
             return self._health_locked(deployment_id)
 
@@ -264,6 +332,8 @@ class DeploymentService:
 
     def reconcile(self) -> list[Deployment]:
         """Re-adopt matching owned processes; clear unowned records without killing."""
+        if self._router_enabled():
+            return self.router.reconcile()
         updated: list[Deployment] = []
         for deployment in list(self.store.list_deployments()):
             if deployment.scope != ManagementScope.managed:
@@ -279,6 +349,8 @@ class DeploymentService:
         return updated
 
     def live_owned(self) -> list[Deployment]:
+        if self._router_enabled():
+            return self.router.live_owned()
         blocking: list[Deployment] = []
         for deployment in self.store.list_deployments():
             if deployment.scope != ManagementScope.managed:

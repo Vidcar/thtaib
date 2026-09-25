@@ -36,7 +36,8 @@ def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=
                     inherited[key] = value
         inherited.update(helper_agent_ids=[], review={"enabled": False})
         selected = service.resolve(project_id=project_id, agent_setup_version_id=version.id,
-            overrides=SetupConfiguration.model_validate(inherited))
+            overrides=SetupConfiguration.model_validate(inherited), helper_role=True,
+            prepare_model=True)
         snapshots.append(FrozenHelperSelection(agent_id=ident, version_id=version.id, name=version.name,
             role=version.role, configuration=selected.configuration, instruction_layers=selected.instruction_layers,
             settings_snapshot=freeze_settings(service.manager, selected.configuration)))

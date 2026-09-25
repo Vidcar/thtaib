@@ -910,6 +910,8 @@ export function AgentMessageFeed(props: {
   renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
   userMessageText?: (message: BaseMessage) => string | undefined;
   sourceScope?: { sessionId?: string; projectPath?: string };
+  hiddenToolCallIds?: ReadonlySet<string>;
+  hideHelperTasks?: boolean;
 }) {
   const { toolCalls = [], fallback, detailedStreams = false } = props;
   const incompleteMessageIds = props.incompleteMessageIds ?? EMPTY_INCOMPLETE;
@@ -954,28 +956,38 @@ export function AgentMessageFeed(props: {
   }
   let previousType = "";
   const latestHumanIndex = messages.map(messageType).lastIndexOf("human");
+  const hiddenIds = new Set(props.hiddenToolCallIds ?? []);
+  if (props.hideHelperTasks) {
+    for (const message of messages) for (const block of parseContent(message.contentBlocks ?? message.content).toolBlocks) {
+      if (block.name === "task" && block.id) hiddenIds.add(block.id);
+    }
+    for (const call of toolCalls) if (call.name === "task") hiddenIds.add(call.callId || call.id);
+  }
   const prepared = messages.map((message, index) => {
     const type = messageType(message);
     const continuation = type === "ai" && previousType === "ai";
     if (type !== "tool") previousType = type;
     const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
-    return { message, type, continuation, live: props.live === undefined ? undefined : props.live && index > latestHumanIndex, key: message.id ?? `${type}-${index}`, parts: parseContent(submittedText ?? message.contentBlocks ?? message.content) };
+    const parts = parseContent(submittedText ?? message.contentBlocks ?? message.content);
+    parts.toolBlocks = parts.toolBlocks.filter(block => !block.id || !hiddenIds.has(block.id));
+    return { message, type, continuation, live: props.live === undefined ? undefined : props.live && index > latestHumanIndex, key: message.id ?? `${type}-${index}`, parts };
   });
   const resultById = new Map<string, ToolBlock>();
   const callIds = new Set<string>();
   for (const item of prepared) {
     const result = toolResultMessage(item.message);
-    if (result?.id) resultById.set(result.id, result);
+    if (result?.id && !hiddenIds.has(result.id)) resultById.set(result.id, result);
     if (item.type !== "tool") for (const call of item.parts.toolBlocks) if (call.id) callIds.add(call.id);
   }
   const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
-  const remainingLive = toolCalls.filter(call => !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
+  const remainingLive = toolCalls.filter(call => !hiddenIds.has(call.callId || call.id) && !callIds.has(call.callId || call.id) && !resultById.has(call.callId || call.id));
   return (
     <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
       {prepared.map(({ message, type, continuation, live, key: messageKey, parts }) => {
         const incomplete = Boolean((message.id && incompleteMessageIds.has(message.id)) || (props.live && message.id && message.id === lastAiId));
         const result = toolResultMessage(message);
         if (result) {
+          if (result.id && hiddenIds.has(result.id)) return null;
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(result.id)) return null;

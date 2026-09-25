@@ -881,6 +881,23 @@ export interface paths {
         patch: operations["update_conversation_queue_item_v1_chat_conversations__conversation_id__queue__item_id__patch"];
         trace?: never;
     };
+    "/v1/chat/conversations/{conversation_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Conversation Readiness */
+        post: operations["conversation_readiness_v1_chat_conversations__conversation_id__readiness_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations/{conversation_id}/reopen": {
         parameters: {
             query?: never;
@@ -2071,6 +2088,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runtime/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Managed Model Runtime */
+        get: operations["get_managed_model_runtime_v1_runtime_models_get"];
+        /** Set Managed Model Runtime */
+        put: operations["set_managed_model_runtime_v1_runtime_models_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runtime/pin": {
         parameters: {
             query?: never;
@@ -2543,6 +2578,8 @@ export interface components {
             created_at: string;
             /** Current Version Id */
             current_version_id: string;
+            /** Helper Missing Dependencies */
+            helper_missing_dependencies?: components["schemas"]["SetupDependencyIssue"][];
             /** Id */
             id: string;
             /** Missing Dependencies */
@@ -3411,6 +3448,37 @@ export interface components {
              */
             resume_paused: boolean;
         };
+        /** ChatReadiness */
+        ChatReadiness: {
+            /** Can Send */
+            can_send: boolean;
+            /** Issues */
+            issues?: components["schemas"]["ChatReadinessIssue"][];
+            selection?: components["schemas"]["ResolvedSetupSelection"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "needs_action" | "incompatible" | "unverified";
+        };
+        /** ChatReadinessIssue */
+        ChatReadinessIssue: {
+            /** Action */
+            action?: string | null;
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * ChatReadinessRequest
+         * @description Preview a saved conversation or one candidate choice without changing it.
+         */
+        ChatReadinessRequest: {
+            /** Agent Setup Version Id */
+            agent_setup_version_id?: string | null;
+            overrides?: components["schemas"]["SetupConfiguration"];
+        };
         /** ChatSearchResult */
         ChatSearchResult: {
             conversation: components["schemas"]["ChatConversation"];
@@ -3860,6 +3928,8 @@ export interface components {
                 [key: string]: unknown;
             };
             resource_usage?: components["schemas"]["ResourceUsage"] | null;
+            /** Router Preset Id */
+            router_preset_id?: string | null;
             scope: components["schemas"]["ManagementScope"];
             server_props?: components["schemas"]["ServerProperties"] | null;
             settings?: components["schemas"]["SettingsBags"];
@@ -4970,6 +5040,25 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ManagedModelRuntime */
+        ManagedModelRuntime: {
+            /** Loaded Deployment Ids */
+            loaded_deployment_ids: string[];
+            /** Loading Deployment Ids */
+            loading_deployment_ids: string[];
+            /** Max Loaded Models */
+            max_loaded_models: number;
+            /**
+             * Router Status
+             * @enum {string}
+             */
+            router_status: "stopped" | "running" | "unhealthy";
+        };
+        /** ManagedModelRuntimeWrite */
+        ManagedModelRuntimeWrite: {
+            /** Max Loaded Models */
+            max_loaded_models: number;
+        };
         /**
          * ManagementScope
          * @enum {string}
@@ -5912,22 +6001,12 @@ export interface components {
             bundle_id?: string | null;
             /** Bundle Name */
             readonly bundle_name?: string | null;
-            /**
-             * Configuration Origin
-             * @default legacy
-             * @enum {string}
-             */
-            readonly configuration_origin: "legacy" | "recovered" | "named";
             /** Created At */
             created_at: string;
             /** Display Name */
             display_name: string;
-            /** Equivalent Configuration Ids */
-            readonly equivalent_configuration_ids?: string[];
             /** Id */
             id: string;
-            /** Merged Into Configuration Id */
-            readonly merged_into_configuration_id?: string | null;
             recipe_origin?: components["schemas"]["ResponseRecipeOrigin"] | null;
             /**
              * Revision
@@ -6558,6 +6637,9 @@ export type SchemaChatMessage = components['schemas']['ChatMessage'];
 export type SchemaChatQueueItem = components['schemas']['ChatQueueItem'];
 export type SchemaChatQueueItemUpdateRequest = components['schemas']['ChatQueueItemUpdateRequest'];
 export type SchemaChatQueueResumeRequest = components['schemas']['ChatQueueResumeRequest'];
+export type SchemaChatReadiness = components['schemas']['ChatReadiness'];
+export type SchemaChatReadinessIssue = components['schemas']['ChatReadinessIssue'];
+export type SchemaChatReadinessRequest = components['schemas']['ChatReadinessRequest'];
 export type SchemaChatSearchResult = components['schemas']['ChatSearchResult'];
 export type SchemaChatStartRequest = components['schemas']['ChatStartRequest'];
 export type SchemaChatTemplateSelectionRequest = components['schemas']['ChatTemplateSelectionRequest'];
@@ -6635,6 +6717,8 @@ export type SchemaLoadedKnowledgeFact = components['schemas']['LoadedKnowledgeFa
 export type SchemaLocalImportRequest = components['schemas']['LocalImportRequest'];
 export type SchemaLocalSessionTrustContract = components['schemas']['LocalSessionTrustContract'];
 export type SchemaManagedDeploymentRequest = components['schemas']['ManagedDeploymentRequest'];
+export type SchemaManagedModelRuntime = components['schemas']['ManagedModelRuntime'];
+export type SchemaManagedModelRuntimeWrite = components['schemas']['ManagedModelRuntimeWrite'];
 export type SchemaManagementScope = components['schemas']['ManagementScope'];
 export type SchemaMatchedPermissionGrant = components['schemas']['MatchedPermissionGrant'];
 export type SchemaMaterializedKnowledgeFact = components['schemas']['MaterializedKnowledgeFact'];
@@ -8666,6 +8750,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conversation_readiness_v1_chat_conversations__conversation_id__readiness_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatReadinessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatReadiness"];
                 };
             };
             /** @description Validation Error */
@@ -11304,6 +11423,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RuntimeManifest"] | null;
+                };
+            };
+        };
+    };
+    get_managed_model_runtime_v1_runtime_models_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedModelRuntime"];
+                };
+            };
+        };
+    };
+    set_managed_model_runtime_v1_runtime_models_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedModelRuntimeWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedModelRuntime"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

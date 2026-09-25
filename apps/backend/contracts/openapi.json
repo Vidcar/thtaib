@@ -899,6 +899,13 @@
             "title": "Current Version Id",
             "type": "string"
           },
+          "helper_missing_dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/SetupDependencyIssue"
+            },
+            "title": "Helper Missing Dependencies",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -3630,6 +3637,98 @@
         "title": "ChatQueueResumeRequest",
         "type": "object"
       },
+      "ChatReadiness": {
+        "properties": {
+          "can_send": {
+            "title": "Can Send",
+            "type": "boolean"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ChatReadinessIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolvedSetupSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "needs_action",
+              "incompatible",
+              "unverified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "can_send"
+        ],
+        "title": "ChatReadiness",
+        "type": "object"
+      },
+      "ChatReadinessIssue": {
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ChatReadinessIssue",
+        "type": "object"
+      },
+      "ChatReadinessRequest": {
+        "additionalProperties": false,
+        "description": "Preview a saved conversation or one candidate choice without changing it.",
+        "properties": {
+          "agent_setup_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Version Id"
+          },
+          "overrides": {
+            "$ref": "#/components/schemas/SetupConfiguration"
+          }
+        },
+        "title": "ChatReadinessRequest",
+        "type": "object"
+      },
       "ChatSearchResult": {
         "properties": {
           "conversation": {
@@ -5063,6 +5162,17 @@
                 "type": "null"
               }
             ]
+          },
+          "router_preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Router Preset Id"
           },
           "scope": {
             "$ref": "#/components/schemas/ManagementScope"
@@ -8089,6 +8199,59 @@
         "title": "ManagedDeploymentRequest",
         "type": "object"
       },
+      "ManagedModelRuntime": {
+        "properties": {
+          "loaded_deployment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Loaded Deployment Ids",
+            "type": "array"
+          },
+          "loading_deployment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Loading Deployment Ids",
+            "type": "array"
+          },
+          "max_loaded_models": {
+            "title": "Max Loaded Models",
+            "type": "integer"
+          },
+          "router_status": {
+            "enum": [
+              "stopped",
+              "running",
+              "unhealthy"
+            ],
+            "title": "Router Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "max_loaded_models",
+          "loaded_deployment_ids",
+          "loading_deployment_ids",
+          "router_status"
+        ],
+        "title": "ManagedModelRuntime",
+        "type": "object"
+      },
+      "ManagedModelRuntimeWrite": {
+        "properties": {
+          "max_loaded_models": {
+            "minimum": 1.0,
+            "title": "Max Loaded Models",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_loaded_models"
+        ],
+        "title": "ManagedModelRuntimeWrite",
+        "type": "object"
+      },
       "ManagementScope": {
         "enum": [
           "managed",
@@ -10448,17 +10611,6 @@
             "readOnly": true,
             "title": "Bundle Name"
           },
-          "configuration_origin": {
-            "default": "legacy",
-            "enum": [
-              "legacy",
-              "recovered",
-              "named"
-            ],
-            "readOnly": true,
-            "title": "Configuration Origin",
-            "type": "string"
-          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -10467,29 +10619,9 @@
             "title": "Display Name",
             "type": "string"
           },
-          "equivalent_configuration_ids": {
-            "items": {
-              "type": "string"
-            },
-            "readOnly": true,
-            "title": "Equivalent Configuration Ids",
-            "type": "array"
-          },
           "id": {
             "title": "Id",
             "type": "string"
-          },
-          "merged_into_configuration_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "readOnly": true,
-            "title": "Merged Into Configuration Id"
           },
           "recipe_origin": {
             "anyOf": [
@@ -14880,6 +15012,55 @@
         "summary": "Update Conversation Queue Item"
       }
     },
+    "/v1/chat/conversations/{conversation_id}/readiness": {
+      "post": {
+        "operationId": "conversation_readiness_v1_chat_conversations__conversation_id__readiness_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatReadinessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatReadiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Conversation Readiness"
+      }
+    },
     "/v1/chat/conversations/{conversation_id}/reopen": {
       "post": {
         "operationId": "reopen_conversation_v1_chat_conversations__conversation_id__reopen_post",
@@ -18168,6 +18349,60 @@
           }
         },
         "summary": "Get Runtime"
+      }
+    },
+    "/v1/runtime/models": {
+      "get": {
+        "operationId": "get_managed_model_runtime_v1_runtime_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedModelRuntime"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Managed Model Runtime"
+      },
+      "put": {
+        "operationId": "set_managed_model_runtime_v1_runtime_models_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedModelRuntimeWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedModelRuntime"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Managed Model Runtime"
       }
     },
     "/v1/runtime/pin": {

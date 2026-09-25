@@ -219,6 +219,15 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(stopped.status.value, "stopped")
         self.assertIsNone(stopped.pid)
 
+    def test_verified_legacy_cutover_stops_only_its_single_model_process(self) -> None:
+        launched = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id))
+        identity = launched.process_identity
+        self.assertIsNotNone(identity)
+        stopped = self.manager.stop_legacy_owned_deployment(launched.id)
+        self.assertEqual(stopped.status, DeploymentStatus.stopped)
+        self.assertIsNone(stopped.process_identity)
+        self.assertEqual(self.supervisor.classify(identity), "gone")
+
     def test_invalid_managed_startup_fails_closed_on_create(self) -> None:
         cases = (
             ({"port": 18081, "ctx_size": -1}, ["ctx_size"]),

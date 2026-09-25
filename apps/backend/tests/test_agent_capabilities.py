@@ -85,7 +85,8 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.harness(lambda *args: model_calls.append(args) or ScriptedChatModel([AIMessage(content='Done')]))
         agent = self.setup(requires_project=True, requires_host_shell=True, presented_tools=['execute'])
         request = {'deployment_id': self.deployment.id, 'agent_setup_version_id': agent['current_version_id'],
-            'project_path': str(self.folder), 'task': 'Plan', 'work_mode': 'plan'}
+            'project_path': str(self.folder), 'task': 'Plan', 'work_mode': 'plan',
+            'presented_tools': ['execute']}
         response = self.client.post('/v1/agent-runs', json=request)
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(response.json()['code'], 'setup_shell_required')
@@ -205,13 +206,13 @@ class AgentCapabilitiesTests(unittest.TestCase):
         profile = self.app.state.manager.create_profile(ProfileWriteRequest(display_name='Temporary', per_request={'temperature':0.8}))
         self.harness(lambda *_: ScriptedChatModel([AIMessage(content='Done')]))
         chat = self.post('/v1/chat/conversations', {'deployment_id':self.deployment.id,
-            'model_configuration_id':profile.id,'per_request_overrides':{'temperature':0.3},'presented_tools':[]})
-        self.assertEqual(chat['model_configuration_id'], profile.id)
+            'profile_id':profile.id,'per_request_overrides':{'temperature':0.3},'presented_tools':[]})
+        self.assertEqual(chat['profile_id'], profile.id)
         self.post(f'/v1/chat/conversations/{chat["id"]}/start', {'task':'Use inherited settings',
-            'model_configuration_id':None,'per_request_overrides':None,'startup_overrides':None})
+            'profile_id':None,'per_request_overrides':None,'startup_overrides':None})
         finished = chat_fixtures.wait_for_chat(self.client, chat['id'])
         self.assertEqual(finished['current_run']['status'], 'completed', finished['current_run'].get('error'))
-        self.assertIsNone(finished['model_configuration_id'])
+        self.assertIsNone(finished['profile_id'])
         self.assertIsNone(finished['current_run']['effective_setup']['selected_profile_id'])
         self.assertNotIn('temperature', finished['current_run']['effective_setup']['bags']['per_request']['applied'])
 

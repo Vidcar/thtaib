@@ -1,5 +1,23 @@
 /* Chat: header, transcript, composer, tool activity and chat popovers. */
 .chat-layout {display: grid; height: 100%; min-height: 0;}
+.chat-helper-button {display: inline-flex; align-items: center; gap: var(--space-tight); border: 0; background: transparent; color: var(--muted); font-size: var(--text-small);}
+.chat-helper-button:hover {color: var(--text);}
+.chat-plan-pill {display: inline-flex; align-items: center; gap: var(--space-tight); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); border: 0; border-radius: var(--radius-pill); background: var(--bg-panel); color: var(--text); font-size: var(--text-small); white-space: nowrap;}
+.chat-agent-label {display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.chat-agent-options {display: grid; min-width: 12rem;}
+.chat-agent-options .menu-action[aria-pressed="true"] {background: var(--bg-raised);}
+.chat-capability-group {display: grid; gap: var(--space-tight);}
+.chat-capability-group .menu-action {display: flex; align-items: center; gap: var(--space-compact); width: 100%;}
+.chat-capability-group .menu-action small {margin-left: auto; color: var(--muted);}
+.chat-capability-summary {display: flex; align-items: center; gap: var(--space-compact); padding: var(--pad-tight) var(--pad-compact); color: var(--muted);}
+.chat-capability-summary small {margin-left: auto;}
+.helper-rail {display: grid; gap: var(--space-compact); min-width: 0;}
+.helper-rail-list {display: grid; gap: var(--space-tight);}
+.helper-rail-list button {display: flex; justify-content: space-between; gap: var(--space-compact); min-width: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
+.helper-rail-list button[aria-selected="true"] {border-color: var(--accent); background: var(--bg-raised);}
+.helper-rail-list button span {color: var(--muted); font-size: var(--text-small);}
+.helper-rail .message-feed {display: grid; gap: var(--space-compact); min-width: 0;}
+.helper-rail .bubble {max-width: 100%;}
 .run-progress-head {display: flex; align-items: center;}
 .run-progress-head h3 {flex: 1;}
 .chat-main {display: flex; flex-direction: column; min-height: 0; overflow: hidden;}

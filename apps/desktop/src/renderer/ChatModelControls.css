@@ -3,6 +3,14 @@
 .chat-model-controls > .menu-popover-trigger {min-width: 0; max-width: min(var(--layout-control), 36vw); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); gap: var(--space-compact); border-radius: var(--radius-control); color: var(--muted);}
 .chat-model-controls > .menu-popover-trigger svg {flex-shrink: 0;}
 .chat-model-controls-model {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: var(--weight-medium);}
+.chat-model-status {font-size: var(--text-small); white-space: nowrap; color: var(--muted);}
+.chat-model-choice-list {display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--space-tight); max-height: 34vh; overflow-y: auto; overflow-x: hidden;}
+.chat-model-choice {display: flex; justify-content: space-between; align-items: center; gap: var(--space-compact); min-width: 0; width: 100%; min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
+.chat-model-choice:hover, .chat-model-choice[aria-pressed="true"] {background: var(--bg-raised);}
+.chat-model-choice strong {min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: var(--weight-medium);}
+.chat-model-choice span {flex: none; font-size: var(--text-small); color: var(--muted);}
+.chat-variant-choice {display: grid; gap: var(--space-tight); padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border); font-size: var(--text-small); color: var(--muted);}
+.chat-thinking-controls {padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border);}
 
 .menu-popover-panel.chat-model-controls-panel {display: grid; gap: var(--space-compact); width: min(var(--layout-dialog), calc(100vw - var(--pad-card) * 2)); max-height: min(70vh, calc(100vh - var(--pad-card) * 2)); padding: var(--pad-card);}
 .chat-model-controls-panel .setting-rows {padding: 0;}

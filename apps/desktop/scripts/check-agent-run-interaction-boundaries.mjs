@@ -90,6 +90,8 @@ function makeHarness() {
       ["saved_b", run("saved_b", "completed", "Previously saved task B")],
     ]),
     commands: [],
+    managedLoads: [],
+    managedDeployment: null,
     cancels: [],
     cancelBarrier: heldCancel,
     streamRuns: new Map(),
@@ -101,8 +103,14 @@ function makeHarness() {
     });
     req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/v1/bundles") { json(res, 200, [{ id: "bundle-one", display_name: "Configured model", status: "ready", disk_matches: true, default_configuration_id: "configuration-one" }]); return; }
       if (req.method === "GET" && url.pathname === "/v1/profiles") { json(res, 200, [{ id: "configuration-one", bundle_id: "bundle-one", display_name: "Configured model", revision: 1, bags: { startup: { requested: {} }, per_request: { requested: {} }, agent: { requested: {} } } }]); return; }
-      if (req.method === "POST" && url.pathname === "/v1/setup-resolution") { const config = JSON.parse(body).overrides; json(res, 200, { configuration: { ...config, deployment_id: config.model_configuration_id ? "dep_1" : config.deployment_id ?? "dep_1" }, instruction_layers: [], effective_values: {} }); return; }
+      if (req.method === "POST" && url.pathname === "/v1/setup-resolution") { const config = JSON.parse(body).overrides; json(res, 200, { configuration: { ...config, deployment_id: config.deployment_id ?? "dep_1" }, instruction_layers: [], effective_values: {} }); return; }
+      if (req.method === "POST" && url.pathname === "/v1/deployments/managed") {
+        state.managedLoads.push(JSON.parse(body));
+        state.managedDeployment = { id: "dep_managed", bundle_id: "bundle-one", profile_id: "configuration-one", display_name: "managed:Configured model", endpoint: "http://127.0.0.1:9", status: "running", scope: "managed", health: { healthy: true }, settings: null, created_at: now(), updated_at: now() };
+        json(res, 200, state.managedDeployment); return;
+      }
       if (req.method === "GET" && url.pathname.endsWith("/configuration-options")) { json(res, 200, { context_size: { maximum: 32768, options: [] }, per_request_defaults: {} }); return; }
       if (req.method === "GET" && url.pathname === "/v1/deployments") {
         json(res, 200, [{
@@ -116,7 +124,7 @@ function makeHarness() {
           settings: null,
           created_at: now(),
           updated_at: now(),
-        }]);
+        }, ...(state.managedDeployment ? [state.managedDeployment] : [])]);
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/agent-tools") {
@@ -257,10 +265,11 @@ try {
     await Promise.resolve();
   });
   await waitFor(() => assert.match(allText(renderer), /Workflows/), "initial task surface render");
-  await act(async () => renderer.root.findByProps({ "aria-label": "Model" }).props.onChange({ target: { value: "configuration:configuration-one" } }));
-  const applyModel = () => renderer.root.findAllByType("button").find(item => textOf(item) === "Apply");
-  await waitFor(() => assert.equal(applyModel().props.disabled, false), "staged workflow model preview");
-  await act(async () => applyModel().props.onClick());
+  await waitFor(() => assert.ok(renderer.root.findAllByType("button").some(item => String(item.props["aria-label"]).startsWith("Chat model:"))), "workflow model picker ready");
+  const configuredModel = () => renderer.root.findAllByType("button").find(item => item.props.className === "chat-model-choice" && textOf(item).includes("Configured model"));
+  await waitFor(() => assert.ok(configuredModel()), "installed model listed once");
+  await act(async () => configuredModel().props.onClick());
+  await waitFor(() => assert.equal(harness.state.managedLoads.length, 1), "workflow model loaded explicitly");
   await waitFor(() => assert.ok(renderer.root.findAllByType("button").some(item => String(item.props["aria-label"]).includes("Configured model"))), "workflow model applied");
   const folder = () => renderer.root.findAllByType("input").find(node => node.props.placeholder === "Optional project path");
   await act(async () => folder().props.onChange({ target: { value: "D:/isolated-workflow" } }));
