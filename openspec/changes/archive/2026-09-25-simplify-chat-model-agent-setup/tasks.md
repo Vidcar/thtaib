@@ -24,4 +24,4 @@
 - [x] 4.1 Retire incompatible development setup records without compatibility shims, preserving weights and external project files; verify bundle integrity and safe old-process cutover.
 - [x] 4.2 Run backend default and integration suites, desktop build, generated-contract freshness, OpenSpec validation and diff check; repair confirmed failures.
 - [x] 4.3 In an isolated Windows data root, run both installed Gemma 4 E2B and Qwen 3.5 4B together, separate chats and a different-model helper; verify actual generations and truthful memory/failure reporting.
-- [ ] 4.4 Update the established local installation, save Dave's limit of two, refresh the handover, archive the completed change and deliver through Git/PR; verify the usable build and clean branch state.
+- [x] 4.4 Update the established local installation, save Dave's limit of two, refresh the handover, archive the completed change and deliver through Git/PR; verify the usable build and clean branch state.
