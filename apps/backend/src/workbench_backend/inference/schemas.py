@@ -76,7 +76,7 @@ class ResponseRecipe(BaseModel):
     name: str
     section: str
     per_request: dict[str, Any] = Field(default_factory=dict)
-    reasoning: Literal["on", "off"]
+    reasoning: Literal["on", "off", "preserve"]
     source_repo_id: str
     source_revision: str
     card_sha256: str

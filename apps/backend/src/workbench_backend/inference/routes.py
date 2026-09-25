@@ -68,6 +68,15 @@ class ManagedModelRuntime(BaseModel):
 class ManagedModelRuntimeWrite(BaseModel):
     max_loaded_models: int = Field(ge=1)
 
+
+class ModelCardResponse(BaseModel):
+    bundle_id: str
+    repo_id: str
+    revision: str
+    sha256: str
+    markdown: str
+    origin: Literal["saved", "fetched"]
+
 router = APIRouter(prefix="/v1")
 
 
@@ -154,6 +163,11 @@ def list_bundles(request: Request) -> object:
 @router.get("/bundles/{bundle_id}", response_model=ModelBundle)
 def get_bundle(request: Request, bundle_id: str) -> object:
     return get_manager(request).get_bundle(bundle_id)
+
+
+@router.get("/bundles/{bundle_id}/model-card", response_model=ModelCardResponse)
+def get_model_card(request: Request, bundle_id: str) -> object:
+    return get_manager(request).get_model_card(bundle_id)
 
 
 @router.get("/bundles/{bundle_id}/projectors", response_model=BundleProjectors)
