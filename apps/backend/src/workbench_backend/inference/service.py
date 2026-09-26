@@ -780,6 +780,40 @@ class ModelManager:
                 if conversation.run_ids or conversation.transcript:
                     raise ManagerError("Start a new chat to reduce context. This session keeps its retained model history.", code="context_history_requires_new_chat", status_code=409,
                         details={"deployment_id": deployment.id, "applied_context": old_context, "requested_context": new_context})
+            # Response settings belong to requests, not the loaded process. An
+            # explicit configuration switch with the identical frozen launch
+            # can update that binding without unloading the model. Keep every
+            # busy/revision/identity check above and require observed ownership;
+            # equal settings on an unhealthy or unowned process are not enough.
+            def same_frozen_launch(current: Deployment) -> bool:
+                selected = requested_identity(bags)[0]
+                frozen = dict(current.applied_startup)
+                # Match the existing configuration identity rule for an
+                # automatically allocated port; never erase an explicit port.
+                if current.requested_startup.get("port") is None:
+                    frozen.pop("port", None)
+                return (current.applied_startup == current.settings.startup.applied
+                    and selected == requested_identity(current.settings)[0] == frozen
+                    and (profile is None or requested_identity(profile.bags)[0] == selected))
+
+            if (same_frozen_launch(deployment) and deployment.status == DeploymentStatus.running
+                and deployment.health and deployment.health.healthy and deployment.process_identity
+                and self.deployments.processes.classify(deployment.process_identity) == "match"):
+                identity = deployment.process_identity
+                deployment = self.deployments.health(deployment.id)
+                if (deployment.status == DeploymentStatus.running and deployment.health and deployment.health.healthy
+                    and deployment.process_identity == identity
+                    and self.deployments.processes.classify(identity) == "match"
+                    and same_frozen_launch(deployment)):
+                    settings = deployment.settings.model_copy(update={
+                        "per_request": bags.per_request, "agent": bags.agent}, deep=True)
+                    return self.store.put_deployment(deployment.model_copy(update={
+                        "settings": settings,
+                        "profile_id": profile.id if profile else deployment.profile_id,
+                        "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
+                        "configuration_revision": profile.revision if profile else deployment.configuration_revision,
+                        "reconfiguration": None, "updated_at": utc_now(),
+                    }))
             # Preflight changed fixed ports while the old process remains usable.
             if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):
                 self.deployments._allocate_listen(bags.startup.applied, fixed=True)

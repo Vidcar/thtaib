@@ -18,24 +18,27 @@ try {
   await checkAgentDraftConflict((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkAgentSavedActions((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkKnowledgeSavedActions(KnowledgePanel);
-  await checkPinnedConversationMemory((await vite.ssrLoadModule("/src/renderer/ConversationSetup.tsx")).ConversationSetup);
+  await checkNextTurnConversationMemory((await vite.ssrLoadModule("/src/renderer/ConversationSetup.tsx")).ConversationSetup);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
+  await checkSavedMemoryNeedsSelection((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
   await checkLifecyclePreview((await vite.ssrLoadModule("/src/renderer/LifecycleAction.tsx")).LifecycleAction);
 } finally { await vite.close(); }
 console.log("Knowledge workspace checks passed.");
 
-async function checkPinnedConversationMemory(Component) {
+async function checkNextTurnConversationMemory(Component) {
   globalThis.fetch = async url => {
     const pathname = new URL(String(url)).pathname;
     if (pathname === "/v1/agent-tools") return json({ tools: [] });
+    if (pathname === "/v1/knowledge/versions/memory-v1") return json({ id: "memory-v1", entry_id: "memory", kind: "memory", content: "Earlier fact", estimated_content_tokens: 4 });
     throw new Error(`unexpected ${pathname}`);
   };
   const entries = [
-    { ...entry("memory", "Versioned memory"), current_version_id: "memory-v2" },
+    { ...entry("memory", "Versioned memory"), current_version_id: "memory-v2", estimated_content_tokens: 10 },
     { ...entry("skill", "Current skill"), kind: "skill", current_version_id: "skill-v1" },
   ];
   let toggled = "";
+  let replaced = [];
   let renderer;
   try {
     await act(async () => { renderer = create(React.createElement(Component, {
@@ -44,15 +47,22 @@ async function checkPinnedConversationMemory(Component) {
       onManageAgents() {}, instructionLayers: [], missingDeployment: false, selectedProfile: null,
       embeddingDeploymentId: "", onEmbedding() {}, embedderDeployments: [], deployments: [],
       knowledgeEntries: entries, selectedKnowledgeIds: ["memory-v1", "skill-v1"],
-      memoryLocked: true, pinnedMemoryVersionIds: ["memory-v1"], onToggleKnowledge: value => { toggled = value; },
+      onToggleKnowledge: (value, previous = []) => { toggled = value; replaced = previous; },
       tools: [], filesystemToolsAvailable: true, shellToolsAvailable: true,
     })); await tick(); });
     const labels = renderer.root.findAllByType("label");
     const memory = labels.find(label => text(label).includes("Versioned memory")).findByType("input");
     const skill = labels.find(label => text(label).includes("Current skill")).findByType("input");
-    assert.equal(memory.props.disabled, true, "an existing chat cannot switch to the current memory version");
+    assert.equal(memory.props.disabled, false, "an existing chat can select a newer version for its next turn");
     assert.equal(memory.props.checked, false, "a newer memory version must not appear selected");
-    assert.match(text(renderer.root), /Pinned earlier memory version/, "the pinned earlier version remains visible");
+    assert.match(text(renderer.root), /memory-v1/, "the selected earlier version remains visible");
+    assert.match(text(renderer.root), /~10 tokens/, "memory cost is disclosed");
+    assert.match(text(renderer.root), /None.*local text search/, "no embedder still permits document text search");
+    const latest = renderer.root.findAllByType("button").find(button => text(button) === "Use latest version");
+    assert.ok(latest, "version updates require an explicit choice");
+    await act(async () => latest.props.onClick());
+    assert.equal(toggled, "memory-v2");
+    assert.deepEqual(replaced, ["memory-v1"]);
     assert.equal(skill.props.disabled, false, "skills remain selectable on later turns");
     await act(async () => skill.props.onChange());
     assert.equal(toggled, "skill-v1");
@@ -256,9 +266,29 @@ async function checkRunProposalConflict(Component) {
   try {
     await act(async () => { renderer = create(React.createElement(Component, { runId: "run_selected", status: "completed", onOpenKnowledge() {} })); await tick(); });
     assert.equal(requestedRun, "run_selected", "the right panel must only review suggestions from its selected run");
+    assert.match(text(renderer.root), /A newer saved version will block acceptance/, "pending updates explain the version conflict safeguard");
     await act(async () => { button(renderer, "Accept memory").props.onClick(); await tick(); });
     assert.ok(text(renderer.root).includes("A newer memory version exists"));
     assert.ok(button(renderer, "Accept memory"), "a conflicted proposal must not be displayed as committed");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+async function checkSavedMemoryNeedsSelection(Component) {
+  const proposal = { id: "proposal", status: "pending", scope: "user", content: "Suggested fact", provenance: { actor: "agent" } };
+  const selections = [];
+  globalThis.fetch = async (url) => {
+    const address = new URL(String(url));
+    if (address.pathname.endsWith("/scopes")) return json([{ scope: "user", label: "Personal", active: true }]);
+    if (address.pathname.endsWith("/review")) return json({ ...proposal, status: "accepted", entry_id: "entry-new", committed_version_id: "memory-new" });
+    return json([proposal]);
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(Component, { runId: "run_saved", status: "completed", onOpenKnowledge() {}, onUseMemoryVersion: id => selections.push(id) })); await tick(); });
+    await act(async () => { button(renderer, "Accept memory").props.onClick(); await tick(); });
+    assert.deepEqual(selections, [], "saving a suggestion does not alter active context or next-turn selection");
+    assert.doesNotMatch(text(renderer.root), /A newer saved version will block acceptance/, "an accepted memory no longer has a pending acceptance warning");
+    await act(async () => { button(renderer, "Use next turn").props.onClick(); await tick(); });
+    assert.deepEqual(selections, ["memory-new"], "explicit selection uses the committed immutable version");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 function field(renderer, label, type) { const result = renderer.root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(result, `expected label ${label}`); return result.props.htmlFor ? renderer.root.find(node => node.type === type && node.props.id === result.props.htmlFor) : result.findByType(type); }

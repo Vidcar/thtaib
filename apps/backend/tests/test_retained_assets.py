@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import hashlib
 import io
 import tempfile
@@ -199,10 +200,13 @@ class RetainedAssetServiceTests(unittest.TestCase):
         self.assertIn("NEEDLE-ORCHID-932", str(result["excerpts"]))
         self.assertEqual(result["sha256"], hashlib.sha256(text.encode()).hexdigest())
         first = tool.invoke({"asset_id": asset.id, "line_count": 1})
-        offset = first["excerpts"][0]["next_start_char"]
+        offset = first["next_read"]["start_char"]
         second = tool.invoke({"asset_id": asset.id, "line_count": 1, "start_char": offset})
         self.assertEqual(second["excerpts"][0]["start_char"], offset)
-        self.assertEqual(first["excerpts"][0]["text"] + second["excerpts"][0]["text"], text[:24000])
+        combined = first["excerpts"][0]["text"] + second["excerpts"][0]["text"]
+        self.assertEqual(combined, text[:len(combined)])
+        self.assertLessEqual(len(json.dumps(first)), 12000)
+        self.assertLessEqual(len(json.dumps(second)), 12000)
         self.assertIn("not selected", tool.invoke({"asset_id": "another"}))
         with self.assertRaises(HarnessError):
             validate_retained_selection(self.store, [asset.id], thread_id="another", project_path=None)

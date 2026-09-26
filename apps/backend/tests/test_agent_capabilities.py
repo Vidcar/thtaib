@@ -108,6 +108,8 @@ class AgentCapabilitiesTests(unittest.TestCase):
         child = ScriptedChatModel([call("echo", {"text": "child result"}, "echo"), AIMessage(content="Child done.")])
         self.harness(lambda run, _sink: child if run.parent_run_id else main)
         run = self.start(presented_tools=["echo"], helper_agent_ids=[helper["id"]], approval_mode="ask")
+        self.assertEqual(run["enabled_tools"].count("task"), 1)
+        self.assertEqual(run["presented_tools"].count("task"), 1)
         finished = wait_for_run(self.client, run["id"])
         self.assertEqual(finished["status"], "completed", finished.get("error"))
         self.assertEqual(len(finished["child_runs"]), 1, finished)

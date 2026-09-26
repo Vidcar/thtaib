@@ -35,10 +35,17 @@ A skill SHALL be importable as one native `SKILL.md` file or as a folder or arch
 
 ### Requirement: STATE-020 - Extract supported documents without a source-inspection journey
 
-A retained text, code, CSV, JSON, text-bearing PDF, or DOCX file SHALL be extractable locally. The result keeps the parser outcome: read, empty, encrypted, malformed, or unsupported. A scanned document without optical character recognition MUST NOT be described as understood. Extraction does not add a screen for inspecting a quote's source location. That journey stays out of this contract. The file itself remains openable in the Files dock when it is text or an image the dock already shows.
+A retained text, code, CSV, JSON, text-bearing PDF, or DOCX file SHALL be extractable locally. The result keeps the parser outcome: read, empty, encrypted, malformed, or unsupported. A scanned document without optical character recognition MUST NOT be described as understood. Accepted attachments SHALL remain available throughout their conversation until removed from future selection. Each submitted turn SHALL freeze its selected document identities; future catalogue injection SHALL remain compact and text SHALL be read on demand. Source links SHALL open the existing retained viewer at the available page/section/line. Search limits and match pagination SHALL be truthful; removal MUST NOT widen other conversations' access.
+
+Document reading SHALL bound the complete serialized model-visible result, including citation metadata and escaping. Ready-to-copy immutable source links SHALL identify original content and exact locations; continuation SHALL cover remaining matches or clipped content without silently dropping it. Source identity SHOULD be shared within a result where it does not require the model to construct its own citation URL.
 
 #### Scenario: Encrypted PDF
 
 - **WHEN** a retained PDF is encrypted
 - **THEN** the extraction says it could not be read
 - **AND** the product does not present invented document text.
+
+#### Scenario: Follow-up document question
+- **WHEN** a later turn searches a previously attached document without an embedding model or reattachment
+- **THEN** the selected document SHALL remain readable with the correct original source location
+- **AND** removing it excludes it from future submitted turns while already submitted turns keep their frozen selections.

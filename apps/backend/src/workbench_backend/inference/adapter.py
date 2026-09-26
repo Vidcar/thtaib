@@ -11,7 +11,6 @@ import json
 import asyncio
 import contextvars
 import re
-from collections.abc import Sequence
 from typing import Any, Callable
 
 import httpx
@@ -24,10 +23,10 @@ from pydantic import PrivateAttr
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.configuration_options import reasoning_history_descriptor, validate_model_reasoning
 from workbench_backend.inference.capabilities import capability_support
-from workbench_backend.inference.image_validation import MAX_TOOL_IMAGE_BYTES_PER_REQUEST, validate_image_data_url
 from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
-from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry
+from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry, current_request_purpose
+from workbench_backend.inference.request_projection import project_outbound_payload, project_context_payload, ReasoningReplayScope
 
 # Transport timeout only — not a product task budget (AGT-003).
 DEFAULT_ADAPTER_TIMEOUT = 120.0
@@ -59,6 +58,7 @@ EXTRA_BODY_KEYS = (
     "typical_p",
     "repeat_penalty",
     "reasoning_format",
+    "reasoning_budget_tokens",
     "logit_bias",
 )
 
@@ -80,6 +80,7 @@ class RecordingTransport(httpx.BaseTransport):
             record = {
                 "url": str(request.url),
                 "method": request.method,
+                "purpose": current_request_purpose(),
                 "body": _redact_body(_decode_body(request.content)),
                 "response_received": False,
             }
@@ -119,6 +120,7 @@ class AsyncRecordingTransport(httpx.AsyncBaseTransport):
             record = {
                 "url": str(request.url),
                 "method": request.method,
+                "purpose": current_request_purpose(),
                 "body": _redact_body(_decode_body(request.content)),
                 "response_received": False,
             }
@@ -147,7 +149,7 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     _owned_http_client: httpx.Client | None = PrivateAttr(default=None)
     _owned_async_http_client: httpx.AsyncClient | None = PrivateAttr(default=None)
     _prefer_max_tokens: bool = PrivateAttr(default=False)
-    _reasoning_replay_supported: bool = PrivateAttr(default=False)
+    _reasoning_replay_scope: ReasoningReplayScope = PrivateAttr(default="none")
     _capture_sink: list[dict[str, Any]] | None = PrivateAttr(default=None)
     _context_guard: Callable[[dict[str, Any]], None] | None = PrivateAttr(default=None)
     _generation_publisher: LatestGenerationPublisher | None = PrivateAttr(default=None)
@@ -158,13 +160,13 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         http_client: httpx.Client | None,
         async_http_client: httpx.AsyncClient | None,
         prefer_max_tokens: bool,
-        reasoning_replay_supported: bool,
+        reasoning_replay_scope: ReasoningReplayScope,
         capture_sink: list[dict[str, Any]] | None,
     ) -> None:
         self._owned_http_client = http_client
         self._owned_async_http_client = async_http_client
         self._prefer_max_tokens = prefer_max_tokens
-        self._reasoning_replay_supported = reasoning_replay_supported
+        self._reasoning_replay_scope = reasoning_replay_scope
         self._capture_sink = capture_sink
 
     def set_context_guard(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
@@ -175,10 +177,14 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             self._generation_publisher.close()
         self._generation_publisher = LatestGenerationPublisher(callback) if callback is not None else None
 
-    def latest_generation_sample(self) -> dict[str, Any] | None:
+    def latest_generation_sample(self, purpose: str = "work") -> dict[str, Any] | None:
         """Return the last request sample without waiting for its display publisher."""
         publisher = self._generation_publisher
-        return publisher.latest_sample() if publisher is not None else None
+        return publisher.latest_sample(purpose=purpose) if publisher is not None else None
+
+    def latest_generation_samples(self) -> dict[str, dict[str, Any]]:
+        publisher = self._generation_publisher
+        return publisher.latest_samples() if publisher is not None else {}
 
     def invoke(self, *args: Any, **kwargs: Any) -> BaseMessage:
         result = super().invoke(*args, **kwargs)
@@ -210,16 +216,17 @@ class WorkbenchChatOpenAI(ChatOpenAI):
             await self._owned_async_http_client.aclose()
             self._owned_async_http_client = None
 
+    def project_context_payload(self, messages: list[Any], *, tools: list[Any] | None = None,
+                                response_format: Any = None) -> dict[str, Any]:
+        return project_context_payload(messages, tools=tools, response_format=response_format,
+                                       reasoning_scope=self._reasoning_replay_scope)
+
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         payload = super()._get_request_payload(*args, **kwargs)
-        _project_tool_images(payload)
-        if payload.get("tools") == []:
-            payload.pop("tools")
-            payload.pop("tool_choice", None)
+        native = self._convert_input(args[0]).to_messages() if args else []
+        payload = project_outbound_payload(payload, native, reasoning_scope=self._reasoning_replay_scope)
         if self._prefer_max_tokens and "max_completion_tokens" in payload:
             payload["max_tokens"] = payload.pop("max_completion_tokens")
-        if self._reasoning_replay_supported and args:
-            _add_reasoning_replay(payload, args[0])
         if self._context_guard is not None:
             self._context_guard(payload)
         publisher = self._generation_publisher
@@ -382,7 +389,7 @@ def chat_model_for_deployment(
         owned_async_client = async_client
     try:
         model_name = _resolve_model_name(deployment, endpoint, client)
-        reasoning_replay_supported = _reasoning_replay_supported(deployment)
+        reasoning_replay_scope = _reasoning_replay_scope(deployment)
         profile = _model_profile(deployment, per_request)
 
         model = WorkbenchChatOpenAI(
@@ -408,7 +415,7 @@ def chat_model_for_deployment(
         http_client=owned_client,
         async_http_client=owned_async_client,
         prefer_max_tokens="max_tokens" in kwargs,
-        reasoning_replay_supported=reasoning_replay_supported,
+        reasoning_replay_scope=reasoning_replay_scope,
         capture_sink=capture_sink,
     )
     return model
@@ -425,7 +432,8 @@ def adapter_target(deployment: Deployment) -> dict[str, Any]:
         "adapter": "langchain-openai ChatOpenAI chat-completions",
         "model": _model_name_from_props(deployment),
         "max_input_tokens": (_model_profile(deployment, deployment.settings.per_request) or {}).get("max_input_tokens"),
-        "reasoning_replay_supported": _reasoning_replay_supported(deployment),
+        "reasoning_replay_supported": _reasoning_replay_scope(deployment) != "none",
+        "reasoning_replay_scope": _reasoning_replay_scope(deployment),
         "unsupported": list(deployment.settings.per_request.unsupported),
         "unverified": list(deployment.settings.per_request.unverified),
     }
@@ -535,16 +543,24 @@ def _model_identities(payload: Any) -> list[str]:
     return identities
 
 
-def _reasoning_replay_supported(deployment: Deployment) -> bool:
+def _reasoning_replay_scope(deployment: Deployment) -> ReasoningReplayScope:
+    """Respect native history policy without removing current-cycle reasoning."""
     props = deployment.server_props
     caps = props.chat_template_caps if props is not None else {}
     if caps.get("supports_preserve_reasoning") is not True:
-        return False
+        return "none"
     explicit = deployment.applied_startup.get("reasoning_preserve")
-    if explicit is not None:
-        return explicit is True
+    if type(explicit) is bool:
+        return "full_history" if explicit else "current_turn"
+    template_kwargs = props.default_generation_settings.get("chat_template_kwargs", {}) if props else {}
+    if isinstance(template_kwargs, dict):
+        for key in ("preserve_reasoning", "preserve_thinking"):
+            if type(template_kwargs.get(key)) is bool:
+                return "full_history" if template_kwargs[key] else "current_turn"
     descriptor = reasoning_history_descriptor(GgufRuntimeMetadata(), deployment)
-    return descriptor.default_value is True
+    # Unknown earlier-turn policy does not authorize replaying old reasoning,
+    # but a verified replay-capable template still needs the active tool cycle.
+    return "full_history" if descriptor.default_value is True else "current_turn"
 
 
 def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:
@@ -558,102 +574,13 @@ def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelPro
     capacity = deployment.server_props.n_ctx if deployment.server_props is not None else None
     if not isinstance(capacity, int) or capacity <= 0:
         return profile
-    reservation = per_request.applied.get("max_tokens")
+    reservation = per_request.applied.get("max_completion_tokens", per_request.applied.get("max_tokens"))
     if not isinstance(reservation, int) or reservation <= 0:
         reservation = DEFAULT_OUTPUT_RESERVATION
     margin = int(capacity * TOKEN_MARGIN_RATIO)
     max_input_tokens = max(0, capacity - reservation - margin)
     profile["max_input_tokens"] = max_input_tokens
     return profile
-
-
-def _project_tool_images(payload: dict[str, Any]) -> None:
-    """Move tool images behind a complete tool-result batch for chat-completions.
-
-    LangChain converts image blocks to `image_url`, but leaves them inside a
-    `tool` message. llama.cpp's OpenAI-compatible endpoint receives the image
-    as a following `user` message, while the tool result and call ID remain in
-    their original order. This changes only the outbound request, not graph
-    state or checkpoint messages.
-    """
-
-    messages = payload.get("messages")
-    if not isinstance(messages, list):
-        return
-    projected: list[dict[str, Any]] = []
-    pending: list[tuple[str, dict[str, Any]]] = []
-    image_bytes = 0
-
-    def flush() -> None:
-        if not pending:
-            return
-        sources = ", ".join(dict.fromkeys(source for source, _ in pending))
-        projected.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Image result from tool call(s) {sources}:"},
-                *(block for _, block in pending),
-            ],
-        })
-        pending.clear()
-
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "tool":
-            flush()
-            projected.append(message)
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            projected.append(message)
-            continue
-        kept: list[Any] = []
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "image_url":
-                kept.append(block)
-                continue
-            image_url = block.get("image_url")
-            url = image_url.get("url") if isinstance(image_url, dict) else image_url
-            if not isinstance(url, str):
-                raise HarnessError("A tool returned an invalid image block.", code="tool_image_invalid", status_code=422)
-            try:
-                image_bytes += validate_image_data_url(url)
-            except ValueError as exc:
-                raise HarnessError(str(exc), code="tool_image_invalid", status_code=422) from exc
-            if image_bytes > MAX_TOOL_IMAGE_BYTES_PER_REQUEST:
-                raise HarnessError("Too many image bytes for one model request. Read fewer images or summarize the conversation.",
-                    code="tool_images_too_large", status_code=422)
-            pending.append((str(message.get("tool_call_id") or "unknown"), block))
-        if len(kept) == len(content):
-            projected.append(message)
-        else:
-            projected.append({**message, "content": kept or "Image delivered in the following message."})
-    flush()
-    payload["messages"] = projected
-
-
-def _add_reasoning_replay(payload: dict[str, Any], input_: Any) -> None:
-    messages = payload.get("messages")
-    source = _source_messages(input_)
-    if not isinstance(messages, list) or source is None:
-        return
-    for outbound, original in zip(messages, source, strict=False):
-        if not isinstance(outbound, dict) or not isinstance(original, AIMessage):
-            continue
-        reasoning = original.additional_kwargs.get("reasoning_content")
-        if reasoning is None:
-            reasoning = original.additional_kwargs.get("reasoning")
-        if reasoning not in (None, ""):
-            outbound["reasoning_content"] = reasoning
-
-
-def _source_messages(input_: Any) -> Sequence[BaseMessage] | None:
-    if (
-        isinstance(input_, Sequence)
-        and not isinstance(input_, str)
-        and all(isinstance(message, BaseMessage) for message in input_)
-    ):
-        return input_
-    return None
 
 
 def _attach_reasoning(message: Any, payload: dict[str, Any]) -> None:
@@ -688,23 +615,65 @@ def _raise_for_invalid_completed_tool_calls(chunk: ChatGenerationChunk | None) -
     if chunk is None:
         return
     message = chunk.message
-    if getattr(message, "invalid_tool_calls", None):
-        raise HarnessError(
-            "The endpoint returned a malformed streamed tool call.",
-            code="adapter_invalid_tool_call",
-            status_code=502,
-        )
-    for tool_chunk in getattr(message, "tool_call_chunks", None) or []:
-        args = tool_chunk.get("args") if isinstance(tool_chunk, dict) else getattr(tool_chunk, "args", None)
-        if isinstance(args, str) and args.strip():
+    limited = ((chunk.generation_info or {}).get("finish_reason") == "length"
+               or message.response_metadata.get("finish_reason") == "length")
+    invalid_calls = getattr(message, "invalid_tool_calls", None) or []
+    invalid_ids = {item.get("id") for item in invalid_calls if item.get("id")}
+    raw_calls = getattr(message, "tool_call_chunks", None) or []
+    if not raw_calls:
+        raw_calls = [*(getattr(message, "tool_calls", None) or []), *invalid_calls]
+    outcomes: list[dict[str, Any]] = []
+    incomplete = False
+    for call in raw_calls:
+        args = call.get("args")
+        parsed = args if isinstance(args, dict) else None
+        if isinstance(args, str):
             try:
-                json.loads(args)
-            except json.JSONDecodeError as exc:
-                raise HarnessError(
-                    "The endpoint returned an incomplete streamed tool call.",
-                    code="adapter_incomplete_tool_call",
-                    status_code=502,
-                ) from exc
+                parsed = json.loads(args)
+            except json.JSONDecodeError:
+                pass
+        valid = isinstance(parsed, dict) and call.get("id") not in invalid_ids
+        incomplete = incomplete or not valid
+        if len(outcomes) >= 256:
+            continue
+        # This batch never reached the tool node. Preserve bounded identities,
+        # not another copy of potentially large or sensitive argument bodies.
+        item = {"call_id": str(call["id"])[:256] if call.get("id") else None,
+                "name": str(call["name"])[:256] if call.get("name") else None,
+                "outcome": "not_dispatched" if valid else "incomplete_arguments"}
+        file_path = (parsed.get("file_path") or parsed.get("path")) if isinstance(parsed, dict) else None
+        if file_path is None and isinstance(args, str):
+            # Only a fully quoted first property is unambiguous in partial JSON.
+            match = re.match(r'^\s*\{\s*"(?:file_path|path)"\s*:\s*("(?:[^"\\]|\\.)*")', args[:8192])
+            if match:
+                try:
+                    file_path = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    pass
+        if isinstance(file_path, str):
+            item["file_path"] = file_path[:4096]
+        outcomes.append(item)
+
+    def failure(*, malformed: bool) -> HarnessError:
+        details = {"tool_calls": outcomes, "incomplete_tool_call": True}
+        if limited:
+            return HarnessError(
+                "The response reached its token limit before finishing a tool call. "
+                "No incomplete call was executed. Increase the response limit or continue with a smaller step.",
+                code="response_limit_reached", status_code=409,
+                details={**details, "finish_reason": "length"},
+            )
+        return HarnessError(
+            "The endpoint returned a malformed streamed tool call." if malformed else
+            "The endpoint returned an incomplete streamed tool call.",
+            code="adapter_invalid_tool_call" if malformed else "adapter_incomplete_tool_call", status_code=502,
+            details=details,
+        )
+
+    if invalid_calls:
+        raise failure(malformed=True)
+    if incomplete:
+        raise failure(malformed=False)
 
 
 def _capture_converted_message(

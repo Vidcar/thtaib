@@ -57,6 +57,22 @@
       },
       "AgentRun": {
         "properties": {
+          "activity_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "thinking",
+                  "using_tools",
+                  "summarizing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Phase"
+          },
           "agent_setup_id": {
             "anyOf": [
               {
@@ -293,6 +309,16 @@
             "title": "Events",
             "type": "array"
           },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "final_snapshot_id": {
             "anyOf": [
               {
@@ -366,6 +392,20 @@
           },
           "host_shell": {
             "$ref": "#/components/schemas/HostShellFacts"
+          },
+          "housekeeping_context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextObservation"
+            },
+            "title": "Housekeeping Context",
+            "type": "object"
+          },
+          "housekeeping_generation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GenerationObservation"
+            },
+            "title": "Housekeeping Generation",
+            "type": "object"
           },
           "id": {
             "title": "Id",
@@ -481,6 +521,18 @@
               }
             ],
             "title": "Project Id"
+          },
+          "project_outline": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Outline"
           },
           "project_path": {
             "anyOf": [
@@ -705,6 +757,13 @@
             "default": "live-tool",
             "title": "Tool Mode Label",
             "type": "string"
+          },
+          "tool_outcomes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ToolOutcome"
+            },
+            "title": "Tool Outcomes",
+            "type": "object"
           },
           "updated_at": {
             "title": "Updated At",
@@ -1438,6 +1497,13 @@
             "title": "Per Request Defaults",
             "type": "object"
           },
+          "response_presets": {
+            "items": {
+              "$ref": "#/components/schemas/ResponsePreset"
+            },
+            "title": "Response Presets",
+            "type": "array"
+          },
           "startup_defaults": {
             "additionalProperties": {
               "$ref": "#/components/schemas/RuntimeControlDescriptor"
@@ -1994,6 +2060,14 @@
             ],
             "title": "Desktop Access",
             "type": "string"
+          },
+          "document_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Document Asset Ids",
+            "type": "array"
           },
           "draft": {
             "anyOf": [
@@ -2775,6 +2849,14 @@
             "title": "Display Title",
             "type": "string"
           },
+          "document_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Document Asset Ids",
+            "type": "array"
+          },
           "draft": {
             "anyOf": [
               {
@@ -3353,6 +3435,11 @@
       },
       "ChatQueueItem": {
         "properties": {
+          "admission_order": {
+            "default": 0,
+            "title": "Admission Order",
+            "type": "integer"
+          },
           "attachment_ids": {
             "items": {
               "type": "string"
@@ -3500,6 +3587,17 @@
             ],
             "title": "Pause Reason"
           },
+          "queue_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Position"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -3528,6 +3626,55 @@
           "updated_at": {
             "title": "Updated At",
             "type": "string"
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project_busy",
+                  "project_uncertain",
+                  "project_order"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Reason"
+          },
+          "waiting_owner_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting Owner Title"
+          },
+          "waiting_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting Run Id"
+          },
+          "waiting_thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting Thread Id"
           }
         },
         "required": [
@@ -3854,6 +4001,21 @@
               }
             ],
             "title": "Desktop Access"
+          },
+          "document_asset_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Asset Ids"
           },
           "draft_revision": {
             "anyOf": [
@@ -4790,7 +4952,7 @@
             "title": "Capacity Tokens"
           },
           "counting_method": {
-            "default": "UTF-8 character estimate (3 chars/token), serialized messages/tools/schema, 2048 tokens/image, 8% capacity margin; not tokenizer usage",
+            "default": "Character estimate (3 chars/token), outbound messages/tools/schema counted once, 2048 tokens/image, 8% capacity margin; not tokenizer usage",
             "title": "Counting Method",
             "type": "string"
           },
@@ -4826,6 +4988,17 @@
             "default": 512,
             "title": "Output Reservation Tokens",
             "type": "integer"
+          },
+          "purpose": {
+            "default": "work",
+            "enum": [
+              "work",
+              "summary",
+              "review",
+              "probe"
+            ],
+            "title": "Purpose",
+            "type": "string"
           },
           "schema_version": {
             "default": 1,
@@ -5525,7 +5698,7 @@
             "type": "array"
           },
           "note": {
-            "default": "Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Retrieval is presented only when embedding_deployment_id resolved to a loaded embedding endpoint.",
+            "default": "Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Document search is presented when selected tools and authorized document sources permit it. Without an embedding model it uses local text search; a selected embedding model must be loaded, and its temporary index is built only when searched.",
             "title": "Note",
             "type": "string"
           },
@@ -5808,6 +5981,17 @@
             "title": "Basis",
             "type": "string"
           },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
           "context_limit": {
             "anyOf": [
               {
@@ -5879,6 +6063,28 @@
               "interrupted"
             ],
             "title": "Phase",
+            "type": "string"
+          },
+          "processed_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processed Input Tokens"
+          },
+          "purpose": {
+            "default": "work",
+            "enum": [
+              "work",
+              "summary",
+              "review",
+              "probe"
+            ],
+            "title": "Purpose",
             "type": "string"
           },
           "request_id": {
@@ -7471,6 +7677,11 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "estimated_content_tokens": {
+            "readOnly": true,
+            "title": "Estimated Content Tokens",
+            "type": "integer"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -7563,6 +7774,11 @@
             ],
             "title": "Scope Label"
           },
+          "token_counting_method": {
+            "readOnly": true,
+            "title": "Token Counting Method",
+            "type": "string"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "string"
@@ -7581,7 +7797,9 @@
           "updated_at",
           "content",
           "provenance",
-          "version_created_at"
+          "version_created_at",
+          "estimated_content_tokens",
+          "token_counting_method"
         ],
         "title": "KnowledgeEntryView",
         "type": "object"
@@ -7890,6 +8108,11 @@
             "title": "Entry Id",
             "type": "string"
           },
+          "estimated_content_tokens": {
+            "readOnly": true,
+            "title": "Estimated Content Tokens",
+            "type": "integer"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -7965,6 +8188,11 @@
               }
             ],
             "title": "Scope Id"
+          },
+          "token_counting_method": {
+            "readOnly": true,
+            "title": "Token Counting Method",
+            "type": "string"
           }
         },
         "required": [
@@ -7974,7 +8202,9 @@
           "kind",
           "content",
           "provenance",
-          "created_at"
+          "created_at",
+          "estimated_content_tokens",
+          "token_counting_method"
         ],
         "title": "KnowledgeVersion",
         "type": "object"
@@ -8772,7 +9002,9 @@
             "default": "work",
             "enum": [
               "work",
-              "review"
+              "summary",
+              "review",
+              "probe"
             ],
             "title": "Purpose",
             "type": "string"
@@ -9758,6 +9990,63 @@
         "title": "ResourceUsage",
         "type": "object"
       },
+      "ResponsePreset": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "enum": [
+              "balanced",
+              "deep"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "per_request": {
+            "additionalProperties": true,
+            "title": "Per Request",
+            "type": "object"
+          },
+          "source": {
+            "const": "workbench",
+            "default": "workbench",
+            "title": "Source",
+            "type": "string"
+          },
+          "thinking_limit_supported": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thinking Limit Supported"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "description",
+          "per_request"
+        ],
+        "title": "ResponsePreset",
+        "type": "object"
+      },
       "ResponseRecipe": {
         "properties": {
           "card_sha256": {
@@ -10581,6 +10870,51 @@
           }
         },
         "title": "ReviewObservation",
+        "type": "object"
+      },
+      "RunFailure": {
+        "properties": {
+          "category": {
+            "enum": [
+              "input",
+              "tool",
+              "runtime",
+              "cancelled",
+              "capacity",
+              "setup",
+              "persistence",
+              "uncertain_effects"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "recovery_action": {
+            "enum": [
+              "continue",
+              "inspect_effects",
+              "change_limit",
+              "correct_setup",
+              "ask"
+            ],
+            "title": "Recovery Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "code",
+          "message",
+          "recovery_action"
+        ],
+        "title": "RunFailure",
         "type": "object"
       },
       "RunLifecycleContract": {
@@ -11903,6 +12237,21 @@
         "title": "StartupMismatch",
         "type": "object"
       },
+      "StaticPreviewRequest": {
+        "properties": {
+          "entry_path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Entry Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_path"
+        ],
+        "title": "StaticPreviewRequest",
+        "type": "object"
+      },
       "StorageCleanupResponse": {
         "properties": {
           "removed": {
@@ -12176,6 +12525,95 @@
         ],
         "title": "ToolMode",
         "type": "string"
+      },
+      "ToolOutcome": {
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "input",
+                  "permission",
+                  "tool",
+                  "runtime",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "incomplete_arguments",
+              "not_dispatched",
+              "running",
+              "succeeded",
+              "failed",
+              "uncertain"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "recovery_action": {
+            "default": "none",
+            "enum": [
+              "none",
+              "continue",
+              "inspect_effects",
+              "ask"
+            ],
+            "title": "Recovery Action",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result"
+          },
+          "result_metadata": {
+            "additionalProperties": true,
+            "title": "Result Metadata",
+            "type": "object"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "name",
+          "outcome",
+          "updated_at"
+        ],
+        "title": "ToolOutcome",
+        "type": "object"
       },
       "UserOverrideRequest": {
         "properties": {
@@ -15195,6 +15633,54 @@
         "summary": "Reopen Conversation"
       }
     },
+    "/v1/chat/conversations/{conversation_id}/runs/{run_id}/acknowledge-effects": {
+      "post": {
+        "operationId": "acknowledge_conversation_effects_v1_chat_conversations__conversation_id__runs__run_id__acknowledge_effects_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge Conversation Effects"
+      }
+    },
     "/v1/chat/conversations/{conversation_id}/start": {
       "post": {
         "operationId": "start_conversation_v1_chat_conversations__conversation_id__start_post",
@@ -17771,6 +18257,53 @@
           }
         },
         "summary": "Reset Lost Preview"
+      }
+    },
+    "/v1/previews/{thread_id}/start": {
+      "post": {
+        "operationId": "start_static_preview_v1_previews__thread_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaticPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Static Preview"
       }
     },
     "/v1/profiles": {

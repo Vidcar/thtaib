@@ -16,12 +16,14 @@ import os
 import re
 import stat
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
-from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
+from deepagents.backends import CompositeBackend, FilesystemBackend as _FilesystemBackend, LocalShellBackend, StateBackend
+from deepagents.backends.filesystem import _raise_if_symlink_loop
 from deepagents.backends.protocol import BackendProtocol, FileData, ReadResult
 
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
+from workbench_backend.agents.owned_shell import OwnedLocalShellBackend
 from workbench_backend.agents.schemas import AgentRun, ToolMode
 from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE, MAX_IMAGE_BYTES, validate_image_bytes
 from workbench_backend.paths import WorkbenchPaths
@@ -48,6 +50,77 @@ HARNESS_SCRATCH_DIRNAME = "harness"
 _UNSAFE_THREAD_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _IMAGE_SUFFIX_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 _OTHER_IMAGE_SUFFIXES = {".gif", ".heic", ".heif"}
+
+
+def _comparison_path(path: Path | PureWindowsPath) -> PurePath:
+    """Normalize Windows namespace spelling for comparison, never for file I/O.
+
+    ``Path.resolve`` can retain the extended prefix when another writer creates
+    a parent between its Win32 lookups. Both spellings still identify the same
+    resolved path. Only DOS and UNC aliases are equivalent; device namespaces
+    are not ordinary project paths.
+    """
+    if isinstance(path, PureWindowsPath):
+        text = str(path)
+        if text[:8].lower() == "\\\\?\\unc\\":
+            text = "\\\\" + text[8:]
+        elif text.startswith("\\\\?\\"):
+            text = text[4:]
+            if not re.match(r"^[A-Za-z]:\\", text):
+                raise ValueError("Device namespaces are not project paths")
+        elif text.startswith("\\\\.\\"):
+            raise ValueError("Device namespaces are not project paths")
+        return PureWindowsPath(text)
+    return path
+
+
+def canonical_root(path: str | Path) -> PurePath:
+    """Resolved project identity for comparisons; do not use this for I/O."""
+    normalized = _comparison_path(Path(path).expanduser().resolve())
+    return PureWindowsPath(str(normalized).lower()) if isinstance(normalized, PureWindowsPath) else normalized
+
+
+def roots_overlap(left: str | Path, right: str | Path) -> bool:
+    first, second = canonical_root(left), canonical_root(right)
+    return first.is_relative_to(second) or second.is_relative_to(first)
+
+
+def resolve_project_tool_path(root: str | Path, key: str) -> Path:
+    """Resolve a native virtual file path without constructing an I/O backend."""
+    cwd = Path(root).resolve()
+    relative = key.lstrip("/")
+    if ".." in relative or relative.startswith("~"):
+        raise ValueError("Use a project-relative path without traversal")
+    if os.name == "nt":
+        supplied = PureWindowsPath(relative)
+        if (supplied.drive or supplied.root or ":" in relative
+                or any(PureWindowsPath(part).is_reserved() for part in supplied.parts)):
+            raise ValueError("Use a project-relative path without device names")
+    full = (cwd / relative).resolve()
+    _comparison_path(full).relative_to(_comparison_path(cwd))
+    _raise_if_symlink_loop(full)
+    return full
+
+
+class _ProjectPathPolicy:
+    """Adapt native file tools to Windows paths and recoverable path refusals."""
+
+    def _resolve_path(self, key: str) -> Path:
+        try:
+            if os.name != "nt" or not self.virtual_mode:
+                return super()._resolve_path(key)
+            return resolve_project_tool_path(self.cwd, key)
+        except ValueError as exc:
+            # Upstream operations already turn OSError into their typed error
+            # result. A path refusal must not abort a parallel ToolNode batch.
+            raise PermissionError("Path is invalid or outside the authorized project.") from exc
+
+    def _to_virtual_path(self, path: Path) -> str:
+        return "/" + _comparison_path(path.resolve()).relative_to(_comparison_path(self.cwd)).as_posix()
+
+
+class FilesystemBackend(_ProjectPathPolicy, _FilesystemBackend):
+    """Native backend with consistent project/scratch containment on Windows."""
 
 
 class _BoundedImageReads:
@@ -87,7 +160,7 @@ class BoundedImageFilesystemBackend(_BoundedImageReads, FilesystemBackend):
     """Project file backend with bounded, verified image reads."""
 
 
-class BoundedImageLocalShellBackend(_BoundedImageReads, LocalShellBackend):
+class BoundedImageLocalShellBackend(_BoundedImageReads, _ProjectPathPolicy, OwnedLocalShellBackend):
     """Host-shell backend with the same image-read policy."""
 
 
@@ -123,6 +196,7 @@ def build_run_backend(
     prepare_storage: bool = True,
     image_inputs_allowed: bool | Callable[[], bool] = False,
     capture_backend: BackendProtocol | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> BackendProtocol | None:
     """Attach a CompositeBackend, or none for recorded-tool without knowledge.
 
@@ -174,6 +248,7 @@ def build_run_backend(
             virtual_mode=True,
             inherit_env=True,
             image_inputs_allowed=image_inputs_allowed,
+            cancel_requested=cancel_requested,
         )
     elif run.project_path:
         default = BoundedImageFilesystemBackend(root_dir=run.project_path, virtual_mode=True,

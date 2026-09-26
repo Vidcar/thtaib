@@ -7,15 +7,17 @@ import hashlib
 from langchain_core.runnables import RunnableLambda
 from langgraph.errors import GraphInterrupt
 
-from workbench_backend.agents.context import observe_context, require_context_fit
+from workbench_backend.agents.context import observe_context
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, PLAN_TOOLS, require_setup_capabilities
 from workbench_backend.agents.host_shell import approval_mode_instructions
-from workbench_backend.agents.schemas import AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria
+from workbench_backend.agents.schemas import AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria, ToolOutcome
+from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
 from workbench_backend.agents.setup_schemas import ReviewConfiguration
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import SettingsBags
+from workbench_backend.agents.memory_skills import memory_selection_notice
 
 
 def _child_run_id(parent, snapshot, call_id):
@@ -79,10 +81,10 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
     messages = payload.get("messages", [])
     task = str(getattr(messages[-1], "content", "Delegated task")) if messages else "Delegated task"
+    model_content_blocks = [memory_selection_notice(refs.memory_version_refs)]
     observation = observe_context(deployment=deployment, per_request=setup.bags.per_request,
-        system_prompt=setup.system_prompt, task=task, content_blocks=None, output_schema=None,
+        system_prompt=setup.system_prompt, task=task, content_blocks=model_content_blocks, output_schema=None,
         tool_count=len(presented), continuing_thread=False)
-    require_context_fit(observation)
     now = utc_now()
     child = parent.model_copy(deep=True, update=dict(id=child_id, parent_run_id=parent.id,
         deployment_id=deployment.id, task=task, input_message_id=None, content_blocks=None,
@@ -100,7 +102,10 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         embedding_deployment_id=config.embedding_deployment_id,
         events=[], model_requests=[], tool_invocations=[], related_files=[],
         completion=None, output_schema=None, structured_output=None, context_observation=observation,
-        generation_observation=None, starting_snapshot_id=None, final_snapshot_id=None,
+        generation_observation=None, housekeeping_context={}, housekeeping_generation={}, project_outline=None,
+        tool_outcomes={}, failure=None, activity_phase=None, finalization_phase=None,
+        settled_status=None, settled_stop_reason=None, retrieved_material=[],
+        starting_snapshot_id=None, final_snapshot_id=None, pre_run_checkpoint_id=None,
         checkpoint_ids=[], resume_checkpoint_id=None, dispatched_tool_calls=0, dispatched_tool_ids=[], completed_tool_ids=[], tool_authorizations={}, tool_authorization_grants={},
         status=AgentRunStatus.running, created_at=now, updated_at=now, finished_at=None,
         pending_interrupt=None, error=None, stop_reason=None))
@@ -214,7 +219,7 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
                 if child is not None:
                     child.status = AgentRunStatus.cancelled if cancelling else AgentRunStatus.failed
                     child.error = None if cancelling else str(exc)
-                    child.stop_reason = "cancelled" if cancelling else "failed"
+                    child.stop_reason = "cancelled" if cancelling else getattr(exc, "code", None) or "failed"
                     child.finished_at = utc_now()
                     child.pending_interrupt = None
                 activity.status = "cancelled" if cancelling else "failed"
@@ -223,10 +228,43 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
             finally:
                 with owner._lock:
                     if child is not None:
+                        if child.status in {AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled}:
+                            _settle_child(child, control)
                         owner._persist(child)
+                    if activity.status in {"failed", "cancelled"}:
+                        # The task call itself has a known terminal result.
+                        # Unconfirmed child effects remain separate, scoped
+                        # outcomes on the parent and still block continuation.
+                        control.record_tool_outcome(parent, ToolOutcome(
+                            call_id=call_id, name="task", outcome="failed",
+                            failure_category="cancelled" if activity.status == "cancelled" else "runtime",
+                            recovery_action="continue", detail=activity.error or "The helper was cancelled.",
+                            result=activity.error or "The helper was cancelled.",
+                            evidence={"helper_run_id": child_id, "helper_status": activity.status}, updated_at=utc_now()))
                     owner._persist_and_notify(parent)
                 if child is not None:
                     await asyncio.to_thread(owner._close_model_client, child.id)
         specs.append({"name": snapshot.agent_id, "description": f"{snapshot.name}: {snapshot.role or 'Selected helper'}",
             "runnable": RunnableLambda(invoke, name=snapshot.name)})
     return specs
+
+
+def _settle_child(child, control):
+    """Settle only this helper's measurements and effects, preserving root scope."""
+    child.activity_phase = None
+    child.finalization_phase = None
+    child.settled_status = None
+    child.settled_stop_reason = None
+    child.updated_at = child.finished_at or utc_now()
+    reconcile_effects(child)
+    child.failure = failure_for_run(child)
+    for outcome in child.tool_outcomes.values():
+        if control.root.tool_outcomes.get(f"{child.id}:{outcome.call_id}") != outcome:
+            control.record_tool_outcome(child, outcome)
+    if child.generation_observation is not None and child.generation_observation.phase in {"prompt_processing", "generating"}:
+        child.generation_observation = child.generation_observation.model_copy(update={
+            "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": child.updated_at})
+    for purpose, measured in list(child.housekeeping_generation.items()):
+        if measured.phase in {"prompt_processing", "generating"}:
+            child.housekeeping_generation[purpose] = measured.model_copy(update={
+                "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": child.updated_at})

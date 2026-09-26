@@ -447,7 +447,7 @@ class InteractionApiTests(unittest.TestCase):
         answer_messages = [message for message in state["values"]["messages"] if message.get("tool_calls")]
         self.assertEqual(answer_messages[-1]["tool_calls"][0]["id"], "call_answer")
 
-    def test_command_context_preflight_rejects_before_second_execution(self) -> None:
+    def test_command_native_budget_rejects_irreducible_context_before_second_execution(self) -> None:
         self._set_server_props(n_ctx=32768, vision=False)
         model = self._install_model([AIMessage(content="first retained"), AIMessage(content="should not run")])
         thread_id = self._register_agent()
@@ -470,11 +470,13 @@ class InteractionApiTests(unittest.TestCase):
             content="Continue briefly.",
             metadata={"presented_tools": []},
         )
-        self.assertEqual(rejected.status_code, 409, rejected.text)
-        self.assertEqual(rejected.json()["error"], "context_capacity_exceeded")
-        after = self.client.get(f"/v1/agent-interaction/threads/{thread_id}/state").json()
-        self.assertEqual(after["values"]["messages"], before_messages)
-        self.assertEqual(model._index, 1)
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        after = self._wait_state(thread_id, status="failed")
+        failed_run = after["values"]["workbench"]["run"]
+        self.assertEqual(failed_run["failure"]["recovery_action"], "change_limit")
+        self.assertFalse(failed_run["context_observation"]["fits"])
+        self.assertEqual(after["values"]["messages"][:len(before_messages)], before_messages)
+        self.assertEqual(model._index, 1, "native budget recovery must stop before another model or tool executes")
 
     def test_command_compaction_summary_is_not_archived_as_assistant_answer(self) -> None:
         self._set_server_props(n_ctx=16384, vision=False)

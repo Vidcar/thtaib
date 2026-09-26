@@ -163,6 +163,7 @@ PER_REQUEST_KEYS: frozenset[str] = frozenset(
         "reasoning",
         "reasoning_format",
         "reasoning_effort",
+        "reasoning_budget_tokens",
     }
 )
 

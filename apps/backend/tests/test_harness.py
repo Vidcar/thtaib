@@ -227,6 +227,8 @@ class HarnessApiTests(unittest.TestCase):
             AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"file_path": "/view.png"}, "id": "image-read"}]),
             AIMessage(content="The image is red."),
         ], profile={"image_inputs": True, "image_tool_message": True})
+        self._record_capability("image")
+        self._record_capability("tool_image")
         created = self.client.post("/v1/chat/conversations", json={
             "deployment_id": self.deployment_id, "project_path": str(project),
             "presented_tools": ["read_file"], "approval_mode": "full_access",
@@ -341,7 +343,7 @@ class HarnessApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422, response.text)
 
-    def test_context_preflight_blocks_before_dispatch(self) -> None:
+    def test_irreducible_context_is_rejected_by_native_budget_after_admission(self) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
         self.manager.store.put_deployment(
             deployment.model_copy(
@@ -363,8 +365,11 @@ class HarnessApiTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["code"], "context_capacity_exceeded")
+        self.assertEqual(response.status_code, 200, response.text)
+        finished = wait_for_run(self.client, response.json()["id"])
+        self.assertEqual(finished["status"], "failed", finished.get("error"))
+        self.assertFalse(finished["context_observation"]["fits"])
+        self.assertEqual(finished["model_requests"], [], "native budgeting must reject before fake model dispatch")
 
     def test_structured_output_requires_passed_setup_specific_probe(self) -> None:
         schema = {
@@ -582,7 +587,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertNotEqual(evidence, judgement)
         self.assertIn("no independent review", judgement["note"].lower())
 
-    def test_second_run_starts_while_another_uses_the_same_project(self) -> None:
+    def test_direct_runs_cannot_bypass_actual_project_admission(self) -> None:
         hold = threading.Event()
         set_generate_hold(hold)
         self.addCleanup(set_generate_hold, None)
@@ -607,20 +612,19 @@ class HarnessApiTests(unittest.TestCase):
         self.app.state.lab._harness_provider = lambda: self.app.state.harness
         first = self._start(project_path=str(project), presented_tools=["echo"])
         wait_for_status(self.client, first["id"], "running")
-        second = self._start(
-            project_path=str(project),
-            presented_tools=["echo"],
-            task="A second chat may write in the same folder.",
-        )
-        self.assertNotEqual(second["id"], first["id"])
+        with patch.object(self.manager, "ensure_deployment_ready", wraps=self.manager.ensure_deployment_ready) as loaded:
+            second = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
+                "project_path": str(project), "presented_tools": ["echo"], "task": "A conflicting task"})
+            self.assertEqual(second.status_code, 409, second.text)
+            self.assertEqual(second.json()["code"], "project_busy")
+            self.assertEqual(second.json()["run_id"], first["id"])
+            loaded.assert_not_called()
         held_workspace = self._start(workspace_id=workspace_id, presented_tools=["echo"], task="Hold the workspace.")
         wait_for_status(self.client, held_workspace["id"], "running")
-        another_workspace = self._start(
-            workspace_id=workspace_id,
-            presented_tools=["echo"],
-            task="Another chat in the same workspace.",
-        )
-        self.assertNotEqual(another_workspace["id"], held_workspace["id"])
+        another_workspace = self.client.post("/v1/agent-runs", json={"deployment_id": self.deployment_id,
+            "workspace_id": workspace_id, "presented_tools": ["echo"], "task": "Another task in this workspace"})
+        self.assertEqual(another_workspace.status_code, 409, another_workspace.text)
+        self.assertEqual(another_workspace.json()["code"], "project_busy")
         blocked = self.client.post(
             "/v1/lab/cases/capture",
             json={"workspace_id": workspace_id, "run_id": held_workspace["id"]},
@@ -628,7 +632,7 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(blocked.status_code, 409, blocked.text)
         self.assertEqual(blocked.json()["code"], "not_quiescent")
         hold.set()
-        for run_id in (first["id"], second["id"], held_workspace["id"], another_workspace["id"]):
+        for run_id in (first["id"], held_workspace["id"]):
             self.assertEqual(wait_for_run(self.client, run_id)["status"], "completed")
 
     def test_cancel_stops_a_running_task(self) -> None:
@@ -831,6 +835,10 @@ class HarnessApiTests(unittest.TestCase):
                 with self.assertRaises(HarnessError) as ctx:
                     harness.cancel(run.id)
                 self.assertEqual(ctx.exception.code, "run_finalizing")
+                with self.assertRaises(HarnessError) as busy:
+                    with harness.project_admission(str(project)):
+                        self.fail("A new task entered while its final snapshot was being written")
+                self.assertEqual(busy.exception.code, "project_busy")
             finally:
                 release.set()
                 worker.join(timeout=5)
@@ -842,6 +850,8 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(finished.final_snapshot_id, "snap_finalizing_test")
         self.assertIsNone(finished.finalization_phase)
         self.assertEqual([event.kind for event in finished.events].count("completed"), 1)
+        with harness.project_admission(str(project)):
+            pass
 
     def test_restart_finishes_settled_snapshot_without_replaying_graph(self) -> None:
         project = self.root / "recovered-finalizing-project"
@@ -860,7 +870,9 @@ class HarnessApiTests(unittest.TestCase):
             run = AgentRun(id=f"agent_recover_finalizing_{outcome}", status=live_status,
                 deployment_id=self.deployment_id, task="graph already settled", enabled_tools=[], presented_tools=[],
                 created_at=now, updated_at=now, project_path=str(project), finalization_phase="saving_changes",
-                settled_status=outcome, settled_stop_reason=outcome,
+                settled_status=outcome, settled_stop_reason=outcome, activity_phase="thinking",
+                housekeeping_generation={"summary": GenerationObservation(purpose="summary", phase="generating", output_tokens=7,
+                    elapsed_seconds=1, measured_at=now)},
                 events=[AgentEvent(at=now, kind="finalizing",
                     detail={"phase": "saving_changes", "execution_settled": True, "snapshot_id": snapshot_id})],
                 error="original execution failure" if outcome == "failed" else None)
@@ -876,6 +888,9 @@ class HarnessApiTests(unittest.TestCase):
                 self.assertEqual(recovered.stop_reason, outcome)
                 self.assertEqual(recovered.error, "original execution failure" if outcome == "failed" else None)
                 self.assertIsNone(recovered.finalization_phase)
+                self.assertIsNone(recovered.activity_phase)
+                self.assertEqual(recovered.housekeeping_generation["summary"].phase, "interrupted")
+                self.assertEqual(recovered.housekeeping_generation["summary"].output_tokens, 7)
                 self.assertTrue(recovered.final_snapshot_id)
                 self.assertEqual((self.manager.paths.snapshots / recovered.final_snapshot_id / "tree" / "created.txt").read_text(encoding="utf-8"), "retained")
                 self.assertEqual([event.kind for event in recovered.events].count(outcome), 1)
@@ -960,6 +975,8 @@ class HarnessApiTests(unittest.TestCase):
         self.app.state.lab._harness_provider = lambda: harness
         project = self.root / "terminal-retry-project"
         project.mkdir()
+        other_project = self.root / "terminal-retry-independent-project"
+        other_project.mkdir()
         b = self._start(task="hold B", project_path=str(project), presented_tools=[])
         try:
             self.assertTrue(entered.wait(timeout=10), "B never entered generation")
@@ -975,7 +992,7 @@ class HarnessApiTests(unittest.TestCase):
                 return original_put(record)
 
             with patch.object(harness.store, "put_run", side_effect=fail_once):
-                for task, path in (("settle A with project", str(project)), ("settle A without project", None)):
+                for task, path in (("settle A with project", str(other_project)), ("settle A without project", None)):
                     failure_seen.clear()
                     a = self._start(task=task, project_path=path, presented_tools=[])
                     self.assertTrue(failure_seen.wait(timeout=10), f"{task} did not reach terminal persistence")
@@ -1071,6 +1088,9 @@ class HarnessApiTests(unittest.TestCase):
             created_at=now,
             updated_at=now,
             workspace_id="ws_orphan",
+            activity_phase="summarizing",
+            housekeeping_generation={"summary": GenerationObservation(purpose="summary", request_id="lost-summary", phase="generating",
+                output_tokens=3, elapsed_seconds=.5, measured_at=now, basis="llama_cpp_timings", interval="current_model_call_generation")},
             generation_observation=GenerationObservation(request_id="lost-request", phase="generating",
                 input_tokens=100, output_tokens=7, context_used_tokens=107, elapsed_seconds=.5,
                 tokens_per_second=12, measured_at=now, basis="llama_cpp_timings", interval="current_model_call_generation"),
@@ -1084,6 +1104,9 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(observed.stop_reason, "orphaned")
         self.assertIn("restarted", observed.error or "")
         self.assertEqual(restarted.active_workspace_run_ids("ws_orphan"), [])
+        self.assertIsNone(observed.activity_phase)
+        self.assertEqual(observed.housekeeping_generation["summary"].phase, "interrupted")
+        self.assertEqual(observed.housekeeping_generation["summary"].output_tokens, 3)
         self.assertEqual(observed.generation_observation.phase, "interrupted")
         self.assertEqual(observed.generation_observation.output_tokens, 7)
         self.assertEqual(observed.generation_observation.interval, "last_model_call_generation")

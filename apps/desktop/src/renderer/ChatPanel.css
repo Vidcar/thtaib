@@ -18,7 +18,7 @@
 .helper-delegation-head {display: flex; align-items: center; gap: var(--space-tight); min-width: 0; font-size: var(--text-small);}
 .helper-delegation-head strong {font-weight: var(--weight-medium);}
 .helper-delegation-head > span {margin-left: auto; color: var(--muted);}
-.helper-delegation-request {color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight); white-space: pre-wrap; overflow-wrap: anywhere;}
+.helper-delegation-request {display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight); white-space: pre-wrap; overflow-wrap: anywhere;}
 .helper-rail {display: grid; gap: var(--space-compact); min-width: 0;}
 .helper-rail-list {display: grid; gap: var(--space-section);}
 .helper-rail-group {display: grid; gap: var(--space-tight);}
@@ -29,6 +29,8 @@
 .helper-rail-back {justify-self: start;}
 .helper-rail-heading {display: flex; justify-content: space-between; gap: var(--space-compact);}
 .helper-rail-request {margin: 0; color: var(--muted); font-size: var(--text-small); white-space: pre-wrap; overflow-wrap: anywhere;}
+.helper-request-disclosure > summary {cursor: pointer; color: var(--muted); font-size: var(--text-small);}
+.helper-request-disclosure .helper-rail-request {max-height: 20rem; overflow: auto; padding-top: var(--space-tight);}
 .helper-rail .message-feed {display: grid; gap: var(--space-compact); min-width: 0;}
 .helper-rail .bubble {max-width: 100%;}
 .run-progress-head {display: flex; align-items: center;}
@@ -49,6 +51,7 @@
 .message-state {border: var(--line-hairline) solid var(--border); border-radius: var(--radius-pill); padding: var(--pad-tight) var(--pad-tight); color: var(--muted); font-size: var(--text-small); text-transform: uppercase;}
 .message-feed {display: grid; align-content: start; gap: var(--space-compact); min-width: 0;}
 .message-body {display: grid;}
+.user-message-text {white-space: pre-wrap; overflow-wrap: anywhere;}
 .message-body :is(p, ul, ol, blockquote, pre, table) {margin: 0;}
 .message-body ul, .message-body ol {padding-left: var(--pad-section);}
 .message-body a {color: var(--accent);}
@@ -364,3 +367,5 @@
 .review-result {border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact);}
 .review-result > summary {display: flex; gap: var(--space-tight); align-items: center;}
 .run-configuration-controls {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact); grid-column: 1 / -1;}
+.run-failure { padding: var(--pad-compact); border-left: var(--line-strong) solid var(--danger); background: color-mix(in srgb, var(--danger) var(--tint-quiet), transparent); border-radius: var(--radius-control); }
+.run-failure p { white-space: pre-wrap; overflow-wrap: anywhere; }

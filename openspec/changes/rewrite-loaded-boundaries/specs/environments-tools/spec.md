@@ -20,3 +20,8 @@ Ordinary Chat SHALL offer Deep Agents built-in `ls`, `read_file`, `write_file`, 
 
 - **WHEN** the harness is assembled for a project
 - **THEN** the file tools are Deep Agents built-ins and the application registers no second tool with their names.
+
+#### Scenario: Parallel creation of a missing Windows directory
+- **WHEN** native tools concurrently write distinct files under a new shared directory
+- **THEN** equivalent Windows path representations SHALL not cause false escape errors, and each call SHALL retain its own success or error result
+- **AND** genuine traversal, junction escape and same-file conflicts SHALL remain rejected.

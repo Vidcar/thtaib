@@ -120,10 +120,24 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.match(tipText(), /2,516/);
     assert.equal(renderer.root.findByProps({ role: "tooltip" }).props.style.left, 520, "usage is kept inside a narrow window");
     await update({ request_id: "call-a", phase: "generating", input_tokens: 1946, output_tokens: 59, context_used_tokens: 2005, context_limit: 65536, tokens_per_second: 43.29, basis: "llama_cpp_timings", interval: "current_model_call_generation" });
-    assert.match(tipText(), /Live/);
+    assert.match(tipText(), /Thinking/);
     assert.match(tipText(), /2,005/);
     assert.doesNotMatch(tipText(), /Estimated|2,516/);
     assert.match(tipText(), /43.3 tok\/s/);
+    assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Thinking", "the screen-reader stage matches the visible model stage");
+    assert.match(textOf(trigger), /Thinking.*43.3 tok\/s/, "thinking is visible without opening the measurements popover");
+    for (const [phase, label] of [["using_tools", "Using tools"], ["summarizing", "Summarizing"]]) {
+      run = { ...run, activity_phase: phase };
+      await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
+      assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), label);
+      assert.match(textOf(trigger), new RegExp(label));
+      assert.equal(renderer.root.findAllByProps({ className: "usage-live-dot" }).length, 0, "a prior work sample cannot imply generation during another stage");
+    }
+    run = { ...run, status: "completed", activity_phase: "thinking" };
+    await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
+    assert.equal(renderer.root.findAllByProps({ role: "status" }).length, 0, "a terminal run ignores a retained generating sample");
+    assert.doesNotMatch(tipText(), /Thinking|Generating/);
+    run = { ...run, status: "running", activity_phase: null };
     run = { ...run, finalization_phase: "saving_changes" };
     await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
     assert.match(tipText(), /Saving/);
@@ -131,7 +145,7 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Saving project state");
     run = { ...run, finalization_phase: null };
     await update({ ...run.generation_observation, phase: "completed", interval: "last_model_call_generation" });
-    assert.match(tipText(), /Last request/);
+    assert.match(tipText(), /Last work request/);
     assert.doesNotMatch(tipText(), /Live/);
     await update(null);
     assert.match(tipText(), /Estimated/);

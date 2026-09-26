@@ -27,7 +27,7 @@ function readRailPage(): RailPage {
   return "files";
 }
 import { ChatDockContext } from "./chatDockContext";
-import { packet03Api } from "./packet03Api";
+import { packet03Api, packet03Request } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { HelperRail, helperEntries, helperIsActive } from "./HelperRail";
 import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
@@ -78,6 +78,7 @@ interface PendingChatSubmit {
   submitted_draft_revision?: number | null;
   task: string;
   attachment_ids?: string[];
+  document_asset_ids?: string[];
   presented_tools?: string[];
   per_request_overrides?: Record<string, unknown>;
   deployment_id?: string;
@@ -128,6 +129,7 @@ function ChatInteractionStream(props: {
   onHelperOpen: (runId: string, toolCallId: string) => void;
   onHelperActivity: (conversationId: string, active: number, total: number) => void;
   historicalRuns: AgentRun[];
+  onRecoverRun?: (run: AgentRun) => void;
 }) {
   const {
     threadId,
@@ -210,6 +212,7 @@ function ChatInteractionStream(props: {
           onHelperOpen={props.onHelperOpen}
           onHelperActivity={props.onHelperActivity}
           historicalRuns={props.historicalRuns}
+          onRecoverRun={props.onRecoverRun}
         />
       )}
     </InteractionStream>
@@ -241,6 +244,7 @@ function ChatInteractionStreamContent(props: {
   onHelperOpen: (runId: string, toolCallId: string) => void;
   onHelperActivity: (conversationId: string, active: number, total: number) => void;
   historicalRuns: AgentRun[];
+  onRecoverRun?: (run: AgentRun) => void;
 }) {
   const {
     stream,
@@ -479,12 +483,17 @@ function ChatInteractionStreamContent(props: {
   return (
     <>
       {projectionRunOwned ? (
-        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageText={message => {
-          const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user" && item.attachment_ids?.length);
-          return retained?.content;
+        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageContent={message => {
+          const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user");
+          if (!retained) return undefined;
+          // Model-only context is never part of the submitted user message.
+          // Retained attachments already have their own file cards.
+          return retained.attachment_ids?.length ? retained.content : [
+            { type: "text", text: retained.content }, ...(retained.content_blocks ?? []),
+          ];
         }} />
       ) : null}
-      {projectionRunOwned ? <RunActivitySummary run={run} showHelpers={false} /> : null}
+      {projectionRunOwned ? <RunActivitySummary run={run} showHelpers={false} onRecover={props.onRecoverRun} /> : null}
       {savingProjectState ? <div className="chat-waiting" role="status">Saving project state…</div> : null}
       {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
       {projectionRunOwned && visibleInterrupt ? (
@@ -510,9 +519,9 @@ function ChatInteractionStreamContent(props: {
   );
 }
 
-function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[], pinnedMemoryRefs?: string[]) {
+function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[]) {
   const selected = entries.filter((entry) => selectedVersionIds.includes(entry.current_version_id));
-  const memoryVersionRefs = pinnedMemoryRefs ?? selected
+  const memoryVersionRefs = selected
     .filter((entry) => entry.kind === "memory")
     .map((entry) => entry.current_version_id);
   const skillVersionRefs = selected
@@ -522,15 +531,13 @@ function knowledgePayload(entries: KnowledgeEntry[], selectedVersionIds: string[
     .filter((entry) => entry.kind === "protected_instruction")
     .map((entry) => entry.current_version_id);
   return {
-    knowledge_version_refs: [...memoryVersionRefs, ...skillVersionRefs, ...protectedInstructionVersionRefs],
+    // The backend resolves kinds for earlier explicit versions too. Omitting
+    // them here would silently replace a selected memory when Knowledge updates.
+    knowledge_version_refs: [...selectedVersionIds],
     memory_version_refs: memoryVersionRefs,
     skill_version_refs: skillVersionRefs,
     protected_instruction_version_refs: protectedInstructionVersionRefs,
   };
-}
-
-function hasFixedMemory(conversation: ChatConversation | null): boolean {
-  return Boolean(conversation && (conversation.source_checkpoint_id || conversation.current_run_id || conversation.run_ids.length));
 }
 
 function messageRoleLabel(role: ChatMessage["role"]): string {
@@ -655,7 +662,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const recordHelperActivity = useCallback((conversationId: string, active: number, total: number) => {
     setHelperActivity(current => current.conversationId === conversationId && current.active === active && current.total === total ? current : { conversationId, active, total });
   }, []);
-  const [selectedPath, setSelectedPath] = useState("");
+  const [selectedFile, setSelectedFile] = useState<{ projectId: string | null; path: string } | null>(null);
   const historyMutations = useRef(new Map<string, boolean | "deleted">());
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
@@ -686,13 +693,17 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const chatLaunchClaim = useRef<string | null>(null);
   const historyNoticeClaim = useRef<string | null>(null);
   const [task, setTask] = useState("");
+  const [recoveryRun, setRecoveryRun] = useState<AgentRun | null>(null);
+  const [recoveringEffects, setRecoveringEffects] = useState(false);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [documentAssetIds, setDocumentAssetIds] = useState<string[] | null>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const [workMode, setWorkMode] = useState<"work" | "plan">("work");
   const [desktopAccess, setDesktopAccess] = useState<DesktopAccess>("off");
   const [selectedTools, setSelectedTools] = useState<string[] | null>(null);
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
   const [toolMenuRequest, setToolMenuRequest] = useState(0);
+  const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [toolMenuFocus, setToolMenuFocus] = useState<"browser" | "windows" | null>(null);
   const [helperAgentIds, setHelperAgentIds] = useState<string[]>([]);
   const [review, setReview] = useState({ enabled: false, criteria: "", max_revisions: 2 as const });
@@ -731,10 +742,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     setToolMenuFocus(section);
     setToolMenuRequest(current => current + 1);
   }, []);
+  const fileProjectId = conversation?.project_id ?? projectId;
+  const selectedPath = selectedFile?.projectId === fileProjectId ? selectedFile.path : "";
+  const selectFile = useCallback((path: string) => {
+    setSelectedFile({ projectId: fileProjectId, path });
+  }, [fileProjectId]);
+  useEffect(() => {
+    setSelectedFile(current => current && current.projectId !== fileProjectId ? null : current);
+  }, [fileProjectId]);
   const openFile = useCallback((path: string) => {
     openRail("files");
-    setSelectedPath(path);
-  }, [openRail]);
+    selectFile(path);
+  }, [openRail, selectFile]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const historySignature = conversations.map(item => `${item.id}:${item.title ?? ""}:${item.display_title ?? ""}:${item.archived ? 1 : 0}`).join("|");
   const [knowledgeEntries, setKnowledgeEntries] = useState<KnowledgeEntry[]>([]);
@@ -854,6 +873,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     }
     draftRevision.current += 1;
     setTask("");
+    setDocumentAssetIds([...new Set([...(pending.document_asset_ids ?? []), ...(pending.attachment_ids ?? [])])]);
     setAttachmentIds([]);
   }, [isCurrentOwner]);
 
@@ -918,8 +938,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function chatConfiguration(): Record<string, unknown> {
     const layered = Boolean(hasApplicationDefaults || projectId || agentSetupVersionId || conversation?.agent_setup_version_id || conversation?.project_id);
-    const pinnedMemory = hasFixedMemory(conversation) ? conversation?.memory_version_refs ?? [] : undefined;
-    const selectedKnowledge = knowledgePayload(knowledgeEntries, selectedKnowledgeIds, pinnedMemory);
+    const selectedKnowledge = knowledgePayload(knowledgeEntries, selectedKnowledgeIds);
     const values = sparseChatSetup({
       deployment_id: deploymentId,
       model_configuration_id: profileId || null,
@@ -934,14 +953,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       review,
       ...selectedKnowledge,
     }, setupEditedFields.current, layered);
-    if (pinnedMemory) Object.assign(values, selectedKnowledge);
-    return { ...values, ...(projectId ? { project_id: projectId } : {}),
+    // Untouched initial setup inherits its selected agent/project defaults.
+    // Once submitted, retain the visible exact versions until an explicit edit.
+    if (conversation?.run_ids.length || conversation?.source_checkpoint_id) Object.assign(values, selectedKnowledge);
+    return { ...values, ...(documentAssetIds !== null ? { document_asset_ids: documentAssetIds } : {}), ...(projectId ? { project_id: projectId } : {}),
       ...(agentSetupVersionId || conversation?.agent_setup_version_id ? { agent_setup_version_id: agentSetupVersionId } : {}),
       ...(!projectId ? { project_path: projectPath.trim() || null } : {}),
       ...(!projectId || conversation?.workspace_id ? { workspace_id: conversation?.workspace_id ?? null } : {}) };
   }
 
-  function applyResolvedSetup(selection: ResolvedSetupSelection, memoryRefs = hasFixedMemory(conversation) ? conversation?.memory_version_refs ?? [] : null) {
+  function applyResolvedSetup(selection: ResolvedSetupSelection, memoryRefs: string[] | null = null) {
     const config = selection.configuration;
     if (config.deployment_id) setDeploymentId(config.deployment_id);
     else if (config.model_configuration_id) setDeploymentId("");
@@ -1087,6 +1108,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     sending,
     task,
     attachmentIds,
+    documentAssetIds,
     approvalMode,
     workMode, desktopAccess, selectedTools, helperAgentIds, review,
     perRequestOverrides,
@@ -1125,6 +1147,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     serverDraftRevision.current = 0;
     updateTask("");
     setAttachmentIds([]);
+    setDocumentAssetIds(null);
     setupEditedFields.current = keepModelChoice ? new Set(["deployment_id", "model_configuration_id"]) : new Set();
     setApprovalMode(approvalModeOf(applicationDefaults.current?.configuration.approval_mode));
     setPerRequestOverrides({});
@@ -1164,7 +1187,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const modelChoices = chatDeployments.length > 0 ? chatDeployments : deployments;
   const selectedDeployment = modelChoices.find((item) => item.id === deploymentId);
   const missingDeployment = Boolean(deploymentId && !selectedDeployment);
-  const tools = selectedTools ?? applicationDefaults.current?.configuration.presented_tools ?? defaultNextTurnTools(enabledTools, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length));
+  const selectedDocumentIds = documentAssetIds ?? conversation?.document_asset_ids ?? [];
+  const tools = selectedTools ?? applicationDefaults.current?.configuration.presented_tools ?? defaultNextTurnTools(enabledTools, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length || selectedDocumentIds.length));
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
   const currentArea = selectionLoading ? areaLabel(selectionLoading) : areaLabel(conversation);
@@ -1222,6 +1246,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         setProfileId(nextConfigurationId);
         setTask(next.draft?.content ?? "");
         setAttachmentIds(next.draft?.attachment_ids ?? []);
+        setDocumentAssetIds(Array.isArray(draftConfig.document_asset_ids) ? draftConfig.document_asset_ids as string[] : null);
         setSetupResolving(true);
         const registration = api.registerAgentInteractionThread({ source_surface: "chat", conversation_id: next.id });
         let resolutionFailure = "";
@@ -1246,11 +1271,14 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         applyExecutionPreferences({ ...(next as ExecutionPreferences), ...draftConfig } as ExecutionPreferences);
         setProjectPath(next.project_path ?? "");
         setSelectedKnowledgeIds([
-          ...(next.memory_version_refs ?? []),
-          ...(next.skill_version_refs ?? []),
-          ...(next.protected_instruction_version_refs ?? []),
+          ...((draftConfig.knowledge_version_refs as string[] | undefined) ?? [
+            ...(next.memory_version_refs ?? []), ...(next.skill_version_refs ?? []), ...(next.protected_instruction_version_refs ?? []),
+          ]),
         ]);
-        if (resolved) applyResolvedSetup(resolved, hasFixedMemory(next) ? next.memory_version_refs ?? [] : null);
+        if (resolved) {
+          applyResolvedSetup(resolved, next.memory_version_refs ?? []);
+          if (Array.isArray(draftConfig.knowledge_version_refs)) setSelectedKnowledgeIds(draftConfig.knowledge_version_refs as string[]);
+        }
         else setInstructionLayers([]);
         const resolvedDeploymentId = nextConfigurationId && resolved?.configuration.model_configuration_id === nextConfigurationId
           ? resolved.configuration.deployment_id ?? "" : nextDeploymentId;
@@ -1353,6 +1381,48 @@ export function ChatPanel(props: ChatPanelProps = {}) {
       });
   }
 
+  function recoverRun(run: AgentRun) {
+    const action = run.failure?.recovery_action;
+    if (action === "inspect_effects" || action === "ask") {
+      setRecoveryRun(run);
+      openRail("files");
+    } else if (action === "change_limit") {
+      setModelMenuRequest(current => current + 1);
+    } else if (action === "correct_setup") {
+      openRail("setup");
+    } else {
+      if (!task.trim()) updateTask("Continue from the confirmed results. Inspect existing work before repeating any action.");
+      document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus();
+    }
+  }
+
+  async function acknowledgeEffects() {
+    if (!recoveryRun || !conversation || recoveringEffects) return;
+    const id = conversation.id;
+    setRecoveringEffects(true);
+    try {
+      const next = await packet03Request<ChatConversation>(`/v1/chat/conversations/${encodeURIComponent(id)}/runs/${encodeURIComponent(recoveryRun.id)}/acknowledge-effects`, {method: "POST"});
+      cacheConversation(next);
+      if (activeOwner.current.conversationId === id) { applyConversationUpdate(next); setRecoveryRun(null); }
+    } catch (error) { setMessage(errorMessage(error)); }
+    finally { setRecoveringEffects(false); }
+  }
+
+  async function useMemoryNextTurn(versionId: string) {
+    const { conversationId, threadId, generation } = activeOwner.current;
+    if (!conversationId || !threadId || conversationId !== conversation?.id) return;
+    const owner = { conversationId, threadId, generation };
+    const version = await api.knowledgeVersion(versionId);
+    const entries = await api.knowledgeEntries();
+    if (!isCurrentOwner(owner)) return;
+    const selected = await Promise.all(selectedKnowledgeIds.map(id => api.knowledgeVersion(id)));
+    if (!isCurrentOwner(owner)) return;
+    setKnowledgeEntries(entries);
+    setSelectedKnowledgeIds([...selected.filter(item => item.entry_id !== version.entry_id).map(item => item.id), versionId]);
+    markSetupEdited("memory_version_refs");
+    draftRevision.current += 1;
+  }
+
   async function sendTurn(): Promise<void> {
     const text = task.trim();
     if ((!text && !attachmentIds.length) || !hasModelChoice || selectionBusy || sending || awaitingRunAdmission || (runBusy && !conversation) || (pendingSubmit && draftRevision.current === pendingSubmit.draft_revision)) {
@@ -1391,6 +1461,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         task: text,
         draft_revision: savedDraft?.draft?.revision ?? conversation?.draft?.revision ?? null,
         attachment_ids: attachmentIds,
+        document_asset_ids: selectedDocumentIds,
       };
       if (queueIntent && conversation) {
         const queued = await api.enqueueChatTurn(conversation.id, {
@@ -1403,6 +1474,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         }
         cacheConversation(queued);
         setConversation(queued);
+        setDocumentAssetIds(queued.document_asset_ids ?? []);
         if (draftRevision.current === capturedDraftRevision) {
           draftRevision.current += 1;
           setTask("");
@@ -1794,6 +1866,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               onHelperOpen={openHelper}
               onHelperActivity={recordHelperActivity}
               historicalRuns={historicalRuns}
+              onRecoverRun={recoverRun}
             />
           ) : (
             transcript.map((item, index) => (
@@ -1823,6 +1896,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
           ) : null}
         </div>
 
+        {recoveryRun && conversation?.run_ids.includes(recoveryRun.id) ? <section className="run-failure" aria-label="Unconfirmed effects">
+          <strong>Some effects could not be confirmed automatically</strong>
+          <p>Available file evidence has been checked. Review these actions before continuing; previous actions will not be replayed.</p>
+          <ul>{Object.values(recoveryRun.tool_outcomes ?? {}).filter(item => item.outcome === "uncertain" && !item.evidence?.acknowledged_at).map(item => <li key={item.call_id}><strong>{item.name}</strong>{item.evidence?.path ? ` · ${String(item.evidence?.path)}` : ""}<p>{item.detail}</p></li>)}</ul>
+          <button type="button" disabled={recoveringEffects} onClick={() => void acknowledgeEffects()}>Continue with current state</button>
+          <button type="button" disabled={recoveringEffects} onClick={() => setRecoveryRun(null)}>Keep paused</button>
+        </section> : null}
         {deployHealthNotice && !runBusy ? (
           <Notice tone={deployHealthNotice.tone}>
             {deployHealthNotice.message}
@@ -1873,12 +1953,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               deployments={deployments}
               knowledgeEntries={knowledgeEntries}
               selectedKnowledgeIds={selectedKnowledgeIds}
-              memoryLocked={hasFixedMemory(conversation) || Boolean(pendingSubmit && pendingSubmit.conversation_id === conversation?.id)}
-              pinnedMemoryVersionIds={conversation?.memory_version_refs ?? []}
-              onToggleKnowledge={versionId => {
-                if (hasFixedMemory(conversation) && knowledgeEntries.some(entry => entry.kind === "memory" && entry.current_version_id === versionId)) return;
+              onToggleKnowledge={(versionId, replacedIds = []) => {
                 markSetupEdited("memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "knowledge_version_refs");
-                setSelectedKnowledgeIds(current => current.includes(versionId) ? current.filter(item => item !== versionId) : [...current, versionId]);
+                draftRevision.current += 1;
+                setSelectedKnowledgeIds(current => current.includes(versionId) ? current.filter(item => item !== versionId) : [...current.filter(item => !replacedIds.includes(item)), versionId]);
               }}
               tools={effectiveNextTurnTools(tools, workMode)}
               filesystemToolsAvailable={conversation?.filesystem_tools_available}
@@ -1897,14 +1975,18 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             /> : <p className="hint">Start a chat to rename, export, or delete it.</p> : null}
             {railPage === "files" || railPage === "library" ? <ChatDock
               page={railPage}
+              threadId={conversation?.thread_id ?? null}
+              previewEnabled={workMode === "work" && Boolean(selectedTools?.includes("start_preview"))}
+              fileRevision={String(conversation?.current_run?.events.filter(event => event.kind === "tool_result").length ?? 0)}
+              onUseMemoryVersion={useMemoryNextTurn}
               showPages={false}
               onPage={page => openRail(page)}
-              projectId={conversation?.project_id ?? projectId}
+              projectId={fileProjectId}
               runIds={conversation?.run_ids ?? []}
               currentRunId={conversation?.current_run_id}
               currentRunStatus={conversation?.current_run?.status}
               selectedPath={selectedPath}
-              onSelectPath={setSelectedPath}
+              onSelectPath={selectFile}
               conversationId={conversation?.id}
               projectPath={conversation?.project_path}
               onOpenKnowledge={() => navigateAway("knowledge")}
@@ -1931,6 +2013,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             profiles={profiles}
             disabled={selectionBusy || sending}
             onUpdated={applyConversationUpdate}
+            onOpenOwner={threadId => { const selected = conversations.find(item => item.thread_id === threadId); if (selected) selectConversation(selected); else void api.chatConversations().then(items => { const found = items.find(item => item.thread_id === threadId); if (found) selectConversation(found); }).catch(error => setMessage(errorMessage(error))); }}
             onError={setMessage}
           /> : null}
           <input ref={filePicker} className="sr-only" type="file" multiple aria-label="Choose files to attach" disabled={!hasModelChoice || sending || selectionBusy} onChange={event => { const files = Array.from(event.target.files ?? []); event.currentTarget.value = ""; if (files.length) void openAttachments(files); }} />
@@ -1950,6 +2033,10 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               }
             }}
           /></div> : null}
+          {selectedDocumentIds.length ? <details className="conversation-documents"><summary>{selectedDocumentIds.length} {selectedDocumentIds.length === 1 ? "file" : "files"} available for the next turn</summary><p className="hint">Searchable without an embedding model. Removing a file affects future messages; submitted turns keep their selection.</p><ul className="plain-list">{selectedDocumentIds.map(id => {
+            const asset = retainedAssets.records.find(item => item.id === id);
+            return <li key={id} className="actions"><span>{asset?.filename ?? "Selected file"}</span><button type="button" disabled={selectionBusy || sending} onClick={() => { draftRevision.current += 1; setDocumentAssetIds(selectedDocumentIds.filter(value => value !== id)); }}>Remove from next turn</button></li>;
+          })}</ul></details> : null}
           <label>
             <span className="sr-only">Message</span>
             <textarea
@@ -1974,7 +2061,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               <div className="menu-section chat-capability-group" role="group" aria-label="Chat capabilities">
                 <div className="chat-capability-summary"><Icon name="folder" size={16} /><span>Project files</span><small>{projectId || projectPath ? "Available" : "Choose a project"}</small></div>
                 <button type="button" className="menu-action" aria-pressed={tools.includes("execute")} onClick={() => toggleShell(!tools.includes("execute"))}><Icon name="terminal" size={16} />Shell <small>{tools.includes("execute") ? "On" : "Off"}</small></button>
-                {toolMenuOpen ? <VisualTestingControls conversationId={conversation?.id ?? null} threadId={interactionThreadId} browserEnabled={tools.some(name => browserToolNames.some(browserName => browserName === name))} desktopAccess={desktopAccess} workMode={workMode} focusSection={toolMenuFocus} focusNonce={toolMenuRequest} disabled={selectionBusy || sending || runBusy} canPrepareConversation={hasModelChoice} onReadinessChange={() => setReadinessEpoch(current => current + 1)} onPrepareConversation={async () => {
+                {toolMenuOpen ? <VisualTestingControls conversationId={conversation?.id ?? null} threadId={conversation?.thread_id ?? null} browserEnabled={tools.some(name => browserToolNames.some(browserName => browserName === name))} desktopAccess={desktopAccess} workMode={workMode} focusSection={toolMenuFocus} focusNonce={toolMenuRequest} disabled={selectionBusy || sending || runBusy} canPrepareConversation={hasModelChoice} onReadinessChange={() => setReadinessEpoch(current => current + 1)} onPrepareConversation={async () => {
                   if (!hasModelChoice) throw new Error("Choose a model before creating this chat.");
                   const created = await persistBeforeLeaving() ?? await createDraftConversation();
                   cacheConversation(created);
@@ -1993,7 +2080,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
                 <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button>
             </MenuPopover>
             {workMode === "plan" ? <button type="button" className="chat-plan-pill" aria-label="Turn off Plan mode" title="Turn off Plan mode" onClick={() => { markSetupEdited("work_mode"); setWorkMode("work"); }} disabled={selectionBusy || sending}><Icon name="close" size={12} /> Plan</button> : null}
-            <ChatModelControls bundles={bundles} deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
+            <ChatModelControls openRequest={modelMenuRequest} bundles={bundles} deployments={modelChoices} profiles={profiles} selectedDeploymentId={deploymentId} selectedConfigurationId={profileId || undefined} configuration={setupOverrides(chatConfiguration())} projectId={projectId} agentSetupVersionId={agentSetupVersionId} conversationId={conversation?.id} runtimeBusy={runBusy || Boolean(conversation?.queue?.length)} disabled={selectionBusy || sending} onReloaded={refresh} onApply={async configuration => {
               await chooseSetup(projectId, agentSetupVersionId, configuration, true, true);
             }} />
             <MenuPopover label="Main agent" trigger={<><Icon name="sparkles" size={16} /><span className="chat-agent-label">{selectedAgent?.name ?? (agentSetupVersionId ? "Saved agent" : "Default agent")}</span></>} disabled={selectionBusy || sending}>{close => <div className="chat-agent-options" role="group" aria-label="Main agent">

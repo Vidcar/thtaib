@@ -20,7 +20,7 @@ from workbench_backend.agents.schemas import (
     label_for_tool_mode,
 )
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
-from workbench_backend.errors import LabError
+from workbench_backend.errors import HarnessError, LabError
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.knowledge.schemas import KnowledgeRefs
@@ -130,6 +130,17 @@ class LabService:
         return read_text_files(Path(workspace.path))
 
     def capture(self, request: CaptureRequest) -> LabCase:
+        workspace = self.get_workspace(request.workspace_id)
+        try:
+            with self.harness.project_admission(workspace.path):
+                return self._capture_reserved(request)
+        except HarnessError as exc:
+            if exc.code != "project_busy":
+                raise
+            raise LabError("Capture requires a quiet project. Another task is running or its effects need review.",
+                code="not_quiescent", status_code=409) from exc
+
+    def _capture_reserved(self, request: CaptureRequest) -> LabCase:
         workspace = self.get_workspace(request.workspace_id)
         active = self.harness.active_workspace_run_ids(workspace.id)
         if active:

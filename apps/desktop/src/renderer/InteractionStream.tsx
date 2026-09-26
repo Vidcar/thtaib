@@ -110,7 +110,12 @@ export function useWorkbenchProjection(stream: WorkbenchStream): {
   incompleteMessageIds: Set<string>;
 } {
   const messages = useMessages(stream);
-  const toolCalls = useToolCalls(stream);
+  const assembledToolCalls = useToolCalls(stream);
+  // The SDK root pump includes depth-one tool events for helper discovery.
+  // This backend emits parent tools at root; tools:/task: branches belong only
+  // to their scoped helper transcript, just like the SDK's message projection.
+  const toolCalls = useMemo(() => assembledToolCalls.filter(call =>
+    !(call.namespace ?? []).some(part => part.startsWith("tools:") || part.startsWith("task:"))), [assembledToolCalls]);
   const incompleteKey = (stream.values.workbench?.incomplete_message_ids ?? []).join("\0");
   const incompleteMessageIds = useMemo(
     () => new Set(stream.values.workbench?.incomplete_message_ids ?? []),

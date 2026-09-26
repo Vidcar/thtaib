@@ -7,25 +7,18 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from deepagents.backends.protocol import FileUploadResponse
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.messages import AIMessage
-from langchain_core.vectorstores import InMemoryVectorStore
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import harness_scratch_root
 from workbench_backend.agents.retrieval import (
     SEARCH_KNOWLEDGE_TOOL_NAME,
-    TREAT_AS_DATA,
-    build_vector_store,
-    documents_from_knowledge,
-    make_search_knowledge_tool,
 )
 from workbench_backend.agents.schemas import AgentRun, ToolMode
 from workbench_backend.app import create_app
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import Deployment, DeploymentStatus, ManagementScope
-from workbench_backend.knowledge.schemas import KnowledgeVersion
 
 from tests.scripted_model import ScriptedChatModel
 from tests.support import close_workbench_sqlite, offline_workbench_client
@@ -48,54 +41,6 @@ def search_then_reply() -> list[AIMessage]:
         ),
         AIMessage(content="Used the retrieved knowledge paths."),
     ]
-
-
-class RetrievalUnitTests(unittest.TestCase):
-    def test_official_splitter_store_and_offload_paths(self) -> None:
-        version = KnowledgeVersion(
-            id="knv_mem",
-            entry_id="kn_mem",
-            scope="user",
-            kind="memory",
-            content=MEMORY_TOKEN,
-            provenance={"actor": "human"},
-            created_at=utc_now(),
-        )
-        documents = documents_from_knowledge([version])
-        self.assertEqual(len(documents), 1)
-        self.assertEqual(documents[0].metadata["source"], "knowledge:knv_mem")
-        store = build_vector_store(documents, DeterministicFakeEmbedding(size=32))
-        self.assertIsInstance(store, InMemoryVectorStore)
-        hits = store.similarity_search(MEMORY_TOKEN, k=2)
-        self.assertTrue(hits)
-
-        class _Backend:
-            def __init__(self) -> None:
-                self.files: dict[str, bytes] = {}
-
-            def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
-                uploaded: list[FileUploadResponse] = []
-                for path, content in files:
-                    self.files[path] = content
-                    uploaded.append(FileUploadResponse(path=path, error=None))
-                return uploaded
-
-        recorded: list[str] = []
-        backend = _Backend()
-        tool = make_search_knowledge_tool(
-            store,
-            backend,  # type: ignore[arg-type]
-            on_retrieved=recorded.extend,
-        )
-        result = tool.invoke({"query": MEMORY_TOKEN})
-        self.assertIn("/retrieved/", result)
-        self.assertTrue(backend.files)
-        path = next(iter(backend.files))
-        self.assertTrue(path.startswith("/retrieved/"))
-        text = backend.files[path].decode("utf-8")
-        self.assertIn("knowledge:knv_mem", text)
-        self.assertIn(TREAT_AS_DATA, text)
-        self.assertTrue(recorded)
 
 
 class RetrievalHarnessTests(unittest.TestCase):
@@ -219,7 +164,7 @@ class RetrievalHarnessTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["code"], "embedding_deployment_unloaded")
 
-    def test_empty_corpus_fails_closed(self) -> None:
+    def test_valid_embedder_without_document_corpus_stays_idle(self) -> None:
         response = self.client.post(
             "/v1/agent-runs",
             json={
@@ -228,8 +173,8 @@ class RetrievalHarnessTests(unittest.TestCase):
                 "embedding_deployment_id": self.embed_deployment_id,
             },
         )
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["code"], "retrieval_corpus_empty")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn(SEARCH_KNOWLEDGE_TOOL_NAME, response.json()["presented_tools"])
 
     def test_live_search_writes_retrieved_under_scratch_not_project(self) -> None:
         memory = self._knowledge()
@@ -303,7 +248,7 @@ class RetrievalHarnessTests(unittest.TestCase):
         self.assertIn("recorded-tool replay", " ".join(body["effective_setup"]["gaps"]))
         self.assertFalse(any(self.manager.paths.state.joinpath("harness").rglob("chunk_*.md")))
 
-    def test_retrieval_keeps_conversation_memory_fixed_and_uses_new_chat_selection(self) -> None:
+    def test_retrieval_excludes_native_memory_and_allows_explicit_next_turn_versions(self) -> None:
         memory = self._knowledge('RETRIEVAL-ORIGINAL-PRIVATE-417')
         original = memory['current_version_id']
         project = self.root / 'selected-retrieval-project'
@@ -342,31 +287,24 @@ class RetrievalHarnessTests(unittest.TestCase):
         updated = changed.json()['current_version_id']
         first, first_files = search(chat)
         self.assertEqual({source.split(':/retrieved/', 1)[0] for source in first['retrieved_material']},
-                         {'project:allowed.txt', f'knowledge:{original}'})
-        self.assertIn('RETRIEVAL-ORIGINAL-PRIVATE-417', '\n'.join(path.read_text(encoding='utf-8') for path in first_files))
-
-        rejected = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
-            'task': 'Change memory in this chat.', 'memory_version_refs': [updated],
-            'presented_tools': [SEARCH_KNOWLEDGE_TOOL_NAME],
-        })
-        self.assertEqual(rejected.status_code, 409, rejected.text)
-        self.assertEqual(rejected.json()['code'], 'memory_selection_locked')
-        self.assertIn('Start a new chat', rejected.text)
-
-        second, second_files = search(chat)
+                         {'project:allowed.txt'})
+        self.assertNotIn('RETRIEVAL-ORIGINAL-PRIVATE-417', '\n'.join(path.read_text(encoding='utf-8') for path in first_files))
+        self.assertEqual(first['memory_version_refs'], [original])
+        second, second_files = search(chat, [updated])
         self.assertEqual({source.split(':/retrieved/', 1)[0] for source in second['retrieved_material']},
-                         {'project:allowed.txt', f'knowledge:{original}'})
+                         {'project:allowed.txt'})
+        self.assertEqual(second['memory_version_refs'], [updated])
         self.assertTrue(second_files - first_files)
         second_text = '\n'.join(path.read_text(encoding='utf-8') for path in second_files - first_files)
-        self.assertIn('RETRIEVAL-ORIGINAL-PRIVATE-417', second_text)
+        self.assertNotIn('RETRIEVAL-ORIGINAL-PRIVATE-417', second_text)
         self.assertNotIn('RETRIEVAL-UPDATED-PRIVATE-563', second_text)
 
         updated_chat = create_chat([updated])
         updated_run, updated_files = search(updated_chat)
         self.assertEqual({source.split(':/retrieved/', 1)[0] for source in updated_run['retrieved_material']},
-                         {'project:allowed.txt', f'knowledge:{updated}'})
+                         {'project:allowed.txt'})
         updated_text = '\n'.join(path.read_text(encoding='utf-8') for path in updated_files)
-        self.assertIn('RETRIEVAL-UPDATED-PRIVATE-563', updated_text)
+        self.assertNotIn('RETRIEVAL-UPDATED-PRIVATE-563', updated_text)
         self.assertNotIn('RETRIEVAL-ORIGINAL-PRIVATE-417', updated_text)
 
         project_only_chat = create_chat([])

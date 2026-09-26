@@ -71,6 +71,7 @@ class ChatStartRequest(BaseModel):
     draft_revision: int | None = Field(default=None, ge=0)
     content_blocks: list[UserContentBlock] | None = Field(default=None, max_length=32)
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
+    document_asset_ids: list[str] | None = Field(default=None, max_length=32)
     output_schema: OutputSchemaRequest | None = None
     deployment_id: str | None = None
     project_id: str | None = None
@@ -150,6 +151,7 @@ class ChatQueueItem(BaseModel):
     id: str
     task: str
     run_id: str | None = None
+    admission_order: int = 0
     input_message_id: str | None = None
     content_blocks: list[dict[str, Any]] | None = None
     attachment_ids: list[str] = Field(default_factory=list, max_length=32)
@@ -157,6 +159,11 @@ class ChatQueueItem(BaseModel):
     intended_config: dict[str, Any] = Field(default_factory=dict)
     frozen_config: dict[str, Any] | None = None
     status: Literal["queued", "dispatching", "paused"] = "queued"
+    wait_reason: Literal["project_busy", "project_uncertain", "project_order"] | None = None
+    waiting_run_id: str | None = None
+    waiting_thread_id: str | None = None
+    waiting_owner_title: str | None = None
+    queue_position: int | None = None
     pause_reason: Literal["failed", "cancelled", "dispatch_uncertain"] | None = None
     pause_error_code: str | None = None
     pause_error: str | None = None
@@ -272,6 +279,7 @@ class ChatConversation(BaseModel):
     protected_instruction_version_refs: list[str] = Field(default_factory=list)
     embedding_deployment_id: str | None = None
     retrieval_project_paths: list[str] = Field(default_factory=list)
+    document_asset_ids: list[str] = Field(default_factory=list, max_length=32)
     draft: ChatDraft | None = None
     queue: list[ChatQueueItem] = Field(default_factory=list)
     created_at: str

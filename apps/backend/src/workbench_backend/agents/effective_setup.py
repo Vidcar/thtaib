@@ -89,8 +89,10 @@ class EffectiveSetup(BaseModel):
     knowledge_binding: str = "none"
     note: str = (
         "Selected ids are not proof of loaded content or applied bags. "
-        "Inspect this record and the outbound request. Retrieval is presented "
-        "only when embedding_deployment_id resolved to a loaded embedding endpoint."
+        "Inspect this record and the outbound request. Document search is presented "
+        "when selected tools and authorized document sources permit it. Without an "
+        "embedding model it uses local text search; a selected embedding model must "
+        "be loaded, and its temporary index is built only when searched."
     )
 
 

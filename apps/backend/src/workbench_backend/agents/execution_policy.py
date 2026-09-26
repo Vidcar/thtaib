@@ -36,6 +36,11 @@ class ExecutionControl:
     def require_dispatch(self, run: Any) -> None:
         if self.root.status in {"cancel_requested", "cancelled"} or run.status in {"cancel_requested", "cancelled"}:
             raise HarnessError("This run is stopping; no further model or tool call was dispatched.", code="run_cancelling", status_code=409)
+        with self._lock:
+            if any(item.outcome == "uncertain" and not item.evidence.get("acknowledged_at")
+                   for item in self.root.tool_outcomes.values()):
+                raise HarnessError("An action has unconfirmed effects. Inspect and acknowledge it before continuing; it will not be repeated automatically.",
+                    code="effects_unconfirmed", status_code=409)
 
     def reserve_tool(self, run: Any, call_id: str) -> None:
         with self._lock:
@@ -81,3 +86,10 @@ class ExecutionControl:
     def model_lock(self, deployment_id: str) -> asyncio.Lock:
         # All owned graphs execute on the shared checkpoint loop.
         return self._model_locks.setdefault(deployment_id, asyncio.Lock())
+
+    def record_tool_outcome(self, run, outcome) -> None:
+        with self._lock:
+            run.tool_outcomes[outcome.call_id] = outcome
+            if run is not self.root:
+                self.root.tool_outcomes[f"{run.id}:{outcome.call_id}"] = outcome
+            self.publish()

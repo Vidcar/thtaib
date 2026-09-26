@@ -87,7 +87,7 @@ class AgentEvent(BaseModel):
 
 
 class ModelRequestCapture(BaseModel):
-    purpose: Literal["work", "review"] = "work"
+    purpose: Literal["work", "summary", "review", "probe"] = "work"
     at: str
     request_prepared: bool = True
     transport_attempted: bool = False
@@ -239,9 +239,12 @@ class AgentStartRequest(BaseModel):
 
 
 class GenerationObservation(BaseModel):
+    purpose: Literal["work", "summary", "review", "probe"] = "work"
     request_id: str | None = None
     phase: Literal["prompt_processing", "generating", "completed", "interrupted"] = "completed"
     input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    processed_input_tokens: int | None = None
     output_tokens: int | None = None
     context_limit: int | None = None
     context_used_tokens: int | None = None
@@ -250,6 +253,26 @@ class GenerationObservation(BaseModel):
     measured_at: str
     basis: Literal["reported_tokens_model_call_wall_time", "llama_cpp_timings"] = "reported_tokens_model_call_wall_time"
     interval: Literal["last_completed_model_call_including_prompt_processing", "current_model_call_generation", "last_model_call_generation"] = "last_completed_model_call_including_prompt_processing"
+
+
+class ToolOutcome(BaseModel):
+    call_id: str
+    name: str
+    outcome: Literal["incomplete_arguments", "not_dispatched", "running", "succeeded", "failed", "uncertain"]
+    failure_category: Literal["input", "permission", "tool", "runtime", "cancelled"] | None = None
+    recovery_action: Literal["none", "continue", "inspect_effects", "ask"] = "none"
+    detail: str | None = None
+    result: Any = None
+    result_metadata: dict[str, Any] = Field(default_factory=dict)
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    updated_at: str
+
+
+class RunFailure(BaseModel):
+    category: Literal["input", "tool", "runtime", "cancelled", "capacity", "setup", "persistence", "uncertain_effects"]
+    code: str
+    message: str
+    recovery_action: Literal["continue", "inspect_effects", "change_limit", "correct_setup", "ask"]
 
 
 class AgentRun(BaseModel):
@@ -282,6 +305,8 @@ class AgentRun(BaseModel):
     dispatched_tool_calls: int = 0
     dispatched_tool_ids: list[str] = Field(default_factory=list)
     completed_tool_ids: list[str] = Field(default_factory=list)
+    tool_outcomes: dict[str, ToolOutcome] = Field(default_factory=dict)
+    failure: RunFailure | None = None
     tool_authorizations: dict[str, str] = Field(default_factory=dict)
     tool_authorization_grants: dict[str, MatchedPermissionGrant] = Field(default_factory=dict)
     framework_read_paths: list[str] = Field(default_factory=list)
@@ -297,7 +322,11 @@ class AgentRun(BaseModel):
     structured_output: StructuredOutputResult | None = None
     context_observation: ContextObservation | None = None
     generation_observation: GenerationObservation | None = None
+    housekeeping_context: dict[str, ContextObservation] = Field(default_factory=dict)
+    housekeeping_generation: dict[str, GenerationObservation] = Field(default_factory=dict)
+    project_outline: dict[str, Any] | None = None
     finalization_phase: Literal["saving_changes"] | None = None
+    activity_phase: Literal["thinking", "using_tools", "summarizing"] | None = None
     settled_status: Literal["completed", "failed", "cancelled"] | None = None
     settled_stop_reason: str | None = None
     stop_reason: str | None = None

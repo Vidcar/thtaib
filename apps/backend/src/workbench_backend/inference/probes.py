@@ -176,9 +176,9 @@ def _exercise(model: Any, capability: str, record: CapabilityEvidence) -> None:
         record.observations = {"answer": str(result.content)[:2048], "separate_reasoning_returned": bool(reasoning), "reasoning_characters": len(str(reasoning)) if reasoning else 0}
         record.status = "passed" if reasoning else "inconclusive"
         if capability == "reasoning_replay":
-            if not reasoning or not getattr(model, "_reasoning_replay_supported", False):
+            if not reasoning or getattr(model, "_reasoning_replay_scope", "none") != "full_history":
                 record.status = "inconclusive"
-                record.note = "Replay needs returned reasoning and the selected template's preserve-reasoning setting."
+                record.note = "This cross-turn replay probe needs returned reasoning and full-history preservation enabled; current-turn tool-cycle replay is separate."
             else:
                 replayed = model.invoke([HumanMessage(content=prompt), result, HumanMessage(content="Repeat only the final number from the previous answer.")])
                 record.observations.update({"replay_answer": str(replayed.content)[:2048], "supported_reasoning_representation_sent": True})

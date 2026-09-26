@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from workbench_backend.knowledge.costs import content_token_estimate, TOKEN_ESTIMATE_METHOD
 
 KnowledgeScope = Literal["user", "agent", "project"]
 KnowledgeKind = Literal["memory", "skill", "protected_instruction"]
@@ -102,6 +104,16 @@ class KnowledgeVersion(BaseModel):
     reverted_from_version_id: str | None = None
     created_at: str
 
+    @computed_field
+    @property
+    def estimated_content_tokens(self) -> int:
+        return content_token_estimate(self.content)
+
+    @computed_field
+    @property
+    def token_counting_method(self) -> str:
+        return TOKEN_ESTIMATE_METHOD
+
 
 class KnowledgeEntry(BaseModel):
     id: str
@@ -126,6 +138,16 @@ class KnowledgeEntryView(KnowledgeEntry):
     version_created_at: str
     scope_bound: bool = True
     scope_label: str | None = None
+
+    @computed_field
+    @property
+    def estimated_content_tokens(self) -> int:
+        return content_token_estimate(self.content)
+
+    @computed_field
+    @property
+    def token_counting_method(self) -> str:
+        return TOKEN_ESTIMATE_METHOD
 
 
 class KnowledgeCreateRequest(BaseModel):

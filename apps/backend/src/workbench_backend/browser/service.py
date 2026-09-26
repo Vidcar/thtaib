@@ -52,7 +52,7 @@ _CONSENT_DIALOG = re.compile(
 _BLOCKED_PAGE = re.compile(r"unusual traffic|captcha|rate-limit|google\.com/sorry|/sorry/index", re.IGNORECASE)
 _PAGE_LINE = ("heading ", "link ", "button ", "Page URL", "Page Title")
 _TOOL_GUIDANCE = {
-    "browser_navigate": " Returns the page address, title, and the headings and links to cite.",
+    "browser_navigate": " Requires an HTTP(S) URL without embedded credentials; file:// and host file paths are not accepted. For project HTML, call start_preview with entry_path, then navigate to its exact loopback URL. Returns the page address, title, and headings and links to cite.",
     "browser_snapshot": " Use this to read and cite what the page says.",
     "browser_find": " Use this to locate one element on a large page.",
     "browser_take_screenshot": " Use this to look at the page and show the person. Read headlines from the page structure, not from the picture.",
@@ -66,8 +66,12 @@ def _safe_thread(thread_id: str | None) -> str:
 
 
 def _allowed_url(value: str) -> bool:
-    parsed = urlsplit(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+            and not parsed.username and not parsed.password and (parsed.port is None or 0 < parsed.port <= 65535))
+    except ValueError:
+        return False
 
 
 def _without_filename(tool: BaseTool) -> dict[str, Any]:
@@ -395,6 +399,7 @@ class BrowserSessionService:
             "coroutine": invoke,
             "description": f"Isolated test browser: {original.description}{_TOOL_GUIDANCE.get(name, '')}",
             "metadata": {**(original.metadata or {}), "browser_worker": True, "browser_read_only": name in BROWSER_READ_TOOLS},
+            "handle_tool_error": True,
         })
 
     @staticmethod

@@ -732,6 +732,48 @@ class AdapterTests(unittest.TestCase):
             replayed = "reasoning_content" in _RecordingHandler.requests[0]["body"]["messages"][0]
             self.assertIs(replayed, expected, startup)
 
+    def test_reasoning_history_drop_keeps_current_tool_cycle_and_counts_real_wire(self) -> None:
+        from workbench_backend.agents.context import estimate_payload, token_counter_for_model
+        from workbench_backend.inference.request_projection import TOOL_CONTEXT_MARKER
+        props = ServerProperties(fetched=utc_now(), source_url=f"{self.endpoint}/props", model_alias="reasoning-model",
+            chat_template="{% if preserve_thinking is undefined or preserve_thinking is true or loop.index0 > ns.last_query_index %}{{ message.reasoning_content }}{% endif %}",
+            chat_template_caps={"supports_preserve_reasoning": True})
+        messages = [HumanMessage(content="Previous task"),
+            AIMessage(content="Previous answer", additional_kwargs={"reasoning_content": "old-turn-reasoning"}),
+            HumanMessage(content="Current task"),
+            AIMessage(content="", additional_kwargs={"reasoning_content": "current-step-one"},
+                tool_calls=[{"id": "one", "name": "echo", "args": {"text": "one"}}]),
+            ToolMessage(content="one", tool_call_id="one"),
+            AIMessage(content="", additional_kwargs={"reasoning_content": "current-step-two"},
+                tool_calls=[{"id": "two", "name": "echo", "args": {"text": "two"}}]),
+            ToolMessage(content="two", tool_call_id="two"),
+        ]
+        original = [message.model_dump() for message in messages]
+        for support, keep, thinking in ((True, False, "on"), (True, True, "on"), (False, True, "on"), (True, False, "off")):
+            with self.subTest(support=support, keep=keep, thinking=thinking):
+                _RecordingHandler.requests.clear()
+                actual_props = props.model_copy(update={"chat_template_caps": {"supports_preserve_reasoning": support}})
+                model = chat_model_for_deployment(self._deployment(server_props=actual_props,
+                    applied_startup={"reasoning_preserve": keep}), per_request=resolve_bags(per_request={"reasoning": thinking}).per_request)
+                try:
+                    projected = model.project_context_payload(messages)
+                    counter = token_counter_for_model(model)(messages)
+                    model.invoke(messages)
+                    wire = _RecordingHandler.requests[-1]["body"]
+                    self.assertEqual(wire["messages"], projected["messages"])
+                    self.assertEqual(counter, estimate_payload(projected))
+                    self.assertEqual("reasoning_content" in wire["messages"][1], support and keep)
+                    for index, reasoning in ((3, "current-step-one"), (5, "current-step-two")):
+                        self.assertEqual(wire["messages"][index].get("reasoning_content"), reasoning if support else None)
+                    self.assertEqual(wire["chat_template_kwargs"]["enable_thinking"], thinking == "on")
+                    augmented = model.project_context_payload([*messages,
+                        HumanMessage(content="Image from the last tool call", additional_kwargs={TOOL_CONTEXT_MARKER: True})])
+                    self.assertEqual(augmented["messages"][5].get("reasoning_content"), "current-step-two" if support else None,
+                        "Application tool-image context must not be mistaken for a new user turn")
+                finally:
+                    model.close()
+        self.assertEqual([message.model_dump() for message in messages], original)
+
     def test_reasoning_replay_unknown_template_default_is_conservative(self) -> None:
         props = ServerProperties(
             fetched=utc_now(), source_url=f"{self.endpoint}/props", model_alias="reasoning-model",

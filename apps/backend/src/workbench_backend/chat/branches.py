@@ -105,6 +105,7 @@ class ChatBranches:
             branch.deployment_id = run.deployment_id
             branch.profile_id = run.profile_id
             branch.memory_version_refs = list(run.memory_version_refs)
+            branch.document_asset_ids = list(run.retained_asset_ids)
             branch.skill_version_refs = list(run.skill_version_refs)
             branch.protected_instruction_version_refs = list(run.protected_instruction_version_refs)
             branch.embedding_deployment_id = run.embedding_deployment_id
@@ -138,6 +139,13 @@ class ChatBranches:
                     restore_snapshot_tree(Path(manifest.tree_path), destination, included_files=manifest.included_files)
                     chat.lab.store.put_workspace(workspace)
                 saved = chat.store.put(branch)
+                # A branch inherits only documents available to its selected
+                # source turn; a new session id alone grants no source access.
+                inherited_assets = dict.fromkeys([*branch.document_asset_ids,
+                    *(asset_id for message in branch.transcript for asset_id in message.attachment_ids)])
+                for asset_id in inherited_assets:
+                    chat.assets._load_content(asset_id, session_id=conversation.id, project_path=conversation.project_path)
+                    chat.assets.store.add_consumer(asset_id, kind="session", consumer_id=branch.id, recorded_at=utc_now())
                 if request.mode == "regenerate":
                     accepted = self._find_existing_regeneration_run(run.id, branch.thread_id)
                     if accepted is None:
@@ -328,6 +336,7 @@ def clone_terminal_checkpoint(
 def _delete_branch_conversation(chat: object, conversation_id: str) -> None:
     app_store = chat.app_store
     with app_store._lock:
+        app_store._conn.execute("DELETE FROM retained_asset_consumers WHERE consumer_kind = 'session' AND consumer_id = ?", (conversation_id,))
         app_store._conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
         app_store._conn.commit()
 

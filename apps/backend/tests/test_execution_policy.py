@@ -140,6 +140,32 @@ class ExecutionPolicyTests(unittest.TestCase):
             middleware.wrap_tool_call(request('echo'), lambda _: effects.append('twice'))
         self.assertEqual(effects, ['once'])
 
+    def test_uncertain_result_blocks_new_dispatch_but_allows_inflight_sibling_to_settle(self):
+        run = run_fixture(project_path=".", approval_mode="full_access")
+        run.presented_tools = ["execute", "echo"]
+        middleware = WorkbenchHarnessMiddleware(run)
+        entered, release = threading.Event(), threading.Event()
+        def sibling(_):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("Sibling was not released")
+            return ToolMessage(content="Already dispatched result", tool_call_id="sibling", name="echo")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(middleware.wrap_tool_call, request("echo", ident="sibling"), sibling)
+            try:
+                self.assertTrue(entered.wait(5))
+                middleware.wrap_tool_call(request("execute", ident="interrupted"),
+                    lambda _: ToolMessage(content="Stopped after partial work", tool_call_id="interrupted", name="execute", artifact={"exit_code": 124}))
+                with self.assertRaises(Exception) as caught:
+                    middleware.wrap_tool_call(request("echo", ident="new"), lambda _: self.fail("New work must not dispatch"))
+                self.assertEqual(caught.exception.code, "effects_unconfirmed")
+            finally:
+                release.set()
+            self.assertEqual(future.result(5).content, "Already dispatched result")
+        self.assertEqual(run.tool_outcomes["sibling"].outcome, "succeeded")
+        self.assertEqual(run.tool_outcomes["interrupted"].outcome, "uncertain")
+        self.assertEqual(run.dispatched_tool_calls, 2)
+
     def test_full_access_skips_selected_file_approval_but_questions_remain(self):
         gates = interrupt_on_for_run(run_fixture(project_path=".", approval_mode="full_access"))
         for name in ("write_file", "edit_file"):

@@ -251,6 +251,30 @@ Use one existing Deep Agents context/summarisation path; both normal and summari
 - **WHEN** a user selects a known-incompatible model for retained messages or media
 - **THEN** dispatch is blocked with the specific constraint; unknown capability remains labelled unknown.
 
+Accounting SHALL use the same outbound representation as dispatch and count each reasoning, content, tool argument and schema once. Native reduction SHALL run before rejecting reducible history. Work and summarization measurements SHALL remain separately attributable, including the evidence responsible for an overflow.
+
+Reasoning replay capability SHALL be distinct from preservation of earlier user turns. A replay-capable template with history preservation disabled SHALL still receive the current tool cycle's reasoning. Explicit full-history preservation SHALL retain earlier reasoning; unsupported replay SHALL send none. Thinking generation on/off SHALL remain a separate setting. The same pure projection SHALL supply transport, preflight and compaction counting without changing checkpoints or the selected runtime settings. Application-supplied tool images SHALL remain tool-response context rather than becoming a new user-query boundary in templates that distinguish that boundary.
+
+#### Scenario: History preservation disabled during a tool cycle
+- **WHEN** a replay-capable model has completed an earlier user turn and is continuing the current turn after tools return
+- **THEN** current-cycle reasoning SHALL remain in the outbound request and earlier-turn reasoning SHALL follow the selected native history policy
+- **AND** tool-image projection SHALL preserve that distinction, while estimates SHALL count exactly the transmitted representation once.
+
+#### Scenario: Thinking generation switched off
+- **WHEN** the user disables new thinking generation on a replay-capable setup
+- **THEN** that setting SHALL NOT erase reasoning needed to continue the current tool cycle or silently change its history-preservation policy.
+
+
+The product SHALL offer explicit Balanced (medium effort, 2048 thinking tokens, 8192 total output tokens) and Deep (extra-high effort, 8192 thinking tokens, 16384 total output tokens) presets separate from publisher recipes. Balanced SHALL seed ordinary new Chat use. Unsupported independent thinking limits SHALL be labelled as response-limit-only; startup settings and saved publisher recipes SHALL remain distinct.
+
+#### Scenario: Duplicate reasoning representation
+- **WHEN** one reasoning string exists in both native content and additional metadata
+- **THEN** context accounting SHALL count only the outbound representation and SHALL NOT trigger compaction due to duplicate storage.
+
+#### Scenario: Response limit interrupts tool input
+- **WHEN** generation reaches its configured limit during tool arguments
+- **THEN** partial arguments SHALL remain inert and the chat SHALL offer an actionable continuation instead of becoming permanently blocked.
+
 ### Requirement: MOD-018 - Bound diagnostics and clean up only owned requests
 
 Bounded redacted evidence SHALL link transmitted requests and wire outcomes to converted messages/chunks, errors, partial output and retries without buffering the full stream before delivery. Credentials and embedded media MUST NOT be indiscriminately persisted. HTTP errors, timeouts, invalid responses and interrupted streams remain failures, not completion; partial delivery MUST NOT silently restart. Sync/async clients SHALL have explicit ownership, timeouts and cleanup. Cancellation stops further application work and owned resources, not a shared deployment or caller-owned client; runtime termination remains separately confirmed or unknown. Transport deadlines are not user task budgets.
@@ -284,7 +308,14 @@ Model controls SHALL show the effective value and source when configuration, ser
 
 ### Requirement: MOD-022 - Apply managed configuration changes safely
 
-Idle managed configurations SHALL support validated reconfiguration with expected-version and retained-history compatibility checks. Editing a loaded configuration SHALL preserve its current launch snapshot until an explicit safe reload; active, queued, waiting, cancelling, Lab and helper consumers SHALL block a disruptive configuration change with named reasons. Capacity-driven eviction of an idle model instance MAY occur between calls, including during an alternate-model helper handoff, provided no in-flight inference request is interrupted and the next call can reload its exact selected configuration. Automatic child ports SHALL be allocated and checked at launch; fixed-port conflicts fail before spawn. Ownership and observed readiness SHALL precede committing loaded values. Failure SHALL preserve prior and attempted configurations, attempt at most one safe restoration and report truthful stopped/failed state; restart SHALL reconcile interrupted changes. Connected endpoints SHALL not grant reload authority.
+Idle managed configurations SHALL support validated reconfiguration with expected-version and retained-history compatibility checks. Startup edits SHALL preserve the current launch snapshot until an explicit safe reload; active, queued, waiting, cancelling, Lab and helper consumers SHALL block a configuration binding change with named reasons. An explicit response-only configuration switch MAY update the existing deployment binding without reloading only when the selected configuration and requested operation match its frozen launch identity, the owned process still matches and fresh runtime observations confirm health. Automatic listen ports SHALL use the established configuration identity normalization; the actual frozen startup and process identity SHALL remain unchanged. Saved publisher recipes SHALL not be repurposed as product presets.
+
+Capacity-driven eviction of an idle model instance MAY occur between calls, including during an alternate-model helper handoff, provided no in-flight inference request is interrupted and the next call can reload its exact selected configuration. Automatic child ports SHALL be allocated and checked at launch; fixed-port conflicts fail before spawn. Ownership and observed readiness SHALL precede committing loaded values. Failure SHALL preserve prior and attempted configurations, attempt at most one safe restoration and report truthful stopped/failed state; restart SHALL reconcile interrupted changes. Connected endpoints SHALL not grant reload authority.
+
+#### Scenario: Response-only Balanced selection
+- **WHEN** an idle healthy owned model selects a separate saved Balanced configuration with the same frozen launch identity
+- **THEN** the same deployment and process SHALL use that configuration's response values for the next request without stop or start
+- **AND** actual startup, model files, publisher recipe configuration and its provenance SHALL remain unchanged.
 
 #### Scenario: Idle conversation context change
 - **WHEN** an idle conversation applies a valid context change

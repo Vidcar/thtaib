@@ -2,18 +2,38 @@
 
 from __future__ import annotations
 
+import contextvars
+from contextlib import contextmanager
 import logging
 import math
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from workbench_backend.inference.ids import utc_now
 
 
 _logger = logging.getLogger(__name__)
+RequestPurpose = Literal["work", "summary", "review", "probe"]
+_request_purpose: contextvars.ContextVar[RequestPurpose] = contextvars.ContextVar("inference_request_purpose", default="work")
+
+
+def current_request_purpose() -> RequestPurpose:
+    return _request_purpose.get()
+
+
+@contextmanager
+def request_purpose(purpose: RequestPurpose):
+    """Attribute framework-internal calls without changing model settings."""
+    if purpose not in {"work", "summary", "review", "probe"}:
+        raise ValueError("Unknown model request purpose")
+    token = _request_purpose.set(purpose)
+    try:
+        yield
+    finally:
+        _request_purpose.reset(token)
 
 
 class LatestGenerationPublisher:
@@ -28,9 +48,9 @@ class LatestGenerationPublisher:
         self._callback = callback
         self._condition = threading.Condition()
         self._latest: dict[str, Any] | None = None
-        self._request_id: str | None = None
-        self._pending_reset: dict[str, Any] | None = None
-        self._pending_sample: dict[str, Any] | None = None
+        self._latest_by_purpose: dict[str, dict[str, Any]] = {}
+        self._request_ids: dict[str, str | None] = {}
+        self._pending: dict[tuple[str, str], dict[str, Any]] = {}
         self._publishing = False
         self._closed = False
         self._publication_disabled = False
@@ -39,65 +59,66 @@ class LatestGenerationPublisher:
     def publish(self, sample: dict[str, Any]) -> None:
         recorded = dict(sample)
         request_id = recorded.get("request_id")
+        purpose = recorded.get("purpose", "work")
         with self._condition:
             if self._closed:
                 return
             if recorded.get("reset"):
-                self._request_id = request_id
+                self._request_ids[purpose] = request_id
                 if not self._publication_disabled:
-                    self._pending_reset = recorded
-                    self._pending_sample = None
-            elif request_id == self._request_id:
+                    self._pending[(purpose, "reset")] = recorded
+                    self._pending.pop((purpose, "sample"), None)
+            elif request_id == self._request_ids.get(purpose):
                 if not self._publication_disabled:
-                    self._pending_sample = recorded
+                    self._pending[(purpose, "sample")] = recorded
             else:
                 return
             self._latest = recorded
+            self._latest_by_purpose[purpose] = recorded
             if self._worker is None and not self._publication_disabled:
                 self._worker = threading.Thread(target=self._drain, name="generation-measurements", daemon=True)
                 try:
                     self._worker.start()
                 except Exception:  # noqa: BLE001 - preserve the sample if publishing cannot start
                     self._publication_disabled = True
-                    self._pending_reset = None
-                    self._pending_sample = None
+                    self._pending.clear()
                     self._worker = None
             self._condition.notify()
 
-    def latest_sample(self) -> dict[str, Any] | None:
+    def latest_sample(self, purpose: str | None = None) -> dict[str, Any] | None:
         with self._condition:
-            return dict(self._latest) if self._latest is not None else None
+            latest = self._latest if purpose is None else self._latest_by_purpose.get(purpose)
+            return dict(latest) if latest is not None else None
+
+    def latest_samples(self) -> dict[str, dict[str, Any]]:
+        with self._condition:
+            return {purpose: dict(sample) for purpose, sample in self._latest_by_purpose.items()}
 
     def wait_idle(self, timeout: float) -> bool:
         """Wait for a test or diagnostic, never from the generation path."""
         with self._condition:
             return self._condition.wait_for(
-                lambda: not self._publishing and self._pending_reset is None and self._pending_sample is None,
+                lambda: not self._publishing and not self._pending,
                 timeout=timeout,
             )
 
     def close(self) -> None:
         with self._condition:
             self._closed = True
-            self._pending_reset = None
-            self._pending_sample = None
+            self._pending.clear()
             self._condition.notify_all()
 
     def _drain(self) -> None:
         reported_error = False
         while True:
             with self._condition:
-                while not self._closed and self._pending_reset is None and self._pending_sample is None:
+                while not self._closed and not self._pending:
                     self._condition.wait()
                 if self._closed:
                     self._condition.notify_all()
                     return
-                if self._pending_reset is not None:
-                    sample = self._pending_reset
-                    self._pending_reset = None
-                else:
-                    sample = self._pending_sample
-                    self._pending_sample = None
+                key = next(iter(self._pending))
+                sample = self._pending.pop(key)
                 self._publishing = True
             try:
                 # An in-flight callback can become stale while a newer request
@@ -125,12 +146,13 @@ class RequestTelemetry:
 
     def __init__(self, observer: Callable[[dict[str, Any]], None]) -> None:
         self.observer = observer
+        self.purpose = current_request_purpose()
         self.request_id = uuid4().hex
         self.response_id: str | None = None
         self.latest: dict[str, Any] | None = None
         self.last_emitted = 0.0
         self.last_phase: str | None = None
-        observer({"request_id": self.request_id, "reset": True})
+        observer({"request_id": self.request_id, "purpose": self.purpose, "reset": True})
 
     def receive(self, response: dict[str, Any]) -> None:
         response_id = response.get("id")
@@ -148,8 +170,8 @@ class RequestTelemetry:
             return
         phase = "generating" if output > 0 else "prompt_processing"
         input_tokens = _count(progress.get("total")) if isinstance(progress, dict) else None
+        cached, processed = _count(timings.get("cache_n")), _count(timings.get("prompt_n"))
         if input_tokens is None and output > 0:
-            cached, processed = _count(timings.get("cache_n")), _count(timings.get("prompt_n"))
             if cached is not None and processed is not None:
                 input_tokens = cached + processed
         usage = response.get("usage")
@@ -164,6 +186,9 @@ class RequestTelemetry:
             return
         self.latest = {
             "request_id": self.request_id,
+            "purpose": self.purpose,
+            "cached_input_tokens": cached,
+            "processed_input_tokens": processed,
             "phase": phase,
             "input_tokens": input_tokens,
             "output_tokens": output,

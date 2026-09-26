@@ -111,7 +111,7 @@ Choosing a file identity line opens the Files page on that file when available. 
 
 - **WHEN** an edit has started and its result is not yet available
 - **THEN** the line shows that the file is being edited
-- **AND** a stopped call is labelled as partial input, without an invented result or line count.
+- **AND** only genuinely incomplete arguments are labelled as partial input; complete calls show undispatched, failed or uncertain outcome according to available evidence, without an invented result or line count.
 
 #### Scenario: Failed todo does not wipe the list
 
@@ -141,3 +141,10 @@ Choosing a file identity line opens the Files page on that file when available. 
 - **WHEN** a person opens a finished shell line
 - **THEN** the command and its output are the first content
 - **AND** the internal tool name and the raw arguments stay behind a further disclosure.
+
+The original durable parent-turn error SHALL remain visible after reopening, with its category and relevant recovery action. Review setup SHALL be offered only for setup problems. Known recoverable tool errors SHALL be returned to the agent for correction; uncertain effects SHALL be inspected before continuation.
+
+#### Scenario: Parallel batch partially succeeds
+- **WHEN** two file writes succeed and four fail
+- **THEN** the two confirmed results SHALL remain successful and the four failures SHALL show their original causes
+- **AND** the chat SHALL stay usable without relabelling all six calls as unfinished input.

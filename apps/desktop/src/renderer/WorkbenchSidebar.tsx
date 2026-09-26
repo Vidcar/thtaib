@@ -324,8 +324,8 @@ export function WorkbenchSidebar(props: {
         {listError ? <p className="hint">{listError}</p> : null}
         {searchMiss ? <p className="hint">No matching conversations</p> : null}
         <div className="chat-groups">
-          {[...projectFolders, ...orphans].map(folder => {
-            const open = !closedFolders.has(folder.key);
+          {[...projectFolders, ...orphans].filter(folder => !searching || folder.items.length > 0).map(folder => {
+            const open = searching || !closedFolders.has(folder.key);
             const project = folder.project;
             return (
               <section key={folder.key} className="chat-group">
@@ -340,12 +340,12 @@ export function WorkbenchSidebar(props: {
               </section>
             );
           })}
-          {!searchMiss && projectsLoaded && !projectFolders.length && !orphans.length ? <p className="hint">No projects yet</p> : null}
+          {!searching && projectsLoaded && !projectFolders.length && !orphans.length ? <p className="hint">No projects yet</p> : null}
         </div>
-        <section className="sidebar-loose" aria-label="No project">
+        {!searching || loose.length > 0 ? <section className="sidebar-loose" aria-label="No project">
           <h3>No project</h3>
           {searchMiss ? null : loose.length ? <ul className="nav-list">{loose.map(renderConversation)}</ul> : chatsLoaded ? <p className="hint">No chats yet</p> : null}
-        </section>
+        </section> : null}
       </div>
       {menuProject && projectMenu ? createPortal(
         <div className="project-menu" role="menu" style={{ top: projectMenu.y, left: projectMenu.x }}>

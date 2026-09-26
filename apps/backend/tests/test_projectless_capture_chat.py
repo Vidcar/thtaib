@@ -123,7 +123,16 @@ class ProjectlessCaptureChatTests(unittest.TestCase):
         next_request = _InspectImageModel.seen[-1]
         self.assertEqual(next_request[-2].tool_call_id, "capture-read")
         self.assertIsInstance(next_request[-1], HumanMessage)
-        self.assertEqual(next_request[-1].content_blocks[-1]["base64"], encoded)
+        blocks = next_request[-1].content_blocks
+        self.assertEqual(blocks[0], {"type": "text", "text": "<tool_response>\n"})
+        self.assertEqual(blocks[-1], {"type": "text", "text": "\n</tool_response>"})
+        images = [block for block in blocks if block["type"] == "image"]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]["base64"], encoded)
+        self.assertEqual(images[0]["mime_type"], "image/png")
+        self.assertEqual([message.content for message in state.get("messages", [])
+            if isinstance(message, HumanMessage)], ["Inspect the saved screenshot."],
+            "Only the original user request is retained; the image envelope is request-only")
         captures = self.app.state.assets.list_assets(RetainedAssetListFilters(
             session_id=conversation["id"], origin=RetainedAssetOrigin.capture))
         self.assertEqual([item.id for item in captures], [asset.id],

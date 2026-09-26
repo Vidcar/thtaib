@@ -176,7 +176,7 @@ function streamFrame(runValue, content = "stream") {
     params: {
       namespace: [],
       data: {
-        messages: [{ id: `${runValue.id}_message`, type: "ai", content: runValue.messageContent ?? content }],
+        messages: runValue.messages ?? [{ id: `${runValue.id}_message`, type: "ai", content: runValue.messageContent ?? content }],
         workbench: { run: runValue },
       },
     },
@@ -218,6 +218,7 @@ function makeHarness(options = {}) {
       chatCancels: [],
       assetUploads: [],
       assetLists: [],
+      projectFiles: [],
       closedStreams: [],
     },
     barriers: {
@@ -266,6 +267,12 @@ function makeHarness(options = {}) {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       try {
         if (req.method === "GET" && url.pathname === "/v1/projects") { json(res, 200, options.projects ?? []); return; }
+        if (req.method === "GET" && /^\/v1\/projects\/[^/]+\/files$/.test(url.pathname)) { json(res, 200, { entries: [] }); return; }
+        if (req.method === "GET" && /^\/v1\/projects\/[^/]+\/file$/.test(url.pathname)) {
+          state.requests.projectFiles.push({ projectId: url.pathname.split("/")[3], path: url.searchParams.get("path") });
+          json(res, 200, { path: url.searchParams.get("path"), text: "original project content" }); return;
+        }
+        if (req.method === "GET" && /^\/v1\/previews\/[^/]+$/.test(url.pathname)) { json(res, 200, { state: "closed", url: null }); return; }
         if (req.method === "GET" && url.pathname === "/v1/agent-setups") { json(res, 200, options.agentSetups ?? []); return; }
         if (req.method === "GET" && url.pathname === "/v1/bundles") { json(res, 200, options.bundles ?? []); return; }
         if (req.method === "GET" && url.pathname === "/v1/browser/runtime") { json(res, 200, { supported: true, installed: state.browserInstalled }); return; }
@@ -313,7 +320,12 @@ function makeHarness(options = {}) {
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/knowledge/entries") {
-          json(res, 200, []);
+          json(res, 200, options.knowledgeEntries ?? []);
+          return;
+        }
+        const knowledgeVersionMatch = url.pathname.match(/^\/v1\/knowledge\/versions\/([^/]+)$/);
+        if (req.method === "GET" && knowledgeVersionMatch && options.knowledgeVersion) {
+          json(res, 200, await options.knowledgeVersion(knowledgeVersionMatch[1]));
           return;
         }
         if (req.method === "GET" && url.pathname.match(/^\/v1\/bundles\/[^/]+\/configuration-options$/)) {
@@ -560,7 +572,7 @@ function makeHarness(options = {}) {
           const runValue = state.streamRuns.get(threadId) ?? null;
           json(res, 200, {
             values: {
-              messages: runValue ? [{ id: `${runValue.id}_message`, type: "ai", content: runValue.messageContent ?? "stream" }] : [],
+              messages: runValue ? runValue.messages ?? [{ id: `${runValue.id}_message`, type: "ai", content: runValue.messageContent ?? "stream" }] : [],
               workbench: { run: runValue },
             },
             next: runValue && ["queued", "running", "cancel_requested"].includes(runValue.status) ? ["agent"] : [],
@@ -1312,6 +1324,115 @@ async function testSubmitAckDoesNotClearNewerDraft(vite, changeDraft = true) {
     heldCommand.resolve();
     await closeHarness(renderer, harness);
   }
+}
+
+async function testUserBubbleUsesSubmittedContent(vite) {
+  const inputId = "conv_a_user";
+  const execution = run("run_a", "completed", inputId);
+  execution.messages = [
+    { id: inputId, type: "human", content: [{ type: "text", text: "Conversation A" }, { type: "text", text: "Internal model context only" }] },
+    { id: "answer_a", type: "ai", content: "A readable answer" },
+  ];
+  const harness = makeHarness({ aRun: execution });
+  const pixels = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+  harness.state.conversations.conv_a.transcript[0].content_blocks = [
+    { type: "text", text: "Original additional text" }, { type: "image_url", image_url: { url: pixels } },
+  ];
+  const renderer = await renderChat(vite, harness);
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "user-message chat listed");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.match(allText(renderer), /A readable answer/), "native transcript hydrated");
+    const bubble = renderer.root.findAll(node => node.type === "article" && String(node.props.className).includes("bubble-user"))[0];
+    assert.ok(bubble, "canonical user bubble rendered");
+    assert.match(textOf(bubble), /Conversation A/);
+    assert.match(textOf(bubble), /Original additional text/);
+    assert.doesNotMatch(textOf(bubble), /Internal model context only/);
+    assert.equal(bubble.findAll(node => node.type === "img" && node.props.src === pixels).length, 1, "original image content remains visible");
+    assert.equal(execution.messages[0].content[1].text, "Internal model context only", "display cannot modify model history");
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testLateMemorySelectionBelongsToConversation(vite) {
+  for (const destination of ["other", "revisited", "same"]) {
+    const heldVersion = deferred();
+    let versionRequested = false;
+    const versions = Object.fromEntries([
+      ["memory-old", "entry-a"], ["memory-new", "entry-a"], ["memory-other", "entry-other"],
+    ].map(([id, entry_id]) => [id, { id, entry_id, kind: "memory", scope: "user", content: id, provenance: {} }]));
+    const harness = makeHarness({ aRun: null, bRun: null, threadARun: null, threadBRun: null,
+      knowledgeEntries: ["memory-old", "memory-other"].map(id => ({
+        ...versions[id], id: versions[id].entry_id, current_version_id: id, display_name: id,
+      })),
+      knowledgeVersion: async id => {
+        if (id === "memory-old") { versionRequested = true; await heldVersion.promise; }
+        return versions[id];
+      },
+    });
+    harness.state.conversations.conv_a.memory_version_refs = ["memory-old", "memory-other"];
+    const renderer = await renderChat(vite, harness);
+    const dock = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0];
+    const setup = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ConversationSetup")[0];
+    let selection;
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "memory chats listed");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, ["memory-old", "memory-other"]), "original memory selection restored");
+      await act(async () => { selection = dock().props.onUseMemoryVersion("memory-new"); });
+      await waitFor(() => assert.equal(versionRequested, true), "selected-version lookup held after the first owner check");
+      if (destination !== "same") {
+        await act(async () => button(renderer, "Conversation B").props.onClick());
+        await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_b"), "other chat selected during memory lookup");
+        await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, []), "other chat keeps its memory selection");
+        if (destination === "revisited") {
+          await act(async () => button(renderer, "Conversation A").props.onClick());
+          await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_a"), "original chat selected in a new generation");
+          await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, ["memory-old", "memory-other"]), "revisited selection restored");
+        }
+      }
+      await act(async () => { heldVersion.resolve(); await selection; });
+      const expected = destination === "same" ? ["memory-other", "memory-new"]
+        : destination === "revisited" ? ["memory-old", "memory-other"] : [];
+      assert.deepEqual(setup().props.selectedKnowledgeIds, expected,
+        "delayed memory selection may update only its original chat selection generation");
+      assert.deepEqual(harness.state.conversations.conv_a.memory_version_refs, ["memory-old", "memory-other"],
+        "next-turn selection does not change the previously submitted memory binding");
+    } finally {
+      heldVersion.resolve();
+      await selection;
+      await closeHarness(renderer, harness);
+    }
+  }
+}
+
+async function testSelectedFileBelongsToProject(vite) {
+  const harness = makeHarness({ aRun: null, bRun: null, threadARun: null, threadBRun: null });
+  harness.state.conversations.conv_a.project_id = "project_a";
+  harness.state.conversations.conv_b.project_id = "project_b";
+  harness.state.conversations.conv_same = conversation("conv_same", "Same project chat", null, { project_id: "project_a" });
+  harness.state.threadByConversation.set("conv_same", "thread_same");
+  const renderer = await renderChat(vite, harness);
+  const dock = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0];
+  try {
+    await waitFor(() => button(renderer, "Conversation A"), "file-project chats listed");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(dock()?.props.projectId, "project_a"), "first project displayed");
+    await act(async () => dock().props.onSelectPath("index.html"));
+    await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_a", path: "index.html" }), "selected file loaded");
+    await act(async () => button(renderer, "Same project chat").props.onClick());
+    await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_same"), "same project conversation selected");
+    assert.equal(dock().props.selectedPath, "index.html", "same project keeps the user's selected file");
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.equal(dock()?.props.projectId, "project_b"), "second project displayed");
+    assert.equal(dock().props.selectedPath, "", "different project starts with no selected file");
+    await flush();
+    assert.equal(harness.state.requests.projectFiles.some(item => item.projectId === "project_b"), false, "old path never reaches the new project's file endpoint");
+    await act(async () => dock().props.onSelectPath("hold.py"));
+    await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_b", path: "hold.py" }), "new project file opens normally");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.equal(dock()?.props.projectId, "project_a"), "original project selected again");
+    assert.equal(dock().props.selectedPath, "", "returning to another project cannot retain its previous selection");
+  } finally { await closeHarness(renderer, harness); }
 }
 
 async function testProjectBranchesGroupByImmutableArea(vite) {
@@ -2500,14 +2621,19 @@ async function testSingleToolMenuBeforeModelAndRuntimeCleanup(vite) {
 async function testToolReadinessActionsOpenRecovery(vite) {
   let issueCode = "browser_worker_missing";
   const harness = makeHarness({ aRun: null, threadARun: null, browserInstalled: false, browserSessionState: "lost", readiness: () => ({ status: "needs_action", can_send: false, issues: [{ code: issueCode, message: issueCode === "browser_worker_missing" ? "Browser worker needs installation" : "Browser session was lost", action: issueCode === "browser_worker_missing" ? "Install browser worker" : "Reset browser" }], selection: null }) });
+  harness.state.conversations.conv_a.thread_id = "native_thread_a";
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "chat list ready");
     await act(async () => button(renderer, "Conversation A").props.onClick());
     await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "worker readiness action visible in chat");
+    assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0].props.threadId, "native_thread_a", "preview uses the saved native thread, not the registered interaction ID");
+    await waitFor(() => assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/previews/native_thread_a")), "preview status targets the real process owner");
+    await waitFor(() => assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")[0]?.props.threadId, "thread_a"), "message streaming continues to use its separate logical interaction ID");
     await act(async () => button(renderer, "Install browser worker").props.onClick());
     await waitFor(() => assert.equal(visualControls(renderer).length, 1), "readiness opens + menu");
     assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "recovery focuses Browser row");
+    assert.equal(visualControls(renderer)[0].props.threadId, "native_thread_a", "browser recovery shares the model tool's native session identity");
     assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0].props["aria-expanded"], true, "Browser recovery detail expands");
     issueCode = "browser_session_lost";
     await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Install browser worker")[0].props.onClick());
@@ -2516,6 +2642,8 @@ async function testToolReadinessActionsOpenRecovery(vite) {
     assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "lost-session recovery keeps Browser focused");
     await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Reset")[0].props.onClick());
     await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "Reset recovery reaches the Browser session action");
+    assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_a/reset"), "Reset addresses the actual lost browser session");
+    assert.ok(!harness.state.outgoingRequests.some(item => item.path.startsWith("/v1/browser/sessions/thread_a")), "logical stream identity never reaches browser process endpoints");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -3325,6 +3453,9 @@ try {
     ["archive preserves draft before leaving", testArchivePreservesDraftBeforeLeaving],
     ["delete while selection loads", testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation],
     ["late draft save cannot restore deleted chat", testLateDraftSaveCannotRestoreDeletedChat],
+    ["user bubbles show submitted content", testUserBubbleUsesSubmittedContent],
+    ["late memory selection ownership", testLateMemorySelectionBelongsToConversation],
+    ["selected file belongs to project", testSelectedFileBelongsToProject],
     ["project branches group by immutable area", testProjectBranchesGroupByImmutableArea],
   ];
     const failures = [];

@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+from workbench_backend.errors import HarnessError
+
 import asyncio
 import base64
 import binascii
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import time
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
-from workbench_backend.agents.context import observe_payload, require_context_fit
+from workbench_backend.agents.context import estimate_payload
+from workbench_backend.agents.project_outline import ProjectOutlineCache
 from workbench_backend.agents.harness_backend import CAPTURES_PREFIX, is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
     is_knowledge_route_path,
@@ -28,7 +32,11 @@ from workbench_backend.agents.replay import (
     FixtureBank,
     apply_recorded_reconstruction,
 )
-from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture, GenerationObservation
+from workbench_backend.agents.schemas import AgentEvent, AgentRun, ModelRequestCapture, GenerationObservation, ToolOutcome, ToolMode
+from workbench_backend.agents.tool_outcomes import file_evidence, result_outcome
+from workbench_backend.agents.tool_errors import recoverable_tool_error
+from workbench_backend.inference.telemetry import current_request_purpose
+from workbench_backend.inference.request_projection import TOOL_CONTEXT_MARKER
 from workbench_backend.agents.tools import (
     FILESYSTEM_TOOL_NAMES,
     KNOWLEDGE_ROUTE_READ_TOOLS,
@@ -76,6 +84,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.asset_service = asset_service
         self.capture_backend = capture_backend
         self.tool_image_preparer = tool_image_preparer
+        self.outline_cache = ProjectOutlineCache()
 
     def wrap_model_call(
         self,
@@ -83,7 +92,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         self._require_dispatch_allowed()
-        filtered = self._with_current_tool_images(request.override(tools=self._presented(request.tools)))
+        filtered = self._with_outline(self._with_current_tool_images(request.override(tools=self._presented(request.tools))))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -91,6 +100,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         try:
             response = handler(filtered)
         except Exception as exc:
+            self._record_undispatched_model_calls(exc)
             self._safe_capture(
                 filtered,
                 _payload_after(self.http_sink, before),
@@ -118,8 +128,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     async def _awrap_model_call(self, request, handler):
         self._require_dispatch_allowed()
-        filtered = await asyncio.to_thread(self._with_current_tool_images,
-            request.override(tools=self._presented(request.tools)))
+        filtered = await asyncio.to_thread(lambda: self._with_outline(self._with_current_tool_images(
+            request.override(tools=self._presented(request.tools)))))
         self._observe_context(filtered)
         self.run.generation_observation = None
         before = len(self.http_sink)
@@ -127,6 +137,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         try:
             response = await handler(filtered)
         except Exception as exc:
+            self._record_undispatched_model_calls(exc)
             self._safe_capture(
                 filtered,
                 _payload_after(self.http_sink, before),
@@ -143,6 +154,33 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         )
         self._observe_generation(response, time.perf_counter() - started)
         return response
+
+    def _record_undispatched_model_calls(self, error: Exception) -> None:
+        """Retain adapter evidence even when native model completion is rejected.
+
+        The model middleware owns the correct parent/helper scope. These calls
+        never reached ToolNode, so recording them must not reserve dispatch or
+        add messages to the execution checkpoint.
+        """
+        if not isinstance(error, HarnessError) or error.code not in {
+            "response_limit_reached", "adapter_invalid_tool_call", "adapter_incomplete_tool_call",
+        }:
+            return
+        for item in error.details.get("tool_calls", []):
+            call_id, name, outcome = item.get("call_id"), item.get("name"), item.get("outcome")
+            if not call_id or not name or call_id in self.run.tool_outcomes:
+                continue
+            if outcome not in {"incomplete_arguments", "not_dispatched"}:
+                continue
+            self.execution_control.record_tool_outcome(self.run, ToolOutcome(
+                call_id=call_id, name=name, outcome=outcome,
+                failure_category="input", recovery_action="continue",
+                detail=("The model stopped before producing complete arguments. This call was not executed."
+                        if outcome == "incomplete_arguments" else
+                        "This call had complete arguments, but its response batch was rejected before dispatch."),
+                evidence={"proposed_path": item["file_path"]} if item.get("file_path") else {},
+                updated_at=utc_now(),
+            ))
 
     def _observe_generation(self, response: ModelResponse, elapsed: float) -> None:
         native = getattr(self.run, "generation_observation", None)
@@ -169,10 +207,55 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
+            self._record_tool_result(request, blocked)
             return blocked
         with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
-            result = self._wrap_tool_call(request, handler)
-            return self._authorization_result(self._offload_read_file_image(result))
+            self._begin_tool(request)
+            try:
+                result = self._wrap_tool_call(request, handler)
+            except BaseException as exc:
+                result = self._handle_tool_failure(request, exc)
+                if result is None:
+                    raise
+            result = self._offload_read_file_image(result)
+            self._record_tool_result(request, result)
+            return self._authorization_result(result)
+
+    def _begin_tool(self, request):
+        name, args, call_id = _tool_call_parts(request)
+        self.run.activity_phase = "using_tools"
+        self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
+            outcome="running", recovery_action="inspect_effects", evidence=file_evidence(self.run, name, args), updated_at=utc_now()))
+
+    def _record_tool_result(self, request, result):
+        name, _, call_id = _tool_call_parts(request)
+        previous = self.run.tool_outcomes.get(call_id)
+        if previous is not None and previous.outcome in {"succeeded", "failed"} and isinstance(result, ToolMessage) and previous.result == result.content:
+            return
+        self.execution_control.record_tool_outcome(self.run,
+            result_outcome(call_id, name, result, previous.evidence if previous else {},
+                process_stopped=True if name == "execute" and sys.platform == "win32" and self.run.tool_mode != ToolMode.recorded_tool else None))
+        if self.run.project_path and name in {"write_file", "edit_file", "execute", "delete_file", "move_file"}:
+            self.outline_cache.invalidate(self.run.project_path)
+
+    def _handle_tool_failure(self, request, exc):
+        from langgraph.errors import GraphInterrupt
+        name, _, call_id = _tool_call_parts(request)
+        previous = self.run.tool_outcomes.get(call_id)
+        if name == "task" and previous is not None and previous.outcome == "failed" and previous.evidence.get("helper_status") in {"failed", "cancelled"}:
+            # The owned inline helper finalizer recorded its terminal result.
+            # Preserve it; uncertain nested effects have their own scoped rows.
+            return None
+        recoverable = recoverable_tool_error(exc, name=name, call_id=call_id)
+        if recoverable is not None:
+            return recoverable
+        interrupted = isinstance(exc, GraphInterrupt)
+        self.execution_control.record_tool_outcome(self.run, ToolOutcome(call_id=call_id, name=name,
+            outcome="not_dispatched" if interrupted else "uncertain",
+            failure_category=None if interrupted else "runtime", recovery_action="none" if interrupted else "inspect_effects",
+            detail="Waiting for approval or an answer." if interrupted else str(exc),
+            evidence=previous.evidence if previous else {}, updated_at=utc_now()))
+        return None
 
     def _authorization_result(self, result):
         if isinstance(result, ToolMessage):
@@ -202,9 +285,24 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self._require_dispatch_allowed()
         blocked = self._reject_projectless_privileged_tool(request)
         if blocked is not None:
+            self._record_tool_result(request, blocked)
             return blocked
         with self.execution_control.tool_dispatch(self.run, _tool_call_parts(request)[2]):
-            result = await self._awrap_tool_call(request, handler)
+            await asyncio.to_thread(self._begin_tool, request)
+            try:
+                result = await self._awrap_tool_call(request, handler)
+            except BaseException as exc:
+                previous = self.run.tool_outcomes.get(_tool_call_parts(request)[2])
+                # Shielded Windows work may have settled while cancellation was
+                # waiting. Keep its returned result and process-stop evidence;
+                # interrupted command effects still require inspection.
+                if (isinstance(exc, asyncio.CancelledError) and previous is not None
+                    and (previous.outcome in {"succeeded", "failed"} or previous.outcome == "uncertain" and previous.result is not None)):
+                    raise
+                result = self._handle_tool_failure(request, exc)
+                if result is None:
+                    raise
+            self._record_tool_result(request, result)
             return self._authorization_result(await asyncio.to_thread(self._offload_read_file_image, result))
 
     def _offload_read_file_image(self, result: ToolMessage | Any) -> ToolMessage | Any:
@@ -334,8 +432,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         if not content:
             if not denied:
                 return request
-            return request.override(messages=[*messages, HumanMessage(content=CANNOT_READ_IMAGE)])
-        return request.override(messages=[*messages, HumanMessage(content=content)])
+            return request.override(messages=[*messages, HumanMessage(content=f"<tool_response>\n{CANNOT_READ_IMAGE}\n</tool_response>", additional_kwargs={TOOL_CONTEXT_MARKER: True})])
+        return request.override(messages=[*messages, HumanMessage(content=[{"type": "text", "text": "<tool_response>\n"}, *content,
+            {"type": "text", "text": "\n</tool_response>"}], additional_kwargs={TOOL_CONTEXT_MARKER: True})])
 
     async def _awrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
@@ -343,7 +442,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             async def invoke() -> Any:
                 token = CURRENT_TOOL_CALL.set(call_id)
                 try:
-                    return await handler(request)
+                    result = await handler(request)
+                    result = await asyncio.to_thread(self._offload_read_file_image, result)
+                    self._record_tool_result(request, result)
+                    return result
                 finally:
                     CURRENT_TOOL_CALL.reset(token)
             if name in {*FILESYSTEM_TOOL_NAMES, *SHELL_TOOL_NAMES}:
@@ -467,13 +569,33 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return selected
 
     def _observe_context(self, request: ModelRequest) -> None:
-        if self.run.context_observation is None:
-            return
-        messages = ([request.system_message] if request.system_message else []) + list(request.messages)
-        self.run.context_observation = observe_payload(self.run.context_observation, {
-            "messages": messages, "tools": request.tools, "response_format": request.response_format,
-        })
-        require_context_fit(self.run.context_observation)
+        # The inference adapter guards its canonical outbound projection after
+        # native compaction and all middleware. Counting native objects here
+        # duplicates reasoning and rejects history before it can be reduced.
+        return
+
+    def _with_outline(self, request):
+        self.run.activity_phase = "thinking"
+        outline = self.outline_cache.build(self.run.project_path, self.run.task, self.run.presented_tools)
+        from dataclasses import asdict
+        self.run.project_outline = {key: value for key, value in asdict(outline).items() if key != "text"}
+        if not outline.text:
+            return request
+        system = request.system_message
+        content = system.content if system else ""
+        if not isinstance(content, str):
+            return request
+        candidate = request.override(system_message=SystemMessage(content=content + "\n\n" + outline.text))
+        project = getattr(request.model, "project_context_payload", None)
+        limit = self.run.context_observation.usable_input_tokens if self.run.context_observation else None
+        if project is not None and limit is not None:
+            payload = project([candidate.system_message, *candidate.messages], tools=candidate.tools,
+                response_format=candidate.response_format)
+            if estimate_payload(payload) > limit:
+                self.run.project_outline["omitted_for_capacity"] = True
+                return request
+        self.run.project_outline["included"] = True
+        return candidate
 
     def _capture(
         self,
@@ -509,6 +631,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         )
         captured = apply_capture_policy(
             ModelRequestCapture(
+                purpose=current_request_purpose(),
                 at=utc_now(),
                 instructions=_captured_instructions(request, http_payload),
                 messages=[_message_dict(message) for message in request.messages],

@@ -97,7 +97,7 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
   assert.deepEqual(updated[0].queue[0].intended_config, conversation.queue[0].intended_config, "the saved text edit preserves the exact queued setup");
 
   await act(async () => {
-    button(renderer, "Remove queued turn").props.onClick();
+    button(renderer, "Cancel waiting message").props.onClick();
     await tick();
   });
   assert.ok(requests.some((request) => request.method === "DELETE" && request.path.endsWith("/queue/q1")), "remove should call queue item delete endpoint");
@@ -128,6 +128,34 @@ async function checkInlineEditAndResume(ChatQueuePanel) {
 
   assert.equal(errors.length, 0);
   assert.ok(updated.length >= 3, "patch/delete/resume should publish updated conversations");
+  await act(async () => renderer.unmount());
+}
+
+async function checkProjectWait(ChatQueuePanel) {
+  const opened = [];
+  const writes = [];
+  const waiting = { ...conversation, queue: [{ ...conversation.queue[0], attachment_ids: [], wait_reason: "project_uncertain", queue_position: 2,
+    waiting_thread_id: "thread-owner", waiting_owner_title: "Finish the game" }] };
+  globalThis.fetch = async (url, init = {}) => {
+    writes.push({ url: String(url), method: init.method ?? "GET" });
+    assert.equal(init.method, "DELETE", "cancelling a project wait does not start or acknowledge the owning task");
+    return jsonResponse({ ...waiting, queue: [] });
+  };
+  let renderer;
+  try {
+    await act(async () => { renderer = create(React.createElement(ChatQueuePanel, { conversation: waiting, deployments, profiles,
+      onUpdated() {}, onError(message) { assert.fail(message); }, onOpenOwner: id => opened.push(id) })); });
+    assert.match(textOf(renderer.root), /Waiting for project · position 2 · Finish the game · effects need review/);
+    assert.equal(button(renderer, "Cancel waiting message").props.disabled, false, "a project-blocked queued message stays cancellable");
+    await act(async () => button(renderer, "Open active chat").props.onClick());
+    assert.deepEqual(opened, ["thread-owner"], "project wait navigation opens the actual lease owner's chat");
+    assert.equal(writes.length, 0, "opening the owning chat does not acknowledge uncertain effects");
+    await act(async () => button(renderer, "Cancel waiting message").props.onClick());
+    assert.equal(writes.length, 1);
+    assert.match(writes[0].url, /\/queue\/q1$/);
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+  }
 }
 
 function button(renderer, text) {
@@ -305,6 +333,7 @@ const liveConversation = {
 try {
   const { ChatQueuePanel } = await vite.ssrLoadModule("/src/renderer/ChatQueuePanel.tsx");
   await checkInlineEditAndResume(ChatQueuePanel);
+  await checkProjectWait(ChatQueuePanel);
 } finally {
   await vite.close();
 }

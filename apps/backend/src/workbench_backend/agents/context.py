@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.exceptions import ContextOverflowError
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from deepagents.middleware.summarization import SummarizationMiddleware
 
@@ -13,6 +14,8 @@ from pydantic import BaseModel, Field
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.schemas import Deployment, SettingsBag
+from workbench_backend.inference.request_projection import project_context_payload
+from workbench_backend.inference.telemetry import request_purpose, current_request_purpose
 from workbench_backend.inference.user_content import UserContentBlock, user_message_content
 
 TOKEN_MARGIN_RATIO = 0.08
@@ -22,8 +25,8 @@ DEFAULT_OUTPUT_RESERVATION = 512
 class BudgetedSummarizationMiddleware(SummarizationMiddleware):
     """Use Deep Agents' one compaction path with our already-reserved input limit.
 
-    Pinned deepagents 0.7.15 otherwise subtracts output and 5% again from the
-    model profile. Only that version-sensitive budget seam is overridden.
+    Pinned deepagents 0.7.19 otherwise subtracts output and 5% again from the
+    model profile. Compaction and summary generation remain upstream-owned.
     """
 
     @property
@@ -31,9 +34,11 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
         # Upstream uses subclass names; explicitly replace the default entry.
         return "SummarizationMiddleware"
 
-    def __init__(self, *args: Any, allowed_tools: set[str] | None = None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, allowed_tools: set[str] | None = None,
+                 on_context_failure: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.allowed_tools = allowed_tools
+        self.on_context_failure = on_context_failure
 
     def _selected_request(self, request: Any) -> Any:
         if self.allowed_tools is None:
@@ -42,10 +47,37 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
         return request.override(tools=[tool for tool in request.tools if tool_name(tool) in self.allowed_tools])
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
-        return super().wrap_model_call(self._selected_request(request), handler)
+        try:
+            return super().wrap_model_call(self._selected_request(request), handler)
+        except ContextOverflowError as exc:
+            if isinstance(exc, HarnessError):
+                raise
+            raise ContextCapacityExceeded(str(exc), code="context_capacity_exceeded", status_code=409) from exc
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        return await super().awrap_model_call(self._selected_request(request), handler)
+        try:
+            return await super().awrap_model_call(self._selected_request(request), handler)
+        except ContextOverflowError as exc:
+            if isinstance(exc, HarnessError):
+                raise
+            raise ContextCapacityExceeded(str(exc), code="context_capacity_exceeded", status_code=409) from exc
+
+    def _create_summary(self, messages_to_summarize: list[Any]) -> str:
+        with request_purpose("summary"):
+            return super()._create_summary(messages_to_summarize)
+
+    async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
+        with request_purpose("summary"):
+            return await super()._acreate_summary(messages_to_summarize)
+
+    def _check_reduction(self, original: Any, reduced: Any, error: Exception | None) -> None:
+        try:
+            return super()._check_reduction(original, reduced, error)
+        except ContextOverflowError:
+            if self.on_context_failure is not None:
+                count = self._count_tokens(reduced.messages, reduced.system_message, reduced.tools)
+                self.on_context_failure(count, self._input_budget(reduced))
+            raise
 
     def _input_budget(self, request: Any) -> int | None:
         profile = request.model.profile or {}
@@ -53,8 +85,13 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
         return value if type(value) is int else None
 
 
+class ContextCapacityExceeded(HarnessError, ContextOverflowError):
+    """An application fit check that native Deep Agents compaction recognizes."""
+
+
 class ContextObservation(BaseModel):
     schema_version: int = 1
+    purpose: Literal["work", "summary", "review", "probe"] = "work"
     capacity_tokens: int | None = None
     capacity_source: Literal["server_props.n_ctx", "unknown"] = "unknown"
     output_reservation_tokens: int = DEFAULT_OUTPUT_RESERVATION
@@ -62,7 +99,7 @@ class ContextObservation(BaseModel):
     usable_input_tokens: int | None = None
     margin_tokens: int = 0
     fits: bool | None = None
-    counting_method: str = "UTF-8 character estimate (3 chars/token), serialized messages/tools/schema, 2048 tokens/image, 8% capacity margin; not tokenizer usage"
+    counting_method: str = "Character estimate (3 chars/token), outbound messages/tools/schema counted once, 2048 tokens/image, 8% capacity margin; not tokenizer usage"
     summarization_path: Literal["deepagents-upstream"] = "deepagents-upstream"
     notes: list[str] = Field(default_factory=list)
 
@@ -82,8 +119,11 @@ def observe_context(
 ) -> ContextObservation:
     capacity, source = _capacity(deployment)
     reservation = _output_reservation(per_request)
-    messages = [*(history or []), HumanMessage(content=user_message_content(task, content_blocks))]
-    payload = {"messages": messages, "system": system_prompt or "", "tools": tools or [], "response_format": output_schema}
+    from workbench_backend.inference.adapter import _reasoning_replay_scope
+    messages = [*([SystemMessage(content=system_prompt)] if system_prompt else []),
+                *(history or []), HumanMessage(content=user_message_content(task, content_blocks))]
+    payload = project_context_payload(messages, tools=tools, response_format=output_schema,
+                                      reasoning_scope=_reasoning_replay_scope(deployment))
     estimated = estimate_payload(payload)
     margin = int(capacity * TOKEN_MARGIN_RATIO) if capacity else 0
     fits = None if capacity is None else estimated + reservation + margin <= capacity
@@ -106,9 +146,9 @@ def observe_context(
 
 def require_context_fit(observation: ContextObservation) -> None:
     if observation.fits is False:
-        raise HarnessError(
-            "The selected setup does not have enough observed context for the retained conversation. "
-            "Choose a larger context, compact while the previous setup still fits, or start a fresh conversation. No history was removed.",
+        raise ContextCapacityExceeded(
+            "The model request exceeds the observed context budget. "
+            "Automatic compaction could not make this request fit. Reduce selected context or increase the model context size. No history was removed.",
             code="context_capacity_exceeded",
             status_code=409,
             details=observation.model_dump(mode="json"),
@@ -152,7 +192,7 @@ def estimate_payload(payload: Any) -> int:
     def simplify(value: Any) -> Any:
         nonlocal images
         if isinstance(value, BaseMessage):
-            value = value.model_dump(exclude={"usage_metadata", "response_metadata", "id"})
+            value = project_context_payload([value])["messages"][0]
         elif hasattr(value, "args_schema"):
             value = convert_to_openai_tool(value)
         if isinstance(value, dict):
@@ -169,18 +209,38 @@ def estimate_payload(payload: Any) -> int:
 
 
 def count_context_tokens(messages: list[Any], *, tools: list[Any] | None = None) -> int:
-    return estimate_payload({"messages": messages, "tools": tools or []})
+    return estimate_payload(project_context_payload(messages, tools=tools))
+
+
+def token_counter_for_model(model: Any, *, response_format: Any = None) -> Any:
+    """Bind native compaction counting to this adapter's actual replay policy."""
+    projection = getattr(model, "project_context_payload", None)
+    if projection is None:
+        projection = project_context_payload
+
+    def count(messages: list[Any], *, tools: list[Any] | None = None) -> int:
+        return estimate_payload(projection(messages, tools=tools, response_format=response_format))
+    return count
 
 
 def observe_payload(base: ContextObservation, payload: dict[str, Any]) -> ContextObservation:
     observation = base.model_copy(deep=True)
+    observation.purpose = current_request_purpose()
     observation.estimated_input_tokens = estimate_payload({key: value for key, value in payload.items() if key in {"messages", "tools", "response_format"}})
     observation.fits = None if observation.usable_input_tokens is None else observation.estimated_input_tokens <= observation.usable_input_tokens
     return observation
 
 
-def validate_retained_messages(deployment: Deployment, messages: list[BaseMessage]) -> None:
-    """Reject known setup mismatches and incomplete call/result pairs without rewriting history."""
+def validate_retained_messages(deployment: Deployment, messages: list[BaseMessage], *, allow_recovery: bool = False) -> None:
+    """Validate a native repair preview without altering checkpoints or effects."""
+    if allow_recovery:
+        from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+        from langchain_core.messages import RemoveMessage
+        repaired = PatchToolCallsMiddleware().before_agent({"messages": messages}, None)
+        if repaired is not None:
+            messages = [item for item in repaired["messages"] if not isinstance(item, RemoveMessage)]
+    failed_ids = {message.tool_call_id for message in messages
+                  if message.type == "tool" and getattr(message, "status", None) == "error"}
     props = deployment.server_props
     pending: set[str] = set()
     for message in messages:
@@ -193,9 +253,10 @@ def validate_retained_messages(deployment: Deployment, messages: list[BaseMessag
                 raise HarnessError("This setup cannot preserve structured content blocks in the conversation.", code="context_content_unsupported", status_code=409)
             if any(isinstance(b, dict) and b.get("type") in {"image", "image_url"} for b in blocks) and props.modalities.get("vision") is False:
                 raise HarnessError("This setup cannot read images retained in the conversation. Select a vision setup or start a fresh conversation.", code="context_image_unsupported", status_code=409)
-        if getattr(message, "invalid_tool_calls", None):
-            raise HarnessError("The retained conversation contains an invalid tool call.", code="context_invalid_tool_call", status_code=409)
-        calls = getattr(message, "tool_calls", [])
+        invalid = getattr(message, "invalid_tool_calls", [])
+        if any(not call.get("id") or call["id"] not in failed_ids for call in invalid):
+            raise HarnessError("The retained conversation contains an unresolved invalid tool call.", code="context_invalid_tool_call", status_code=409)
+        calls = [*getattr(message, "tool_calls", []), *invalid]
         if calls:
             if len(calls) > 1 and props and props.chat_template_caps.get("supports_parallel_tool_calls") is False:
                 raise HarnessError("This setup cannot preserve multiple tool calls in one retained message.", code="context_parallel_tools_unsupported", status_code=409)

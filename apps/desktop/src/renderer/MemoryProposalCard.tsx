@@ -39,7 +39,7 @@ export function MemoryProposalCard(props: {
       ) : null}
       <pre className={props.contentClassName ?? "wrapped-text"}>{props.proposal.content}</pre>
       {props.origin ? <details><summary>Origin</summary><p className="hint">{props.origin}</p></details> : null}
-      {props.existingHint ? <p className="hint">Updates an existing memory. A newer saved version will block acceptance.</p> : null}
+      {pending && props.existingHint ? <p className="hint">Updates an existing memory. A newer saved version will block acceptance.</p> : null}
       {pending ? (
         <div className="actions">
           <button type="button" disabled={props.busy} onClick={props.onAccept}>{props.acceptLabel}</button>

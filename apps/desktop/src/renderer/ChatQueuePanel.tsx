@@ -16,6 +16,7 @@ interface ChatQueuePanelProps {
   disabled?: boolean;
   onUpdated: (next: ChatConversation) => void;
   onError: (message: string) => void;
+  onOpenOwner?: (threadId: string) => void;
 }
 
 interface QueueDraft {
@@ -30,7 +31,7 @@ interface QueueDraft {
 
 const EMPTY_QUEUE: ChatQueueItem[] = [];
 
-export function ChatQueuePanel({ conversation, deployments, profiles, disabled = false, onUpdated, onError }: ChatQueuePanelProps) {
+export function ChatQueuePanel({ conversation, deployments, profiles, disabled = false, onUpdated, onError, onOpenOwner }: ChatQueuePanelProps) {
   const queue = conversation.queue ?? EMPTY_QUEUE;
   const [drafts, setDrafts] = useState<Record<string, QueueDraft>>({});
   const [openEditors, setOpenEditors] = useState<Record<string, boolean>>({});
@@ -179,13 +180,13 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                   </button>
                 </div>
               ) : (
-                <p className="composer-queue-text" title={preview}>{preview}</p>
+                <div className="composer-queue-text"><p title={preview}>{preview}</p>{item.wait_reason ? <div className="queue-project-wait" role="status"><span>Waiting for project{item.queue_position ? ` · position ${item.queue_position}` : ""}{item.waiting_owner_title ? ` · ${item.waiting_owner_title}` : ""}{item.wait_reason === "project_uncertain" ? " · effects need review" : ""}</span>{item.waiting_thread_id && onOpenOwner ? <button type="button" onClick={() => onOpenOwner(item.waiting_thread_id!)}>Open active chat</button> : null}</div> : null}</div>
               )}
               <div className="composer-queue-actions">
                 <button type="button" className="icon-button" aria-label="Edit queued turn" title={locked ? "View queued message" : "Edit queued message"} disabled={disabled || itemBusy} onClick={() => setOpenEditors((current) => ({ ...current, [item.id]: !current[item.id] }))}>
                   <Icon name="edit" size={14} />
                 </button>
-                <button type="button" className="icon-button" aria-label="Remove queued turn" title="Remove from queue" disabled={itemDisabled} onClick={() => void removeQueueItem(item)}>
+                <button type="button" className="icon-button" aria-label="Cancel waiting message" title="Cancel waiting message" disabled={itemDisabled} onClick={() => void removeQueueItem(item)}>
                   <Icon name="close" size={14} />
                 </button>
               </div>

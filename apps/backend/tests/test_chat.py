@@ -553,7 +553,7 @@ class ChatHarnessTests(unittest.TestCase):
         conversation = self._create(
             workspace_id=workspace["id"],
             project_path=workspace["path"],
-            retrieval_project_paths=[workspace["path"]],
+            retrieval_project_paths=["seed.md"],
         )
         first = self._start(conversation["id"], "First turn with the project.")
         first_run_id = first["current_run"]["id"]
@@ -577,7 +577,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(body["profile_id"], self.profile_id)
         self.assertEqual(body["project_path"], str(Path(workspace["path"]).resolve()))
         self.assertEqual(body["workspace_id"], workspace["id"])
-        self.assertEqual(body["retrieval_project_paths"], [workspace["path"]])
+        self.assertEqual(body["retrieval_project_paths"], ["seed.md"])
         self.assertTrue(body["filesystem_tools_available"])
         self.assertTrue(body["shell_tools_available"])
         first_run = self.client.get(f"/v1/agent-runs/{first_run_id}").json()
@@ -593,7 +593,7 @@ class ChatHarnessTests(unittest.TestCase):
         conversation = self._create(
             workspace_id=workspace["id"],
             project_path=workspace["path"],
-            retrieval_project_paths=[workspace["path"]],
+            retrieval_project_paths=["seed.md"],
         )
         preserved = self.client.post(
             f"/v1/chat/conversations/{conversation['id']}/start",
@@ -604,7 +604,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertEqual(preserved_body["profile_id"], self.profile_id)
         self.assertEqual(preserved_body["workspace_id"], workspace["id"])
         self.assertEqual(preserved_body["project_path"], str(Path(workspace["path"]).resolve()))
-        self.assertEqual(preserved_body["retrieval_project_paths"], [workspace["path"]])
+        self.assertEqual(preserved_body["retrieval_project_paths"], ["seed.md"])
         wait_for_chat(self.client, conversation["id"])
 
         profile_cleared = self.client.post(
@@ -616,7 +616,7 @@ class ChatHarnessTests(unittest.TestCase):
         self.assertIsNone(profile_body["profile_id"])
         self.assertEqual(profile_body["workspace_id"], workspace["id"])
         self.assertEqual(profile_body["project_path"], str(Path(workspace["path"]).resolve()))
-        self.assertEqual(profile_body["retrieval_project_paths"], [workspace["path"]])
+        self.assertEqual(profile_body["retrieval_project_paths"], ["seed.md"])
         wait_for_chat(self.client, conversation["id"])
 
         project_cleared = self.client.post(
@@ -633,7 +633,7 @@ class ChatHarnessTests(unittest.TestCase):
         project_body = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()
         self.assertEqual(project_body["workspace_id"], workspace["id"])
         self.assertEqual(project_body["project_path"], str(Path(workspace["path"]).resolve()))
-        self.assertEqual(project_body["retrieval_project_paths"], [workspace["path"]])
+        self.assertEqual(project_body["retrieval_project_paths"], ["seed.md"])
         self.assertTrue(project_body["filesystem_tools_available"])
         self.assertTrue(project_body["shell_tools_available"])
 
@@ -809,7 +809,9 @@ class ChatHarnessTests(unittest.TestCase):
             app_store=self.app.state.app_store,
         )
         first = self._create()
-        second = self._create()
+        independent_project = self.root / "independent-conversation-project"
+        independent_project.mkdir()
+        second = self._create(project_path=str(independent_project))
         barrier = threading.Barrier(3)
         results: list[tuple[str, int, dict[str, Any]]] = []
         lock = threading.Lock()
@@ -2058,7 +2060,7 @@ class ChatHarnessTests(unittest.TestCase):
         queued_run = wait_for_run(self.client, dispatched["current_run_id"])
         self.assertEqual(queued_run["status"], "completed", queued_run.get("error"))
 
-    def test_queue_requires_resume_and_preserves_intended_config_across_selector_changes(self) -> None:
+    def test_new_submission_joins_queue_and_preserves_prior_intended_config(self) -> None:
         other = self.client.post(
             "/v1/deployments/connected",
             json={"endpoint": "http://127.0.0.1:10/v1", "display_name": "queue-other"},
@@ -2092,8 +2094,8 @@ class ChatHarnessTests(unittest.TestCase):
             json={"task": "Change selector.", "deployment_id": other["id"]},
         )
         self.assertEqual(direct.status_code, 200, direct.text)
-        self.assertEqual(direct.json()["deployment_id"], other["id"])
-        wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(direct.json()["queue"][1]["intended_config"]["deployment_id"], other["id"])
+        self.assertEqual(direct.json()["run_ids"], [])
 
         resumed = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/resume", json={})
         self.assertEqual(resumed.status_code, 200, resumed.text)
@@ -2206,7 +2208,8 @@ class ChatHarnessTests(unittest.TestCase):
             json={"task": "Change selector before queued dispatch.", "deployment_id": other["id"]},
         )
         self.assertEqual(changed.status_code, 200, changed.text)
-        wait_for_chat(self.client, conversation["id"])
+        self.assertEqual(changed.json()["queue"][1]["intended_config"]["deployment_id"], other["id"])
+        self.assertEqual(changed.json()["run_ids"], [])
 
         resumed = self.client.post(f"/v1/chat/conversations/{conversation['id']}/queue/resume", json={})
         self.assertEqual(resumed.status_code, 200, resumed.text)
@@ -2274,6 +2277,8 @@ class ChatHarnessTests(unittest.TestCase):
         blocks = finished["current_run"]["content_blocks"]
         self.assertEqual(len(blocks), 1)
         self.assertIn("Source retained file: queued.txt", blocks[0]["text"])
+        self.assertIn("queued attachment", blocks[0]["text"])
+        self.assertEqual(finished["current_run"]["presented_tools"], [])
 
     def test_direct_start_recovers_accepted_run_after_commit_gap(self) -> None:
         conversation = self._create()

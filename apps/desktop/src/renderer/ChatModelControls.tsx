@@ -11,7 +11,7 @@ import type { BundleConfigurationOptions, Deployment, ModelBundle, RunProfile } 
 import type { SetupConfiguration } from "./workspaceApi";
 import "./ChatModelControls.css";
 
-const thinkingFields = new Set(["reasoning", "reasoning_effort", "reasoning_format"]);
+const thinkingFields = new Set(["reasoning", "reasoning_effort", "reasoning_format", "reasoning_budget_tokens", "max_tokens"]);
 function thinkingSettings(configuration: SetupConfiguration): Record<string, unknown> {
   return Object.fromEntries(Object.entries(configuration.per_request_overrides ?? {}).filter(([key]) => thinkingFields.has(key)));
 }
@@ -32,11 +32,12 @@ export interface ChatModelControlsProps {
   conversationId?: string | null;
   disabled?: boolean;
   runtimeBusy?: boolean;
+  openRequest?: number;
   onApply: (configuration: SetupConfiguration) => void | Promise<void>;
   onReloaded: () => Promise<void>;
 }
 
-export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, onApply, onReloaded }: ChatModelControlsProps) {
+export function ChatModelControls({ bundles, deployments, profiles, selectedDeploymentId, selectedConfigurationId, configuration, projectId = null, agentSetupVersionId = null, conversationId = null, disabled = false, runtimeBusy = false, openRequest, onApply, onReloaded }: ChatModelControlsProps) {
   const [fallbackBundles, setFallbackBundles] = useState<ModelBundle[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   useEffect(() => {
@@ -79,9 +80,11 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const optionKey = `${selectedBundleId ?? ""}:${selectedDeployment?.id ?? ""}`;
   const [optionsResult, setOptionsResult] = useState<{ key: string; data: BundleConfigurationOptions } | null>(null);
   useEffect(() => {
-    if (!pickerOpen || !selectedBundleId) return;
+    if (!pickerOpen || (!selectedBundleId && !selectedDeployment?.id)) return;
     let cancelled = false;
-    void api.modelConfiguration(selectedBundleId, selectedDeployment?.id).then(data => {
+    const request = selectedBundleId ? api.modelConfiguration(selectedBundleId, selectedDeployment?.id)
+      : api.deploymentConfiguration(selectedDeployment!.id);
+    void request.then(data => {
       if (!cancelled) setOptionsResult({ key: optionKey, data });
     }).catch(failure => { if (!cancelled) setError(errorMessage(failure)); });
     return () => { cancelled = true; };
@@ -151,7 +154,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     } finally { pending.current = false; setBusy(false); }
   }
 
-  return <MenuPopover label={`Chat model: ${selectedName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{selectedName}</span><small className="chat-model-status">{selectedState}</small></>} disabled={disabled} onOpenChange={setPickerOpen}>
+  return <MenuPopover label={`Chat model: ${selectedName}`} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model">{selectedName}</span><small className="chat-model-status">{selectedState}</small></>} disabled={disabled} openRequest={openRequest} onOpenChange={setPickerOpen}>
     {close => <>
       <div className="chat-model-choice-list" role="group" aria-label="Installed models">
         {availableBundles.filter(item => item.status === "ready" || item.disk_matches).map(bundle => {
@@ -165,7 +168,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
       {selectedBundle && variants.length > 1 ? <label className="chat-variant-choice">Configuration<select aria-label="Model configuration" value={selectedProfile?.id ?? ""} disabled={busy} onChange={event => { const profile = variants.find(item => item.id === event.target.value); if (profile && !incompatibleChoices[profile.id]) void applyChoice(profile, null, close); }}><option value="" disabled>Choose configuration</option>{variants.map(item => <option key={item.id} value={item.id} disabled={Boolean(incompatibleChoices[item.id])} title={incompatibleChoices[item.id] || undefined}>{item.display_name}{item.id === selectedBundle.default_configuration_id ? " · default" : ""}{incompatibleChoices[item.id] ? " · incompatible" : ""}</option>)}</select></label> : null}
       <div className="chat-thinking-controls"><ResponseSettingsEditor value={thinking} onChange={setThinking} options={options} facts={facts} disabled={busy || preview.loading} /></div>
       {error || preview.error ? <Notice tone="error">{error || preview.error}</Notice> : null}
-      {JSON.stringify(thinking) !== incomingThinking ? <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={busy || preview.loading || Boolean(preview.error)} onClick={() => void applyThinking(close)}>{busy ? "Applying…" : "Apply thinking"}</button></div> : null}
+      {JSON.stringify(thinking) !== incomingThinking ? <div className="actions chat-model-controls-actions"><button type="button" className="primary-button" disabled={busy || preview.loading || Boolean(preview.error)} onClick={() => void applyThinking(close)}>{busy ? "Applying…" : "Apply response settings"}</button></div> : null}
     </>}
   </MenuPopover>;
 }

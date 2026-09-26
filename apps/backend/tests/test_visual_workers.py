@@ -97,6 +97,16 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
         await self.service.shutdown()
         self.temp.cleanup()
 
+    async def test_correctable_url_failure_returns_result_and_browser_continues(self):
+        async with self.service.open_tools(self.run) as available:
+            navigate = next(item for item in available if item.name == "browser_navigate")
+            for address in ("file:///C:/private.txt", "http://[broken", "http://localhost:bad/", "https://user:secret@example.com/"):
+                refused = await navigate.ainvoke({"type": "tool_call", "id": "bad_url", "name": "browser_navigate", "args": {"url": address}})
+                self.assertEqual(refused.status, "error")
+                self.assertEqual(refused.tool_call_id, "bad_url")
+            accepted = await navigate.ainvoke({"type": "tool_call", "id": "good_url", "name": "browser_navigate", "args": {"url": "http://127.0.0.1:8000/page.html"}})
+            self.assertEqual(accepted.status, "success")
+
     async def test_session_survives_turns_and_marks_restart_lost(self):
         async with self.service.open_tools(self.run) as tools:
             by_name = {item.name: item for item in tools}

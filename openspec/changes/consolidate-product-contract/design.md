@@ -15,7 +15,7 @@ See proposal.md. The current contract already loads Deep Agents, Monaco, and a f
 **Non-Goals:**
 
 - Building the screens in this change.
-- The memory-proposal review journey, document-source inspection, the skill walkthrough, or a claim that half-screen review was accepted.
+- The memory-proposal review journey, a separate document-source inspection product, the skill walkthrough, or a claim that half-screen review was accepted. Document source links use the existing retained viewer under the current STATE-020 contract.
 - Shipping ComfyUI, Whisper, Kokoro, Piper, or a chart engine inside the app.
 - Requiring Inspect, RULER, voice cloning, always-on listening, or automatic schedules now.
 - Saying those later features are forbidden.

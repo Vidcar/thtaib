@@ -58,6 +58,16 @@ def _run() -> AgentRun:
 
 
 class VisualMiddlewareTests(unittest.TestCase):
+    def assert_tool_image_response(self, message, encoded):
+        self.assertIsInstance(message, HumanMessage)
+        blocks = message.content_blocks
+        self.assertEqual(blocks[0], {"type": "text", "text": "<tool_response>\n"})
+        self.assertEqual(blocks[-1], {"type": "text", "text": "\n</tool_response>"})
+        images = [block for block in blocks if block["type"] == "image"]
+        self.assertEqual(len(images), 1, "Only the requested image is delivered")
+        self.assertEqual(images[0]["base64"], encoded)
+        self.assertEqual(images[0]["mime_type"], "image/png")
+
     def _setup(self):
         encoded = _image_fixture("red").partition(",")[2]
         assets = _Assets()
@@ -93,8 +103,8 @@ class VisualMiddlewareTests(unittest.TestCase):
             messages=preceding, tools=[], model_settings={})
         projected = middleware._with_current_tool_images(request)
         self.assertEqual(projected.messages[:-1], preceding)
-        self.assertEqual(projected.messages[-1].content_blocks[-1]["type"], "image")
-        self.assertEqual(projected.messages[-1].content_blocks[-1]["base64"], encoded)
+        self.assert_tool_image_response(projected.messages[-1], encoded)
+        self.assertNotIn(encoded, json.dumps([message.model_dump() for message in preceding]))
         self.assertEqual(captures.reads, ["/asset_" + "a" * 32 + ".png"])
         next_turn = request.override(messages=[*preceding, HumanMessage(content="Continue")])
         self.assertEqual(middleware._with_current_tool_images(next_turn).messages,
@@ -174,8 +184,10 @@ class VisualMiddlewareTests(unittest.TestCase):
         self.assertEqual(len(InspectModel.seen), 2)
         second_request = InspectModel.seen[1]
         self.assertEqual(second_request[-2].tool_call_id, "image-call")
-        self.assertIsInstance(second_request[-1], HumanMessage)
-        self.assertEqual(second_request[-1].content_blocks[-1]["base64"], encoded)
+        self.assert_tool_image_response(second_request[-1], encoded)
+        self.assertEqual([message.content for message in checkpoint["messages"]
+            if isinstance(message, HumanMessage)], ["Inspect /view.png"],
+            "Synthetic tool-image context must not become a retained user turn")
 
     def test_unverified_screenshot_keeps_page_text_and_withholds_pixels(self) -> None:
         encoded, _, captures, middleware, _, _ = self._setup()
@@ -193,12 +205,16 @@ class VisualMiddlewareTests(unittest.TestCase):
             ], tools=[], model_settings={})
         projected = middleware._with_current_tool_images(request)
         self.assertEqual(projected.messages[-2], shot)
-        self.assertEqual(projected.messages[-1].content, CANNOT_READ_IMAGE)
+        self.assertEqual(projected.messages[-1].content, f"<tool_response>\n{CANNOT_READ_IMAGE}\n</tool_response>")
+        self.assertFalse(any(block["type"] == "image" for message in projected.messages
+            for block in message.content_blocks))
+        self.assertNotIn(encoded, json.dumps([message.model_dump() for message in projected.messages]))
         self.assertNotIn("probe", projected.messages[-1].content)
         self.assertEqual(captures.reads, [])
         state = {"ready": False}
         captures.image_inputs_allowed = lambda: state["ready"]
         middleware.tool_image_preparer = lambda: state.__setitem__("ready", True) or True
         delivered = middleware._with_current_tool_images(request)
-        self.assertEqual(delivered.messages[-1].content_blocks[-1]["base64"], encoded)
+        self.assert_tool_image_response(delivered.messages[-1], encoded)
+        self.assertEqual(delivered.messages[-2], shot, "Original page text and capture reference remain paired")
         self.assertEqual(captures.reads, ["/" + path.removeprefix("/captures/")])

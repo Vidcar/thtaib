@@ -530,6 +530,10 @@ class InteractionService:
         patched = dict(workbench.get("run") or {})
         observation = run.generation_observation.model_dump(mode="json") if run.generation_observation else None
         patched["generation_observation"] = observation
+        patched["context_observation"] = run.context_observation.model_dump(mode="json") if run.context_observation else None
+        patched["housekeeping_generation"] = {key: value.model_dump(mode="json") for key, value in run.housekeeping_generation.items()}
+        patched["housekeeping_context"] = {key: value.model_dump(mode="json") for key, value in run.housekeeping_context.items()}
+        patched["activity_phase"] = run.activity_phase
         patched["updated_at"] = run.updated_at if isinstance(run.updated_at, str) else run.updated_at.isoformat()
         workbench["run"] = patched
         snapshot = {**stored, "workbench": workbench}

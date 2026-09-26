@@ -35,8 +35,11 @@ from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.helpers import freeze_helpers
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
-from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, count_context_tokens, validate_retained_messages
-from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root
+from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, token_counter_for_model, validate_retained_messages
+from workbench_backend.inference.telemetry import current_request_purpose
+from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
+from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
+from workbench_backend.agents.project_admission import holds_project, root_runs
 from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
 from workbench_backend.agents.memory_skills import (
     KnowledgeMaterializePlan,
@@ -49,12 +52,13 @@ from workbench_backend.agents.memory_skills import (
 from workbench_backend.agents.retrieval import (
     RETRIEVAL_INSTRUCTIONS,
     SEARCH_KNOWLEDGE_TOOL_NAME,
-    build_vector_store,
     load_retrieval_documents,
-    make_search_knowledge_tool,
+    make_document_search_tool,
+    documents_from_retained_assets,
     openai_embeddings_for_deployment,
     record_retrieved_sources,
     resolve_embedding_deployment,
+    validate_project_retrieval_paths,
 )
 from workbench_backend.agents.host_shell import (
     approval_mode_instructions,
@@ -80,6 +84,7 @@ from workbench_backend.agents.schemas import (
     TaskCriteria,
     ReviewObservation,
     ToolMode,
+    ToolOutcome,
     label_for_tool_mode,
 )
 from workbench_backend.contracts.lifecycle import (
@@ -198,6 +203,7 @@ class HarnessService:
         self._lock = threading.RLock()
         self._updates = threading.Condition(self._lock)
         self._startup_reconciled = False
+        self._project_admissions: dict[str, tuple[str, int]] = {}
 
     @property
     def store(self) -> ApplicationStore:
@@ -272,19 +278,23 @@ class HarnessService:
         """
 
         self._reconcile_startup_once()
+        workspace = LabStore(self.manager.paths).get_workspace(workspace_id)
         with self._lock:
             memory = {run.id: run for run in self._runs.values()}
+            preparing = [token for token, (path, owner_thread) in self._project_admissions.items()
+                         if owner_thread != threading.get_ident() and workspace is not None and roots_overlap(path, workspace.path)]
         stored = {item.id: item for item in self.store.list_runs()}
         for run_id, run in memory.items():
             stored_run = stored.get(run_id)
             if stored_run is not None and not is_run_lifecycle_live(stored_run.status):
                 continue
             stored[run_id] = run
-        return [
+        return [*preparing, *[
             run.id
-            for run in stored.values()
-            if run.workspace_id == workspace_id and is_run_lifecycle_live(run.status)
-        ]
+            for run in root_runs(list(stored.values()))
+            if holds_project(run) and (run.workspace_id == workspace_id or
+                (workspace is not None and run.project_path and roots_overlap(run.project_path, workspace.path)))
+        ]]
 
     def checkpoint_state_for_run(self, run: AgentRun, checkpoint_id: str) -> dict[str, Any]:
         # Use the execution graph's exact framework topology and state schema,
@@ -336,7 +346,113 @@ class HarnessService:
             }
         return "all", None
 
+    def _project_blocker_locked(self, project_path: str) -> dict[str, Any] | None:
+        for token, (path, owner_thread) in self._project_admissions.items():
+            if owner_thread != threading.get_ident() and roots_overlap(project_path, path):
+                return {"run_id": None, "thread_id": None, "task": "Starting another task", "project_path": path, "uncertain": False}
+        stored = {item.id: item for item in self.store.list_runs()}
+        stored.update(self._runs)
+        for run in root_runs(list(stored.values())):
+            if run.project_path and holds_project(run) and roots_overlap(project_path, run.project_path):
+                return {"run_id": run.id, "thread_id": run.thread_id, "task": run.task[:160],
+                        "project_path": run.project_path, "uncertain": not is_run_lifecycle_live(run.status)}
+        return None
+
+    def project_blocker(self, project_path: str | None) -> dict[str, Any] | None:
+        self._reconcile_startup_once()
+        if not project_path:
+            return None
+        with self._lock:
+            return self._project_blocker_locked(project_path)
+
+    @contextmanager
+    def project_admission(self, project_path: str | None):
+        """Reserve before model preparation; durable run state then owns the root."""
+        self._reconcile_startup_once()
+        if not project_path:
+            yield
+            return
+        token = new_id("admission")
+        with self._lock:
+            blocker = self._project_blocker_locked(project_path)
+            if blocker is not None:
+                raise HarnessError("Another task owns this project. Wait for it to finish or resolve its unconfirmed effects before starting this task.",
+                    code="project_busy", status_code=409, details=blocker)
+            self._project_admissions[token] = (project_path, threading.get_ident())
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._project_admissions.pop(token, None)
+
+    def _request_project_path(self, request: AgentStartRequest) -> str | None:
+        workspace = LabStore(self.manager.paths).get_workspace(request.workspace_id) if request.workspace_id else None
+        if workspace is not None and (not request.project_id or workspace.origin == "restored"):
+            return str(workspace.path)
+        if request.project_id:
+            project = SetupService(self.store, self.manager).get_project(request.project_id, require_active=True)
+            if workspace is not None and canonical_root(workspace.path) != canonical_root(project.path):
+                raise HarnessError("The workspace does not match the selected project.", code="project_mismatch", status_code=409)
+            return project.path
+        return request.project_path
+
+    def require_thread_effects_confirmed(self, thread_id: str | None) -> None:
+        """A new run cannot bypass an earlier unconfirmed action on its thread.
+
+        Project exclusion additionally protects other chats sharing files. This
+        continuation boundary also covers browser, desktop and external tools
+        in projectless chats. Existing interrupt resumes keep their owned run.
+        """
+        self._reconcile_startup_once()
+        if not thread_id:
+            return
+        with self._lock:
+            stored = {item.id: item for item in self.store.list_runs()}
+            stored.update(self._runs)
+            for run in root_runs(list(stored.values())):
+                if run.thread_id != thread_id:
+                    continue
+                uncertain = [ident for ident, item in run.tool_outcomes.items()
+                    if item.outcome in {"running", "uncertain"} and not item.evidence.get("acknowledged_at")]
+                if uncertain:
+                    raise HarnessError(
+                        "An earlier action in this chat has unconfirmed effects. Inspect and acknowledge it before continuing; it will not be repeated automatically.",
+                        code="effects_unconfirmed", status_code=409,
+                        details={"run_id": run.id, "thread_id": thread_id,
+                            "call_ids": uncertain, "recovery_action": "inspect_effects"})
+
+    def acknowledge_project_effects(self, run_id: str) -> AgentRun:
+        """Inspect first, then record explicit acceptance without replay or a success claim."""
+        self._reconcile_startup_once()
+        with self._lock:
+            run = self._runs.get(run_id) or self.store.get_run(run_id)
+            if run is None:
+                raise HarnessError("Unknown task.", code="run_missing", status_code=404)
+            if is_run_lifecycle_live(run.status) or run.finalization_phase is not None:
+                raise HarnessError("Wait for this task to stop before reviewing its effects.", code="run_still_live", status_code=409)
+            updated = run.model_copy(deep=True)
+            reconcile_effects(updated)
+            now = utc_now()
+            acknowledged = []
+            for ident, item in list(updated.tool_outcomes.items()):
+                if item.outcome == "uncertain" and not item.evidence.get("acknowledged_at"):
+                    updated.tool_outcomes[ident] = item.model_copy(update={"evidence": {**item.evidence, "acknowledged_at": now},
+                        "recovery_action": "continue", "updated_at": now})
+                    acknowledged.append(ident)
+            updated.failure = failure_for_run(updated)
+            updated.updated_at = now
+            updated.events.append(AgentEvent(at=now, kind="effects_acknowledged", detail={"call_ids": acknowledged, "replayed": False}))
+            self._persist_and_notify(updated)
+            self._runs[run_id] = updated
+            return updated.model_copy(deep=True)
+
     def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
+        self.require_thread_effects_confirmed(request.thread_id)
+        with self.project_admission(self._request_project_path(request)):
+            return self._start_admitted(request, instruction_snapshot=instruction_snapshot,
+                helper_snapshot=helper_snapshot, execution_snapshot=execution_snapshot)
+
+    def _start_admitted(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self._reconcile_startup_once()
         selection_service = SetupService(self.store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.connections.available, connection_tools=lambda ident: [tool.name for tool in self.connections.get(ident).tools])
         if request.project_path and not request.project_id and not request.workspace_id:
@@ -369,7 +485,7 @@ class HarnessService:
             # A checkpoint branch keeps its original project identity/defaults,
             # while its files live in the separately registered restored copy.
             execution_path = workspace.path if workspace is not None and workspace.origin == "restored" else project.path
-            if request.project_path and Path(request.project_path).resolve() != Path(execution_path).resolve():
+            if request.project_path and canonical_root(request.project_path) != canonical_root(execution_path):
                 raise HarnessError("The folder does not match the selected project.", code="project_mismatch", status_code=409)
             selected["project_path"] = execution_path
         request = request.model_copy(update=selected)
@@ -404,6 +520,10 @@ class HarnessService:
                 )
             refs = self._resolve_knowledge_refs(request)
             versions = self._load_knowledge_versions(refs)
+            from workbench_backend.agents.memory_skills import memory_selection_notice
+            # The native memory middleware derives the same model-only notice.
+            # Preserve the exact submitted input in run records and graph state.
+            model_content_blocks = [*(request.content_blocks or []), memory_selection_notice(refs.memory_version_refs)]
             knowledge_plan = plan_knowledge_materialization(
                 versions,
                 resource_loader=self._knowledge_provider().resource_bytes if self._knowledge_provider else None,
@@ -442,32 +562,19 @@ class HarnessService:
                 external_names=external_names,
                 attachment_available=bool(request.retained_asset_ids),
             )
-            retrieval_requested = bool((request.embedding_deployment_id or "").strip())
+            retrieval_requested = bool(request.embedding_deployment_id or request.retained_asset_ids or request.retrieval_project_paths)
             recorded = request.tool_mode is ToolMode.recorded_tool
-            if retrieval_requested and SEARCH_KNOWLEDGE_TOOL_NAME in denied:
-                denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
+            if not recorded:
+                validate_project_retrieval_paths(project_path, request.retrieval_project_paths)
             embedding_deployment = None
             retrieval_documents = []
-            if retrieval_requested and not recorded:
+            if request.embedding_deployment_id and not recorded:
                 embedding_deployment = resolve_embedding_deployment(
                     self.manager,
                     request.embedding_deployment_id or "",
                 )
-                retrieval_documents = load_retrieval_documents(
-                    versions,
-                    list(request.retrieval_project_paths),
-                    project_path,
-                )
-                if not retrieval_documents:
-                    raise HarnessError(
-                        "Retrieval was requested but the derived corpus is empty. "
-                        "Select knowledge versions or allowlisted project text files. "
-                        "No hits were invented.",
-                        code="retrieval_corpus_empty",
-                        status_code=409,
-                    )
             retrieval_presented = bool(
-                retrieval_requested and not recorded and embedding_deployment is not None
+                (request.retained_asset_ids or request.retrieval_project_paths) and not recorded and request.presented_tools != []
             )
             if denied:
                 raise HarnessError(
@@ -502,7 +609,9 @@ class HarnessService:
                 ["/large_tool_results/", "/conversation_history/"]
                 if presented and "read_file" not in presented and not recorded else []
             )
-            if retrieval_presented and request.presented_tools == []:
+            if retrieval_presented and "/retrieved/" not in framework_read_paths:
+                framework_read_paths.append("/retrieved/")
+            if request.embedding_deployment_id and request.presented_tools == []:
                 raise HarnessError(
                     "Retrieval requires its search tool. Enable tools or remove the retrieval selection.",
                     code="retrieval_tools_off",
@@ -541,7 +650,7 @@ class HarnessService:
             )
             enabled = [*enabled, *external_names]
             enabled.extend(name for name in presented if name not in enabled)
-            if helpers and request.presented_tools != []:
+            if helpers and request.presented_tools != [] and "task" not in enabled:
                 enabled.append("task")
             if framework_read_paths and "read_file" not in enabled:
                 enabled.append("read_file")
@@ -654,14 +763,14 @@ class HarnessService:
             retained = SummarizationMiddleware._apply_event_to_messages(retained, saved_state.get(SUMMARIZATION_EVENT_KEY))
             validation_messages = [SystemMessage(content=setup.system_prompt), *retained]
             if not request.resume_checkpoint_id:
-                validation_messages.append(HumanMessage(content=user_message_content(request.task, request.content_blocks)))
-            validate_retained_messages(deployment, validation_messages)
+                validation_messages.append(HumanMessage(content=user_message_content(request.task, model_content_blocks)))
+            validate_retained_messages(deployment, validation_messages, allow_recovery=not request.resume_checkpoint_id)
             context_observation = observe_context(
                 deployment=deployment,
                 per_request=setup.bags.per_request,
                 system_prompt=setup.system_prompt,
                 task="" if request.resume_checkpoint_id else request.task,
-                content_blocks=None if request.resume_checkpoint_id else request.content_blocks,
+                content_blocks=None if request.resume_checkpoint_id else model_content_blocks,
                 tool_count=len(presented),
                 output_schema=(
                     request.output_schema.json_schema
@@ -672,9 +781,9 @@ class HarnessService:
                 history=retained,
                 tools=tools_for_names(presented),
             )
-            require_context_fit(context_observation)
-            # Another live run in this folder does not block a new one. The person
-            # chooses which run writes. Lab capture and backup still wait for a quiet folder.
+            # Native summarization must see reducible history before the final
+            # outbound guard decides whether the current request can fit.
+            # The project reservation precedes both model loading and this snapshot.
             starting_snapshot_id = self._capture_starting_snapshot(request, project_path)
             now = utc_now()
             run = AgentRun(
@@ -1023,6 +1132,7 @@ class HarnessService:
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
             run.error = clarify_connection_error(exc)
+            run.failure = failure_for_run(run, code=getattr(exc, "code", None))
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
             with self._lock:
@@ -1073,6 +1183,7 @@ class HarnessService:
                 self._finish(run, AgentRunStatus.cancelled, "cancelled")
                 return
             run.error = clarify_connection_error(exc)
+            run.failure = failure_for_run(run, code=getattr(exc, "code", None))
             self._finish(run, AgentRunStatus.failed, "failed")
         finally:
             with self._lock:
@@ -1195,7 +1306,9 @@ class HarnessService:
         # A tool image must be retained before the graph checkpoint; runs with
         # no Chat asset owner cannot safely expose a raw image result.
         backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only,
-            image_inputs_allowed=image_inputs_allowed, capture_backend=capture_backend)
+            image_inputs_allowed=image_inputs_allowed, capture_backend=capture_backend,
+            cancel_requested=lambda: (execution_control.root.status in {AgentRunStatus.cancel_requested, AgentRunStatus.cancelled}
+                or bool((cancel_event := self._cancels.get(execution_control.root.id)) and cancel_event.is_set())))
         knowledge_plan = self._knowledge_plan_for_run(run)
         if backend is not None:
             agent_kwargs["backend"] = backend
@@ -1205,27 +1318,34 @@ class HarnessService:
         observation = run.context_observation
         usable = observation.usable_input_tokens if observation is not None else None
         # Override provider-name defaults; only observed runtime capacity is a fact.
-        model.profile = {**media_profile, **({"max_input_tokens": usable} if usable else {})}
+        model.profile = {**media_profile, **({"max_input_tokens": usable} if usable is not None else {})}
         if not inspection_only and callable(getattr(model, "set_generation_observer", None)):
-            latest_request_id: str | None = None
+            latest_request_ids: dict[str, str] = {}
 
             def observe_generation(sample: dict[str, Any]) -> None:
-                nonlocal latest_request_id
                 with self._lock:
                     if not is_run_lifecycle_live(run.status) or run.finalization_phase is not None:
                         return
-                    latest_sample = model.latest_generation_sample() if callable(getattr(model, "latest_generation_sample", None)) else None
+                    purpose = sample.get("purpose", "work")
+                    latest_sample = model.latest_generation_sample(purpose=purpose) if callable(getattr(model, "latest_generation_sample", None)) else None
                     if latest_sample is not None and sample.get("request_id") != latest_sample.get("request_id"):
                         return
                     if sample.get("reset"):
-                        latest_request_id = sample["request_id"]
-                        run.generation_observation = None
-                    elif sample["request_id"] == latest_request_id:
+                        latest_request_ids[purpose] = sample["request_id"]
+                        if purpose == "work":
+                            run.generation_observation = None
+                        else:
+                            run.housekeeping_generation.pop(purpose, None)
+                    elif sample["request_id"] == latest_request_ids.get(purpose):
                         if latest_sample is not None and sample != latest_sample:
                             return
-                        run.generation_observation = GenerationObservation(
+                        measured = GenerationObservation(
                             **sample, context_limit=observation.capacity_tokens if observation else None,
                         )
+                        if purpose == "work":
+                            run.generation_observation = measured
+                        else:
+                            run.housekeeping_generation[purpose] = measured
                     else:
                         return
                     run.updated_at = utc_now()
@@ -1244,19 +1364,13 @@ class HarnessService:
         if observation is not None and callable(getattr(model, "set_context_guard", None)):
             def guard(payload: dict[str, Any]) -> None:
                 observed = observe_payload(observation, payload)
-                run.context_observation = observed
+                run.activity_phase = "summarizing" if current_request_purpose() == "summary" else "thinking"
+                if current_request_purpose() == "work":
+                    run.context_observation = observed
+                else:
+                    run.housekeeping_context[current_request_purpose()] = observed
                 require_context_fit(observed)
             model.set_context_guard(guard)
-        native_summarization = compute_summarization_defaults(model) if usable else None
-        summarization = BudgetedSummarizationMiddleware(
-            model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
-            allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
-            trigger=native_summarization["trigger"] if native_summarization else None,
-            keep=native_summarization["keep"] if native_summarization else ("messages", 6),
-            token_counter=count_context_tokens,
-            trim_tokens_to_summarize=None,
-            truncate_args_settings=None,
-        )
         agent_kwargs.update(official_agent_kwargs(knowledge_plan))
         permissions = filesystem_permissions_for_run(run)
         if permissions:
@@ -1290,6 +1404,30 @@ class HarnessService:
             per_request=per_request,
             tools_presented=bool(run.presented_tools),
             tools_off=not run.presented_tools,
+        )
+        native_summarization = compute_summarization_defaults(model) if usable else None
+        from langchain.agents.structured_output import ProviderStrategy
+        provider_format = response_format.to_model_kwargs().get("response_format") if isinstance(response_format, ProviderStrategy) else None
+
+        def retain_failed_context(count: int, budget: int | None) -> None:
+            if observation is None:
+                return
+            failed = observation.model_copy(deep=True)
+            failed.purpose = "work"
+            failed.estimated_input_tokens = count
+            failed.usable_input_tokens = budget
+            failed.fits = count <= budget if budget is not None else None
+            failed.notes.append("Native context recovery exhausted before a new work request could be sent.")
+            run.context_observation = failed
+
+        summarization = BudgetedSummarizationMiddleware(
+            model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
+            allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
+            trigger=native_summarization["trigger"] if native_summarization else None,
+            keep=native_summarization["keep"] if native_summarization else ("messages", 6),
+            token_counter=token_counter_for_model(model, response_format=provider_format),
+            on_context_failure=retain_failed_context,
+            trim_tokens_to_summarize=None,
         )
         if structured_output is not None and run.structured_output is None:
             run.structured_output = structured_output
@@ -1640,30 +1778,45 @@ class HarnessService:
 
     def _merge_latest_generation_sample(self, run: AgentRun) -> None:
         model = self._adapter_models.get(run.id)
-        accessor = getattr(model, "latest_generation_sample", None)
-        sample = accessor() if callable(accessor) else None
-        if not isinstance(sample, dict):
-            return
-        if sample.get("reset"):
-            run.generation_observation = None
-            return
-        try:
-            run.generation_observation = GenerationObservation(
-                **sample,
-                context_limit=run.context_observation.capacity_tokens if run.context_observation else None,
-            )
-        except (TypeError, ValueError):
-            # A malformed measurement cannot change the graph's settled result.
-            return
+        all_samples = getattr(model, "latest_generation_samples", None)
+        if callable(all_samples):
+            samples = all_samples()
+        else:
+            accessor = getattr(model, "latest_generation_sample", None)
+            samples = {"work": accessor()} if callable(accessor) else {}
+        for purpose, sample in samples.items():
+            if not isinstance(sample, dict):
+                continue
+            if sample.get("reset"):
+                if purpose == "work":
+                    run.generation_observation = None
+                else:
+                    run.housekeeping_generation.pop(purpose, None)
+                continue
+            try:
+                measured = GenerationObservation(
+                    **sample,
+                    context_limit=run.context_observation.capacity_tokens if run.context_observation else None,
+                )
+            except (TypeError, ValueError):
+                # A malformed measurement cannot change the graph's settled result.
+                continue
+            if purpose == "work":
+                run.generation_observation = measured
+            else:
+                run.housekeeping_generation[purpose] = measured
 
     def _commit_terminal_run(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
         settled_copy = run.model_copy(deep=True)
         self._merge_latest_generation_sample(run)
         run.finalization_phase = None
+        run.activity_phase = None
         run.settled_status = None
         run.settled_stop_reason = None
         run.status = status
         run.stop_reason = stop_reason
+        reconcile_effects(run)
+        run.failure = failure_for_run(run, code=run.failure.code if run.failure else None)
         run.finished_at = utc_now()
         run.updated_at = run.finished_at
         # Inline children have no detached worker once their owning graph ends.
@@ -1680,12 +1833,18 @@ class HarnessService:
                 child.finished_at = run.finished_at
                 child.updated_at = run.finished_at
                 child.pending_interrupt = None
+                child.activity_phase = None
                 activity.status = child.status.value
                 self._persist(child)
         if run.generation_observation is not None and run.generation_observation.phase in {"prompt_processing", "generating"}:
             run.generation_observation = run.generation_observation.model_copy(update={
                 "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
             })
+        for purpose, observed in list(run.housekeeping_generation.items()):
+            if observed.phase in {"prompt_processing", "generating"}:
+                run.housekeeping_generation[purpose] = observed.model_copy(update={
+                    "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": run.finished_at,
+                })
         event_detail: dict[str, Any] = {
             "stop_reason": stop_reason,
             "error": run.error,
@@ -1838,6 +1997,11 @@ class HarnessService:
 
     def _ingest_message(self, run: AgentRun, message: BaseMessage | Any, node: str | None) -> bool:
         if isinstance(message, AIMessage) and message.invalid_tool_calls:
+            for call in message.invalid_tool_calls:
+                if call.get("id"):
+                    run.tool_outcomes[call["id"]] = ToolOutcome(call_id=call["id"], name=call.get("name") or "unknown",
+                        outcome="incomplete_arguments", failure_category="input", recovery_action="continue",
+                        detail="The model stopped before producing valid arguments. This call was not executed.", updated_at=utc_now())
             raise HarnessError("The model returned malformed tool arguments. No invalid call was executed.", code="invalid_tool_call", status_code=409)
         now = utc_now()
         emitted = False
@@ -1871,6 +2035,8 @@ class HarnessService:
                         "name": message.name,
                         "content": _safe_tool_event_content(message),
                         "tool_call_id": message.tool_call_id,
+                        "status": message.status,
+                        "outcome": "failed" if message.status == "error" else "succeeded",
                         **_tool_media_reference(message),
                         **tool_authorization_metadata(run, message.tool_call_id),
                         **({"node": node} if node else {}),
@@ -1933,36 +2099,27 @@ class HarnessService:
             return None
         if SEARCH_KNOWLEDGE_TOOL_NAME not in run.presented_tools:
             return None
-        if not run.embedding_deployment_id or backend is None:
+        if backend is None:
             return None
         if inspection_only:
-            return make_search_knowledge_tool(_CheckpointInspectionVectorStore(), backend)
-        embedding_deployment = resolve_embedding_deployment(
-            self.manager,
-            run.embedding_deployment_id,
-        )
-        refs = KnowledgeRefs(
-            memory_version_refs=run.memory_version_refs,
-            skill_version_refs=run.skill_version_refs,
-            protected_instruction_version_refs=run.protected_instruction_version_refs,
-        )
-        documents = load_retrieval_documents(
-            self._load_knowledge_versions(refs),
-            list(run.retrieval_project_paths),
-            run.project_path,
-        )
-        if not documents:
-            raise HarnessError(
-                "Retrieval was requested but the derived corpus is empty. No hits were invented.",
-                code="retrieval_corpus_empty",
-                status_code=409,
-            )
-        store = build_vector_store(documents, self._embeddings_factory(embedding_deployment))
+            return make_document_search_tool(lambda: [], backend)
+        session = self.assets.session_for_run(run) if self.assets is not None else None
+
+        def documents():
+            return [*documents_from_retained_assets(self.store, run.retained_asset_ids,
+                session_id=session.id if session else None, project_path=run.project_path),
+                *load_retrieval_documents([], list(run.retrieval_project_paths), run.project_path)]
+
+        def embeddings():
+            deployment = resolve_embedding_deployment(self.manager, run.embedding_deployment_id)
+            return self._embeddings_factory(deployment)
 
         def on_retrieved(sources: list[str]) -> None:
             run.retrieved_material = record_retrieved_sources(run.retrieved_material, sources)
 
-        return make_search_knowledge_tool(store, backend, on_retrieved)
+        return make_document_search_tool(documents, backend,
+            embeddings_factory=embeddings if run.embedding_deployment_id else None,
+            on_retrieved=on_retrieved)
 
     def _resolve_knowledge_refs(self, request: AgentStartRequest) -> KnowledgeRefs:
         requested = (
@@ -2018,47 +2175,41 @@ class HarnessService:
             values = getattr(state, "values", {}) or {}
         except Exception:
             values = {}
-        cancel = self._cancels.get(run.id)
-        if cancel is not None and cancel.is_set():
-            pending_calls: dict[str, dict[str, Any]] = {}
-            for message in values.get("messages", []):
-                for call in getattr(message, "tool_calls", []):
-                    if call.get("id"):
-                        pending_calls[call["id"]] = call
-                if isinstance(message, ToolMessage):
-                    pending_calls.pop(message.tool_call_id, None)
-            if pending_calls:
-                # Cancellation can land after the model checkpoint but before
-                # tools run. Preserve calls and explicitly close their protocol
-                # pairs without executing or replaying any tool. An interrupted
-                # tool may have effects, so never invent a successful/no-op result.
-                repaired_messages = list(values.get("messages", []))
-                existing_ids = {getattr(message, "id", None) for message in repaired_messages}
-                results = []
-                for ident, call in pending_calls.items():
-                    message_id = f"{ident}:cancelled"
-                    suffix = 1
-                    while message_id in existing_ids:
-                        suffix += 1
-                        message_id = f"{ident}:cancelled:{suffix}"
-                    existing_ids.add(message_id)
-                    results.append(ToolMessage(
-                        id=message_id,
-                        tool_call_id=ident,
-                        name=call["name"],
-                        status="error",
-                        content="Run cancelled before a tool result was recorded. Completion is unconfirmed; inspect state before retrying any action.",
-                    ))
-                # `messages` uses LangGraph's public add_messages reducer.
-                # Replace the whole channel so the synthetic tool result stays
-                # after the matching AI tool call even when abort races the
-                # native stream's final checkpoint write.
-                await agent.aupdate_state(
-                    _invoke_config(run),
-                    {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *repaired_messages, *results]},
-                )
-                await self._alink_new_checkpoints(run, agent)
-                run.events.append(AgentEvent(at=utc_now(), kind="cancelled_tool_results", detail={"tool_call_ids": list(pending_calls), "execution_confirmed": False}))
+        # Preserve each known sibling result even when another tool aborts the
+        # native batch. Native PatchToolCallsMiddleware closes only the remaining
+        # pairs on the next user turn; neither path invokes an old action.
+        reconcile_effects(run)
+        messages = list(values.get("messages", []))
+        answered = {message.tool_call_id for message in messages if isinstance(message, ToolMessage)}
+        repaired = []
+        restored = []
+        for message in messages:
+            repaired.append(message)
+            for call in getattr(message, "tool_calls", []):
+                ident = call.get("id")
+                if not ident or ident in answered:
+                    continue
+                outcome = run.tool_outcomes.get(ident)
+                if outcome is None:
+                    dispatched = f"{run.id}:{ident}" in run.dispatched_tool_ids
+                    run.tool_outcomes[ident] = ToolOutcome(call_id=ident, name=call.get("name") or "unknown",
+                        outcome="uncertain" if dispatched else "not_dispatched",
+                        recovery_action="inspect_effects" if dispatched else "continue",
+                        detail="No durable result was recorded." if dispatched else "This call was not dispatched.", updated_at=utc_now())
+                    continue
+                if outcome.outcome not in {"succeeded", "failed"}:
+                    continue
+                content = outcome.result if outcome.result is not None else outcome.detail or "The tool completed."
+                repaired.append(ToolMessage(id=f"{ident}:settled", tool_call_id=ident, name=outcome.name,
+                    status="success" if outcome.outcome == "succeeded" else "error", content=content,
+                    additional_kwargs=outcome.result_metadata))
+                restored.append(ident)
+        if restored:
+            await agent.aupdate_state(_invoke_config(run),
+                {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *repaired]})
+            await self._alink_new_checkpoints(run, agent)
+            run.events.append(AgentEvent(at=utc_now(), kind="tool_results_reconciled",
+                detail={"tool_call_ids": restored, "replayed": False}))
         compaction = values.get(SUMMARIZATION_EVENT_KEY)
         if isinstance(compaction, dict):
             cutoff = compaction.get("cutoff_index")
@@ -2247,6 +2398,7 @@ class HarnessService:
             missing_checkpoint = live.pending_interrupt is not None
             cancelling = live.status is AgentRunStatus.cancel_requested
             live.finalization_phase = None
+            live.activity_phase = None
             live.settled_status = None
             live.settled_stop_reason = None
             live.status = AgentRunStatus.failed
@@ -2261,10 +2413,17 @@ class HarnessService:
             )
             live.finished_at = utc_now()
             live.updated_at = live.finished_at
+            reconcile_effects(live)
+            live.failure = failure_for_run(live, code="orphaned")
             if live.generation_observation is not None and live.generation_observation.phase in {"prompt_processing", "generating"}:
                 live.generation_observation = live.generation_observation.model_copy(update={
                     "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": live.finished_at,
                 })
+            for purpose, observed in list(live.housekeeping_generation.items()):
+                if observed.phase in {"prompt_processing", "generating"}:
+                    live.housekeeping_generation[purpose] = observed.model_copy(update={
+                        "phase": "interrupted", "interval": "last_model_call_generation", "measured_at": live.finished_at,
+                    })
             live.events.append(
                 AgentEvent(
                     at=live.updated_at,

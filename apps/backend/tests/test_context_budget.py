@@ -30,6 +30,7 @@ from workbench_backend.app import create_app
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
 from workbench_backend.inference.capabilities import setup_fingerprint
+from workbench_backend.inference.request_projection import project_context_payload
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import ServerProperties
 from workbench_backend.inference.schemas import SettingsBag
@@ -210,7 +211,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         checkpoint_after = conversation_state(self.manager.paths.checkpoints_db, "thread-image-context")
         self.assertEqual(checkpoint_after.get("messages"), checkpoint_before.get("messages"))
 
-    def test_smaller_observed_context_blocks_long_retained_history_without_changing_checkpoint(self) -> None:
+    def test_irreducible_smaller_context_fails_before_dispatch_and_retains_history(self) -> None:
         thread_id = "thread-smaller-context"
         self._set_context(n_ctx=32768, vision=True)
         started = self._start(thread_id=thread_id, task="long-context " + ("older material " * 900), presented_tools=[])
@@ -228,12 +229,17 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         )
         self._set_context(n_ctx=512, vision=True)
 
-        rejected = self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=[])
-        self.assertEqual(rejected.status_code, 409, rejected.text)
-        self.assertEqual(rejected.json()["code"], "context_capacity_exceeded")
-        self.assertEqual(len(self.chat_payloads), 1, "smaller context must block before another model request")
+        accepted = self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=[])
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        failed = self._complete(accepted.json())
+        self.assertEqual(failed["status"], "failed")
+        self.assertFalse(failed["context_observation"]["fits"])
+        self.assertEqual(failed["context_observation"]["purpose"], "work")
+        self.assertEqual(failed["failure"]["recovery_action"], "change_limit")
+        self.assertEqual(len(self.chat_payloads), 1, "native compaction must not dispatch an irreducible oversized request")
         checkpoint_after = conversation_state(self.manager.paths.checkpoints_db, thread_id)
-        self.assertEqual(checkpoint_after.get("messages"), messages_before, "preflight must preserve retained checkpoint state")
+        self.assertEqual(checkpoint_after.get("messages", [])[:len(messages_before)], messages_before,
+                         "native failure must preserve retained messages even when the new turn is checkpointed")
 
     def test_retained_tool_result_pair_is_preserved_and_incomplete_pairs_are_rejected(self) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
@@ -287,12 +293,10 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         }}}
         self.assertGreater(estimate_payload({"tools": [structured_mcp_schema]}), 0)
 
-        expected_with_schema = estimate_payload({
-            "messages": [HumanMessage(content="Say hello.")],
-            "system": "Answer the request.",
-            "tools": tools,
-            "response_format": schema,
-        })
+        expected_with_schema = estimate_payload(project_context_payload(
+            [SystemMessage(content="Answer the request."), HumanMessage(content="Say hello.")],
+            tools=tools, response_format=schema,
+        ))
         self.assertGreater(expected_with_schema, estimate_payload({
             "messages": [HumanMessage(content="Say hello.")],
             "system": "Answer the request.",
@@ -320,7 +324,7 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         observed = observe_payload(observation, live_payload)
         expected_live = estimate_payload({key: value for key, value in live_payload.items() if key in {"messages", "tools", "response_format"}})
         self.assertEqual(observed.estimated_input_tokens, expected_live)
-        self.assertGreater(observed.estimated_input_tokens, expected_with_schema)
+        self.assertEqual(observed.estimated_input_tokens, expected_with_schema)
         self.assertEqual(observed.fits, observed.estimated_input_tokens <= observation.usable_input_tokens)
 
         model = ScriptedChatModel([])
@@ -433,6 +437,108 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertTrue(budgets, "the configured summarizer should measure the input budget")
         self.assertTrue(all(item == usable for item in budgets))
         self.assertNotEqual(budgets[0], max(0, int(usable * 0.95)))
+
+    def test_long_reasoning_continues_then_compacts_readable_native_history(self) -> None:
+        self._set_context(n_ctx=98304, vision=True)
+        deployment = self.manager.get_deployment(self.deployment_id)
+        props = deployment.server_props.model_copy(deep=True)
+        props.chat_template_caps["supports_preserve_reasoning"] = True
+        self.manager.store.put_deployment(deployment.model_copy(update={
+            "server_props": props, "applied_startup": {"reasoning_preserve": True}}))
+        normal_endpoint = self._mock_openai
+        reason = "bounded-history-thought " * 5249
+        first = True
+
+        def endpoint(request):
+            nonlocal first
+            payload = json.loads(request.content)
+            if payload.get("stream") and first:
+                first = False
+                self.chat_payloads.append(payload)
+                return self._stream_fixture(request, {"role": "assistant", "content": "First reply.", "reasoning_content": reason})
+            return normal_endpoint(request)
+
+        self._mock_openai = endpoint
+        thread_id = "thread-long-reasoning"
+        first_run = self._complete(self._start(thread_id=thread_id, task="original-history-marker", presented_tools=["echo"]).json())
+        self.assertEqual(first_run["status"], "completed", first_run.get("error"))
+        second_run = self._complete(self._start(thread_id=thread_id, task="Continue briefly.", presented_tools=["echo"]).json())
+        self.assertEqual(second_run["status"], "completed", second_run.get("error"))
+        self.assertFalse(any(event["kind"] == "context_compacted" for event in second_run["events"]))
+        self.assertLess(second_run["context_observation"]["estimated_input_tokens"], 50000)
+        self.assertEqual(sum(json.dumps(payload).count(reason) for payload in self.chat_payloads), 1)
+        third_run = self._complete(self._start(thread_id=thread_id, task="new material " * 14000,
+                                              presented_tools=["echo"]).json())
+        self.assertEqual(third_run["status"], "completed", third_run.get("error"))
+        compacted = [event for event in third_run["events"] if event["kind"] == "context_compacted"]
+        self.assertEqual(len(compacted), 1)
+        path = compacted[0]["detail"]["history_preserved_at"]
+        self.assertTrue(path.startswith("/conversation_history/"))
+        from workbench_backend.agents.harness_backend import build_run_backend
+        backend = build_run_backend(AgentRun.model_validate(third_run), self.manager.paths, prepare_storage=False)
+        saved = backend.download_files([path])[0]
+        self.assertIsNone(saved.error)
+        self.assertIn("original-history-marker", saved.content.decode())
+        self.assertIn(reason, saved.content.decode())
+        self.assertIsNone(backend.read(path, offset=0, limit=5).error)
+        self.assertEqual(third_run["context_observation"]["purpose"], "work")
+        self.assertEqual(third_run["housekeeping_context"]["summary"]["purpose"], "summary")
+        self.assertTrue(third_run["context_observation"]["fits"])
+
+    @staticmethod
+    def _stream_fixture(request, delta, finish="stop"):
+        events = [
+            {"id": "budget-fixture", "object": "chat.completion.chunk", "created": 1,
+             "model": "fixture-model", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+            {"id": "budget-fixture", "object": "chat.completion.chunk", "created": 1,
+             "model": "fixture-model", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+        ]
+        body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=body.encode(), request=request)
+
+    def test_response_limit_partial_call_never_executes_and_next_turn_continues(self) -> None:
+        normal_endpoint = self._mock_openai
+        first = True
+        project = self.root / "partial-project"
+        project.mkdir()
+
+        def endpoint(request):
+            nonlocal first
+            payload = json.loads(request.content)
+            if payload.get("stream") and first:
+                first = False
+                self.chat_payloads.append(payload)
+                return self._stream_fixture(request, {"role": "assistant", "tool_calls": [
+                    {"index": 0, "id": "ready-write", "type": "function", "function": {
+                        "name": "write_file", "arguments": '{"file_path":"/ready.txt","content":"ready"}'}},
+                    {"index": 1, "id": "partial-write", "type": "function", "function": {
+                        "name": "write_file", "arguments": '{"file_path":"/never.txt","content":"cut'}}]}, "length")
+            return normal_endpoint(request)
+
+        self._mock_openai = endpoint
+        first_run = self._complete(self._start(thread_id="thread-partial-output", task="Write a file",
+            project_path=str(project), presented_tools=["write_file"], approval_mode="full_access",
+            per_request_overrides={"reasoning_budget_tokens": 32, "max_tokens": 128}).json())
+        self.assertEqual(first_run["status"], "failed")
+        self.assertEqual(first_run["dispatched_tool_calls"], 0)
+        self.assertEqual(first_run["failure"]["code"], "response_limit_reached")
+        self.assertEqual(first_run["failure"]["recovery_action"], "change_limit")
+        outcome = first_run["tool_outcomes"]["partial-write"]
+        self.assertEqual(outcome["outcome"], "incomplete_arguments")
+        self.assertEqual(outcome["name"], "write_file")
+        self.assertEqual(first_run["tool_outcomes"]["ready-write"]["outcome"], "not_dispatched")
+        self.assertEqual(first_run["tool_invocations"], [])
+        self.assertFalse((project / "never.txt").exists())
+        self.assertFalse((project / "ready.txt").exists())
+        self.assertEqual(self.chat_payloads[0]["max_tokens"], 128)
+        self.assertEqual(self.chat_payloads[0]["reasoning_budget_tokens"], 32)
+        resumed = self._start(thread_id="thread-partial-output", task="Continue without writing.",
+            project_path=str(project), presented_tools=["write_file"], approval_mode="full_access")
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        second_run = self._complete(resumed.json())
+        self.assertEqual(second_run["status"], "completed", second_run.get("error"))
+        self.assertFalse((project / "never.txt").exists())
+        self.assertFalse((project / "ready.txt").exists())
 
     def test_unknown_capacity_preserves_non_fraction_compaction_policy(self) -> None:
         self._set_context(n_ctx=None, vision=True)

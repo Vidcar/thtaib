@@ -70,7 +70,7 @@ try {
   assert.match(legacyHelper, /Other tool output/, "a later unrelated tool result reusing the helper id remains visible");
   const { helperEntries, helperIsActive } = await vite.ssrLoadModule("/src/renderer/HelperRail.tsx");
   const live = { id: "helper-task-1", name: "research", namespace: ["tools"], parentId: null, status: "running", taskInput: "Research the exact request" };
-  assert.equal(helperEntries([], [live], "parent-1")[0].request, "Research the exact request", "early SDK discovery lists the helper before a child run exists");
+  assert.equal(helperEntries([{ id: "parent-1", events: [{ kind: "tool_call", detail: { id: "helper-task-1", name: "task" } }] }], [live], "parent-1")[0].request, "Research the exact request", "owned task discovery lists the helper before a child run exists");
   const scoped = helperEntries([{ id: "parent-1", helper_snapshots: [{ agent_id: "research", version_id: "v1", name: "Research helper" }], child_runs: [{ run_id: "child-1", tool_call_id: "helper-task-1", agent_id: "research", version_id: "v1", name: "research", namespace: ["tools:child-1"], status: "waiting for approval or answer" }] }], [live], "parent-1")[0];
   assert.equal(scoped.name, "Research helper");
   assert.deepEqual(scoped.namespace, ["tools:child-1"], "child output uses the saved unique namespace, not generic tools");
@@ -80,8 +80,15 @@ try {
     { id: "parent-2", helper_snapshots: [{ agent_id: "research", version_id: "v2", name: "Renamed helper" }], child_runs: [{ run_id: "child-2", tool_call_id: "reused", agent_id: "research", version_id: "v2", name: "research", namespace: ["tools:child-2"], status: "working" }] },
   ], [], "parent-2");
   assert.deepEqual(twoTurns.map(entry => [entry.key, entry.name, entry.namespace]), [["parent-1:reused", "Research helper", ["tools:child-1"]], ["parent-2:reused", "Renamed helper", ["tools:child-2"]]], "reopen keeps both parent runs and frozen helper names when call ids repeat");
-  const staleDiscovery = helperEntries([{ id: "parent-3", status: "running", events: [{ kind: "started", at: "2026-09-25T12:00:00Z" }], child_runs: [] }], [{ ...live, id: "reused", startedAt: new Date("2026-09-25T11:00:00Z") }], "parent-3");
-  assert.equal(staleDiscovery.length, 0, "an earlier SDK discovery cannot attach to a later parent run that reuses its call id");
+  const staleDiscovery = helperEntries([{ id: "parent-3", status: "running", events: [{ kind: "started", at: "2026-09-25T12:00:00Z" }], child_runs: [] }], [{ ...live, id: "reused", startedAt: new Date("2026-09-25T13:00:00Z") }], "parent-3");
+  assert.equal(staleDiscovery.length, 0, "replaying an older discovery now cannot invent task ownership in the new parent");
+  const reusedDiscovery = helperEntries([
+    { id: "earlier", child_runs: [{ run_id: "old-child", tool_call_id: "reused", namespace: ["tools:old"], status: "completed", name: "Earlier helper" }] },
+    { id: "current", status: "running", events: [{ kind: "tool_call", detail: { id: "reused", name: "task" } }], child_runs: [{ run_id: "new-child", tool_call_id: "reused", namespace: ["tools:new"], status: "working", name: "Current helper" }] },
+  ], [{ ...live, id: "reused", namespace: ["tools:old"], status: "completed", startedAt: new Date() }], "current");
+  assert.deepEqual(reusedDiscovery.map(item => [item.key, item.namespace, item.status]), [
+    ["earlier:reused", ["tools:old"], "completed"], ["current:reused", ["tools:new"], "working"],
+  ], "same call IDs retain both owned children and never apply earlier discovery to the current one");
   const clicked = [];
   let helperRenderer;
   await act(async () => { helperRenderer = create(React.createElement(AgentMessageFeed, { onHelperOpen: (runId, id) => clicked.push([runId, id]), helperName: (_tool, runId) => runId === "parent-1" ? "Research helper" : "Renamed helper", helperRuns: [{ id: "parent-1", input_message_id: "human-1" }, { id: "parent-2", input_message_id: "human-2" }], currentRunId: "parent-2", messages: [
@@ -142,12 +149,27 @@ try {
   const retainedInput = new HumanMessage({ id: "retained-input", content: "Source retained file: sample.txt\nAsset id: internal-id\nSHA-256: internal-hash\nsource bytes" });
   const retainedHtml = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
     messages: [retainedInput],
-    userMessageText: message => message.id === "retained-input" ? "" : undefined,
+    userMessageContent: message => message.id === "retained-input" ? "" : undefined,
     renderMessageFooter: () => React.createElement("span", null, "sample.txt"),
   }));
   assert.match(retainedHtml, /sample.txt/, "attachment-only user turn retains its file card");
   assert.doesNotMatch(retainedHtml, /internal-id|internal-hash|source bytes/, "hydrated execution source labels stay out of readable user message");
   assert.match(String(retainedInput.content), /source bytes/, "display customization must not mutate execution messages");
+  const exactUserInput = "Open C:\\Users\\Dave_\\.codex\\worktrees\\reliable-chat\\thtaib\\.scratch\\notes.txt\nKeep `literal backticks` and **stars**.\n\n  Preserve indentation and <script>plain text</script>.";
+  const exactHuman = new HumanMessage({ id: "exact-user", content: exactUserInput + "\nCurrent turn memory selection: INTERNAL MODEL NOTE" });
+  let userRenderer;
+  try {
+    await act(async () => { userRenderer = create(React.createElement(AgentMessageFeed, {
+      messages: [exactHuman], userMessageContent: () => exactUserInput,
+    })); });
+    const userText = userRenderer.root.findByProps({ className: "user-message-text" });
+    assert.equal(userText.children.join(""), exactUserInput, "the user's paths, Markdown characters, newlines and indentation stay literal");
+    assert.equal(userText.findAll(node => ["code", "strong", "script"].includes(node.type)).length, 0, "user text cannot create formatted or active markup");
+    assert.doesNotMatch(JSON.stringify(userRenderer.toJSON()), /INTERNAL MODEL NOTE/, "canonical user input excludes model-only context");
+    assert.match(String(exactHuman.content), /INTERNAL MODEL NOTE/, "presentation does not rewrite model messages");
+  } finally {
+    if (userRenderer) await act(async () => userRenderer.unmount());
+  }
   const messages = [
     {
       id: "ai_partial",
@@ -188,6 +210,22 @@ try {
   assert.match(detailed, /<details class="message-reasoning" open=""><summary aria-expanded="true">/);
   assert.match(detailed, /<details class="message-tools" open=""><summary aria-expanded="true">/);
 
+  for (const [phase, generationPhase, answer, expected] of [
+    ["thinking", undefined, "", "Thinking"],
+    [undefined, "prompt_processing", "", "Thinking"],
+    ["thinking", "generating", "The answer is", "Writing"],
+    ["using_tools", "completed", "", "Using tools"],
+    ["summarizing", "prompt_processing", "", "Summarizing"],
+  ]) {
+    const phaseRun = { id: "phase-run", status: "running", activity_phase: phase,
+      generation_observation: generationPhase ? { phase: generationPhase } : undefined };
+    const phaseMarkup = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+      messages: [new AIMessage({ id: "phase-message", content: answer })],
+      live: true, currentRunId: phaseRun.id, helperRuns: [phaseRun],
+    }));
+    assert.equal(phaseMarkup.match(/class="message-state"[^>]*>([^<]+)</)?.[1], expected,
+      `phase ${phase ?? generationPhase} must describe actual work before/after answer text`);
+  }
   const historical = renderToStaticMarkup(React.createElement(AgentMessageFeed, {messages: [
     new AIMessage({id: "saved-call", content: "", tool_calls: [{id: "call-old", name: "lookup", args: {q: "retained"}}]}),
     new ToolMessage({id: "saved-result", tool_call_id: "call-old", name: "lookup", content: "Saved lookup result"}),
@@ -277,12 +315,12 @@ try {
   await act(async () => { stoppedInput = create(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], live: true, detailedStreams: true })); });
   await act(async () => stoppedInput.update(React.createElement(AgentMessageFeed, { messages: [], toolCalls: [preparingCall], live: false, detailedStreams: true })));
   const stoppedTree = JSON.stringify(stoppedInput.toJSON());
-  assert.match(stoppedTree, /Partial input/, "terminal runs retain unfinished tool input as partial output");
-  assert.match(stoppedTree, /Unfinished input for stream-bench.html/, "unfinished tool preparation must not claim the file was created");
+  assert.match(stoppedTree, /Proposed content/, "terminal runs retain unfinished tool input as partial output");
+  assert.match(stoppedTree, /Result not recorded for stream-bench.html/, "complete arguments without a result must not claim either creation or unfinished arguments");
   assert.doesNotMatch(stoppedTree, /Creating stream-bench|Created stream-bench|Writing|characters written|KB written/, "a terminal tool cannot still claim active writing or successful execution");
   assert.equal(stoppedInput.root.findByProps({ "aria-label": "Tool input" }).findByType("code").props.children, fileBody, "terminal presentation preserves the entire readable input");
   await act(async () => stoppedInput.update(React.createElement(AgentMessageFeed, { messages: [new HumanMessage({ id: "new-after-stop", content: "A new request" })], toolCalls: [preparingCall], live: true, detailedStreams: true })));
-  assert.match(JSON.stringify(stoppedInput.toJSON()), /Partial input/, "a new turn cannot reactivate an unfinished tool from the previous turn");
+  assert.match(JSON.stringify(stoppedInput.toJSON()), /Proposed content/, "a new turn cannot reactivate an unfinished tool from the previous turn");
   await act(async () => stoppedInput.unmount());
   const hydratedPartial = new AIMessage({ id: "hydrated-partial-tool", content: [
     { type: "reasoning", reasoning: "The generation ended while preparing file input." },

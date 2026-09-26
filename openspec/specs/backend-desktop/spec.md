@@ -170,6 +170,8 @@ Every displayed snapshot SHALL pair message text, run state and resume cursor fr
 
 Existing Chat SHALL support new, rename, archive, retained-title/message search and reopen. Archive changes visibility, not memory/context. Incremental answers, separate returned reasoning, tool content and partial failures SHALL reconcile by run/thread/message/call identity into one final saved result. Internal summaries MUST NOT appear as answers. After the verified `migrate-local-agent-interaction` prerequisite, consume the supported `@langchain/react` interaction boundary for message/tool/state projections and scoped subscriptions; do not extend the superseded custom `snapshot` / `run_event` / `stream_end` contract. Application-owned durable history, run identity, reconnect/hydration and authorization remain authoritative; reconcile SDK updates into one saved result and avoid rewriting the entire growing run for every token.
 
+Submitted user text SHALL display literally with original backslashes, punctuation, line breaks and indentation preserved, while long text wraps within the bubble. Model-only context additions MUST NOT appear as user-authored text. Assistant replies SHALL retain safe Markdown, code and table rendering.
+
 Expose effective setup, actual selected tools/results, observed planning, context capacity/usage/compaction, approvals and loading/empty/error/reconnect states. Provide safe Markdown/code/table rendering, copy and access-checked open/save actions, keyboard controls and scrolling that respects the user's position. Generated HTML/scripts MUST NOT execute in the trusted renderer; opening/saving is not execution authority.
 
 The `repair-local-interaction-boundaries` prerequisite SHALL remain satisfied: selection and transport binding stay atomic, stale callbacks are generation-guarded, command configuration and draft ownership are isolated, and accepted work is never retargeted or repeated by navigation. External links SHALL retain main-owned HTTP(S) validation and requesting-document/frame authorization; neither untrusted windows nor replacement documents gain the backend token.
@@ -183,6 +185,12 @@ The `repair-local-interaction-boundaries` prerequisite SHALL remain satisfied: s
 
 - **WHEN** history is archived or generated code/HTML is displayed
 - **THEN** archive does not erase execution context and content cannot execute with desktop privileges.
+
+
+#### Scenario: Exact submitted user text
+- **WHEN** a person submits a Windows path, backticks, Markdown punctuation, blank lines or indented text
+- **THEN** the user bubble SHALL retain those characters and spacing literally without interpreting them as Markdown or HTML
+- **AND** assistant Markdown and code remain formatted, attachments remain accessible, and model-only context notices remain outside the user bubble.
 
 ### Requirement: API-011 - Keep background work visible and quit deliberately
 
@@ -266,6 +274,10 @@ Opening the application or restoring a chat SHALL NOT warm its selected model. S
 - **WHEN** the application preference changes after a chat explicitly selected Ask
 - **THEN** that chat remains Ask while a new chat takes the current application preference, and Chat names the preference source when no explicit choice exists.
 
+#### Scenario: Bounded everyday reasoning and scoped measurements
+- **WHEN** the user selects Balanced or Deep and later an internal summary runs
+- **THEN** Chat SHALL show the effective supported thinking/response limits and distinguish work, summary, cached input, current measurements and completed measurements without inventing unavailable values.
+
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
 Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact Reasoning and tools switch in the header's Conversation view menu SHALL default off and remember the user's preference across conversations/reopening. Its presentation controls stay distinct from model Thinking and effort controls. Changing this switch SHALL only change the visibility of returned detail, never model reasoning or tool permissions. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
@@ -340,6 +352,12 @@ Inline approval cards SHALL show exact action/resource scope and the four AGT-00
 
 - **WHEN** another conversation requests approval while the app is backgrounded
 - **THEN** its badge/attention entry and allowed Windows notification identify it without moving focus, and opening it presents the current interruption rather than accepting a stale decision.
+
+Project waiting SHALL be distinct from a follow-up behind the same conversation. A known settled outcome in one chat SHALL permit another eligible chat in that project to advance after revalidation; failed-conversation follow-ups keep their existing pause rule. The waiting row SHALL name its owner and offer Open active chat and Cancel waiting message.
+
+#### Scenario: Another chat owns the project
+- **WHEN** a submitted message waits for an overlapping project task
+- **THEN** the message SHALL show that project wait rather than model loading and its cancellation SHALL affect only itself.
 
 ### Requirement: API-020 - Separate technical verification from human UX acceptance
 
@@ -444,7 +462,7 @@ Choosing a file identity line opens the Files page on that file when available. 
 
 - **WHEN** an edit has started and its result is not yet available
 - **THEN** the line shows that the file is being edited
-- **AND** a stopped call is labelled as partial input, without an invented result or line count.
+- **AND** only genuinely incomplete arguments are labelled as partial input; complete calls show undispatched, failed or uncertain outcome according to available evidence, without an invented result or line count.
 
 #### Scenario: Failed todo does not wipe the list
 
@@ -474,6 +492,13 @@ Choosing a file identity line opens the Files page on that file when available. 
 - **WHEN** a person opens a finished shell line
 - **THEN** the command and its output are the first content
 - **AND** the internal tool name and the raw arguments stay behind a further disclosure.
+
+The original durable parent-turn error SHALL remain visible after reopening, with its category and relevant recovery action. Review setup SHALL be offered only for setup problems. Known recoverable tool errors SHALL be returned to the agent for correction; uncertain effects SHALL be inspected before continuation.
+
+#### Scenario: Parallel batch partially succeeds
+- **WHEN** two file writes succeed and four fail
+- **THEN** the two confirmed results SHALL remain successful and the four failures SHALL show their original causes
+- **AND** the chat SHALL stay usable without relabelling all six calls as unfinished input.
 
 ### Requirement: API-027 - Keep every destination compact and readable
 
@@ -577,7 +602,7 @@ The transcript SHALL be able to scroll so the last line of the conversation sits
 
 The sidebar row for a conversation and that conversation's header SHALL show the same current title. A new conversation may read "New conversation" until it has a title. When the title changes, both update together.
 
-Each model chooser SHALL show one row per selectable model configuration or connected endpoint, rather than duplicate historical runtime instances. Two rows MUST NOT share the same visible label. A repeated file name gains the fact that distinguishes it, such as ready or stopped, context, or size. An internal prefix such as `managed:` MUST NOT appear in the label. Meaningfully distinct configurations SHALL remain selectable; equivalent duplicate runtime records SHALL not become duplicate user choices.
+Each model chooser SHALL show one primary row per installed model or connected endpoint, with an installed model's named configurations as secondary choices, rather than duplicate historical runtime instances. Sibling model rows or configuration choices MUST NOT share the same visible label. A repeated file name gains the fact that distinguishes it, such as ready or stopped, context, or size. An internal prefix such as `managed:` MUST NOT appear in the label. Meaningfully distinct configurations SHALL remain selectable; equivalent duplicate runtime records SHALL not become duplicate user choices.
 
 In the library, rows that share a file name stay separate, and each row shows when it was added and where it belongs without opening the file.
 
@@ -589,9 +614,9 @@ In the library, rows that share a file name stay separate, and each row shows wh
 
 #### Scenario: Repeated model files stay distinguishable
 
-- **WHEN** two selectable setups use the same file name and one is ready
-- **THEN** each row has its own visible label
-- **AND** neither label begins with an internal prefix.
+- **WHEN** two selectable configurations of one installed model use the same file name and one is ready
+- **THEN** both remain distinguishable as secondary choices under the single model row
+- **AND** each choice has its own visible label without an internal prefix.
 
 ### Requirement: API-034 - Finish the page the person is looking at
 
