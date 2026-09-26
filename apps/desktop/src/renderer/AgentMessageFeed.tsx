@@ -787,9 +787,9 @@ function useFollowTranscript(messages: BaseMessage[], incompleteMessageIds: Read
     const observed = new Set<Element>();
     const observeContent = () => {
       // Approval cards and run summaries are siblings of the message feed.
-      // The feed uses display:contents, so its own box never reports growth.
-      // Observe its real message boxes, including late saved-answer actions.
-      const targets = new Set<Element>([transcript, ...Array.from(transcript.children ?? []), ...Array.from(rootRef.current?.children ?? [])]);
+      // The feed is its own grid, so its box grows with the reply.
+      const targets = new Set<Element>([transcript, ...Array.from(transcript.children ?? [])]);
+      if (rootRef.current) targets.add(rootRef.current);
       for (const element of observed) if (!targets.has(element)) { observer?.unobserve?.(element); observed.delete(element); }
       for (const element of targets) if (!observed.has(element)) { observer?.observe(element); observed.add(element); }
       follow();
