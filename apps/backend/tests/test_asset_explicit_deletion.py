@@ -123,6 +123,57 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
         self.assertEqual(source.read_text(encoding='utf-8'), 'project source remains')
         self.assert_deleted(asset.id)
 
+    def own_run(self, asset, run_id: str):
+        loaded = self.assets.store.get(asset.id)
+        assert loaded is not None
+        record, content = loaded
+        self.assets.store.put(record.model_copy(update={'source_run_id': run_id}), content)
+        recorded_at = utc_now()
+        self.assets.store.add_consumer(asset.id, kind='run', consumer_id=run_id, recorded_at=recorded_at)
+        self.assets.store.add_consumer(
+            asset.id, kind='tool_call', consumer_id=f'{run_id}:call_1', recorded_at=recorded_at,
+        )
+
+    def test_explicit_delete_removes_file_owned_only_by_its_producing_run(self) -> None:
+        self.put_conversation('chat_output')
+        asset = self.upload('chat_output', filename='falling_sand.html')
+        self.own_run(asset, 'run_output')
+
+        preview = self.assets.deletion_preview(RetainedAssetDeletionRequest(asset_ids=[asset.id]))
+
+        self.assertEqual(preview.affected_asset_ids, [asset.id])
+        self.assertEqual(preview.preserved_asset_ids, [])
+        self.assertIn('run_output', preview.affected_runs)
+        self.assertNotIn('run_output', preview.retained_runs)
+
+        deleted = self.assets.mark_deletable_assets_deleted(RetainedAssetDeletionRequest(asset_ids=[asset.id]))
+        self.assertEqual(deleted.affected_asset_ids, [asset.id])
+        self.assert_deleted(asset.id)
+
+    def test_explicit_delete_keeps_file_another_run_still_uses(self) -> None:
+        self.put_conversation('chat_output')
+        asset = self.upload('chat_output', filename='falling_sand.html')
+        self.own_run(asset, 'run_output')
+        self.assets.store.add_consumer(asset.id, kind='run', consumer_id='run_keeper', recorded_at=utc_now())
+
+        preview = self.assets.deletion_preview(RetainedAssetDeletionRequest(asset_ids=[asset.id]))
+
+        self.assertEqual(preview.affected_asset_ids, [])
+        self.assertEqual(preview.preserved_asset_ids, [asset.id])
+        self.assertIn('run_keeper', preview.retained_runs)
+
+    def test_explicit_delete_keeps_file_a_case_still_uses(self) -> None:
+        self.put_conversation('chat_output')
+        asset = self.upload('chat_output', filename='falling_sand.html')
+        self.own_run(asset, 'run_output')
+        self.assets.store.add_consumer(asset.id, kind='case', consumer_id='case_keeper', recorded_at=utc_now())
+
+        preview = self.assets.deletion_preview(RetainedAssetDeletionRequest(asset_ids=[asset.id]))
+
+        self.assertEqual(preview.affected_asset_ids, [])
+        self.assertEqual(preview.preserved_asset_ids, [asset.id])
+        self.assertIn('case_keeper', preview.retained_cases)
+
     def test_transcript_attachment_preserves_explicit_asset_delete(self) -> None:
         self.put_conversation('chat_sent')
         asset = self.upload('chat_sent')

@@ -552,6 +552,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
       await tick();
     });
     assert.deepEqual(deleteRequestedIds, ["asset_a"], "delete confirmation must request only deletable affected ids");
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Review file deletion" }).length, 0, "the deletion review closes after the saved files are deleted");
     assert.ok(textOf(renderer.root).includes("1 shared item preserved"));
     assert.ok(!textOf(renderer.root).includes("full retained text"), "deleting the previewed retained asset must clear its content immediately");
   } finally {
