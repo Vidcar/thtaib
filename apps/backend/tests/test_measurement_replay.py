@@ -70,7 +70,10 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertGreater(latest, 240)
         self.assertNotIn(removed_cursor, [item["seq"] for item in self.store.interaction_events_after("display", 0)])
         retained = self.store._conn.execute("SELECT COUNT(*) AS n,SUM(LENGTH(payload)) AS bytes FROM interaction_events WHERE thread_id='display'").fetchone()
-        self.assertEqual(retained["n"], before + len(native) + 1)
+        origins = [item for item in page if item["params"].get("_tool_origin")]
+        self.assertEqual(len(origins), 1)
+        self.assertLess(origins[0]["seq"], native_records[-1]["seq"])
+        self.assertEqual(retained["n"], before + len(native) + len(origins) + 1)
         self.assertLess(retained["bytes"], 150_000)
         partials, incomplete = partial_archive(page)
         self.assertEqual(partials[0]["content"], [{"type": "text", "text": "partial reply"}])
@@ -129,7 +132,12 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertEqual(latest, self.store.get_interaction("display")["seq"])
         self.assertEqual([item["seq"] for item in page if item["method"] == "tools"], [retained_tool])
         self.assertNotIn(first, [item["seq"] for item in page])
-        values = [item for item in page if item["method"] == "values" and not item["params"].get("measurement")]
+        origins = [item for item in page if item["params"].get("_tool_origin")]
+        self.assertEqual(len(origins), 1)
+        self.assertLess(origins[0]["seq"], retained_tool)
+        self.assertEqual(origins[0]["params"]["data"]["workbench"]["tool_origins"][0]["call_id"], "retained-tool")
+        values = [item for item in page if item["method"] == "values"
+            and not item["params"].get("measurement") and not item["params"].get("_tool_origin")]
         self.assertEqual(len(values), 1)
         self.assertEqual(values[0]["params"]["data"]["messages"][-1]["id"], "answer-23")
         self.assertEqual(len(self.store.get_interaction("display")["snapshot"]["messages"]), 40)
@@ -293,9 +301,13 @@ class MeasurementReplayTests(unittest.TestCase):
         wires, cursor, gap, status = self.service.stream_poll("display", before, options, subscriber)
         self.assertFalse(gap)
         self.assertEqual(status, "running")
-        self.assertEqual(cursor, before + len(native))
+        self.assertEqual(cursor, before + len(native) + 1)
         self.assertEqual([item["method"] for item in wires], [item["method"] for item in native])
         saved = self.store.interaction_page("display", before)[0]
+        origins = [item for item in saved if item["params"].get("_tool_origin")]
+        self.assertEqual(len(origins), 1)
+        self.assertLess(origins[0]["seq"], next(item["seq"] for item in saved if item["method"] == "tools"))
+        self.assertEqual(origins[0]["params"]["data"]["workbench"]["tool_origins"][0]["call_id"], "call")
         self.assertEqual([item["params"]["data"] for item in saved if item["method"] == "tools"],
                          [item["params"]["data"] for item in native if item["method"] == "tools"])
         partials, incomplete = partial_archive(saved)

@@ -266,6 +266,13 @@ function makeHarness(options = {}) {
     req.on("end", async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       try {
+        if (options.browser) {
+          res.setHeader("access-control-allow-origin", "*");
+          res.setHeader("access-control-allow-headers", "*");
+          res.setHeader("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS");
+          if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
+        }
+        if (await options.requestOverride?.({ req, res, url, body, state })) return;
         if (req.method === "GET" && url.pathname === "/v1/projects") { json(res, 200, options.projects ?? []); return; }
         if (req.method === "GET" && /^\/v1\/projects\/[^/]+\/files$/.test(url.pathname)) { json(res, 200, { entries: [] }); return; }
         if (req.method === "GET" && /^\/v1\/projects\/[^/]+\/file$/.test(url.pathname)) {
@@ -2720,7 +2727,13 @@ async function testLateDraftSaveCannotRestoreDeletedChat(vite) {
     await waitFor(() => assert.equal(harness.state.requests.deletes.length, 1), "delete saved");
     await releaseResponse(harness, held, "/v1/chat/conversations/conv_a/draft", "PUT");
     assert.equal(buttons(renderer, "Conversation A").length, 0, "late save must not put deleted history back in the cache");
-    assertFreshConversation(renderer, "late save must not restore deleted chat selection");
+    assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.className === "nav-item active").length, 0,
+      "late save cannot restore a deleted active selection even while fresh-chat settings resolve");
+    assert.equal(selectedRunId(renderer), null, "late save cannot attach a deleted interaction while settings resolve");
+    // New chat resolves its settings after the draft-save response. Consuming
+    // that response is not the completion boundary for the later settings read.
+    await waitFor(() => assertFreshConversation(renderer, "late save must not restore deleted chat selection"),
+      "fresh chat settings finish resolving after the departing draft save");
   } finally {
     held.resolve();
     await closeHarness(renderer, harness);
@@ -3392,6 +3405,9 @@ async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
   }
 }
 
+export { makeHarness, run, conversation, deferred, json, renderChat, closeHarness, button, textarea, composeForm, allText, textOf, waitFor, flush, streamFrame };
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const vite = await createViteServer({
   root: desktopRoot,
   appType: "custom",
@@ -3522,4 +3538,5 @@ try {
 
 if (!reproduceProjectionLeak) {
   console.log("Chat interaction boundary checks passed.");
+}
 }

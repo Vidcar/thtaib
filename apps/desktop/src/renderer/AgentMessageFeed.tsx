@@ -1,7 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { AssembledToolCall } from "@langchain/react";
 import type React from "react";
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activityLine, groupActivity, parseTodoList, type TodoItem } from "./activityLine";
 import { useChatDock } from "./chatDockContext";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -16,6 +16,7 @@ import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdow
 import type { MatchedPermissionGrant } from "./packet03Api";
 import type { AgentRun } from "./types";
 import { RunActivitySummary } from "./RunActivitySummary";
+import { toolOriginGeneration, toolOriginIdentity, type WorkbenchToolOrigin } from "./InteractionStream";
 
 export let markdownParseCount = 0;
 export let finishedBubbleRenders = 0;
@@ -633,6 +634,7 @@ function ToolBlockList({
   live,
   waiting,
   messageKey,
+  toolScopeKey,
   onToggle,
   openStates,
   toolBlocks,
@@ -645,6 +647,7 @@ function ToolBlockList({
   live?: boolean;
   waiting?: boolean;
   messageKey: string;
+  toolScopeKey?: string;
   onToggle: (id: string, open: boolean) => void;
   openStates: ReadonlyMap<string, boolean>;
   toolBlocks: ToolBlock[];
@@ -661,7 +664,7 @@ function ToolBlockList({
   const rows = toolBlocks.filter(tool => tool.name !== "write_todos");
   const groups = groupActivity(rows, tool => { const error = toolError(tool); const finished = toolSucceeded(tool); return { label: activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) }), finished, failed: Boolean(error) }; });
   function renderTool(tool: ToolBlock, index: number) {
-    const id = tool.id ? `${helperRunId ?? "default"}:tool:${tool.id}` : `${messageKey}:tool:${index}`;
+    const id = tool.id ? `${toolScopeKey ?? messageKey}:tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
     const incomplete = toolIsStreaming(tool);
     const stopped = incomplete && (live === false || tool.status === "unfinished");
@@ -731,8 +734,8 @@ function ToolBlockList({
     </div>;
   }
   return <div className="tool-call-list">
-    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${messageKey}:todos`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
-    {groups.map((group, index) => group.label ? <DetailSection key={group.items[0]?.id ?? index} className="activity-group" defaultOpen={defaultOpen} id={`${messageKey}:group:${group.items[0]?.id ?? index}`} onToggle={onToggle} openStates={openStates} summary={<><Icon name="files" size={14} /><span>{group.label}</span></>}>{group.items.map(tool => renderTool(tool, rows.indexOf(tool)))}</DetailSection> : group.items.map(tool => renderTool(tool, rows.indexOf(tool))))}
+    {todos ? <TodoChecklist defaultOpen={false} failure={todos.failure} id={`${toolScopeKey ?? messageKey}:todos:${[...toolBlocks].reverse().find(tool => tool.name === "write_todos")?.id ?? "list"}`} items={todos.items} onToggle={onToggle} openStates={openStates} raw={todos.raw} /> : null}
+    {groups.map((group, index) => group.label ? <DetailSection key={group.items[0]?.id ?? index} className="activity-group" defaultOpen={defaultOpen} id={`${toolScopeKey ?? messageKey}:group:${group.items[0]?.id ?? index}`} onToggle={onToggle} openStates={openStates} summary={<><Icon name="files" size={14} /><span>{group.label}</span></>}>{group.items.map(tool => renderTool(tool, rows.indexOf(tool)))}</DetailSection> : group.items.map(tool => renderTool(tool, rows.indexOf(tool))))}
   </div>;
 }
 
@@ -877,6 +880,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   incomplete: boolean;
   message: BaseMessage;
   messageKey: string;
+  toolScopeKey: string;
   messageTools: ToolBlock[];
   onToggle: (id: string, open: boolean) => void;
   openStates: ReadonlyMap<string, boolean>;
@@ -915,7 +919,7 @@ const MessageBubble = memo(function MessageBubble(props: {
         {props.type === "human" ? (props.answer ? <p className="user-message-text">{props.answer}</p> : null)
           : props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
         <AttachmentList attachments={props.attachments} />
-        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={props.helperRunId} />
+        <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} toolScopeKey={props.toolScopeKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={props.helperRunId} />
       </div>
       {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
       {props.renderMessageFooter?.(props.message)}
@@ -945,7 +949,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.answer === next.answer;
 });
 
-export function AgentMessageFeed(props: {
+interface AgentMessageFeedProps {
   messages: BaseMessage[];
   toolAuthorizations?: Record<string, string>;
   toolAuthorizationGrants?: Record<string, MatchedPermissionGrant>;
@@ -963,37 +967,42 @@ export function AgentMessageFeed(props: {
   hiddenHelperResultIds?: ReadonlySet<string>;
   helperRuns?: AgentRun[];
   currentRunId?: string;
+  currentInputMessageId?: string | null;
+  toolOrigins?: readonly WorkbenchToolOrigin[];
+  toolCallOrigins?: ReadonlyMap<string, string>;
   onHelperOpen?: (runId: string, toolCallId: string) => void;
   helperName?: (tool: ToolBlock, runId?: string) => string;
   helperStatus?: (tool: ToolBlock, runId?: string) => string;
-}) {
+}
+
+export function AgentMessageFeed(props: AgentMessageFeedProps) {
+  const streaming = props.live !== false && (Boolean(props.live) || Boolean(props.incompleteMessageIds?.size)
+    || props.toolCalls?.some(call => ["preparing", "running"].includes(call.status as string)) === true);
+  // Messages, handles, origins and turn ownership describe one display frame.
+  // Sampling only messages lets a newer tool/run leak into an older turn.
+  const display = useFrameSample(props, streaming);
+  return <AgentMessageFeedContent {...display} />;
+}
+
+function AgentMessageFeedContent(props: AgentMessageFeedProps) {
   const { toolCalls = [], fallback, detailedStreams = false } = props;
   const currentRun = props.helperRuns?.find(run => run.id === props.currentRunId);
   const incompleteMessageIds = props.incompleteMessageIds ?? EMPTY_INCOMPLETE;
   const endedToolIds = useRef(new Set<string>());
-  if (props.live === false) {
-    for (const call of toolCalls) {
-      if (toolIsStreaming(mergeTool({ name: call.name }, undefined, call))) {
-        endedToolIds.current.add(call.callId || call.id);
-      }
-    }
-  }
-  const retainStoppedTool = (tool: ToolBlock, runId?: string): ToolBlock => {
-    const outcome = tool.id ? props.helperRuns?.find(run => run.id === (runId ?? props.currentRunId))?.tool_outcomes?.[tool.id] : undefined;
+  const retainStoppedTool = (tool: ToolBlock, runId?: string, scopeKey = "unscoped"): ToolBlock => {
+    const outcome = tool.id && runId ? props.helperRuns?.find(run => run.id === runId)?.tool_outcomes?.[tool.id] : undefined;
     return { ...tool,
-    status: tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool) ? "unfinished" : tool.status,
-    authorizationSource: tool.authorizationSource ?? (tool.id ? props.toolAuthorizations?.[tool.id] : undefined),
-    authorizationGrant: tool.authorizationGrant ?? (tool.id ? matchedPermissionGrant(props.toolAuthorizationGrants?.[tool.id]) : undefined),
+    status: tool.id && endedToolIds.current.has(`${scopeKey}:${tool.id}`) && toolIsStreaming(tool) ? "unfinished" : tool.status,
+    authorizationSource: tool.authorizationSource ?? (tool.id ? props.helperRuns?.find(run => run.id === runId)?.tool_authorizations?.[tool.id]
+      ?? ((!props.currentRunId || runId === props.currentRunId) ? props.toolAuthorizations?.[tool.id] : undefined) : undefined),
+    authorizationGrant: tool.authorizationGrant ?? (tool.id ? matchedPermissionGrant(props.helperRuns?.find(run => run.id === runId)?.tool_authorization_grants?.[tool.id]
+      ?? ((!props.currentRunId || runId === props.currentRunId) ? props.toolAuthorizationGrants?.[tool.id] : undefined)) : undefined),
     ...(outcome ? {outcome: outcome.outcome,
       status: outcome.outcome === "succeeded" ? "success" : outcome.outcome === "failed" ? "error" : outcome.outcome,
       result: outcome.result ?? tool.result,
       error: outcome.outcome === "failed" ? outcome.detail ?? undefined : undefined} : {}),
   }; };
-  const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
-    const status = call.status as string;
-    return status === "preparing" || status === "running";
-  }));
-  const messages = useFrameSample(props.messages, streaming);
+  const messages = props.messages;
   const { rootRef, showJump, jumpToLatest } = useFollowTranscript(messages, incompleteMessageIds, toolCalls);
   const [openStates, setOpenStates] = useState<Map<string, boolean>>(() => new Map());
   const handleDetailToggle = useCallback((id: string, open: boolean) => {
@@ -1020,22 +1029,33 @@ export function AgentMessageFeed(props: {
   const hiddenIds = new Set(props.hiddenToolCallIds ?? []);
   const helperIds = new Set(props.hiddenHelperResultIds ?? []);
   const runByInputId = new Map((props.helperRuns ?? []).flatMap(run => run.input_message_id ? [[run.input_message_id, run.id] as const] : []));
+  for (const origin of props.toolOrigins ?? []) if (origin.input_message_id) runByInputId.set(origin.input_message_id, origin.run_id);
+  if (props.currentInputMessageId && props.currentRunId) runByInputId.set(props.currentInputMessageId, props.currentRunId);
   let turnIndex = -1;
   let turnRunId = latestHumanIndex < 0 ? props.currentRunId : undefined;
+  let turnInputId: string | undefined;
+  const prefixScope = "prefix:root";
+  let turnScope = prefixScope;
   const prepared = messages.map((message, index) => {
     const type = messageType(message);
     if (type === "human") {
       turnIndex += 1;
-      turnRunId = (message.id ? runByInputId.get(message.id) : undefined) ?? (index === latestHumanIndex ? props.currentRunId : undefined);
+      turnInputId = message.id;
+      turnScope = message.id ? `input:${message.id}` : `turn:${turnIndex}`;
+      turnRunId = (message.id ? runByInputId.get(message.id) : undefined)
+        ?? (index === latestHumanIndex && (!props.currentInputMessageId || props.currentInputMessageId === message.id) ? props.currentRunId : undefined);
     }
     const runId = turnRunId;
-    const scopeKey = runId ? `run:${runId}` : `turn:${turnIndex}`;
+    const scopeKey = turnScope;
     const continuation = type === "ai" && previousType === "ai";
     if (type !== "tool") previousType = type;
     const submittedContent = type === "human" ? props.userMessageContent?.(message) : undefined;
     const parts = parseContent(submittedContent ?? message.contentBlocks ?? message.content);
     parts.toolBlocks = parts.toolBlocks.filter(block => !block.id || !hiddenIds.has(block.id));
-    return { message, type, runId, scopeKey, continuation, live: props.live === undefined ? undefined : props.live && index > latestHumanIndex, key: `${scopeKey}:${message.id ?? `${type}-${index}`}`, parts };
+    return { message, type, runId, inputId: turnInputId, scopeKey, continuation,
+      live: props.live === undefined ? undefined : props.live && index > latestHumanIndex
+        && (!props.currentInputMessageId || turnInputId === props.currentInputMessageId),
+      key: `${scopeKey}:${message.id ?? `${type}-${index}`}`, parts };
   });
   const resultById = new Map<string, ToolBlock>();
   const callIds = new Set<string>();
@@ -1048,30 +1068,75 @@ export function AgentMessageFeed(props: {
       if (call.name === "task" && props.onHelperOpen) taskIds.add(`${item.scopeKey}:${call.id}`);
     }
   }
-  const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
+  const handleKey = (call: AssembledToolCall) => toolOriginIdentity(call.namespace ?? [], call.callId || call.id);
+  const originKey = (origin: WorkbenchToolOrigin) => toolOriginIdentity(origin.namespace ?? [], origin.call_id);
+  const latestOrigins = new Map((props.toolOrigins ?? []).map(origin => [originKey(origin), origin]));
+  const liveById = new Map<string, AssembledToolCall>();
+  const handleScopes = new Map<AssembledToolCall, { scopeKey: string; runId?: string }>();
+  for (const call of toolCalls) {
+    const id = call.callId || call.id;
+    const identity = handleKey(call);
+    const origin = latestOrigins.get(identity);
+    if (props.toolOrigins !== undefined && !origin) continue;
+    let scopeKey: string;
+    let runId: string | undefined;
+    if (origin) {
+      const generation = toolOriginGeneration(origin);
+      // Origin publication can reconcile a historical handle before the new
+      // native start. Only the SDK's observed start confirms its generation.
+      if (props.toolCallOrigins?.get(identity) !== generation) continue;
+      scopeKey = origin.input_message_id ? `input:${origin.input_message_id}` : prefixScope;
+      runId = origin.run_id;
+    } else {
+      // Standalone feeds without run metadata retain their single-scope API.
+      // Scoped Chat callers use explicit native origins.
+      const matchingScopes = prepared.filter(item => item.parts.toolBlocks.some(block => block.id === id)
+        || (item.type === "tool" && toolResultMessage(item.message)?.id === id));
+      const currentScope = props.currentInputMessageId ? `input:${props.currentInputMessageId}` : prepared.at(-1)?.scopeKey ?? prefixScope;
+      scopeKey = matchingScopes.find(item => item.scopeKey === currentScope)?.scopeKey
+        ?? (matchingScopes.length === 1 ? matchingScopes[0].scopeKey : currentScope);
+      runId = prepared.find(item => item.scopeKey === scopeKey)?.runId ?? props.currentRunId;
+    }
+    handleScopes.set(call, { scopeKey, runId });
+    liveById.set(`${scopeKey}:${id}`, call);
+    if (props.live === false && toolIsStreaming(mergeTool({ name: call.name }, undefined, call))) {
+      endedToolIds.current.add(`${scopeKey}:${id}`);
+    }
+  }
   const lastMessageByRun = new Map(prepared.filter(item => item.type !== "tool" && item.runId && (
     item.type !== "ai" || item.parts.answer || item.parts.reasoning.length || item.parts.attachments.length || item.parts.toolBlocks.length
     || (item.message.id && incompleteMessageIds.has(item.message.id))
   )).map(item => [item.runId!, item.key]));
-  const liveScope = props.currentRunId ? `run:${props.currentRunId}` : prepared.at(-1)?.scopeKey ?? "turn:-1";
   const remainingLive = toolCalls.filter(call => {
     const id = call.callId || call.id;
-    const scoped = `${liveScope}:${id}`;
-    return !hiddenIds.has(id) && !callIds.has(scoped) && !resultById.has(scoped);
+    const owner = handleScopes.get(call);
+    const scoped = `${owner?.scopeKey}:${id}`;
+    return owner && !hiddenIds.has(id) && !callIds.has(scoped) && !resultById.has(scoped);
   });
+  const floatingTools = (scopeKey: string) => {
+    const calls = remainingLive.filter(call => handleScopes.get(call)?.scopeKey === scopeKey);
+    if (!calls.length) return null;
+    const runId = handleScopes.get(calls[0])?.runId;
+    return <ToolBlockList key={`${scopeKey}:live-tools`} defaultOpen={detailedStreams}
+      live={props.live && (!props.currentRunId || runId === props.currentRunId)} waiting={props.waiting && (!props.currentRunId || runId === props.currentRunId)}
+      messageKey={`${scopeKey}:live-tools`} toolScopeKey={scopeKey} onToggle={handleDetailToggle} openStates={openStates}
+      toolBlocks={calls.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call), runId, scopeKey))}
+      onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={runId} />;
+  };
   return (
     <SourceScope.Provider value={props.sourceScope ?? {}}><div className="message-feed" ref={rootRef}>
-      {prepared.map(({ message, type, runId, scopeKey, continuation, live, key: messageKey, parts }) => {
-        const incomplete = Boolean((message.id && incompleteMessageIds.has(message.id)) || (props.live && message.id && message.id === lastAiId));
+      {prepared.map(({ message, type, runId, scopeKey, continuation, live, key: messageKey, parts }, index) => {
+        const row = (() => {
+        const incomplete = Boolean((message.id && incompleteMessageIds.has(message.id)) || (live && message.id && message.id === lastAiId));
         const result = toolResultMessage(message);
         if (result) {
           if (result.id && (hiddenIds.has(result.id) || taskIds.has(`${scopeKey}:${result.id}`) || (runId && helperIds.has(helperKey(runId, result.id))))) return null;
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(`${scopeKey}:${result.id}`)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(result.id) : undefined), runId)]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting && live} messageKey={messageKey} toolScopeKey={scopeKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id ? liveById.get(`${scopeKey}:${result.id}`) : undefined), runId, scopeKey)]} /></div>;
         }
-        const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(`${scopeKey}:${block.id}`) : undefined, block.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(block.id) : undefined), runId));
+        const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(`${scopeKey}:${block.id}`) : undefined, block.id ? liveById.get(`${scopeKey}:${block.id}`) : undefined), runId, scopeKey));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
         const toolsKey = JSON.stringify(messageTools);
         return (
@@ -1085,6 +1150,7 @@ export function AgentMessageFeed(props: {
             incomplete={incomplete}
             message={message}
             messageKey={messageKey}
+            toolScopeKey={scopeKey}
             messageTools={messageTools}
             onHelperOpen={props.onHelperOpen}
             helperName={props.helperName}
@@ -1098,8 +1164,8 @@ export function AgentMessageFeed(props: {
             toolsKey={toolsKey}
             toolsLive={live}
             type={type}
-            writing={Boolean(props.live && message.id === lastAiId)}
-            activityLabel={currentRun?.finalization_phase === "saving_changes" ? "Saving"
+            writing={Boolean(live && message.id === lastAiId)}
+            activityLabel={!live ? undefined : currentRun?.finalization_phase === "saving_changes" ? "Saving"
               : currentRun?.activity_phase === "summarizing" ? "Summarizing"
               : currentRun?.activity_phase === "using_tools" ? "Using tools"
               : !parts.answer && (parts.reasoning.length || currentRun?.activity_phase === "thinking"
@@ -1107,8 +1173,10 @@ export function AgentMessageFeed(props: {
             waiting={Boolean(props.waiting && message.id === lastAiId)}
           />
         );
+        })();
+        return <Fragment key={messageKey}>{row}{prepared[index + 1]?.scopeKey !== scopeKey ? floatingTools(scopeKey) : null}</Fragment>;
       })}
-       <ToolBlockList defaultOpen={detailedStreams} live={props.live} waiting={props.waiting} messageKey="live-tools" onToggle={handleDetailToggle} openStates={openStates} toolBlocks={remainingLive.map(call => retainStoppedTool(mergeTool({ id: call.callId || call.id, name: call.name }, undefined, call)))} onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={props.currentRunId} />
+      {[...new Set(remainingLive.map(call => handleScopes.get(call)!.scopeKey))].filter(scopeKey => !prepared.some(item => item.scopeKey === scopeKey)).map(floatingTools)}
       {showJump ? <button type="button" className="chat-jump-latest" aria-label="Jump to latest message" onClick={jumpToLatest}>↓ Latest</button> : null}
     </div></SourceScope.Provider>
   );

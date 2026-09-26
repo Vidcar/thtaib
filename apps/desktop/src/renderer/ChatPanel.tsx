@@ -282,6 +282,13 @@ function ChatInteractionStreamContent(props: {
     !conversation.current_run
     )
   ));
+  // Admission and stream publication are separate observations. Keep the
+  // verified transcript mounted while the next run catches up; unverified
+  // projections still cannot target controls or update conversation state.
+  const verifiedProjection = useRef<typeof projection | null>(null);
+  if (projectionRunOwned) verifiedProjection.current = projection;
+  const displayProjection = projectionRunOwned ? projection : verifiedProjection.current;
+  const displayRun = displayProjection?.run ?? null;
   const savingProjectState = projectionRunOwned && run?.finalization_phase === "saving_changes";
   const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
   const inputId = pendingSubmit?.id ?? run?.input_message_id;
@@ -289,12 +296,16 @@ function ChatInteractionStreamContent(props: {
   const inputIndex = reverseInputIndex < 0 ? -1 : projection.messages.length - reverseInputIndex - 1;
   const hasTurnOutput = inputIndex >= 0 && projection.messages.slice(inputIndex + 1).some(message =>
     message.getType() !== "human" && (message.content.length > 0 || Boolean((message as { tool_calls?: unknown[] }).tool_calls?.length)),
-  ) || projection.toolCalls.some(call => (call.status as string) === "preparing" || call.status === "running");
+  ) || (inputId === run?.input_message_id && projection.toolCalls.some(call =>
+    ((call.status as string) === "preparing" || call.status === "running") &&
+    ((run?.events ?? []).some(event => event.kind === "tool_call" && event.detail.id === (call.callId || call.id)) ||
+      projection.workbench?.tool_origins?.some(origin => origin.run_id === run?.id && origin.call_id === (call.callId || call.id))),
+  ));
   const waitingForOutput = projectionRunOwned && !savingProjectState && !visibleInterrupt && !hasTurnOutput &&
     Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
-  const currentParentRun = run ?? conversation.current_run;
+  const currentParentRun = displayRun ?? (projectionRunOwned ? conversation.current_run : null);
   const helperRuns = [...props.historicalRuns, ...(currentParentRun ? [currentParentRun] : [])];
-  const helpers = helperEntries(helperRuns, stream.subagents.values(), currentParentRun?.id);
+  const helpers = helperEntries(helperRuns, projectionRunOwned ? stream.subagents.values() : [], currentParentRun?.id);
   const helperById = new Map(helpers.map(helper => [helper.key, helper]));
   useEffect(() => {
     if (projectionRunOwned) props.onHelperActivity(conversation.id, helpers.filter(helper => helperIsActive(helper.status)).length, helpers.length);
@@ -482,8 +493,7 @@ function ChatInteractionStreamContent(props: {
 
   return (
     <>
-      {projectionRunOwned ? (
-        <AgentMessageFeed waiting={Boolean(visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} toolAuthorizations={run?.tool_authorizations} toolAuthorizationGrants={run?.tool_authorization_grants} live={run ? isAgentRunLive(run.status) : stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={projection.messages} toolCalls={projection.toolCalls} incompleteMessageIds={projection.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageContent={message => {
+        <AgentMessageFeed waiting={Boolean(projectionRunOwned && visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} currentInputMessageId={currentParentRun?.input_message_id} toolOrigins={displayProjection?.workbench?.tool_origins} toolCallOrigins={displayProjection?.toolCallOrigins} toolAuthorizations={displayRun?.tool_authorizations} toolAuthorizationGrants={displayRun?.tool_authorization_grants} live={displayRun ? isAgentRunLive(displayRun.status) : projectionRunOwned && stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={displayProjection?.messages ?? []} toolCalls={displayProjection?.toolCalls ?? []} incompleteMessageIds={displayProjection?.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageContent={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user");
           if (!retained) return undefined;
           // Model-only context is never part of the submitted user message.
@@ -492,7 +502,6 @@ function ChatInteractionStreamContent(props: {
             { type: "text", text: retained.content }, ...(retained.content_blocks ?? []),
           ];
         }} />
-      ) : null}
       {projectionRunOwned ? <RunActivitySummary run={run} showHelpers={false} onRecover={props.onRecoverRun} /> : null}
       {savingProjectState ? <div className="chat-waiting" role="status">Saving project state…</div> : null}
       {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
@@ -714,14 +723,40 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   const reuseClaim = useRef<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
-  const [historicalRuns, setHistoricalRuns] = useState<AgentRun[]>([]);
+  const [runMetadata, setRunMetadata] = useState<{ conversationId: string; runs: Map<string, AgentRun> }>(() => ({ conversationId: "", runs: new Map() }));
+  const runMetadataRef = useRef(runMetadata);
+  runMetadataRef.current = runMetadata;
   const historicalRunIds = conversation?.run_ids.filter(id => id !== conversation.current_run_id && id !== conversation.current_run?.id).join("|") ?? "";
+  const historicalRuns = runMetadata.conversationId === conversation?.id
+    ? [...runMetadata.runs.values()].filter(run => historicalRunIds.split("|").includes(run.id)) : [];
   useEffect(() => {
-    setHistoricalRuns([]);
+    const conversationId = conversation?.id ?? "";
+    const currentRun = conversation?.current_run;
+    setRunMetadata(current => {
+      const sameConversation = current.conversationId === conversationId;
+      if (sameConversation && (!currentRun || current.runs.get(currentRun.id) === currentRun)) return current;
+      const runs = new Map(sameConversation ? current.runs : []);
+      if (currentRun) runs.set(currentRun.id, currentRun);
+      return { conversationId, runs };
+    });
+  }, [conversation?.id, conversation?.current_run]);
+  useEffect(() => {
     if (!conversation?.id || !historicalRunIds) return;
+    const conversationId = conversation.id;
+    const cached = runMetadataRef.current.conversationId === conversationId ? runMetadataRef.current.runs : new Map<string, AgentRun>();
+    // A queued successor can be admitted before the predecessor's terminal
+    // projection arrives. Retain its rows, then refresh that unfinished record.
+    const missing = historicalRunIds.split("|").filter(id => !cached.has(id) || isAgentRunLive(cached.get(id)!.status));
+    if (!missing.length) return;
     let cancelled = false;
-    void Promise.allSettled(historicalRunIds.split("|").map(id => api.agentRun(id))).then(results => {
-      if (!cancelled) setHistoricalRuns(results.flatMap(result => result.status === "fulfilled" ? [result.value] : []));
+    void Promise.allSettled(missing.map(id => api.agentRun(id))).then(results => {
+      if (cancelled) return;
+      setRunMetadata(current => {
+        if (current.conversationId !== conversationId) return current;
+        const runs = new Map(current.runs);
+        for (const result of results) if (result.status === "fulfilled") runs.set(result.value.id, result.value);
+        return { conversationId, runs };
+      });
     });
     return () => { cancelled = true; };
   }, [conversation?.id, historicalRunIds]);

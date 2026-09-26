@@ -1,10 +1,12 @@
 """Local protocol commands delegate to the existing Chat/Harness owners."""
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import threading
 import time
+import zlib
 from typing import Any
 from uuid import uuid4, uuid5, NAMESPACE_URL
 
@@ -338,7 +340,7 @@ class InteractionService:
                     binding = self.store.interaction_for_graph(run.thread_id or run.id)
                     if binding is not None:
                         self._flush_thread(binding["id"])
-                        self._observe_native_event(binding, run, raw)
+                        self._observe_native_event(self.binding(binding["id"]), run, raw)
                 except Exception as exc:
                     raise InteractionPersistenceError() from exc
                 return
@@ -430,6 +432,31 @@ class InteractionService:
             if snapshot is None:
                 snapshot = copy.deepcopy(stored)
             return snapshot
+
+        if raw.get("method") == "tools":
+            data = params.get("data") or {}
+            if isinstance(data, tuple):
+                data = data[0]
+            call_id = data.get("tool_call_id") if isinstance(data, dict) else None
+            if isinstance(call_id, str) and call_id:
+                origin = {"run_id": run.id, "input_message_id": run.input_message_id,
+                          "namespace": list(namespace), "call_id": call_id}
+                origins = stored.get("workbench", {}).get("tool_origins", [])
+                if origin not in origins:
+                    current = editable()
+                    current.setdefault("workbench", {})["tool_origins"] = [*origins, origin]
+                    # Pin exact message content at the origin cursor. Compress
+                    # this once per new call so ownership replay stays bounded
+                    # without reading potentially newer archive content.
+                    ownership = event("values", {**{
+                        key: value for key, value in current.items() if key != "messages"
+                    }, "_tool_origin_messages": base64.b64encode(zlib.compress(
+                        json.dumps(current.get("messages", []), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    )).decode("ascii")})
+                    # Unlike superseded full snapshots, this frame must keep
+                    # its position before the native call it attributes.
+                    ownership["params"]["_tool_origin"] = True
+                    outgoing.append(ownership)
 
         if raw.get("method") == "values":
             data = params.get("data", {})
@@ -717,9 +744,18 @@ class InteractionService:
         for item in page:
             since = item["seq"]
             matches = self.matches(item, options)
-            if matches and item["method"] == "values" and not item["params"].get("namespace") and not item["params"].get("measurement"):
-                item["params"]["data"] = self.display_values(item["params"]["data"])
-            wires.extend(resume.consume(item, matches=matches))
+            if item["params"].get("_tool_origin"):
+                data = item["params"]["data"]
+                compressed = data.pop("_tool_origin_messages")
+                data["messages"] = json.loads(zlib.decompress(base64.b64decode(compressed, validate=True)))
+            # Resume needs private run boundaries before public filtering.
+            # Sanitizing first makes a warm subscriber retain the prior run's
+            # unfinished model/tool state indefinitely.
+            for wire in resume.consume(item, matches=matches):
+                if wire["method"] == "values" and not wire["params"].get("namespace") and not wire["params"].get("measurement"):
+                    wire["params"]["data"] = self.display_values(wire["params"]["data"])
+                wire["params"].pop("_tool_origin", None)
+                wires.append(wire)
         return wires, since, False
 
     def discard_finished_token_logs(self) -> int:
