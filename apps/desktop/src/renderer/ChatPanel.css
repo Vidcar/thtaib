@@ -39,7 +39,7 @@
 .chat-header-status {justify-content: flex-end; gap: var(--space-tight); flex-wrap: wrap;}
 .chat-setup {border-bottom: var(--line-hairline) solid var(--border);}
 .chat-run-details {flex: 0 1 auto; min-height: var(--control-height-lg); max-height: 40vh; overflow: auto;}
-.transcript {flex: 1; overflow: auto; display: grid; align-content: start; gap: var(--space-compact);}
+.transcript {flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: stretch; gap: var(--space-compact);}
 .bubble {max-width: 46rem;}
 .bubble-user {justify-self: end; border-color: var(--border);}
 .bubble-assistant {justify-self: start;}
@@ -47,7 +47,7 @@
 .bubble header {display: flex; justify-content: space-between; gap: var(--space-compact); margin-bottom: var(--space-tight);}
 .bubble p {margin: 0; white-space: pre-wrap; line-height: var(--leading-body);}
 .message-state {border: var(--line-hairline) solid var(--border); border-radius: var(--radius-pill); padding: var(--pad-tight) var(--pad-tight); color: var(--muted); font-size: var(--text-small); text-transform: uppercase;}
-.message-feed {display: contents;}
+.message-feed {display: grid; align-content: start; gap: var(--space-compact); min-width: 0;}
 .message-body {display: grid;}
 .message-body :is(p, ul, ol, blockquote, pre, table) {margin: 0;}
 .message-body ul, .message-body ol {padding-left: var(--pad-section);}
