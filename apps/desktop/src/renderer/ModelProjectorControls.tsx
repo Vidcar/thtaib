@@ -38,7 +38,7 @@ export function ModelProjectorControls({ bundleId, active, disabled, onSaved, ac
       const next = await api.modelProjectors(bundleId);
       if (generation.current !== current) return;
       setReport(next); setSelected(next.selected_path ?? "");
-      setMessage(next.selected_path ? "Vision file saved. Start the model, then test Vision above." : "Text-only setup saved. Start the model to apply it.");
+      setMessage(next.selected_path ? "Vision file saved. Start the model, then test Vision and Screenshot reading above." : "Text-only setup saved. Start the model to apply it.");
       await onSaved();
     } catch (failure) { if (generation.current === current) setError(errorMessage(failure)); }
     finally { saving.current = false; if (generation.current === current) setBusy(false); }

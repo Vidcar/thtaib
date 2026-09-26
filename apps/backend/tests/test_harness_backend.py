@@ -165,7 +165,7 @@ class HarnessBackendHelperTests(unittest.TestCase):
             paths = WorkbenchPaths(root).ensure()
             run = _run(project_path=str(project), presented_tools=["read_file"])
             blocked = build_run_backend(run, paths)
-            self.assertIn("passing image and tool-image probes", blocked.read("/view.png").error)
+            self.assertIn("cannot read the screenshot", blocked.read("/view.png").error)
             for presented in (["read_file"], ["read_file", "execute"]):
                 with self.subTest(presented=presented):
                     backend = build_run_backend(_run(project_path=str(project), presented_tools=presented),

@@ -71,7 +71,7 @@ class CaptureBackendTests(unittest.TestCase):
         self.assertEqual(len(backend.glob("*.png").matches), 1)
         self.assertIsNotNone(backend.write("/other.png", "bad").error)
         self.assertIsNotNone(CaptureBackend(self.assets, "another_chat", image_inputs_allowed=True).read(virtual_path.removeprefix("/captures")).error)
-        self.assertIn("tool-image probes", CaptureBackend(self.assets, "chat_capture").read(virtual_path.removeprefix("/captures")).error)
+        self.assertIn("cannot read the screenshot", CaptureBackend(self.assets, "chat_capture").read(virtual_path.removeprefix("/captures")).error)
         self.assertIsNotNone(backend.read("/../" + asset.id + ".png").error)
 
     def test_capture_rejects_unowned_path(self) -> None:

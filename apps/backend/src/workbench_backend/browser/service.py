@@ -26,6 +26,7 @@ from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.browser.runtime import BrowserRuntime
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.paths import WorkbenchPaths
 
 BROWSER_TOOL_NAMES = (
@@ -42,6 +43,20 @@ BROWSER_READ_TOOLS = frozenset({
 BROWSER_IDLE_SECONDS = 30 * 60
 _THREAD_ID = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+_PAGE_TEXT_LIMIT = 12_000
+_SNAPSHOT_LINK = re.compile(r"\[Snapshot\]\(([^)]+)\)")
+_CONSENT_DIALOG = re.compile(
+    r"""heading ["'][^"']*(?:cookie|consent)[^"']*["'][^\n]*\[active\]|dialog ["'][^"']*(?:cookie|consent)[^"']*["']""",
+    re.IGNORECASE,
+)
+_BLOCKED_PAGE = re.compile(r"unusual traffic|captcha|rate-limit|google\.com/sorry|/sorry/index", re.IGNORECASE)
+_PAGE_LINE = ("heading ", "link ", "button ", "Page URL", "Page Title")
+_TOOL_GUIDANCE = {
+    "browser_navigate": " Returns the page address, title, and the headings and links to cite.",
+    "browser_snapshot": " Use this to read and cite what the page says.",
+    "browser_find": " Use this to locate one element on a large page.",
+    "browser_take_screenshot": " Use this to look at the page and show the person. Read headlines from the page structure, not from the picture.",
+}
 
 
 def _safe_thread(thread_id: str | None) -> str:
@@ -77,6 +92,61 @@ def _text(result: Any) -> str:
     return _text(content) if content is not None else str(result)
 
 
+def _inline_snapshot_files(text: str, output_dir: Path) -> str:
+    """Replace a worker snapshot link with that file when it stays in the capture folder."""
+
+    root = output_dir.resolve()
+
+    def replace(match: re.Match[str]) -> str:
+        raw = match.group(1).strip().strip('"').strip("'")
+        try:
+            resolved = Path(raw).resolve()
+            if resolved != root and root not in resolved.parents or not resolved.is_file():
+                return match.group(0)
+            body = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return match.group(0)
+        return "\n" + body + "\n"
+
+    return _SNAPSHOT_LINK.sub(replace, text)
+
+
+def _bound_page_text(text: str) -> str:
+    stripped = text.strip()
+    if len(stripped) <= _PAGE_TEXT_LIMIT:
+        return stripped
+    kept: list[str] = []
+    size = 0
+    for line in stripped.splitlines():
+        compact = line.strip()
+        if not compact or not any(token in compact for token in _PAGE_LINE):
+            continue
+        if len(compact) > 300:
+            compact = compact[:300]
+        if size + len(compact) + 1 > _PAGE_TEXT_LIMIT:
+            break
+        kept.append(compact)
+        size += len(compact) + 1
+    kept.append("The rest of the page structure was omitted. Use browser_find to locate one element.")
+    return "\n".join(kept)
+
+
+def present_page(result: Any, output_dir: Path) -> str:
+    """Page address and citable structure. A snapshot file path is not the page."""
+
+    text = _inline_snapshot_files(_text(result), output_dir)
+    url_match = re.search(r"(?:Page URL:|URL:)\s*(https?://[^\s]+)", text)
+    url = url_match.group(1).rstrip("),]") if url_match else None
+    title_match = re.search(r"Page Title:\s*(.+)", text)
+    notes: list[str] = []
+    if (url and _BLOCKED_PAGE.search(url)) or _BLOCKED_PAGE.search(text):
+        notes.append("This site refused the automated browser. This is not a search-result page.")
+    if _CONSENT_DIALOG.search(text):
+        notes.append("A consent dialog is open. It was not clicked. Use the button refs below if it covers the results.")
+    header = [line for line in (f"Page URL: {url}" if url else "", f"Page title: {title_match.group(1).strip()}" if title_match else "") if line]
+    return "\n".join([*notes, *header, _bound_page_text(text)]).strip()
+
+
 @dataclass
 class _Session:
     thread_id: str
@@ -99,12 +169,14 @@ class BrowserSessionService:
         runtime: BrowserRuntime | None = None,
         adapter_factory: Callable[..., Any] | None = None,
         idle_seconds: int = BROWSER_IDLE_SECONDS,
+        screenshot_reader: Callable[[Any], bool] | None = None,
     ):
         self.paths = paths
         self.runtime = runtime or BrowserRuntime(paths)
         self.capture_publisher = capture_publisher
         self.app_store = app_store
         self.adapter_factory = adapter_factory
+        self.screenshot_reader = screenshot_reader
         self.idle_seconds = idle_seconds
         self._sessions: dict[str, _Session] = {}
         self._lock = asyncio.Lock()
@@ -272,24 +344,27 @@ class BrowserSessionService:
                     await asyncio.to_thread(effects.acknowledge, effect.id)
                 if name == "browser_navigate":
                     session.last_url = self._observed_url(result)
+                if name in {"browser_navigate", "browser_snapshot"}:
+                    return text_result(present_page(result, session.output_dir))
                 if name != "browser_take_screenshot":
                     return result
                 created = [path for path in session.output_dir.iterdir() if path not in before and path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES]
                 if len(created) != 1:
                     raise ToolException("The browser did not produce exactly one controlled screenshot.")
                 path = created[0]
-                observed_url = self._observed_url(result)
-                if observed_url is None:
-                    try:
-                        observed_url = self._observed_url(await session.tools["browser_snapshot"].coroutine())
-                    except Exception:
-                        # A screenshot can still be retained if its page URL
-                        # cannot be read. Never substitute an earlier URL.
-                        pass
+                page_source = result
+                try:
+                    page_source = await session.tools["browser_snapshot"].coroutine()
+                except Exception:
+                    # A screenshot can still be retained if the page text cannot
+                    # be read. Never substitute an earlier URL.
+                    page_source = result
+                observed_url = self._observed_url(result) or self._observed_url(page_source)
                 target = observed_url or "browser page (URL unavailable)"
                 session.last_url = observed_url
+                page = present_page(page_source, session.output_dir)
                 if self.capture_publisher is None:
-                    return text_result(f"Screenshot saved to {path}.")
+                    return text_result(f"Screenshot saved to {path}.\n{page}")
                 try:
                     published = self.capture_publisher(
                         run, path, source_tool_name=name, source_tool_call_id=CURRENT_TOOL_CALL.get() or None,
@@ -304,12 +379,21 @@ class BrowserSessionService:
                     # directory is only a transient handoff from MCP.
                     path.unlink(missing_ok=True)
                 virtual_path = published[1] if isinstance(published, tuple) else published
-                return text_result(f"Screenshot captured from {target}. Read {virtual_path} with read_file to inspect the image.")
+                readable = None
+                if self.screenshot_reader is not None:
+                    try:
+                        readable = self.screenshot_reader(run)
+                    except Exception:
+                        readable = False
+                message = f"Screenshot captured from {target}.\n{page}\nSaved screenshot: {virtual_path}"
+                if readable is False:
+                    message = f"{message}\n{CANNOT_READ_IMAGE}"
+                return text_result(message)
 
         return original.model_copy(update={
             "args_schema": _without_filename(original),
             "coroutine": invoke,
-            "description": f"Isolated test browser: {original.description}",
+            "description": f"Isolated test browser: {original.description}{_TOOL_GUIDANCE.get(name, '')}",
             "metadata": {**(original.metadata or {}), "browser_worker": True, "browser_read_only": name in BROWSER_READ_TOOLS},
         })
 

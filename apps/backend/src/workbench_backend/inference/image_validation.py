@@ -12,6 +12,9 @@ from PIL import Image, UnidentifiedImageError
 MAX_IMAGE_BYTES = 8_000_000  # Match retained-asset admission before checkpoint offload.
 MAX_IMAGE_PIXELS = 32_000_000
 MAX_TOOL_IMAGE_BYTES_PER_REQUEST = 32 * 1024 * 1024
+CANNOT_READ_IMAGE = (
+    "This model cannot read the screenshot. Answer from the page text instead of describing the picture."
+)
 IMAGE_FORMATS = {
     "image/png": "PNG",
     "image/jpeg": "JPEG",

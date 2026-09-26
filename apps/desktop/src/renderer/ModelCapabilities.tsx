@@ -7,7 +7,7 @@ import { Icon } from "./Icon";
 import type { Deployment } from "./types";
 import type { SchemaCapabilityProbeReport } from "../generated/shared-contracts/openapi";
 
-const checks = [["text_stream", "Streaming"], ["tools", "Tools"], ["reasoning", "Thinking"], ["structured_native", "Structured output"], ["image", "Vision"]] as const;
+const checks = [["text_stream", "Streaming"], ["tools", "Tools"], ["reasoning", "Thinking"], ["structured_native", "Structured output"], ["image", "Vision"], ["tool_image", "Screenshot reading"]] as const;
 
 export function ModelCapabilities({ deployment, busy, action }: {
   deployment: Deployment;
@@ -38,7 +38,8 @@ export function ModelCapabilities({ deployment, busy, action }: {
       const stale = latest && latest.fingerprint !== report?.current_fingerprint;
       const state = loading ? "loading" : error ? "unknown" : stale ? "stale" : report?.current_support[capability] ?? "untested";
       const testing = busy === `probe-${deployment.id}-${capability}`;
-      const unavailable = capability === "image" && (report?.image_setup?.runtime_support ?? deployment.server_props?.modalities?.vision) === false;
+      const visionOff = (report?.image_setup?.runtime_support ?? deployment.server_props?.modalities?.vision) === false;
+      const unavailable = (capability === "image" || capability === "tool_image") && visionOff;
       const status = testing ? "Testing…" : ({ passed: "Verified", failed: "Failed", inconclusive: "Inconclusive", stale: "Needs retest", untested: "Not tested", loading: "Loading…", unknown: "Unavailable" }[state] ?? state);
       const visionNote = capability === "image" && unavailable
         ? report?.image_setup?.selected_projector ? report.image_setup.projector_present === false ? "Selected vision file is missing. Unload and choose an available file." : "A vision file is selected, but this running setup reports no image support. Unload and start it again." : deployment.scope === "managed" ? "No vision file is loaded. Choose one in Image input below, then start the model." : "This server reports no image input. Configure vision in the app serving it."
