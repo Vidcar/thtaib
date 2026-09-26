@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import fnmatch
 import re
+from collections.abc import Callable
 
 from deepagents.backends.protocol import (
     BackendProtocol,
@@ -22,7 +23,7 @@ from fastapi import HTTPException
 
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin
 from workbench_backend.assets.service import RetainedAssetService, capture_virtual_path
-from workbench_backend.inference.image_validation import validate_image_bytes
+from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE, validate_image_bytes
 
 _CAPTURE_PATH = re.compile(r"^/(asset_[0-9a-f]{32})\.(png|jpg|webp)$")
 _READ_ONLY = "Captures are read-only retained assets."
@@ -31,7 +32,7 @@ _READ_ONLY = "Captures are read-only retained assets."
 class CaptureBackend(BackendProtocol):
     """Expose retained bytes without copying them into project or scratch files."""
 
-    def __init__(self, assets: RetainedAssetService, session_id: str, *, image_inputs_allowed: bool = False) -> None:
+    def __init__(self, assets: RetainedAssetService, session_id: str, *, image_inputs_allowed: bool | Callable[[], bool] = False) -> None:
         self.assets = assets
         self.session_id = session_id
         self.image_inputs_allowed = image_inputs_allowed
@@ -61,8 +62,9 @@ class CaptureBackend(BackendProtocol):
         match = _CAPTURE_PATH.fullmatch(file_path)
         if match is None:
             return ReadResult(error="Capture not found.")
-        if not self.image_inputs_allowed:
-            return ReadResult(error="Image reading needs passing image and tool-image probes for this exact model setup.")
+        allowed = self.image_inputs_allowed
+        if not (bool(allowed()) if callable(allowed) else bool(allowed)):
+            return ReadResult(error=CANNOT_READ_IMAGE)
         try:
             asset, content = self.assets._load_content(match.group(1), session_id=self.session_id, project_path=None)
         except HTTPException as exc:

@@ -14,7 +14,13 @@ from openai import BadRequestError
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import chat_model_for_deployment
-from workbench_backend.inference.capabilities import CapabilityEvidence, CapabilityProbeRequest, setup_fingerprint, setup_identity
+from workbench_backend.inference.capabilities import (
+    CapabilityEvidence,
+    CapabilityProbeRequest,
+    capability_support,
+    setup_fingerprint,
+    setup_identity,
+)
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.settings import PER_REQUEST_KEYS, resolve_bag
 
@@ -39,6 +45,48 @@ def _image_fixture(colour: str = "red") -> str:
     pixel = {"red": b"\xff\x00\x00", "blue": b"\x00\x00\xff"}[colour]
     data += chunk(b"IDAT", zlib.compress((b"\x00" + pixel * 32) * 32)) + chunk(b"IEND", b"")
     return "data:image/png;base64," + base64.b64encode(data).decode()
+
+
+def ensure_tool_image_support(manager: Any, deployment_id: str, per_request: Any = None, *, probe=None) -> bool:
+    """Run the image checks once when a vision setup has never been tested.
+
+    A failed or inconclusive result stays failed. Page text does not depend on this.
+    """
+
+    if probe is None:
+        probe = run_capability_probe
+    deployment = manager.get_deployment(deployment_id)
+    settings = getattr(per_request, "applied", None) if per_request is not None and not isinstance(per_request, dict) else per_request
+
+    def current(capability: str) -> str:
+        return capability_support(manager.get_deployment(deployment_id), capability, per_request)
+
+    image = current("image")
+    tool_image = current("tool_image")
+    if image == "passed" and tool_image == "passed":
+        return True
+    if image in {"failed", "inconclusive"} or tool_image in {"failed", "inconclusive"}:
+        return False
+    props = deployment.server_props
+    vision = props.modalities.get("vision") if props is not None else None
+    if vision is False:
+        return False
+    if vision is None:
+        from pathlib import Path
+
+        from workbench_backend.inference.bundles import mmproj_companion
+
+        bundle = manager.store.get_bundle(deployment.bundle_id) if getattr(deployment, "bundle_id", None) else None
+        projector = mmproj_companion(bundle) if bundle else None
+        if projector is None or not Path(projector.path).is_file():
+            return False
+    if image != "passed":
+        probe(manager, deployment_id, CapabilityProbeRequest(capability="image", per_request=settings))
+        if current("image") != "passed":
+            return False
+    if current("tool_image") == "untested":
+        probe(manager, deployment_id, CapabilityProbeRequest(capability="tool_image", per_request=settings))
+    return current("tool_image") == "passed"
 
 
 def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityProbeRequest, *, model_factory=chat_model_for_deployment) -> CapabilityEvidence:
@@ -91,6 +139,23 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
         return record
 
 
+def _visible_answer(content: Any) -> str:
+    """Use the reply text. Thinking models return reasoning beside that text."""
+
+    if isinstance(content, list):
+        texts = [
+            block.get("text") for block in content
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        if texts:
+            return "\n".join(texts).strip()
+    return str(content or "").strip()
+
+
+def _colour_answer(content: Any, colour: str) -> bool:
+    return re.fullmatch(rf"\s*{colour}[.!]?\s*", _visible_answer(content), flags=re.IGNORECASE) is not None
+
+
 def _exercise(model: Any, capability: str, record: CapabilityEvidence) -> None:
     if capability == "text_stream":
         prompt = "Reply with the single word READY."
@@ -127,8 +192,8 @@ def _exercise(model: Any, capability: str, record: CapabilityEvidence) -> None:
         record.observations = {"samples": samples}
         for colour in colours:
             result = model.invoke([HumanMessage(content=[{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": _image_fixture(colour)}}])])
-            answer = str(result.content)
-            correct = re.fullmatch(rf"\s*{colour}[.!]?\s*", answer, flags=re.IGNORECASE) is not None
+            answer = _visible_answer(result.content)
+            correct = _colour_answer(result.content, colour)
             samples.append({"expected_colour": colour, "answer": answer[:2048], "correct": correct})
         record.observations["fixture_answer_correct"] = all(sample["correct"] for sample in samples)
         record.status = "passed" if record.observations["fixture_answer_correct"] else "failed"
@@ -167,8 +232,8 @@ def _exercise(model: Any, capability: str, record: CapabilityEvidence) -> None:
             # answer call must be free to answer rather than be forced to call
             # another tool by the probe's `tool_choice="any"` setting.
             result = model.invoke([initial, call, image_result])
-            answer = str(result.content)
-            correct = re.fullmatch(rf"\s*{colour}[.!]?\s*", answer, flags=re.IGNORECASE) is not None
+            answer = _visible_answer(result.content)
+            correct = _colour_answer(result.content, colour)
             samples.append({"expected_colour": colour, "answer": answer[:2048],
                 "valid_harmless_call": True, "tool_call_id": calls[0]["id"], "correct": correct})
         record.observations["fixture_answer_correct"] = all(sample["correct"] for sample in samples)

@@ -15,6 +15,7 @@ import base64
 import os
 import re
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, LocalShellBackend, StateBackend
@@ -22,7 +23,7 @@ from deepagents.backends.protocol import BackendProtocol, FileData, ReadResult
 
 from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.agents.schemas import AgentRun, ToolMode
-from workbench_backend.inference.image_validation import MAX_IMAGE_BYTES, validate_image_bytes
+from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE, MAX_IMAGE_BYTES, validate_image_bytes
 from workbench_backend.paths import WorkbenchPaths
 
 # Deep Agents 0.7.15 FilesystemMiddleware / summarization write these when
@@ -52,7 +53,7 @@ _OTHER_IMAGE_SUFFIXES = {".gif", ".heic", ".heif"}
 class _BoundedImageReads:
     """Keep upstream `read_file`, but validate still-image bytes before encoding."""
 
-    def __init__(self, *args, image_inputs_allowed: bool = False, **kwargs) -> None:
+    def __init__(self, *args, image_inputs_allowed: bool | Callable[[], bool] = False, **kwargs) -> None:
         self.image_inputs_allowed = image_inputs_allowed
         super().__init__(*args, **kwargs)
 
@@ -62,8 +63,8 @@ class _BoundedImageReads:
             if Path(file_path).suffix.lower() in _OTHER_IMAGE_SUFFIXES:
                 return ReadResult(error="Only PNG, JPEG, and WebP images are supported in Chat.")
             return super().read(file_path, offset, limit)
-        if not self.image_inputs_allowed:
-            return ReadResult(error="Image reading needs passing image and tool-image probes for this exact model setup.")
+        if not _images_allowed(self.image_inputs_allowed):
+            return ReadResult(error=CANNOT_READ_IMAGE)
         try:
             resolved = self._resolve_path(file_path)
         except (OSError, RuntimeError, ValueError):
@@ -111,12 +112,16 @@ def harness_scratch_root(paths: WorkbenchPaths, thread_id: str) -> Path:
     return paths.state / HARNESS_SCRATCH_DIRNAME / sanitize_thread_id(thread_id)
 
 
+def _images_allowed(flag: bool | Callable[[], bool]) -> bool:
+    return bool(flag()) if callable(flag) else bool(flag)
+
+
 def build_run_backend(
     run: AgentRun,
     paths: WorkbenchPaths,
     *,
     prepare_storage: bool = True,
-    image_inputs_allowed: bool = False,
+    image_inputs_allowed: bool | Callable[[], bool] = False,
     capture_backend: BackendProtocol | None = None,
 ) -> BackendProtocol | None:
     """Attach a CompositeBackend, or none for recorded-tool without knowledge.

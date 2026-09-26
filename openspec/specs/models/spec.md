@@ -475,7 +475,7 @@ An installed Hugging Face bundle SHALL support an explicit response-recipe refre
 
 ### Requirement: MOD-032 - Distinguish user-image and tool-image support
 
-The active deployment's capability record SHALL distinguish accepted user images from image content returned by a tool. The model adapter SHALL preserve tool-call pairing, bounded image bytes and selected request settings when a supported tool image is sent to the endpoint. Failed, untested and inconclusive tool-image support MUST NOT be displayed as verified visual inspection. Other model uses SHALL remain available under their existing compatibility rules.
+The active deployment's capability record SHALL distinguish accepted user images from image content returned by a tool. The model adapter SHALL preserve tool-call pairing, bounded image bytes and selected request settings when a supported tool image is sent to the endpoint. Failed, untested and inconclusive tool-image support MUST NOT be displayed as verified visual inspection. An untested tool-image check MAY run once when a screenshot is taken on a vision setup. Until it passes, the product SHALL NOT send the image and SHALL keep the page text available. Other model uses SHALL remain available under their existing compatibility rules.
 
 #### Scenario: Tool image reaches the model
 - **WHEN** a vision deployment passes an actual tool-image probe and an authorized agent reads a screenshot

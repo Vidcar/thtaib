@@ -23,7 +23,8 @@ import psutil
 
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.browser.runtime import BrowserRuntime, MCP_VERSION, NODE_SHA256, PACKAGE_MANIFEST
-from workbench_backend.browser.service import BrowserSessionService
+from workbench_backend.browser.service import BrowserSessionService, present_page
+from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.errors import HarnessError
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.preview.service import PreviewService
@@ -107,6 +108,8 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 CURRENT_TOOL_CALL.reset(token)
             self.assertIn("/captures/asset_red.png", capture)
+            self.assertIn("heading: Example", capture)
+            self.assertNotIn("read_file", capture)
             self.assertEqual(self.published[0][2]["target"], "http://127.0.0.1:8080/")
             self.assertEqual(self.published[0][2]["source_tool_call_id"], "call_capture_1")
             await by_name["browser_click"].coroutine(target="http://127.0.0.1:8080/after-click")
@@ -115,6 +118,13 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
             await by_name["browser_click"].coroutine(target="unknown")
             await by_name["browser_take_screenshot"].coroutine()
             self.assertEqual(self.published[-1][2]["target"], "browser page (URL unavailable)")
+            self.service.screenshot_reader = lambda _run: False
+            denied = await by_name["browser_take_screenshot"].coroutine()
+            self.assertIn(CANNOT_READ_IMAGE, denied)
+            self.assertNotIn("probe", denied)
+            self.service.screenshot_reader = lambda _run: True
+            allowed = await by_name["browser_take_screenshot"].coroutine()
+            self.assertNotIn(CANNOT_READ_IMAGE, allowed)
             def broken_publisher(*_args, **_kwargs):
                 raise RuntimeError("fixture storage failure")
             self.service.capture_publisher = broken_publisher
@@ -135,6 +145,45 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
                 pass
         await self.service.reset("thread_1")
         self.assertEqual(self.service.status("thread_1")["state"], "closed")
+
+
+class PageObservationTests(unittest.TestCase):
+    def test_snapshot_file_is_inlined_and_bounded_to_citable_lines(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            snapshot = folder / "page.yml"
+            snapshot.write_text("\n".join(
+                ["- heading \"City news\" [level=1]"]
+                + [f"- link \"Result {index}\" [ref=e{index}]" for index in range(800)]
+            ), encoding="utf-8")
+            observed = present_page(
+                f"Page URL: https://news.example/uk\nPage Title: UK news\n- [Snapshot]({snapshot})",
+                folder,
+            )
+            self.assertIn("heading \"City news\"", observed)
+            self.assertIn("link \"Result 0\"", observed)
+            self.assertNotIn(str(snapshot), observed)
+            self.assertIn("browser_find", observed)
+            self.assertLess(len(observed), 13_000)
+
+    def test_consent_dialog_is_named_and_not_accepted(self):
+        text = "\n".join([
+            "Page URL: https://www.bbc.co.uk/news/uk",
+            "Page Title: UK news",
+            "- heading \"Cookies on the BBC website\" [active] [level=2]",
+            "- button \"Reject additional cookies\" [ref=e4]",
+            "- heading \"Man City ruling\" [level=3]",
+        ])
+        observed = present_page(text, Path("."))
+        self.assertIn("consent dialog is open", observed)
+        self.assertIn("was not clicked", observed)
+        self.assertIn("Man City ruling", observed)
+        self.assertIn("Reject additional cookies", observed)
+
+    def test_blocked_browser_is_not_described_as_results(self):
+        observed = present_page("Page URL: https://www.google.com/sorry/index\nPage Title: unusual traffic", Path("."))
+        self.assertIn("refused the automated browser", observed)
+        self.assertIn("not a search-result page", observed)
 
 
 class BrowserRuntimeTests(unittest.TestCase):

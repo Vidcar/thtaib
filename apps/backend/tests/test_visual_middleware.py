@@ -25,6 +25,7 @@ from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
+from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.inference.probes import _image_fixture
 
 
@@ -175,3 +176,29 @@ class VisualMiddlewareTests(unittest.TestCase):
         self.assertEqual(second_request[-2].tool_call_id, "image-call")
         self.assertIsInstance(second_request[-1], HumanMessage)
         self.assertEqual(second_request[-1].content_blocks[-1]["base64"], encoded)
+
+    def test_unverified_screenshot_keeps_page_text_and_withholds_pixels(self) -> None:
+        encoded, _, captures, middleware, _, _ = self._setup()
+        path = "/captures/asset_" + "a" * 32 + ".png"
+        captures.image_inputs_allowed = False
+        middleware.tool_image_preparer = lambda: False
+        shot = ToolMessage(
+            content=f"Screenshot captured from https://news.example.\n- heading \"City news\"\nSaved screenshot: {path}",
+            name="browser_take_screenshot", tool_call_id="shot",
+        )
+        request = ModelRequest(model=ScriptedChatModel([AIMessage(content="ok")]),
+            messages=[
+                AIMessage(content="", tool_calls=[{"name": "browser_take_screenshot", "args": {}, "id": "shot"}]),
+                shot,
+            ], tools=[], model_settings={})
+        projected = middleware._with_current_tool_images(request)
+        self.assertEqual(projected.messages[-2], shot)
+        self.assertEqual(projected.messages[-1].content, CANNOT_READ_IMAGE)
+        self.assertNotIn("probe", projected.messages[-1].content)
+        self.assertEqual(captures.reads, [])
+        state = {"ready": False}
+        captures.image_inputs_allowed = lambda: state["ready"]
+        middleware.tool_image_preparer = lambda: state.__setitem__("ready", True) or True
+        delivered = middleware._with_current_tool_images(request)
+        self.assertEqual(delivered.messages[-1].content_blocks[-1]["base64"], encoded)
+        self.assertEqual(captures.reads, ["/" + path.removeprefix("/captures/")])

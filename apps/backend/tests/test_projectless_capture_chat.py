@@ -17,6 +17,7 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.schemas import AgentRun
 from workbench_backend.app import create_app
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin
+from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.probes import _image_fixture
 from workbench_backend.state.checkpointer import conversation_state
@@ -51,6 +52,14 @@ class ProjectlessCaptureChatTests(unittest.TestCase):
         })
         self.assertEqual(deployment.status_code, 200, deployment.text)
         self.deployment_id = deployment.json()["id"]
+        loaded = self.manager.get_deployment(self.deployment_id)
+        fingerprint = setup_fingerprint(loaded)
+        for capability in ("image", "tool_image"):
+            self.manager.store.put_capability_evidence({
+                "schema_version": 1, "id": new_id("probe"), "deployment_id": loaded.id,
+                "capability": capability, "status": "passed", "fingerprint": fingerprint,
+                "setup": {}, "tested_at": utc_now(), "inputs": {}, "observations": {}, "note": "fixture",
+            })
 
     def tearDown(self) -> None:
         close_workbench_sqlite(self.app, self.client)

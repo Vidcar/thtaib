@@ -445,6 +445,7 @@ async function checkSavedCapabilities(ModelCapabilities) {
     assert.equal(requests, 1);
     assert.ok(textOf(row("Vision")).includes("No vision file is loaded"));
     assert.equal(row("Vision").findAllByType("button").find(node => node.props["aria-label"] === "Test vision").props.disabled, true);
+    assert.equal(row("Screenshot reading").findAllByType("button").find(node => node.props["aria-label"] === "Test screenshot reading").props.disabled, true);
     report = { ...report, current_fingerprint: "setup-two", current_support: { tools: "untested" } };
     await act(async () => { renderer.update(React.createElement(ModelCapabilities, { deployment: { ...deployment }, busy: "", action })); await tick(); });
     assert.ok(textOf(row("Tools")).includes("Needs retest"), "changed setup preserves old evidence but never calls it verified");

@@ -179,6 +179,8 @@ class HarnessService:
         self._interaction_observer = interaction_observer
         self.assets = assets
         self.browser = browser
+        if browser is not None and hasattr(browser, "screenshot_reader"):
+            browser.screenshot_reader = self.prepare_screenshot_reading
         self.preview = preview
         self.desktop_automation = desktop_automation
         self._runs: dict[str, AgentRun] = {}
@@ -1148,6 +1150,17 @@ class HarnessService:
                         pass
                 raise
 
+    def prepare_screenshot_reading(self, run: AgentRun) -> bool:
+        """Prove screenshot delivery once for this loaded setup, then remember it."""
+
+        from workbench_backend.inference.probes import ensure_tool_image_support
+
+        per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+        try:
+            return ensure_tool_image_support(self.manager, run.deployment_id, per_request)
+        except Exception:
+            return False
+
     def _create_compiled_agent(
         self,
         run: AgentRun,
@@ -1162,20 +1175,25 @@ class HarnessService:
         execution_control = execution_control or ExecutionControl(run, lambda: self._publish_control_update(run))
         model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
         media_profile = dict(model.profile) if isinstance(model.profile, dict) else {}
-        image_inputs_allowed = (
-            media_profile.get("image_inputs") is True
-            and media_profile.get("image_tool_message") is True
-        )
         agent_kwargs: dict[str, Any] = {}
         capture_backend = None
+        image_inputs_allowed: bool | Any = False
         if self.assets is not None and run.capture_routes_enabled:
             session = self.assets.session_for_run(run)
             if session is not None:
+                def images_allowed() -> bool:
+                    from workbench_backend.inference.capabilities import capability_support
+                    deployment = self.manager.get_deployment(run.deployment_id)
+                    per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+                    return (
+                        capability_support(deployment, "image", per_request) == "passed"
+                        and capability_support(deployment, "tool_image", per_request) == "passed"
+                    )
+                image_inputs_allowed = images_allowed
                 capture_backend = CaptureBackend(self.assets, session.id,
-                    image_inputs_allowed=image_inputs_allowed)
+                    image_inputs_allowed=images_allowed)
         # A tool image must be retained before the graph checkpoint; runs with
         # no Chat asset owner cannot safely expose a raw image result.
-        image_inputs_allowed = image_inputs_allowed and capture_backend is not None
         backend = build_run_backend(run, self.manager.paths, prepare_storage=not inspection_only,
             image_inputs_allowed=image_inputs_allowed, capture_backend=capture_backend)
         knowledge_plan = self._knowledge_plan_for_run(run)
@@ -1306,6 +1324,7 @@ class HarnessService:
                     execution_control=execution_control,
                     asset_service=self.assets,
                     capture_backend=capture_backend,
+                    tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run),
                 )
             ],
             name="workbench-embedded-harness",

@@ -7,6 +7,7 @@ import base64
 import binascii
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 import time
 
@@ -36,6 +37,7 @@ from workbench_backend.agents.tools import (
 )
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.image_validation import (
+    CANNOT_READ_IMAGE,
     MAX_IMAGE_BYTES,
     MAX_TOOL_IMAGE_BYTES_PER_REQUEST,
     validate_image_bytes,
@@ -63,6 +65,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         execution_control: ExecutionControl | None = None,
         asset_service: Any = None,
         capture_backend: Any = None,
+        tool_image_preparer: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__()
         self.run = run
@@ -72,6 +75,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.execution_control = execution_control or ExecutionControl(run)
         self.asset_service = asset_service
         self.capture_backend = capture_backend
+        self.tool_image_preparer = tool_image_preparer
 
     def wrap_model_call(
         self,
@@ -257,6 +261,28 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 **({"capture_sha256": digest} if digest is not None else {})},
         })
 
+    def _saved_screenshot(self, message: ToolMessage) -> tuple[str, str] | None:
+        path = message.additional_kwargs.get("capture_path")
+        mime_type = message.additional_kwargs.get("capture_media_type")
+        if not isinstance(path, str):
+            match = _SAVED_SCREENSHOT.search(message.content if isinstance(message.content, str) else "")
+            if match is None:
+                return None
+            path = match.group(1)
+            mime_type = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}.get(Path(path).suffix.lower())
+        if not isinstance(path, str) or _CAPTURE_FILE_PATH.fullmatch(path) is None:
+            return None
+        if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            return None
+        return path, mime_type
+
+    def _images_allowed_now(self) -> bool:
+        backend = self.capture_backend
+        if backend is None:
+            return False
+        flag = getattr(backend, "image_inputs_allowed", True)
+        return bool(flag()) if callable(flag) else bool(flag)
+
     def _with_current_tool_images(self, request: ModelRequest) -> ModelRequest:
         """Attach only the trailing tool batch's images to this model request."""
 
@@ -270,17 +296,29 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             or not isinstance(messages[batch_start - 1], AIMessage)
             or not messages[batch_start - 1].tool_calls):
             return request
+        saved = [(message, self._saved_screenshot(message)) for message in messages[batch_start:]]
+        if any(item is not None for _, item in saved) and self.tool_image_preparer is not None:
+            try:
+                self.tool_image_preparer()
+            except Exception:
+                # A check that cannot finish leaves the page text usable.
+                pass
         content: list[dict[str, Any]] = []
         image_bytes = 0
-        for message in messages[batch_start:]:
-            path = message.additional_kwargs.get("capture_path")
-            mime_type = message.additional_kwargs.get("capture_media_type")
-            if not isinstance(path, str) or _CAPTURE_FILE_PATH.fullmatch(path) is None:
+        denied = False
+        allowed = self._images_allowed_now()
+        for message, item in saved:
+            if item is None:
                 continue
-            if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            path, mime_type = item
+            if not allowed:
+                denied = CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
                 continue
             loaded = self.capture_backend.read(path.removeprefix("/captures"))
             if loaded.error or loaded.file_data is None:
+                if loaded.error and CANNOT_READ_IMAGE in loaded.error:
+                    denied = CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
+                    continue
                 from workbench_backend.errors import HarnessError
                 raise HarnessError("The retained image is unavailable. Read or capture it again.",
                     code="capture_unavailable", status_code=409)
@@ -294,7 +332,9 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 {"type": "image", "base64": loaded.file_data["content"], "mime_type": mime_type},
             ])
         if not content:
-            return request
+            if not denied:
+                return request
+            return request.override(messages=[*messages, HumanMessage(content=CANNOT_READ_IMAGE)])
         return request.override(messages=[*messages, HumanMessage(content=content)])
 
     async def _awrap_tool_call(self, request, handler):
@@ -555,6 +595,7 @@ def _allow_projectless_knowledge_tool(
 
 
 _CAPTURE_FILE_PATH = re.compile(r"^/captures/asset_[0-9a-f]{32}\.(png|jpg|webp)$")
+_SAVED_SCREENSHOT = re.compile(r"Saved screenshot: (/captures/asset_[0-9a-f]{32}\.(?:png|jpg|webp))")
 
 
 def _allow_projectless_capture_tool(name: str, args: dict[str, Any], run: AgentRun) -> bool:

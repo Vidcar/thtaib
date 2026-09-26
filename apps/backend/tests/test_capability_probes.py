@@ -6,6 +6,8 @@ import copy
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 import httpx
 from openai import BadRequestError
 from contextlib import contextmanager
@@ -25,6 +27,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.probes import (
     PROBE_TOOL,
     _image_fixture,
+    ensure_tool_image_support,
     run_capability_probe,
 )
 from workbench_backend.inference.schemas import (
@@ -333,7 +336,9 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.images.append(messages[0].content[1]["image_url"]["url"])
                 return AIMessage(content=next(self.answers))
         for answers, expected in ((["red", "blue"], "passed"), (["red", "red"], "failed"),
-                                  (["The image is blue, not red.", "blue"], "failed")):
+                                  (["The image is blue, not red.", "blue"], "failed"),
+                                  ([[{"type": "reasoning", "reasoning": "bright"}, {"type": "text", "text": "Red"}],
+                                    [{"type": "text", "text": "Blue"}]], "passed")):
             with self.subTest(answers=answers):
                 model = Images(answers)
                 evidence = run_capability_probe(FakeManager(self.store, self.deployment), self.deployment.id,
@@ -442,6 +447,37 @@ class UserContentBoundaryTests(unittest.TestCase):
         self.assertEqual(content[1]["type"], "image_url")
         self.assertEqual(content[1]["image_url"]["url"], fixture)
         self.assertEqual(content[1]["image_url"]["detail"], "auto")
+
+
+class ScreenshotReadingGateTests(unittest.TestCase):
+    def _deployment(self, vision):
+        return SimpleNamespace(server_props=SimpleNamespace(modalities={"vision": vision}), capability_evidence=[])
+
+    def test_untested_vision_runs_both_checks_once_and_a_failure_does_not_repeat(self) -> None:
+        deployment = self._deployment(True)
+        calls: list[str] = []
+
+        def support(_deployment, capability, _per_request=None):
+            for item in reversed(deployment.capability_evidence):
+                if item["capability"] == capability:
+                    return item["status"]
+            return "untested"
+
+        def probe(_manager, _deployment_id, request):
+            calls.append(request.capability)
+            deployment.capability_evidence.append({"capability": request.capability, "status": "passed"})
+
+        manager = SimpleNamespace(get_deployment=lambda _id: deployment)
+        with patch("workbench_backend.inference.probes.capability_support", support):
+            self.assertTrue(ensure_tool_image_support(manager, "deploy", probe=probe))
+            self.assertEqual(calls, ["image", "tool_image"])
+            calls.clear()
+            self.assertTrue(ensure_tool_image_support(manager, "deploy", probe=probe))
+            self.assertEqual(calls, [])
+            deployment.capability_evidence = [{"capability": "image", "status": "failed"}]
+            self.assertFalse(ensure_tool_image_support(manager, "deploy", probe=probe))
+            self.assertEqual(calls, [])
+            self.assertFalse(ensure_tool_image_support(SimpleNamespace(get_deployment=lambda _id: self._deployment(False)), "deploy", probe=probe))
 
 
 if __name__ == "__main__":
