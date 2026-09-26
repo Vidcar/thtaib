@@ -232,7 +232,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
       detailGeneration.current += 1;
       setPreview(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
       setFullContent(current => current && result.affected_asset_ids.includes(current.id) ? null : current);
-      setDeletionPreview(result);
+      setDeletionPreview(null);
       setSelectedIds([]);
       setMessage(deleteOutcomeText(result));
       await loadAssets({ clearMessage: false });

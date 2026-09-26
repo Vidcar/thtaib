@@ -445,6 +445,10 @@ class RetainedAssetService:
                 elif kind == "run":
                     if consumer_id in selected_runs:
                         affected_runs.add(consumer_id)
+                    elif explicit_asset and asset is not None and consumer_id == asset.source_run_id:
+                        # The producing run is provenance of this retained copy.
+                        # Choosing the file in the Library is the deliberate delete.
+                        affected_runs.add(consumer_id)
                     else:
                         retained_runs.add(consumer_id)
                         shared = True
@@ -471,7 +475,11 @@ class RetainedAssetService:
                 elif kind == "tool_call":
                     # Collection deduplication belongs to the run; it is not
                     # an independent surviving consumer of its output bytes.
-                    if consumer_id.partition(":")[0] not in selected_runs:
+                    owning_run = consumer_id.partition(":")[0]
+                    owns_deleted_copy = owning_run in selected_runs or (
+                        explicit_asset and asset is not None and owning_run == asset.source_run_id
+                    )
+                    if not owns_deleted_copy:
                         shared = True
                 elif asset_id not in selected_assets:
                     shared = True
