@@ -7338,6 +7338,44 @@
         "title": "InteractionRegistration",
         "type": "object"
       },
+      "InteractionToolOrigin": {
+        "additionalProperties": false,
+        "description": "Display ownership of one native call, scoped to its actual execution.",
+        "properties": {
+          "call_id": {
+            "title": "Call Id",
+            "type": "string"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          },
+          "namespace": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespace",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "call_id"
+        ],
+        "title": "InteractionToolOrigin",
+        "type": "object"
+      },
       "InterruptDecision": {
         "additionalProperties": false,
         "properties": {
@@ -12777,6 +12815,13 @@
                 "type": "null"
               }
             ]
+          },
+          "tool_origins": {
+            "items": {
+              "$ref": "#/components/schemas/InteractionToolOrigin"
+            },
+            "title": "Tool Origins",
+            "type": "array"
           }
         },
         "title": "WorkbenchInteractionMetadata",

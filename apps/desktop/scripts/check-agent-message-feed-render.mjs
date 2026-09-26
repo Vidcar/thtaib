@@ -44,6 +44,112 @@ function tick() {
 try {
   const feedModule = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
   const { AgentMessageFeed, helperKey, resetPaintCounters } = feedModule;
+  const { toolOriginGeneration, toolOriginIdentity } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
+  const warmFailures = [];
+  const warmCase = async (label, test) => {
+    try { await test(); } catch (error) { warmFailures.push(new Error(`${label}: ${error.message}`, { cause: error })); }
+  };
+  const oldTurn = [
+    new HumanMessage({ id: "warm-human-1", content: "First request" }),
+    new AIMessage({ id: "warm-call-1", content: [{ type: "reasoning", reasoning: "Earlier reasoning" }, { type: "text", text: "Earlier work" }], tool_calls: [{ id: "warm-tool-1", name: "lookup", args: { q: "old" } }] }),
+    new ToolMessage({ id: "warm-result-1", tool_call_id: "warm-tool-1", content: "Earlier lookup result" }),
+    new AIMessage({ id: "warm-final-1", content: "Earlier final answer" }),
+  ];
+  const oldHandle = { id: "warm-tool-1", callId: "warm-tool-1", name: "lookup", input: { q: "old" }, output: "Earlier lookup result", status: "finished", namespace: [] };
+  const oldOrigin = { run_id: "warm-run-1", input_message_id: "warm-human-1", namespace: [], call_id: "warm-tool-1" };
+  const confirmed = (...origins) => new Map(origins.map(origin => [toolOriginIdentity(origin.namespace, origin.call_id), toolOriginGeneration(origin)]));
+  await warmCase("retained handles stay in their original turn", async () => {
+    const html = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+      messages: [...oldTurn, new HumanMessage({ id: "warm-human-2", content: "Second request" }), new AIMessage({ id: "warm-answer-2", content: "Current live answer" })],
+      toolCalls: [oldHandle], toolOrigins: [oldOrigin], currentRunId: "warm-run-2", currentInputMessageId: "warm-human-2", live: true,
+      helperRuns: [{ id: "warm-run-1", input_message_id: "warm-human-1" }, { id: "warm-run-2", input_message_id: "warm-human-2" }],
+    }));
+    assert.equal(html.split("Earlier lookup result").length - 1, 1, "the retained result renders once");
+    assert.ok(html.indexOf("Earlier lookup result") < html.indexOf("Second request"), "old activity stays before the new user turn");
+    assert.ok(html.lastIndexOf("Current live answer") > html.lastIndexOf("Earlier lookup result"), "current output is at the transcript tail");
+  });
+  await warmCase("delayed run metadata preserves mounted rows and disclosures", async () => {
+    let renderer;
+    const props = { messages: [...oldTurn, new HumanMessage({ id: "warm-human-2", content: "Second request" })], currentRunId: "warm-run-2", currentInputMessageId: "warm-human-2", live: false };
+    const runs = [{ id: "warm-run-1", input_message_id: "warm-human-1" }, { id: "warm-run-2", input_message_id: "warm-human-2" }];
+    try {
+      await act(async () => { renderer = create(React.createElement(AgentMessageFeed, { ...props, helperRuns: runs })); });
+      const bubble = renderer.root.findAllByType("article")[1];
+      await toggleDetails(renderer.root, "message-reasoning", true);
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, helperRuns: [runs[1]] })));
+      assert.ok(renderer.root.findAllByType("article")[1] === bubble, "unchanged historical row remains mounted while metadata loads");
+      assert.equal(detailsOpen(renderer.root, "message-reasoning"), true, "opened historical reasoning remains open");
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, helperRuns: runs })));
+      assert.ok(renderer.root.findAllByType("article")[1] === bubble, "metadata completion keeps the same historical row");
+    } finally { if (renderer) await act(async () => renderer.unmount()); }
+  });
+  await warmCase("reused call origin waits for its new SDK handle", async () => {
+    let renderer;
+    const secondUser = new HumanMessage({ id: "warm-human-2", content: "Second request" });
+    const origin2 = { ...oldOrigin, run_id: "warm-run-2", input_message_id: "warm-human-2" };
+    const props = { currentRunId: "warm-run-2", currentInputMessageId: "warm-human-2", live: true, detailedStreams: false, toolCallOrigins: confirmed(oldOrigin) };
+    const text = () => JSON.stringify(renderer.toJSON());
+    try {
+      await act(async () => { renderer = create(React.createElement(AgentMessageFeed, { messages: oldTurn, toolCalls: [oldHandle], toolOrigins: [oldOrigin], currentRunId: "warm-run-1", currentInputMessageId: "warm-human-1", live: false })); });
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, messages: [...oldTurn, secondUser], toolCalls: [oldHandle], toolOrigins: [oldOrigin, origin2] })));
+      assert.equal(text().split("Earlier lookup result").length - 1, 1, "publishing a reused origin cannot move the old result into the new turn");
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, messages: [...oldTurn, secondUser], toolCalls: [{ ...oldHandle, status: "error", error: "Historical reconciliation" }], toolOrigins: [oldOrigin, origin2] })));
+      assert.doesNotMatch(text(), /Historical reconciliation/, "a replaced historical SDK object is still not evidence of the new native start");
+      const currentHandle = { ...oldHandle, status: "running", output: null, input: { q: "current unique lookup" } };
+      props.toolCallOrigins = confirmed(origin2);
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, messages: [...oldTurn, secondUser], toolCalls: [currentHandle], toolOrigins: [oldOrigin, origin2] })));
+      assert.equal(renderer.root.findAll(node => node.type === "details" && node.props.className === "message-tools").length, 2, "a current tool renders before its AI message is projected");
+      const currentDetails = renderer.root.findAll(node => node.type === "details" && node.props.className === "message-tools").at(-1);
+      await act(async () => currentDetails.findAllByType("summary")[0].props.onClick({ preventDefault() {} }));
+      assert.match(text(), /current unique lookup/, "the pre-AI tool owns the current input");
+      const secondCall = new AIMessage({ id: "warm-call-2", content: "Current commentary", tool_calls: [{ id: oldHandle.callId, name: "lookup", args: currentHandle.input }] });
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, messages: [...oldTurn, secondUser, secondCall], toolCalls: [currentHandle], toolOrigins: [oldOrigin, origin2] })));
+      assert.equal(renderer.root.findAll(node => node.type === "details" && node.props.className === "message-tools").at(-1).findAllByType("summary")[0].props["aria-expanded"], true, "the tool's disclosure survives attachment to its AI message");
+      assert.equal(text().split("Earlier lookup result").length - 1, 1, "reused live input never overwrites the retained earlier result");
+      const currentResult = new ToolMessage({ id: "warm-result-2", tool_call_id: oldHandle.callId, content: "Current unique result" });
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { ...props, live: false, messages: [...oldTurn, secondUser, secondCall, currentResult], toolCalls: [{ ...currentHandle, status: "finished", output: "Current unique result" }], toolOrigins: [oldOrigin, origin2] })));
+      assert.equal(text().split("Current unique result").length - 1, 1, "the completed current tool is joined once");
+      assert.ok(text().indexOf("Earlier lookup result") < text().indexOf("Second request") && text().indexOf("Second request") < text().indexOf("Current unique result"), "both reused calls retain their own chronological turn");
+    } finally { if (renderer) await act(async () => renderer.unmount()); }
+  });
+  await warmCase("one paint samples messages tools and origins together", async () => {
+    const oldWindow = globalThis.window;
+    const frames = new Map();
+    let nextFrame = 0;
+    globalThis.window = { requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; }, cancelAnimationFrame: id => frames.delete(id) };
+    let renderer;
+    try {
+      await act(async () => { renderer = create(React.createElement(AgentMessageFeed, { messages: oldTurn, toolCalls: [oldHandle], toolOrigins: [oldOrigin], toolCallOrigins: confirmed(oldOrigin), currentRunId: "warm-run-1", currentInputMessageId: "warm-human-1", live: true, detailedStreams: true })); });
+      const newHandle = { ...oldHandle, id: "warm-tool-2", callId: "warm-tool-2", status: "running", output: null, input: { q: "Next frame tool" } };
+      const newOrigin = { ...oldOrigin, call_id: newHandle.callId, run_id: "warm-run-2", input_message_id: "warm-human-2" };
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { messages: [...oldTurn, new HumanMessage({ id: "warm-human-2", content: "Next frame user" })], toolCalls: [oldHandle, newHandle], toolOrigins: [oldOrigin, newOrigin], toolCallOrigins: confirmed(oldOrigin, newOrigin), currentRunId: newOrigin.run_id, currentInputMessageId: newOrigin.input_message_id, live: true, detailedStreams: true })));
+      assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /Next frame tool/, "new tools cannot paint against the previous frame's messages");
+      await act(async () => frames.values().next().value());
+      const rendered = JSON.stringify(renderer.toJSON());
+      assert.ok(rendered.indexOf("Next frame user") < rendered.indexOf("Next frame tool"), "the same paint includes the originating user before its tool");
+      assert.equal(rendered.split("Earlier lookup result").length - 1, 1, "a coherent frame cannot rehome retained activity");
+    } finally {
+      if (renderer) await act(async () => renderer.unmount());
+      if (oldWindow === undefined) delete globalThis.window; else globalThis.window = oldWindow;
+    }
+  });
+  await warmCase("stopped calls do not stop a later reused call", async () => {
+    let renderer;
+    const origin2 = { ...oldOrigin, run_id: "warm-run-2", input_message_id: "warm-human-2" };
+    const stoppedMessages = [oldTurn[0], new AIMessage({ id: "stopped-call", content: "", tool_calls: [{ id: oldHandle.callId, name: "lookup", args: { q: "stopped" } }] })];
+    const pending = { ...oldHandle, status: "running", output: null };
+    try {
+      await act(async () => { renderer = create(React.createElement(AgentMessageFeed, { messages: stoppedMessages, toolCalls: [pending], toolOrigins: [oldOrigin], toolCallOrigins: confirmed(oldOrigin), currentRunId: oldOrigin.run_id, currentInputMessageId: oldOrigin.input_message_id, live: false })); });
+      assert.match(JSON.stringify(renderer.toJSON()), /No recorded lookup result/);
+      const newer = { ...pending, input: { q: "new turn" } };
+      const newMessages = [...stoppedMessages, new HumanMessage({ id: origin2.input_message_id, content: "New request after stop" }), new AIMessage({ id: "new-call-after-stop", content: "", tool_calls: [{ id: oldHandle.callId, name: "lookup", args: newer.input }] })];
+      await act(async () => renderer.update(React.createElement(AgentMessageFeed, { messages: newMessages, toolCalls: [newer], toolOrigins: [oldOrigin, origin2], toolCallOrigins: confirmed(origin2), currentRunId: origin2.run_id, currentInputMessageId: origin2.input_message_id, live: true })));
+      const rendered = JSON.stringify(renderer.toJSON());
+      assert.equal(rendered.split("No recorded lookup result").length - 1, 1, "only the original turn remains stopped");
+      assert.ok(rendered.indexOf("New request after stop") < rendered.indexOf("Calling lookup"), "the reused current call keeps its live status after its own user");
+    } finally { if (renderer) await act(async () => renderer.unmount()); }
+  });
+  if (warmFailures.length) throw new AggregateError(warmFailures, warmFailures.map(error => error.message).join("\n"));
   const helperRun = { id: "parent-1", input_message_id: "human-1" };
   const helperShown = renderToStaticMarkup(React.createElement(AgentMessageFeed, { onHelperOpen: () => {}, helperName: () => "Research helper", helperStatus: () => "waiting for model", helperRuns: [helperRun], currentRunId: helperRun.id, hiddenHelperResultIds: new Set([helperKey("parent-1", "helper-task-1")]), messages: [
     new HumanMessage({ id: "human-1", content: "Please research" }),

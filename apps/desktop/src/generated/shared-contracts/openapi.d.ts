@@ -4723,6 +4723,20 @@ export interface components {
              */
             source_surface: "chat" | "agent";
         };
+        /**
+         * InteractionToolOrigin
+         * @description Display ownership of one native call, scoped to its actual execution.
+         */
+        InteractionToolOrigin: {
+            /** Call Id */
+            call_id: string;
+            /** Input Message Id */
+            input_message_id?: string | null;
+            /** Namespace */
+            namespace?: string[];
+            /** Run Id */
+            run_id: string;
+        };
         /** InterruptDecision */
         InterruptDecision: {
             /** Message */
@@ -6815,6 +6829,8 @@ export interface components {
             interrupt_run_id?: string | null;
             recovery?: components["schemas"]["InteractionRecovery"] | null;
             run?: components["schemas"]["AgentRun"] | null;
+            /** Tool Origins */
+            tool_origins?: components["schemas"]["InteractionToolOrigin"][];
         };
     };
     responses: never;
@@ -6916,6 +6932,7 @@ export type SchemaInstructionLayer = components['schemas']['InstructionLayer'];
 export type SchemaInteractionBinding = components['schemas']['InteractionBinding'];
 export type SchemaInteractionRecovery = components['schemas']['InteractionRecovery'];
 export type SchemaInteractionRegistration = components['schemas']['InteractionRegistration'];
+export type SchemaInteractionToolOrigin = components['schemas']['InteractionToolOrigin'];
 export type SchemaInterruptDecision = components['schemas']['InterruptDecision'];
 export type SchemaInterruptDecisionRequest = components['schemas']['InterruptDecisionRequest'];
 export type SchemaKnowledgeAutomaticPolicy = components['schemas']['KnowledgeAutomaticPolicy'];

@@ -28,7 +28,7 @@ class ResumeProjection:
         self._prepared = False
         self._partial = PartialArchiveAccumulator()
         self._message_prefixes: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-        self._open_tools: dict[str, dict[str, Any]] = {}
+        self._open_tools: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
 
     def _prepare(self) -> None:
         if self._prepared or self.since <= 0:
@@ -61,10 +61,11 @@ class ResumeProjection:
         elif item.get("method") == "tools":
             call_id = data.get("tool_call_id")
             if isinstance(call_id, str) and call_id:
+                tool_key = (tuple(params.get("namespace") or []), call_id)
                 if data.get("event") == "tool-started":
-                    self._open_tools[call_id] = item
+                    self._open_tools[tool_key] = item
                 elif data.get("event") in {"tool-finished", "tool-error"}:
-                    self._open_tools.pop(call_id, None)
+                    self._open_tools.pop(tool_key, None)
 
     def _reset_for_run(self, started: int, through: int) -> None:
         self._run_started_seq = max(0, started)

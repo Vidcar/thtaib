@@ -175,7 +175,8 @@ class InteractionStoreMixin:
                                        (thread_id, seq, json.dumps(event), int(replaceable_measurement), seq - 1))
                     if (not replaceable_measurement and original.get("method") == "values" and
                             not original.get("params", {}).get("namespace") and
-                            not original.get("params", {}).get("measurement")):
+                            not original.get("params", {}).get("measurement") and
+                            not original.get("params", {}).get("_tool_origin")):
                         full_values.append(seq)
                 if root_values:
                     # A newer complete values record supersedes only snapshots
@@ -203,6 +204,7 @@ class InteractionStoreMixin:
                                  AND json_extract(payload, '$.method')='values'
                                  AND json_extract(payload, '$.params.namespace')='[]'
                                  AND COALESCE(json_extract(payload, '$.params.measurement'),0)=0
+                                 AND COALESCE(json_extract(payload, '$.params._tool_origin'),0)=0
                                ORDER BY seq""",
                             (thread_id, full_values[-1]),
                         )

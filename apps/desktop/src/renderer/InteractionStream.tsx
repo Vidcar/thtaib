@@ -1,16 +1,26 @@
-import { useMessages, useStream, useToolCalls, type AssembledToolCall } from "@langchain/react";
+import { useChannelEffect, useMessages, useStream, useToolCalls, type AssembledToolCall } from "@langchain/react";
 import type { Interrupt } from "@langchain/langgraph-sdk";
 import type { BaseMessage } from "@langchain/core/messages";
 import type React from "react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createResumingInteractionTransport } from "./interactionResume";
-import type { SchemaWorkbenchInteractionMetadata } from "../generated/shared-contracts/openapi";
+import type { SchemaInteractionToolOrigin, SchemaWorkbenchInteractionMetadata } from "../generated/shared-contracts/openapi";
 import type { AgentRun, PendingInterrupt, PendingInterruptAction } from "./types";
 
 type WorkbenchInteractionMetadata = Omit<SchemaWorkbenchInteractionMetadata, "run"> & {
   run?: AgentRun | null;
 };
+
+export type WorkbenchToolOrigin = SchemaInteractionToolOrigin;
+
+export function toolOriginIdentity(namespace: readonly string[], callId: string): string {
+  return JSON.stringify([namespace, callId]);
+}
+
+export function toolOriginGeneration(origin: WorkbenchToolOrigin): string {
+  return JSON.stringify([origin.run_id, origin.input_message_id ?? null, origin.namespace ?? [], origin.call_id]);
+}
 
 export interface WorkbenchInteractionValues {
   workbench?: WorkbenchInteractionMetadata;
@@ -107,10 +117,59 @@ export function useWorkbenchProjection(stream: WorkbenchStream): {
   workbench: WorkbenchInteractionValues["workbench"] | undefined;
   messages: BaseMessage[];
   toolCalls: AssembledToolCall[];
+  toolCallOrigins: ReadonlyMap<string, string>;
   incompleteMessageIds: Set<string>;
 } {
   const messages = useMessages(stream);
   const assembledToolCalls = useToolCalls(stream);
+  const nativeOrigins = useRef(new Map<string, WorkbenchToolOrigin>());
+  const confirmedOrigins = useRef(new Map<string, string>());
+  const observationGeneration = useRef(0);
+  const pendingStarts = useRef(new Map<string, object>());
+  const observedThread = useRef(stream.threadId);
+  const [, notifyOrigin] = useState(0);
+  useEffect(() => () => { observationGeneration.current += 1; }, []);
+  if (observedThread.current !== stream.threadId) {
+    observedThread.current = stream.threadId;
+    nativeOrigins.current = new Map();
+    confirmedOrigins.current = new Map();
+    pendingStarts.current = new Map();
+    observationGeneration.current += 1;
+  }
+  const hydratedOrigins = new Map((stream.values.workbench?.tool_origins ?? []).map(origin => [toolOriginIdentity(origin.namespace ?? [], origin.call_id), origin]));
+  for (const [identity, origin] of hydratedOrigins) {
+    // Raw root events can be ahead of the coalesced values snapshot.
+    if (!nativeOrigins.current.has(identity)) nativeOrigins.current.set(identity, origin);
+  }
+  useChannelEffect(stream, ["values", "tools"], { replay: false, bufferSize: 1, onEvent(event) {
+    if (event.method === "values" && event.params.namespace.length === 0) {
+      const data = event.params.data as WorkbenchInteractionValues;
+      for (const origin of data.workbench?.tool_origins ?? []) nativeOrigins.current.set(toolOriginIdentity(origin.namespace ?? [], origin.call_id), origin);
+      return;
+    }
+    if (event.method !== "tools") return;
+    const data = event.params.data as { event?: string; tool_call_id?: string };
+    if (data.event !== "tool-started" || !data.tool_call_id) return;
+    const identity = toolOriginIdentity(event.params.namespace, data.tool_call_id);
+    const origin = nativeOrigins.current.get(identity);
+    if (!origin) return;
+    const generation = observationGeneration.current;
+    const originGeneration = toolOriginGeneration(origin);
+    const startToken = {};
+    pendingStarts.current.set(identity, startToken);
+    // The SDK root bus runs before its tool assembler. Do not confirm the
+    // new origin until that same event has replaced the retained old handle.
+    confirmedOrigins.current = new Map(confirmedOrigins.current);
+    confirmedOrigins.current.delete(identity);
+    notifyOrigin(value => value + 1);
+    queueMicrotask(() => {
+      if (observationGeneration.current !== generation || pendingStarts.current.get(identity) !== startToken
+        || toolOriginGeneration(nativeOrigins.current.get(identity) ?? origin) !== originGeneration) return;
+      pendingStarts.current.delete(identity);
+      confirmedOrigins.current = new Map(confirmedOrigins.current).set(identity, originGeneration);
+      notifyOrigin(value => value + 1);
+    });
+  } });
   // The SDK root pump includes depth-one tool events for helper discovery.
   // This backend emits parent tools at root; tools:/task: branches belong only
   // to their scoped helper transcript, just like the SDK's message projection.
@@ -126,6 +185,7 @@ export function useWorkbenchProjection(stream: WorkbenchStream): {
     workbench: stream.values.workbench,
     messages,
     toolCalls,
+    toolCallOrigins: confirmedOrigins.current,
     incompleteMessageIds,
   };
 }
