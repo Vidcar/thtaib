@@ -514,6 +514,16 @@ class GgufRuntimeMetadata(BaseModel):
     has_mtp_tensors: bool = False
 
 
+class ResponsePreset(BaseModel):
+    id: Literal["balanced", "deep"]
+    label: str
+    description: str
+    source: Literal["workbench"] = "workbench"
+    per_request: dict[str, Any]
+    thinking_limit_supported: bool | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class BundleConfigurationOptions(BaseModel):
     bundle_id: str | None
     deployment_id: str | None = None
@@ -521,6 +531,7 @@ class BundleConfigurationOptions(BaseModel):
     gpu_layers: RuntimeControlDescriptor
     startup_defaults: dict[str, RuntimeControlDescriptor]
     per_request_defaults: dict[str, RuntimeControlDescriptor] = Field(default_factory=dict)
+    response_presets: list[ResponsePreset] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

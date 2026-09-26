@@ -17,8 +17,12 @@ class ChatCoordinator:
         self.thread.start()
 
     def observe(self, run):
-        if run.source_surface == "chat" and run.status in {"completed", "failed", "cancelled"}:
+        if run.status in {"completed", "failed", "cancelled"}:
             self.events.put(run.id)
+
+    def wake(self):
+        """New durable waiter or an acknowledged effect may now be admissible."""
+        self.events.put(None)
 
     def _work(self):
         state = self.application.state
@@ -29,11 +33,13 @@ class ChatCoordinator:
                 continue
             try:
                 with state.maintenance_gate.mutation():
-                    run = state.harness.get_run(run_id)
-                    for conversation in state.chat.store.list_conversations(include_archived=True):
-                        if run.id in conversation.run_ids and conversation.current_run_id == run.id:
-                            state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
-                    state.chat.observe_terminal_run(run)
+                    if run_id is not None:
+                        run = state.harness.get_run(run_id)
+                        for conversation in state.chat.store.list_conversations(include_archived=True):
+                            if run.id in conversation.run_ids and conversation.current_run_id == run.id:
+                                state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
+                        state.chat.observe_terminal_run(run)
+                    state.chat.dispatch_idle_queued()
             except BackupError:
                 if not self.closed.wait(0.2):
                     self.events.put(run_id)

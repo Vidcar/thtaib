@@ -15,6 +15,7 @@ import { ReadSources, SourceLink, SourceScope, sourceReference } from "./SourceR
 import { closeUnfinishedMarks, splitStreamingMarkdown } from "./streamingMarkdown";
 import type { MatchedPermissionGrant } from "./packet03Api";
 import type { AgentRun } from "./types";
+import { RunActivitySummary } from "./RunActivitySummary";
 
 export let markdownParseCount = 0;
 export let finishedBubbleRenders = 0;
@@ -42,6 +43,7 @@ interface ToolBlock {
   status?: string;
   result?: unknown;
   error?: string;
+  outcome?: string;
   authorizationSource?: string;
   authorizationGrant?: MatchedPermissionGrant;
 }
@@ -356,9 +358,14 @@ function proposedAmount(count: number): string {
 
 function toolIsStreaming(tool: ToolBlock): boolean {
   if (toolError(tool)) return false;
+  if (tool.outcome && tool.outcome !== "running") return false;
   const status = tool.status ?? "";
   if (["finished", "success", "completed", "error", "failed"].includes(status)) return false;
   return tool.result === undefined;
+}
+
+function toolSucceeded(tool: ToolBlock): boolean {
+  return tool.outcome ? tool.outcome === "succeeded" : !toolIsStreaming(tool) && !toolError(tool);
 }
 
 function safeHref(href: string | undefined): string | undefined {
@@ -652,7 +659,7 @@ function ToolBlockList({
   }
   const todos = todoState(toolBlocks);
   const rows = toolBlocks.filter(tool => tool.name !== "write_todos");
-  const groups = groupActivity(rows, tool => { const error = toolError(tool); const finished = !toolIsStreaming(tool); return { label: activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) }), finished, failed: Boolean(error) }; });
+  const groups = groupActivity(rows, tool => { const error = toolError(tool); const finished = toolSucceeded(tool); return { label: activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) }), finished, failed: Boolean(error) }; });
   function renderTool(tool: ToolBlock, index: number) {
     const id = tool.id ? `${helperRunId ?? "default"}:tool:${tool.id}` : `${messageKey}:tool:${index}`;
     const error = toolError(tool);
@@ -662,12 +669,19 @@ function ToolBlockList({
     const writing = incomplete ? readableToolText(tool.args) : "";
     const fileContent = tool.name === "write_file" ? writtenFileContent(tool.args) : null;
     const readableInput = incomplete ? writing : fileContent;
-    const finished = !incomplete && !error;
+    const finished = toolSucceeded(tool);
     const path = toolFilePath(tool.args);
-    const label = waiting && incomplete
+    const partial = tool.outcome === "incomplete_arguments" || (stopped && typeof tool.args === "string" && (() => { try { JSON.parse(tool.args); return false; } catch { return true; } })());
+    const label = partial
+      ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
+      : tool.outcome === "uncertain"
+      ? path ? `Check effects for ${path}` : `Check ${tool.name} effects`
+      : tool.outcome === "not_dispatched"
+      ? path ? `Not started: ${path}` : `Not started: ${tool.name}`
+      : waiting && incomplete
       ? path ? `Proposed change to ${path}` : `Waiting: ${tool.name}`
       : stopped
-      ? path ? `Unfinished input for ${path}` : `Unfinished ${tool.name} input`
+      ? path ? `Result not recorded for ${path}` : `No recorded ${tool.name} result`
       : activityLine({ name: tool.name, args: tool.args, finished, failed: Boolean(error) });
     const openable = FILE_ACTIVITY.has(tool.name) && Boolean(path) && !stopped;
     const open = openStates.get(id) ?? defaultOpen;
@@ -702,7 +716,7 @@ function ToolBlockList({
         {incomplete && !open ? null : <div className="tool-call-details">
           {path ? <p className="hint tool-identity">{path}</p> : tool.name === "execute" ? <p className="hint tool-identity">{readableToolText(tool.args)}</p> : null}
           {readableInput !== null ? <section aria-label="Tool input">
-            <span className="tool-detail-label">{incomplete ? stopped ? "Partial input" : "Proposed content" : "File content"}</span>
+            <span className="tool-detail-label">{partial ? "Partial input" : incomplete ? "Proposed content" : "File content"}</span>
             <div className="code-block-wrap"><CopyIconButton text={readableInput} label="Copy tool input" /><ToolInputText text={readableInput} /></div>
           </section> : null}
           {!incomplete && tool.result !== undefined ? <section aria-label="Tool output"><span className="tool-detail-label">Output</span>{output.answer ? <CodeBlock><code>{output.answer}</code></CodeBlock> : <span className="hint">{output.attachments.length ? "Image output below" : "No text output"}</span>}</section> : null}
@@ -712,7 +726,7 @@ function ToolBlockList({
       </DetailSection>
       <AttachmentList attachments={output.attachments} />
       {!error && !incomplete && ["browser_take_screenshot", "desktop_screenshot"].includes(tool.name) && captureAssetId(output.answer) ? <CapturePreview assetId={captureAssetId(output.answer)!} /> : null}
-      {tool.name === "read_attachment" && !error ? <ReadSources text={output.answer} /> : null}
+      {["read_attachment", "search_knowledge"].includes(tool.name) && !error ? <ReadSources text={output.answer} /> : null}
       {error ? <p className="tool-call-error" role="status">{error.split("\n")[0].slice(0, 240)}</p> : null}
     </div>;
   }
@@ -855,6 +869,7 @@ function useFrameSample<T>(value: T, enabled: boolean): T {
 }
 
 const MessageBubble = memo(function MessageBubble(props: {
+  turnFailure?: AgentRun;
   answer: string;
   attachments: MessageParts["attachments"];
   continuation: boolean;
@@ -872,6 +887,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   toolsLive?: boolean;
   type: string;
   writing: boolean;
+  activityLabel?: string;
   waiting: boolean;
   onHelperOpen?: (runId: string, toolCallId: string) => void;
   helperName?: (tool: ToolBlock, runId?: string) => string;
@@ -886,7 +902,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
-        {props.incomplete ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? "Writing" : "Partial"}</span> : null}
+        {props.incomplete ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? props.activityLabel ?? "Writing" : "Partial"}</span> : null}
       </header>
       <div className="message-body">
         <ReasoningDetails
@@ -896,12 +912,14 @@ const MessageBubble = memo(function MessageBubble(props: {
           openStates={props.openStates}
           reasoning={props.reasoning}
         />
-        {props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
+        {props.type === "human" ? (props.answer ? <p className="user-message-text">{props.answer}</p> : null)
+          : props.incomplete ? <StreamingMarkdown text={props.answer} /> : <MarkdownMessage text={props.answer} />}
         <AttachmentList attachments={props.attachments} />
         <ToolBlockList defaultOpen={props.detailedStreams} live={props.toolsLive} waiting={props.waiting} messageKey={props.messageKey} onToggle={props.onToggle} openStates={props.openStates} toolBlocks={props.messageTools} onHelperOpen={props.onHelperOpen} helperName={props.helperName} helperStatus={props.helperStatus} helperRunId={props.helperRunId} />
       </div>
       {props.type === "ai" ? props.renderAnswerActions?.(props.message, props.incomplete, props.answer) : null}
       {props.renderMessageFooter?.(props.message)}
+      {props.turnFailure ? <RunActivitySummary run={props.turnFailure} showHelpers={false} /> : null}
     </article>
   );
 }, (previous, next) => {
@@ -912,6 +930,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.continuation === next.continuation
     && previous.toolsKey === next.toolsKey
     && previous.toolsLive === next.toolsLive
+    && previous.activityLabel === next.activityLabel
     && previous.waiting === next.waiting
     && previous.detailedStreams === next.detailedStreams
     && previous.openStates === next.openStates
@@ -922,6 +941,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.helperName === next.helperName
     && previous.helperStatus === next.helperStatus
     && previous.helperRunId === next.helperRunId
+    && previous.turnFailure === next.turnFailure
     && previous.answer === next.answer;
 });
 
@@ -937,7 +957,7 @@ export function AgentMessageFeed(props: {
   detailedStreams?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
   renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
-  userMessageText?: (message: BaseMessage) => string | undefined;
+  userMessageContent?: (message: BaseMessage) => BaseMessage["content"] | undefined;
   sourceScope?: { sessionId?: string; projectPath?: string };
   hiddenToolCallIds?: ReadonlySet<string>;
   hiddenHelperResultIds?: ReadonlySet<string>;
@@ -948,6 +968,7 @@ export function AgentMessageFeed(props: {
   helperStatus?: (tool: ToolBlock, runId?: string) => string;
 }) {
   const { toolCalls = [], fallback, detailedStreams = false } = props;
+  const currentRun = props.helperRuns?.find(run => run.id === props.currentRunId);
   const incompleteMessageIds = props.incompleteMessageIds ?? EMPTY_INCOMPLETE;
   const endedToolIds = useRef(new Set<string>());
   if (props.live === false) {
@@ -957,11 +978,17 @@ export function AgentMessageFeed(props: {
       }
     }
   }
-  const retainStoppedTool = (tool: ToolBlock): ToolBlock => ({ ...tool,
+  const retainStoppedTool = (tool: ToolBlock, runId?: string): ToolBlock => {
+    const outcome = tool.id ? props.helperRuns?.find(run => run.id === (runId ?? props.currentRunId))?.tool_outcomes?.[tool.id] : undefined;
+    return { ...tool,
     status: tool.id && endedToolIds.current.has(tool.id) && toolIsStreaming(tool) ? "unfinished" : tool.status,
     authorizationSource: tool.authorizationSource ?? (tool.id ? props.toolAuthorizations?.[tool.id] : undefined),
     authorizationGrant: tool.authorizationGrant ?? (tool.id ? matchedPermissionGrant(props.toolAuthorizationGrants?.[tool.id]) : undefined),
-  });
+    ...(outcome ? {outcome: outcome.outcome,
+      status: outcome.outcome === "succeeded" ? "success" : outcome.outcome === "failed" ? "error" : outcome.outcome,
+      result: outcome.result ?? tool.result,
+      error: outcome.outcome === "failed" ? outcome.detail ?? undefined : undefined} : {}),
+  }; };
   const streaming = props.live !== false && (Boolean(props.live) || incompleteMessageIds.size > 0 || toolCalls.some((call) => {
     const status = call.status as string;
     return status === "preparing" || status === "running";
@@ -1005,8 +1032,8 @@ export function AgentMessageFeed(props: {
     const scopeKey = runId ? `run:${runId}` : `turn:${turnIndex}`;
     const continuation = type === "ai" && previousType === "ai";
     if (type !== "tool") previousType = type;
-    const submittedText = type === "human" ? props.userMessageText?.(message) : undefined;
-    const parts = parseContent(submittedText ?? message.contentBlocks ?? message.content);
+    const submittedContent = type === "human" ? props.userMessageContent?.(message) : undefined;
+    const parts = parseContent(submittedContent ?? message.contentBlocks ?? message.content);
     parts.toolBlocks = parts.toolBlocks.filter(block => !block.id || !hiddenIds.has(block.id));
     return { message, type, runId, scopeKey, continuation, live: props.live === undefined ? undefined : props.live && index > latestHumanIndex, key: `${scopeKey}:${message.id ?? `${type}-${index}`}`, parts };
   });
@@ -1022,6 +1049,10 @@ export function AgentMessageFeed(props: {
     }
   }
   const liveById = new Map(toolCalls.map(call => [call.callId || call.id, call]));
+  const lastMessageByRun = new Map(prepared.filter(item => item.type !== "tool" && item.runId && (
+    item.type !== "ai" || item.parts.answer || item.parts.reasoning.length || item.parts.attachments.length || item.parts.toolBlocks.length
+    || (item.message.id && incompleteMessageIds.has(item.message.id))
+  )).map(item => [item.runId!, item.key]));
   const liveScope = props.currentRunId ? `run:${props.currentRunId}` : prepared.at(-1)?.scopeKey ?? "turn:-1";
   const remainingLive = toolCalls.filter(call => {
     const id = call.callId || call.id;
@@ -1038,14 +1069,15 @@ export function AgentMessageFeed(props: {
           // A completed ToolMessage and the SDK's live handle describe the same
           // call. Keep its result beside the original call in transcript order.
           if (result.id && callIds.has(`${scopeKey}:${result.id}`)) return null;
-          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(result.id) : undefined))]} /></div>;
+          return <div className="tool-message" key={messageKey}><ToolBlockList defaultOpen={detailedStreams} live={live} waiting={props.waiting} messageKey={messageKey} onToggle={handleDetailToggle} openStates={openStates} toolBlocks={[retainStoppedTool(mergeTool(result, result, result.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(result.id) : undefined), runId)]} /></div>;
         }
-        const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(`${scopeKey}:${block.id}`) : undefined, block.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(block.id) : undefined)));
+        const messageTools = parts.toolBlocks.map(block => retainStoppedTool(mergeTool(block, block.id ? resultById.get(`${scopeKey}:${block.id}`) : undefined, block.id && (!props.currentRunId || runId === props.currentRunId) ? liveById.get(block.id) : undefined), runId));
         if (type === "ai" && !parts.answer && !parts.reasoning.length && !parts.attachments.length && !messageTools.length && !incomplete) return null;
         const toolsKey = JSON.stringify(messageTools);
         return (
           <MessageBubble
             key={messageKey}
+            turnFailure={runId !== props.currentRunId && lastMessageByRun.get(runId ?? "") === messageKey ? props.helperRuns?.find(run => run.id === runId && Boolean(run.failure || run.error)) : undefined}
             answer={parts.answer}
             attachments={parts.attachments}
             continuation={continuation}
@@ -1067,6 +1099,11 @@ export function AgentMessageFeed(props: {
             toolsLive={live}
             type={type}
             writing={Boolean(props.live && message.id === lastAiId)}
+            activityLabel={currentRun?.finalization_phase === "saving_changes" ? "Saving"
+              : currentRun?.activity_phase === "summarizing" ? "Summarizing"
+              : currentRun?.activity_phase === "using_tools" ? "Using tools"
+              : !parts.answer && (parts.reasoning.length || currentRun?.activity_phase === "thinking"
+                || currentRun?.generation_observation?.phase === "prompt_processing") ? "Thinking" : "Writing"}
             waiting={Boolean(props.waiting && message.id === lastAiId)}
           />
         );

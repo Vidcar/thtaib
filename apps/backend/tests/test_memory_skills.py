@@ -112,7 +112,7 @@ class MemorySkillsGlueTests(unittest.TestCase):
             [_version(kind="memory", content=MEMORY_TOKEN, entry_id="kn_mem", version_id="knv_mem")]
         )
         self.assertEqual(list(official_agent_kwargs(memory_only)), ["memory"])
-        self.assertEqual(memory_only.memory_sources, ["/memories/user/kn_mem.md"])
+        self.assertEqual(memory_only.memory_sources, ["/memories/user/kn_mem/knv_mem.md"])
         self.assertNotIn("skills", official_agent_kwargs(memory_only))
         skill_only = plan_knowledge_materialization(
             [_version(kind="skill", content=SKILL_BODY, entry_id="kn_skill", version_id="knv_skill")],
@@ -361,7 +361,7 @@ class MemorySkillsScratchEditTests(unittest.TestCase):
                 "provenance": HUMAN,
             },
         ).json()
-        path = f"/memories/user/{memory['id']}.md"
+        path = f"/memories/user/{memory['id']}/{memory['current_version_id']}.md"
         project = self.root / "scratch-edit-project"
         project.mkdir()
         self.scripted = ScriptedChatModel(

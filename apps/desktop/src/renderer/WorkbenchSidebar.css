@@ -122,12 +122,13 @@
 .nav-item-title {font-size: var(--text-body); font-weight: var(--weight-regular); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block;}
 .nav-item-meta {font-size: var(--text-small); color: var(--muted);}
 .conversation-row .nav-item-meta {display: none;}
-.conversation-row {position: relative; min-width: 0; border-radius: var(--radius-control);}
+.conversation-row {position: relative; min-width: 0; border-radius: var(--radius-control); grid-template-columns: minmax(0, 1fr) auto; gap: 0;}
 .conversation-row:hover, .conversation-row:focus-within {background: var(--bg-raised);}
-.conversation-row:hover .nav-item, .conversation-row:focus-within .nav-item {padding-right: 86px;}
-.conversation-row .nav-item {min-height: var(--control-height);}
-.conversation-actions {display: flex; gap: 0; right: 3px; top: 4px; bottom: auto; padding: 0; background: var(--bg-raised); border: 0; border-radius: var(--radius-control); pointer-events: none;}
-.conversation-row:hover .conversation-actions, .conversation-row:focus-within .conversation-actions {opacity: 1; pointer-events: auto;}
+.conversation-row .nav-item {min-height: var(--control-height); min-width: 0;}
+.conversation-row .conversation-rename {grid-column: 1 / -1;}
+.conversation-actions {display: flex; gap: 0; position: static; align-self: center; padding: 0; background: var(--bg-raised); border: 0; border-radius: var(--radius-control); pointer-events: none;}
+.conversation-row:hover .conversation-actions, .conversation-row:focus-within .conversation-actions {opacity: 1;}
+.conversation-row:hover .conversation-actions .icon-button, .conversation-row:focus-within .conversation-actions .icon-button {pointer-events: auto;}
 .conversation-actions .icon-button {width: var(--control-height); height: var(--control-height); min-width: 25px; min-height: var(--control-height); padding: 0; border: 0; color: var(--muted);}
 .conversation-actions .icon-button[aria-label="Delete chat"]:hover {color: var(--danger);}
 .model-tile .nav-item-title {font-size: var(--text-body); color: var(--text); font-weight: var(--weight-medium); white-space: normal;}

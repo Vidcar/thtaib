@@ -38,6 +38,41 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.manager.store.get_bundle(self.bundle_id).default_configuration_id, profiles[0].id)
         self.assertEqual(self.manager.get_deployment(first.id).settings, first.settings)
 
+    def test_fresh_balanced_uses_supported_template_effort_over_publisher_default(self):
+        import numpy as np
+        from gguf import GGUFWriter
+        from workbench_backend.inference.schemas import HuggingFaceConfiguration
+        source = Path(self.tmp.name) / "thinking.gguf"
+        writer = GGUFWriter(str(source), "llama")
+        writer.add_chat_template("{% set level = reasoning_effort|default('xhigh') %}{% if reasoning_effort in ['medium', 'xhigh'] %}{{ level }}{% endif %}{% if enable_thinking %}think{% endif %}")
+        writer.add_tensor("token_embd.weight", np.zeros((2, 2), dtype=np.float32))
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(source))).bundle_id
+        bundle = self.manager.store.get_bundle(bundle_id)
+        self.manager.store.put_bundle(bundle.model_copy(update={"huggingface_configuration":
+            HuggingFaceConfiguration(generation_defaults={"reasoning_effort": "xhigh", "reasoning": "off", "temperature": 0.6})}))
+        profile = self.manager.list_model_configurations(bundle_id)[0]
+        self.assertEqual(profile.display_name, "Balanced")
+        self.assertEqual(profile.bags.per_request.requested,
+            {"reasoning": "on", "reasoning_effort": "medium", "reasoning_budget_tokens": 2048, "max_tokens": 8192})
+        self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "medium")
+        self.assertEqual(profile.bags.per_request.applied["temperature"], 0.6)
+        options = self.manager.get_bundle_configuration_options(bundle_id)
+        self.assertEqual(profile.bags.per_request.requested, options.response_presets[0].per_request)
+        self.assertEqual(options.per_request_defaults["reasoning_effort"].default_value, "xhigh")
+        self.assertIn("medium", [item.value for item in options.per_request_defaults["reasoning_effort"].options])
+        # A previously authored configuration remains the user's choice.
+        saved = self.manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(
+            configuration_id=profile.id, display_name="Deep choice", per_request={"reasoning_effort": "xhigh"}))
+        self.assertEqual(self.manager.list_model_configurations(bundle_id)[0].bags.per_request.requested, saved.bags.per_request.requested)
+
+    def test_fresh_balanced_does_not_invent_unsupported_thinking_controls(self):
+        profile = self.manager.list_model_configurations(self.bundle_id)[0]
+        self.assertEqual(profile.bags.per_request.requested, {"reasoning_budget_tokens": 2048, "max_tokens": 8192})
+
     def test_configuration_save_revision_and_default_are_explicit(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
         variant = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(display_name="Long", startup={"ctx_size":8192}))
@@ -75,7 +110,7 @@ class ModelConfigurationTests(unittest.TestCase):
     def test_explicit_equal_named_variants_keep_identity_after_listing_and_restart(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
         variant = self.manager.save_model_configuration(self.bundle_id,
-            ModelConfigurationWriteRequest(display_name="My experiment"))
+            ModelConfigurationWriteRequest(display_name="My experiment", per_request=dict(original.bags.per_request.requested)))
         self.assertEqual(variant.bags, original.bags)
         for _ in range(2):
             self.assertEqual({p.id for p in self.manager.list_model_configurations(self.bundle_id)}, {original.id, variant.id})

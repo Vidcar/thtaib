@@ -144,12 +144,29 @@ def remove_conversation_queue_item(
     conversation_id: str,
     item_id: str,
 ) -> ChatConversationView:
-    return get_chat(request).remove_queue_item(conversation_id, item_id)
+    result = get_chat(request).remove_queue_item(conversation_id, item_id)
+    coordinator = getattr(request.app.state, "chat_coordinator", None)
+    if coordinator is not None:
+        coordinator.wake()
+    return result
 
 
 @router.post("/conversations/{conversation_id}/start")
 def start_conversation(request: Request, conversation_id: str, body: ChatStartRequest) -> ChatConversationView:
-    return get_chat(request).start(conversation_id, body)
+    result = get_chat(request).start(conversation_id, body)
+    coordinator = getattr(request.app.state, "chat_coordinator", None)
+    if coordinator is not None and result.queue:
+        coordinator.wake()
+    return result
+
+
+@router.post("/conversations/{conversation_id}/runs/{run_id}/acknowledge-effects")
+def acknowledge_conversation_effects(request: Request, conversation_id: str, run_id: str) -> ChatConversationView:
+    result = get_chat(request).acknowledge_effects(conversation_id, run_id)
+    coordinator = getattr(request.app.state, "chat_coordinator", None)
+    if coordinator is not None:
+        coordinator.wake()
+    return result
 
 
 @router.post("/conversations/{conversation_id}/cancel")
@@ -158,7 +175,11 @@ def cancel_conversation(
     conversation_id: str,
     body: ChatCancelRequest | None = None,
 ) -> object:
-    return get_chat(request).cancel(conversation_id, body or ChatCancelRequest())
+    result = get_chat(request).cancel(conversation_id, body or ChatCancelRequest())
+    coordinator = getattr(request.app.state, "chat_coordinator", None)
+    if coordinator is not None:
+        coordinator.wake()
+    return result
 
 
 @router.post("/conversations/{conversation_id}/interrupt-decision")

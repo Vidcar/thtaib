@@ -236,11 +236,11 @@ class SetupService:
                 except KnowledgeError:
                     issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="missing"))
         available_tools = set(enabled_catalogue())
-        if configuration.embedding_deployment_id:
-            # Retrieval is constructed by the harness for the selected embedder,
-            # rather than being a permanently enabled catalogue tool.
-            from workbench_backend.agents.retrieval import SEARCH_KNOWLEDGE_TOOL_NAME
-            available_tools.add(SEARCH_KNOWLEDGE_TOOL_NAME)
+        # Document search is a known dynamic capability, including lexical search
+        # without an embedder. A saved setup has no turn's attachment selection;
+        # Chat/harness admission checks that source scope before presenting it.
+        from workbench_backend.agents.retrieval import SEARCH_KNOWLEDGE_TOOL_NAME
+        available_tools.add(SEARCH_KNOWLEDGE_TOOL_NAME)
         for connection in (configuration.connection_ids or []) if configuration.presented_tools != [] else []:
             if self.connection_available is None or not self.connection_available(connection):
                 issues.append(SetupDependencyIssue(kind="connection", id=connection, reason="missing, disconnected or needs a successful test"))

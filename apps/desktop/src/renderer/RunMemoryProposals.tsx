@@ -4,7 +4,7 @@ import { errorMessage } from "./errors";
 import { MemoryProposalCard } from "./MemoryProposalCard";
 import { Notice } from "./Notice";
 
-export function RunMemoryProposals({ runId, status, onOpenKnowledge }: { runId: string; status: string; onOpenKnowledge: () => void }) {
+export function RunMemoryProposals({ runId, status, onOpenKnowledge, onUseMemoryVersion }: { runId: string; status: string; onOpenKnowledge: () => void; onUseMemoryVersion?: (versionId: string) => Promise<void> | void }) {
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
   const [scopes, setScopes] = useState<KnowledgeScopeOption[]>([]);
   const [error, setError] = useState("");
@@ -26,5 +26,13 @@ export function RunMemoryProposals({ runId, status, onOpenKnowledge }: { runId: 
     catch (failure) { if (owner === generation.current) setError(errorMessage(failure)); }
     finally { pending.current = false; setBusy(false); }
   }
-  return <section className="memory-proposals"><div className="memory-proposals-heading"><h4>Suggested memories</h4><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)}>Refresh suggestions</button></div>{error ? <Notice tone="error">{error}</Notice> : null}{proposals.length ? <ul className="plain-list">{proposals.map(proposal => <MemoryProposalCard key={proposal.id} proposal={proposal} className="memory-proposal-detail" headingClassName="memory-proposals-heading" contentClassName="plain-file-content" destination={scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"} existingHint={Boolean(proposal.entry_id)} acceptLabel="Accept memory" rejectLabel="Reject memory" busy={busy} onAccept={() => void review(proposal, "accept")} onReject={() => void review(proposal, "reject")} />)}</ul> : <p className="hint">No memory suggestions from this turn.</p>}<button type="button" onClick={onOpenKnowledge}>Open Knowledge</button></section>;
+  async function useNext(versionId: string) {
+    if (!onUseMemoryVersion || pending.current) return;
+    const owner = generation.current;
+    pending.current = true; setBusy(true); setError("");
+    try { await onUseMemoryVersion(versionId); }
+    catch (failure) { if (generation.current === owner) setError(errorMessage(failure)); }
+    finally { pending.current = false; setBusy(false); }
+  }
+  return <section className="memory-proposals"><div className="memory-proposals-heading"><h4>Suggested memories</h4><button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)}>Refresh suggestions</button></div>{error ? <Notice tone="error">{error}</Notice> : null}{proposals.length ? <ul className="plain-list">{proposals.map(proposal => <MemoryProposalCard key={proposal.id} proposal={proposal} meta={proposal.committed_version_id && onUseMemoryVersion ? <><span> · Saved; choose whether to use it</span><button type="button" disabled={busy} onClick={() => void useNext(proposal.committed_version_id!)}>Use next turn</button></> : undefined} className="memory-proposal-detail" headingClassName="memory-proposals-heading" contentClassName="plain-file-content" destination={scopes.find(option => option.scope === proposal.scope && (option.scope_id ?? null) === (proposal.scope_id ?? null))?.label ?? "Unavailable destination"} existingHint={Boolean(proposal.entry_id)} acceptLabel="Accept memory" rejectLabel="Reject memory" busy={busy} onAccept={() => void review(proposal, "accept")} onReject={() => void review(proposal, "reject")} />)}</ul> : <p className="hint">No memory suggestions from this turn.</p>}<button type="button" onClick={onOpenKnowledge}>Open Knowledge</button></section>;
 }

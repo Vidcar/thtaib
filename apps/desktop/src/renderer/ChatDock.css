@@ -19,3 +19,6 @@ button.activity-line {cursor: pointer; text-decoration: underline; text-underlin
 .history-menu-panel {position: static; width: min(var(--layout-dialog), 100%); max-height: 40vh; margin-top: var(--space-tight);}
 .setup-popover {position: absolute; z-index: 5; top: calc(100% - 4px); right: 48px; width: min(420px, calc(100% - 24px)); max-height: min(60vh, 480px); overflow: auto; background: var(--bg-panel); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); padding: var(--pad-compact); box-shadow: var(--shadow);}
 .chat-setup {margin: 0; padding: 0; border: 0; background: transparent; max-height: none;}
+.project-preview { display: grid; gap: var(--space-tight); border-bottom: var(--line-hairline) solid var(--border); padding-bottom: var(--pad-compact); }
+.project-preview-actions { display: flex; gap: var(--space-tight); align-items: center; flex-wrap: wrap; }
+.project-preview-actions > :first-child { margin-right: auto; }

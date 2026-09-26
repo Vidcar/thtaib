@@ -185,6 +185,11 @@ def resolve_presented_tools(
         if name in seen:
             continue
         seen.add(name)
+        if name == "search_knowledge":
+            # Known dynamic tool: harness presents it only for this turn's
+            # authorized corpus. An empty selection leaves it idle, as with
+            # read_attachment, instead of breaking a saved tool preference.
+            continue
         if name not in ENABLED_TOOL_NAMES and name not in optional and name not in external:
             denied.append(name)
         elif name in preview and not project_bound:

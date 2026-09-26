@@ -13,7 +13,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from deepagents import create_deep_agent
-from deepagents.backends import LocalShellBackend
+from workbench_backend.agents.owned_shell import OwnedLocalShellBackend
 from deepagents.backends.protocol import ExecuteResponse
 
 from tests.scripted_model import ScriptedChatModel
@@ -187,7 +187,7 @@ class AsyncLifecycleTests(unittest.TestCase):
                 return ExecuteResponse(output='done', exit_code=0, truncated=False)
             finally:
                 settled.set()
-        with patch.object(LocalShellBackend, 'execute', execute):
+        with patch.object(OwnedLocalShellBackend, 'execute', execute):
             started = self._start(project_path=str(project), presented_tools=['execute'], approval_mode='full_access')
             try:
                 self.assertTrue(entered.wait(5))

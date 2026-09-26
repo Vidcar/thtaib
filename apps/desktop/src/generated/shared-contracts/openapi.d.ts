@@ -932,6 +932,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/chat/conversations/{conversation_id}/runs/{run_id}/acknowledge-effects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Acknowledge Conversation Effects */
+        post: operations["acknowledge_conversation_effects_v1_chat_conversations__conversation_id__runs__run_id__acknowledge_effects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations/{conversation_id}/start": {
         parameters: {
             query?: never;
@@ -1912,6 +1929,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/previews/{thread_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Static Preview */
+        post: operations["start_static_preview_v1_previews__thread_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/profiles": {
         parameters: {
             query?: never;
@@ -2339,6 +2373,8 @@ export interface components {
         };
         /** AgentRun */
         AgentRun: {
+            /** Activity Phase */
+            activity_phase?: ("thinking" | "using_tools" | "summarizing") | null;
             /** Agent Setup Id */
             agent_setup_id?: string | null;
             /** Agent Setup Version Id */
@@ -2402,6 +2438,7 @@ export interface components {
             error?: string | null;
             /** Events */
             events?: components["schemas"]["AgentEvent"][];
+            failure?: components["schemas"]["RunFailure"] | null;
             /** Final Snapshot Id */
             final_snapshot_id?: string | null;
             /** Finalization Phase */
@@ -2422,6 +2459,14 @@ export interface components {
             /** Helper Snapshots */
             helper_snapshots?: components["schemas"]["FrozenHelperSelection"][];
             host_shell?: components["schemas"]["HostShellFacts"];
+            /** Housekeeping Context */
+            housekeeping_context?: {
+                [key: string]: components["schemas"]["ContextObservation"];
+            };
+            /** Housekeeping Generation */
+            housekeeping_generation?: {
+                [key: string]: components["schemas"]["GenerationObservation"];
+            };
             /** Id */
             id: string;
             /** Input Message Id */
@@ -2454,6 +2499,10 @@ export interface components {
             profile_id?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Project Outline */
+            project_outline?: {
+                [key: string]: unknown;
+            } | null;
             /** Project Path */
             project_path?: string | null;
             /** Protected Instruction Version Refs */
@@ -2533,6 +2582,10 @@ export interface components {
              * @default live-tool
              */
             tool_mode_label: string;
+            /** Tool Outcomes */
+            tool_outcomes?: {
+                [key: string]: components["schemas"]["ToolOutcome"];
+            };
             /** Updated At */
             updated_at: string;
             /**
@@ -2744,6 +2797,8 @@ export interface components {
             per_request_defaults?: {
                 [key: string]: components["schemas"]["RuntimeControlDescriptor"];
             };
+            /** Response Presets */
+            response_presets?: components["schemas"]["ResponsePreset"][];
             /** Startup Defaults */
             startup_defaults: {
                 [key: string]: components["schemas"]["RuntimeControlDescriptor"];
@@ -2956,6 +3011,8 @@ export interface components {
              * @enum {string}
              */
             desktop_access: "off" | "selected" | "all";
+            /** Document Asset Ids */
+            document_asset_ids?: string[];
             draft?: components["schemas"]["ChatDraft"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
@@ -3176,6 +3233,8 @@ export interface components {
              * @default New conversation
              */
             display_title: string;
+            /** Document Asset Ids */
+            document_asset_ids?: string[];
             draft?: components["schemas"]["ChatDraft"] | null;
             /** Embedding Deployment Id */
             embedding_deployment_id?: string | null;
@@ -3383,6 +3442,11 @@ export interface components {
         };
         /** ChatQueueItem */
         ChatQueueItem: {
+            /**
+             * Admission Order
+             * @default 0
+             */
+            admission_order: number;
             /** Attachment Ids */
             attachment_ids?: string[];
             /** Content Blocks */
@@ -3418,6 +3482,8 @@ export interface components {
             pause_error_code?: string | null;
             /** Pause Reason */
             pause_reason?: ("failed" | "cancelled" | "dispatch_uncertain") | null;
+            /** Queue Position */
+            queue_position?: number | null;
             /** Run Id */
             run_id?: string | null;
             /**
@@ -3430,6 +3496,14 @@ export interface components {
             task: string;
             /** Updated At */
             updated_at: string;
+            /** Wait Reason */
+            wait_reason?: ("project_busy" | "project_uncertain" | "project_order") | null;
+            /** Waiting Owner Title */
+            waiting_owner_title?: string | null;
+            /** Waiting Run Id */
+            waiting_run_id?: string | null;
+            /** Waiting Thread Id */
+            waiting_thread_id?: string | null;
         };
         /** ChatQueueItemUpdateRequest */
         ChatQueueItemUpdateRequest: {
@@ -3518,6 +3592,8 @@ export interface components {
             deployment_id?: string | null;
             /** Desktop Access */
             desktop_access?: ("off" | "selected" | "all") | null;
+            /** Document Asset Ids */
+            document_asset_ids?: string[] | null;
             /** Draft Revision */
             draft_revision?: number | null;
             /** Embedding Deployment Id */
@@ -3810,7 +3886,7 @@ export interface components {
             capacity_tokens?: number | null;
             /**
              * Counting Method
-             * @default UTF-8 character estimate (3 chars/token), serialized messages/tools/schema, 2048 tokens/image, 8% capacity margin; not tokenizer usage
+             * @default Character estimate (3 chars/token), outbound messages/tools/schema counted once, 2048 tokens/image, 8% capacity margin; not tokenizer usage
              */
             counting_method: string;
             /**
@@ -3832,6 +3908,12 @@ export interface components {
              * @default 512
              */
             output_reservation_tokens: number;
+            /**
+             * Purpose
+             * @default work
+             * @enum {string}
+             */
+            purpose: "work" | "summary" | "review" | "probe";
             /**
              * Schema Version
              * @default 1
@@ -4090,7 +4172,7 @@ export interface components {
             materialized_knowledge?: components["schemas"]["MaterializedKnowledgeFact"][];
             /**
              * Note
-             * @default Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Retrieval is presented only when embedding_deployment_id resolved to a loaded embedding endpoint.
+             * @default Selected ids are not proof of loaded content or applied bags. Inspect this record and the outbound request. Document search is presented when selected tools and authorized document sources permit it. Without an embedding model it uses local text search; a selected embedding model must be loaded, and its temporary index is built only when searched.
              */
             note: string;
             /** Overridden */
@@ -4200,6 +4282,8 @@ export interface components {
              * @enum {string}
              */
             basis: "reported_tokens_model_call_wall_time" | "llama_cpp_timings";
+            /** Cached Input Tokens */
+            cached_input_tokens?: number | null;
             /** Context Limit */
             context_limit?: number | null;
             /** Context Used Tokens */
@@ -4224,6 +4308,14 @@ export interface components {
              * @enum {string}
              */
             phase: "prompt_processing" | "generating" | "completed" | "interrupted";
+            /** Processed Input Tokens */
+            processed_input_tokens?: number | null;
+            /**
+             * Purpose
+             * @default work
+             * @enum {string}
+             */
+            purpose: "work" | "summary" | "review" | "probe";
             /** Request Id */
             request_id?: string | null;
             /** Tokens Per Second */
@@ -4766,6 +4858,8 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            /** Estimated Content Tokens */
+            readonly estimated_content_tokens: number;
             /** Id */
             id: string;
             /**
@@ -4796,6 +4890,8 @@ export interface components {
             scope_id?: string | null;
             /** Scope Label */
             scope_label?: string | null;
+            /** Token Counting Method */
+            readonly token_counting_method: string;
             /** Updated At */
             updated_at: string;
             /** Version Created At */
@@ -4903,6 +4999,8 @@ export interface components {
             created_at: string;
             /** Entry Id */
             entry_id: string;
+            /** Estimated Content Tokens */
+            readonly estimated_content_tokens: number;
             /** Id */
             id: string;
             /**
@@ -4926,6 +5024,8 @@ export interface components {
             scope: "user" | "agent" | "project";
             /** Scope Id */
             scope_id?: string | null;
+            /** Token Counting Method */
+            readonly token_counting_method: string;
         };
         /** LifecycleConsumer */
         LifecycleConsumer: {
@@ -5287,7 +5387,7 @@ export interface components {
              * @default work
              * @enum {string}
              */
-            purpose: "work" | "review";
+            purpose: "work" | "summary" | "review" | "probe";
             /**
              * Redacted
              * @default false
@@ -5686,6 +5786,32 @@ export interface components {
             /** Rss Bytes */
             rss_bytes?: number | null;
         };
+        /** ResponsePreset */
+        ResponsePreset: {
+            /** Description */
+            description: string;
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "balanced" | "deep";
+            /** Label */
+            label: string;
+            /** Notes */
+            notes?: string[];
+            /** Per Request */
+            per_request: {
+                [key: string]: unknown;
+            };
+            /**
+             * Source
+             * @default workbench
+             * @constant
+             */
+            source: "workbench";
+            /** Thinking Limit Supported */
+            thinking_limit_supported?: boolean | null;
+        };
         /** ResponseRecipe */
         ResponseRecipe: {
             /** Card Sha256 */
@@ -5991,6 +6117,23 @@ export interface components {
              * @default not_requested
              */
             status: string;
+        };
+        /** RunFailure */
+        RunFailure: {
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "input" | "tool" | "runtime" | "cancelled" | "capacity" | "setup" | "persistence" | "uncertain_effects";
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /**
+             * Recovery Action
+             * @enum {string}
+             */
+            recovery_action: "continue" | "inspect_effects" | "change_limit" | "correct_setup" | "ask";
         };
         /**
          * RunLifecycleContract
@@ -6455,6 +6598,11 @@ export interface components {
             /** Selected */
             selected?: unknown;
         };
+        /** StaticPreviewRequest */
+        StaticPreviewRequest: {
+            /** Entry Path */
+            entry_path: string;
+        };
         /** StorageCleanupResponse */
         StorageCleanupResponse: {
             /** Removed */
@@ -6582,6 +6730,40 @@ export interface components {
          * @enum {string}
          */
         ToolMode: "live-tool" | "recorded-tool";
+        /** ToolOutcome */
+        ToolOutcome: {
+            /** Call Id */
+            call_id: string;
+            /** Detail */
+            detail?: string | null;
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            };
+            /** Failure Category */
+            failure_category?: ("input" | "permission" | "tool" | "runtime" | "cancelled") | null;
+            /** Name */
+            name: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "incomplete_arguments" | "not_dispatched" | "running" | "succeeded" | "failed" | "uncertain";
+            /**
+             * Recovery Action
+             * @default none
+             * @enum {string}
+             */
+            recovery_action: "none" | "continue" | "inspect_effects" | "ask";
+            /** Result */
+            result?: unknown;
+            /** Result Metadata */
+            result_metadata?: {
+                [key: string]: unknown;
+            };
+            /** Updated At */
+            updated_at: string;
+        };
         /** UserOverrideRequest */
         UserOverrideRequest: {
             /** Claim */
@@ -6784,6 +6966,7 @@ export type SchemaRenameProfileRequest = components['schemas']['RenameProfileReq
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
+export type SchemaResponsePreset = components['schemas']['ResponsePreset'];
 export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
 export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];
 export type SchemaResponseRecipeConfigurationResult = components['schemas']['ResponseRecipeConfigurationResult'];
@@ -6800,6 +6983,7 @@ export type SchemaRetainedAssetStorage = components['schemas']['RetainedAssetSto
 export type SchemaRetainedUploadRequest = components['schemas']['RetainedUploadRequest'];
 export type SchemaReviewConfiguration = components['schemas']['ReviewConfiguration'];
 export type SchemaReviewObservation = components['schemas']['ReviewObservation'];
+export type SchemaRunFailure = components['schemas']['RunFailure'];
 export type SchemaRunLifecycleContract = components['schemas']['RunLifecycleContract'];
 export type SchemaRunLifecycleStatus = components['schemas']['RunLifecycleStatus'];
 export type SchemaRunProfile = components['schemas']['RunProfile'];
@@ -6822,6 +7006,7 @@ export type SchemaSmokeResult = components['schemas']['SmokeResult'];
 export type SchemaSourceRange = components['schemas']['SourceRange'];
 export type SchemaSourceRangeRequest = components['schemas']['SourceRangeRequest'];
 export type SchemaStartupMismatch = components['schemas']['StartupMismatch'];
+export type SchemaStaticPreviewRequest = components['schemas']['StaticPreviewRequest'];
 export type SchemaStorageCleanupResponse = components['schemas']['StorageCleanupResponse'];
 export type SchemaStorageLocation = components['schemas']['StorageLocation'];
 export type SchemaStorageLocationRequest = components['schemas']['StorageLocationRequest'];
@@ -6830,6 +7015,7 @@ export type SchemaStructuredOutputResult = components['schemas']['StructuredOutp
 export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
 export type SchemaTextContentBlock = components['schemas']['TextContentBlock'];
 export type SchemaToolMode = components['schemas']['ToolMode'];
+export type SchemaToolOutcome = components['schemas']['ToolOutcome'];
 export type SchemaUserOverrideRequest = components['schemas']['UserOverrideRequest'];
 export type SchemaUserQuestion = components['schemas']['UserQuestion'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
@@ -8873,6 +9059,38 @@ export interface operations {
             header?: never;
             path: {
                 conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatConversationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_conversation_effects_v1_chat_conversations__conversation_id__runs__run_id__acknowledge_effects_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                run_id: string;
             };
             cookie?: never;
         };
@@ -10950,6 +11168,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_static_preview_v1_previews__thread_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaticPreviewRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

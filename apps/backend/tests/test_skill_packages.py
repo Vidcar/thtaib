@@ -150,11 +150,18 @@ class SkillPackageTests(unittest.TestCase):
         self.assertTrue((scratch / 'large_tool_results' / 'keep.txt').is_file())
         self.assertNotIn(slug, finished['current_run']['model_requests'][-1]['instructions'])
 
-    def test_memory_version_is_fixed_for_a_chat_and_new_chat_reads_updated_version(self):
+    def test_memory_version_changes_explicitly_on_next_turn_and_can_be_deselected(self):
         reset_received_prompts()
+        actual_inputs = []
+
+        class MemoryModel(ScriptedChatModel):
+            def _generate(self, messages, *args, **kwargs):
+                actual_inputs.append(messages[-1].content)
+                return super()._generate(messages, *args, **kwargs)
+
         memory = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'memory', 'content': 'MEMORY-ORIGINAL-UNIQUE'}).json()
         deployment = self.client.post('/v1/deployments/connected', json={'endpoint': 'http://127.0.0.1:9/v1', 'display_name': 'fixture'}).json()
-        self.app.state.harness = HarnessService(lambda: self.app.state.manager, app_store=self.app.state.app_store, knowledge_provider=lambda: self.app.state.knowledge, model_factory=lambda *_: ScriptedChatModel([AIMessage(content='done')]))
+        self.app.state.harness = HarnessService(lambda: self.app.state.manager, app_store=self.app.state.app_store, knowledge_provider=lambda: self.app.state.knowledge, model_factory=lambda *_: MemoryModel([AIMessage(content='done')]))
         chat = self.client.post('/v1/chat/conversations', json={'deployment_id': deployment['id'], 'memory_version_refs': [memory['current_version_id']]}).json()
         self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'First message', 'presented_tools': []})
         first = wait_for_chat(self.client, chat['id'])
@@ -165,19 +172,24 @@ class SkillPackageTests(unittest.TestCase):
         self.assertNotIn('To persist new knowledge, call `edit_file`', RECEIVED_PROMPTS[-1])
         changed = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={'content': 'MEMORY-UPDATED-UNIQUE', 'base_version': memory['current_version_id']}).json()
         attempted = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Change memory here', 'presented_tools': [], 'memory_version_refs': [changed['current_version_id']]})
-        self.assertEqual(attempted.status_code, 409, attempted.text)
-        self.assertIn('new chat', attempted.text.lower())
-        self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'Second message', 'presented_tools': []})
+        self.assertEqual(attempted.status_code, 200, attempted.text)
         second = wait_for_chat(self.client, chat['id'])
         self.assertEqual(second['current_run']['status'], 'completed', second['current_run'].get('error'))
         prompt = RECEIVED_PROMPTS[-1]
-        self.assertIn('MEMORY-ORIGINAL-UNIQUE', prompt)
-        self.assertNotIn('MEMORY-UPDATED-UNIQUE', prompt)
+        self.assertNotIn('MEMORY-ORIGINAL-UNIQUE', prompt)
+        self.assertIn('MEMORY-UPDATED-UNIQUE', prompt)
+        current_input = actual_inputs[-1]
+        self.assertEqual(str(current_input).count('Current turn memory selection:'), 1)
+        self.assertIn(changed['current_version_id'], str(current_input))
+        self.assertNotIn(memory['current_version_id'], str(current_input))
+        self.assertNotIn('MEMORY-UPDATED-UNIQUE', str(current_input))
         self.assertEqual(first['thread_id'], second['thread_id'])
         self.assertGreater(len(second['transcript']), len(first['transcript']))
-        fresh = self.client.post('/v1/chat/conversations', json={'deployment_id': deployment['id'], 'memory_version_refs': [changed['current_version_id']]}).json()
-        self.client.post(f'/v1/chat/conversations/{fresh["id"]}/start', json={'task': 'New chat', 'presented_tools': []})
-        third = wait_for_chat(self.client, fresh['id'])
+        self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={'task': 'No memory now', 'presented_tools': [], 'memory_version_refs': []})
+        third = wait_for_chat(self.client, chat['id'])
         self.assertEqual(third['current_run']['status'], 'completed', third['current_run'].get('error'))
-        self.assertIn('MEMORY-UPDATED-UNIQUE', RECEIVED_PROMPTS[-1])
-        self.assertNotEqual(third['thread_id'], first['thread_id'])
+        self.assertNotIn('MEMORY-UPDATED-UNIQUE', RECEIVED_PROMPTS[-1])
+        self.assertNotIn('MEMORY-ORIGINAL-UNIQUE', RECEIVED_PROMPTS[-1])
+        self.assertIn('Current turn memory selection: none.', str(actual_inputs[-1]))
+        self.assertIsNone(third['current_run']['content_blocks'])
+        self.assertEqual(third['thread_id'], first['thread_id'])

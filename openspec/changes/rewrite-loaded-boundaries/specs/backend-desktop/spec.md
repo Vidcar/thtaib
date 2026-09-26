@@ -75,6 +75,10 @@ Opening the application or restoring a chat SHALL NOT warm its selected model. S
 - **WHEN** the application preference changes after a chat explicitly selected Ask
 - **THEN** that chat remains Ask while a new chat takes the current application preference, and Chat names the preference source when no explicit choice exists.
 
+#### Scenario: Bounded everyday reasoning and scoped measurements
+- **WHEN** the user selects Balanced or Deep and later an internal summary runs
+- **THEN** Chat SHALL show the effective supported thinking/response limits and distinguish work, summary, cached input, current measurements and completed measurements without inventing unavailable values.
+
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
 Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact Reasoning and tools switch in the header's Conversation view menu SHALL default off and remember the user's preference across conversations/reopening. Its presentation controls stay distinct from model Thinking and effort controls. Changing this switch SHALL only change the visibility of returned detail, never model reasoning or tool permissions. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
@@ -221,7 +225,7 @@ Choosing a file identity line opens the Files page on that file when available. 
 
 - **WHEN** an edit has started and its result is not yet available
 - **THEN** the line shows that the file is being edited
-- **AND** a stopped call is labelled as partial input, without an invented result or line count.
+- **AND** only genuinely incomplete arguments are labelled as partial input; complete calls show undispatched, failed or uncertain outcome according to available evidence, without an invented result or line count.
 
 #### Scenario: Failed todo does not wipe the list
 
@@ -251,3 +255,10 @@ Choosing a file identity line opens the Files page on that file when available. 
 - **WHEN** a person opens a finished shell line
 - **THEN** the command and its output are the first content
 - **AND** the internal tool name and the raw arguments stay behind a further disclosure.
+
+The original durable parent-turn error SHALL remain visible after reopening, with its category and relevant recovery action. Review setup SHALL be offered only for setup problems. Known recoverable tool errors SHALL be returned to the agent for correction; uncertain effects SHALL be inspected before continuation.
+
+#### Scenario: Parallel batch partially succeeds
+- **WHEN** two file writes succeed and four fail
+- **THEN** the two confirmed results SHALL remain successful and the four failures SHALL show their original causes
+- **AND** the chat SHALL stay usable without relabelling all six calls as unfinished input.

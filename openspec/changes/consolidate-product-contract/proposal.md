@@ -26,7 +26,7 @@ None.
 - `agents-workflows`: Named helpers, and a Workflows canvas whose steps match what actually runs.
 - `backend-desktop`: Compact screens, visible Lab reservation, helper and model-swap confirmation, and child activity a person can read.
 - `environments-tools`: Web search, connection secrets, ComfyUI image generation, and configured speech plugs, with composer controls.
-- `state-recovery`: Immediate archive, chat deletion that leaves project files, skill packages, and document extraction without a source-inspection screen.
+- `state-recovery`: Immediate archive, chat deletion that leaves project files, skill packages, and document extraction using the existing retained viewer for source locations, without a separate source-inspection screen.
 - `architecture`: Later features extend the same plugs and are not banned.
 
 ## Impact

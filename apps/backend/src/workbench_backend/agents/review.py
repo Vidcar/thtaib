@@ -4,6 +4,7 @@ from __future__ import annotations
 from deepagents import RubricMiddleware
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.tools import tool_name
+from workbench_backend.inference.telemetry import request_purpose
 
 
 class ReviewCaptureMiddleware(WorkbenchHarnessMiddleware):
@@ -11,6 +12,14 @@ class ReviewCaptureMiddleware(WorkbenchHarnessMiddleware):
         super().__init__(*args, **kwargs)
         self.capture_owner = capture_owner
         self.publish = publish
+
+    def wrap_model_call(self, request, handler):
+        with request_purpose("review"):
+            return super().wrap_model_call(request, handler)
+
+    async def awrap_model_call(self, request, handler):
+        with request_purpose("review"):
+            return await super().awrap_model_call(request, handler)
 
     def _capture(self, *args, **kwargs):
         super()._capture(*args, **kwargs)

@@ -7,7 +7,6 @@ health check, output log and cleanup. Approval is enforced by harness HITL.
 from __future__ import annotations
 
 import asyncio
-import ctypes
 import http.client
 import json
 import os
@@ -20,16 +19,18 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
+from urllib.parse import quote
 
 import psutil
 from langchain_core.tools import BaseTool, ToolException, tool
 
-from workbench_backend.agents.harness_backend import sanitize_thread_id
+from workbench_backend.agents.harness_backend import canonical_root, sanitize_thread_id
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.process_tree import WindowsJob as _WindowsJob
 
 PREVIEW_TOOL_NAMES = ("start_preview", "stop_preview", "preview_status")
 PREVIEW_IDLE_SECONDS = 30 * 60
@@ -43,121 +44,18 @@ def _key(thread_id: str | None) -> str:
     return sanitize_thread_id(thread_id)
 
 
-def _localhost_health(port: int) -> bool:
+def _localhost_health(port: int, token: str | None = None) -> bool:
     """Probe only the owned loopback port; never follow a site's redirect."""
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
     try:
-        connection.request("GET", "/")
+        connection.request("GET", f"/.__workbench_health_{token}" if token else "/")
         response = connection.getresponse()
         response.read(1)
-        return True  # Any HTTP response proves the local listener is present.
+        return response.getheader("X-Workbench-Preview") == token if token else True
     except (OSError, http.client.HTTPException):
         return False
     finally:
         connection.close()
-
-
-class _WindowsJob:
-    """Own a Windows process tree even if its launcher exits first."""
-
-    def __init__(self, handle: int):
-        self.handle = handle
-
-    @classmethod
-    def attach_suspended(cls, process: subprocess.Popen) -> "_WindowsJob":
-        from ctypes import wintypes
-
-        class _BasicLimits(ctypes.Structure):
-            _fields_ = [
-                ("per_process_user_time", ctypes.c_int64),
-                ("per_job_user_time", ctypes.c_int64),
-                ("limit_flags", wintypes.DWORD),
-                ("minimum_working_set", ctypes.c_size_t),
-                ("maximum_working_set", ctypes.c_size_t),
-                ("active_process_limit", wintypes.DWORD),
-                ("affinity", ctypes.c_size_t),
-                ("priority_class", wintypes.DWORD),
-                ("scheduling_class", wintypes.DWORD),
-            ]
-
-        class _IoCounters(ctypes.Structure):
-            _fields_ = [(name, ctypes.c_uint64) for name in (
-                "read_operations", "write_operations", "other_operations",
-                "read_bytes", "write_bytes", "other_bytes",
-            )]
-
-        class _ExtendedLimits(ctypes.Structure):
-            _fields_ = [
-                ("basic", _BasicLimits), ("io", _IoCounters),
-                ("process_memory_limit", ctypes.c_size_t),
-                ("job_memory_limit", ctypes.c_size_t),
-                ("peak_process_memory_used", ctypes.c_size_t),
-                ("peak_job_memory_used", ctypes.c_size_t),
-            ]
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-        kernel.CreateJobObjectW.restype = wintypes.HANDLE
-        kernel.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-        kernel.SetInformationJobObject.restype = wintypes.BOOL
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        kernel.AssignProcessToJobObject.restype = wintypes.BOOL
-        kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenThread.restype = wintypes.HANDLE
-        kernel.ResumeThread.argtypes = [wintypes.HANDLE]
-        kernel.ResumeThread.restype = wintypes.DWORD
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle.restype = wintypes.BOOL
-        handle = kernel.CreateJobObjectW(None, None)
-        if not handle:
-            raise OSError(ctypes.get_last_error(), "Could not create preview process job")
-        job = cls(handle)
-        process_handle = None
-        thread_handle = None
-        try:
-            limits = _ExtendedLimits()
-            limits.basic.limit_flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if not kernel.SetInformationJobObject(handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
-                raise OSError(ctypes.get_last_error(), "Could not configure preview process job")
-            process_handle = kernel.OpenProcess(0x0101, False, process.pid)  # SET_QUOTA | TERMINATE
-            if not process_handle or not kernel.AssignProcessToJobObject(handle, process_handle):
-                raise OSError(ctypes.get_last_error(), "Could not attach preview to its process job")
-            # CREATE_SUSPENDED prevents the command from spawning a child before
-            # the job owns it. A suspended new process has one initial thread.
-            thread_ids = [thread.id for thread in psutil.Process(process.pid).threads()]
-            if len(thread_ids) != 1:
-                raise OSError("Preview process did not have one suspended startup thread")
-            thread_handle = kernel.OpenThread(0x0002, False, thread_ids[0])  # THREAD_SUSPEND_RESUME
-            if not thread_handle or kernel.ResumeThread(thread_handle) == 0xFFFFFFFF:
-                raise OSError(ctypes.get_last_error(), "Could not resume preview process")
-            return job
-        except BaseException:
-            job.stop()
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=3)
-            raise
-        finally:
-            if thread_handle:
-                kernel.CloseHandle(thread_handle)
-            if process_handle:
-                kernel.CloseHandle(process_handle)
-
-    def stop(self) -> bool:
-        if not self.handle:
-            return True
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        kernel.TerminateJobObject.restype = wintypes.BOOL
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle.restype = wintypes.BOOL
-        stopped = bool(kernel.TerminateJobObject(self.handle, 1))
-        closed = bool(kernel.CloseHandle(self.handle))
-        self.handle = 0
-        return stopped and closed
 
 
 def _kill_tree(process: subprocess.Popen, job: _WindowsJob | None = None) -> bool:
@@ -202,6 +100,13 @@ class _Preview:
     job: _WindowsJob | None = None
     timer: threading.Timer | None = None
     launch_id: str = ""
+    kind: str = "command"
+    entry_path: str | None = None
+    health_token: str | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/" + quote(self.entry_path or "", safe="/")
 
 
 class PreviewService:
@@ -230,7 +135,9 @@ class PreviewService:
         return {
             "thread_id": key,
             "state": "active" if alive else ("lost" if self._marker(key).exists() else "closed"),
-            "url": f"http://127.0.0.1:{preview.port}/" if alive and preview else None,
+            "url": preview.url if alive and preview else None,
+            "kind": preview.kind if alive and preview else None,
+            "entry_path": preview.entry_path if alive and preview else None,
             "port": preview.port if alive and preview else None,
             "pid": preview.process.pid if alive and preview else None,
         }
@@ -249,7 +156,10 @@ class PreviewService:
             log_tail = ""
         healthy: bool | None = None
         if status["state"] == "active" and status["port"]:
-            healthy = _localhost_health(status["port"])
+            with self._lock:
+                owner = self._owned.get(key)
+                token = owner.health_token if owner else None
+            healthy = _localhost_health(status["port"], token)
         return {**status, "healthy": healthy, "recent_log": log_tail}
 
     def _refresh_idle(self, preview: _Preview) -> None:
@@ -259,7 +169,42 @@ class PreviewService:
         preview.timer.daemon = True
         preview.timer.start()
 
-    def start(self, thread_id: str, project_path: str, command: list[str], port: int) -> dict[str, Any]:
+    def start_static(self, thread_id: str, project_path: str, entry_path: str) -> dict[str, Any]:
+        """Serve an existing project HTML page through the ordinary preview owner."""
+        key = _key(thread_id)
+        project = Path(project_path).resolve()
+        try:
+            supplied = PureWindowsPath(entry_path)
+            if (not entry_path or "\x00" in entry_path or supplied.drive or supplied.root
+                    or ".." in supplied.parts or ":" in entry_path
+                    or any(PureWindowsPath(part).is_reserved() for part in supplied.parts)):
+                raise ValueError("Use a relative HTML path")
+            target = (project / entry_path.replace("\\", "/")).resolve()
+            canonical_root(target).relative_to(canonical_root(project))
+            if target.suffix.lower() not in {".html", ".htm"} or not target.is_file():
+                raise ValueError("HTML file unavailable")
+            # Keep the requested spelling for relative asset URLs; containment
+            # above still resolves junctions and links before granting access.
+            entry = PureWindowsPath(entry_path).as_posix()
+        except (ValueError, OSError) as exc:
+            raise HarnessError("Choose an existing HTML file inside this project.", code="preview_entry_invalid", status_code=409) from exc
+        with self._lock:
+            existing = self._owned.get(key)
+            if existing and existing.process.poll() is None:
+                if existing.kind != "static" or canonical_root(existing.project_path) != canonical_root(project):
+                    raise HarnessError("Stop this conversation's current preview before starting a static page.", code="preview_already_running", status_code=409)
+                existing.entry_path = entry
+                self._refresh_idle(existing)
+                return self.status(key)
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            token = uuid.uuid4().hex
+            command = [sys.executable, str(Path(__file__).with_name("static_server.py")), str(project), str(port), token]
+        return self.start(key, str(project), command, port, kind="static", entry_path=entry, health_token=token)
+
+    def start(self, thread_id: str, project_path: str, command: list[str], port: int, *,
+              kind: str = "command", entry_path: str | None = None, health_token: str | None = None) -> dict[str, Any]:
         key = _key(thread_id)
         project = Path(project_path).resolve()
         if not project.is_dir():
@@ -275,7 +220,7 @@ class PreviewService:
         with self._lock:
             existing = self._owned.get(key)
             if existing and existing.process.poll() is None:
-                if existing.project_path != project or existing.command != tuple(argv) or existing.port != port:
+                if canonical_root(existing.project_path) != canonical_root(project) or existing.command != tuple(argv) or existing.port != port:
                     raise HarnessError("Stop this conversation's preview before changing its command or port.", code="preview_already_running", status_code=409)
                 self._refresh_idle(existing)
                 return self.status(key)
@@ -308,19 +253,23 @@ class PreviewService:
                 log_file.close()
                 raise
             preview = _Preview(key, project, tuple(argv), port, process, log_file,
-                job=job, launch_id=uuid.uuid4().hex)
+                job=job, launch_id=uuid.uuid4().hex, kind=kind, entry_path=entry_path, health_token=health_token)
             marker = self._marker(key)
-            marker.write_text(json.dumps({"pid": process.pid, "port": port, "started_at": utc_now()}), encoding="utf-8")
+            try:
+                marker.write_text(json.dumps({"pid": process.pid, "port": port, "started_at": utc_now()}), encoding="utf-8")
+            except BaseException:
+                _kill_tree(process, job)
+                log_file.close()
+                raise
             self._owned[key] = preview
             self._refresh_idle(preview)
-        url = f"http://127.0.0.1:{port}/"
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 self.stop(key)
                 raise HarnessError("The preview command exited before its page became ready. Check the preview log.", code="preview_exited", status_code=409)
-            if _localhost_health(port):
-                return {"state": "active", "url": url, "port": port, "log": str(log_path),
+            if _localhost_health(port, health_token):
+                return {**self.status(key), "log": str(log_path),
                     "_launch_id": preview.launch_id}
             time.sleep(0.2)
         stopped = self.stop(key)
@@ -371,10 +320,16 @@ class PreviewService:
         result: list[BaseTool] = []
 
         @tool("start_preview")
-        async def start_preview(command: list[str], port: int) -> str:
-            """Start an owned project web preview from an executable and argv on a selected localhost port. The project folder is the cwd."""
-            launch = asyncio.create_task(asyncio.to_thread(self.start,
-                run.thread_id, run.project_path, command, port))
+        async def start_preview(command: list[str] | None = None, port: int | None = None, entry_path: str | None = None) -> str:
+            """Preview project HTML with entry_path='relative/page.html'; the returned exact HTTP URL supports relative assets. Or provide command (executable plus argv) and port for a development server, with the project as cwd. Choose one mode. Workbench owns and stops the process. No shell syntax."""
+            if entry_path is not None:
+                if command is not None or port is not None:
+                    raise ToolException("Provide entry_path, or command and port, not both.")
+                launch = asyncio.create_task(asyncio.to_thread(self.start_static, run.thread_id, run.project_path, entry_path))
+            else:
+                if command is None or port is None:
+                    raise ToolException("Provide entry_path for an HTML file, or command and port for a development server.")
+                launch = asyncio.create_task(asyncio.to_thread(self.start, run.thread_id, run.project_path, command, port))
             try:
                 info = await asyncio.shield(launch)
                 return f"Project preview is ready at {info['url']}. Use browser_navigate to test it."
@@ -395,13 +350,15 @@ class PreviewService:
                         continue
                 raise
             except HarnessError as exc:
+                if exc.code == "preview_stop_unconfirmed":
+                    raise
                 raise ToolException(f"{exc.code}: {exc.message}") from exc
 
         @tool("stop_preview")
         async def stop_preview() -> str:
             """Stop this conversation's owned project preview process tree."""
             if not await asyncio.to_thread(self.stop, run.thread_id):
-                raise ToolException("The preview process did not confirm stopping; inspect its status before another launch.")
+                raise HarnessError("The preview process did not confirm stopping; inspect its status before another launch.", code="preview_stop_unconfirmed", status_code=409)
             return "Project preview stopped."
 
         @tool("preview_status")
@@ -416,7 +373,7 @@ class PreviewService:
             result.append(stop_preview)
         if "preview_status" in selected:
             result.append(preview_status)
-        return result
+        return [item.model_copy(update={"handle_tool_error": True}) for item in result]
 
     def shutdown(self) -> None:
         with self._lock:

@@ -22,6 +22,7 @@ from workbench_backend.inference.schemas import (
     HuggingFaceConfiguration,
     RuntimeControlDescriptor,
     RuntimeControlOption,
+    ResponsePreset,
     SettingsBag,
 )
 from workbench_backend.inference.settings import DEFAULT_GPU_PROFILE, STARTUP_ENUMS
@@ -52,14 +53,20 @@ def bundle_configuration_options(
             if huggingface_configuration.source_verified else "Hugging Face GGUF repository")
         for key, value in huggingface_configuration.generation_defaults.items():
             observed = per_request_defaults.get(key)
-            per_request_defaults[key] = RuntimeControlDescriptor(
-                key=key, label=key.replace("_", " ").title(),
-                description="Downloaded generation setting used when no explicit override is saved.",
-                source="huggingface_generation_config", applied=value,
-                observed=observed.observed if observed else None,
-                default_value=value, default_source=source,
-                supported=True,
-            )
+            if observed is not None:
+                # A publisher default is not evidence that the selected template
+                # accepts a control or a new effort level.
+                per_request_defaults[key] = observed.model_copy(update={
+                    "default_value": value, "default_source": source,
+                })
+            else:
+                per_request_defaults[key] = RuntimeControlDescriptor(
+                    key=key, label=key.replace("_", " ").title(),
+                    description="Downloaded generation setting used when no explicit override is saved.",
+                    source="huggingface_generation_config", applied=value,
+                    default_value=value, default_source=source,
+                    supported=True,
+                )
     return BundleConfigurationOptions(
         bundle_id=bundle_id,
         deployment_id=deployment.id if deployment is not None else None,
@@ -68,6 +75,7 @@ def bundle_configuration_options(
         startup_defaults={**_startup_defaults(recommended_threads=recommended_threads), **_speculative_descriptors(metadata),
                           "reasoning_preserve": reasoning_history_descriptor(metadata, deployment)},
         per_request_defaults=per_request_defaults,
+        response_presets=response_presets(per_request_defaults),
         metadata={
             "architecture": metadata.architecture,
             "name": metadata.name,
@@ -165,6 +173,7 @@ def _per_request_defaults(metadata: GgufRuntimeMetadata, deployment: Deployment 
             if value is not None and value not in ("default", "auto"):
                 defaults[key].default_value = value
                 defaults[key].default_source = "loaded_startup"
+    defaults["reasoning_budget_tokens"] = reasoning_budget_descriptor(deployment)
     return defaults
 
 
@@ -232,12 +241,77 @@ def _template_efforts(template: str) -> tuple[set[str], set[str], bool]:
     return canonical, canonical | aliases, closed
 
 
+def reasoning_budget_descriptor(deployment: Deployment | None) -> RuntimeControlDescriptor:
+    props = deployment.server_props if deployment is not None else None
+    params = props.default_generation_settings.get("params", {}) if props else {}
+    params = params if isinstance(params, dict) else {}
+    observed = params.get("reasoning_budget_tokens")
+    if observed is None and props:
+        observed = props.default_generation_settings.get("reasoning_budget_tokens")
+    explicit = props.chat_template_caps.get("supports_reasoning_budget") if props else None
+    pinned_runtime = bool(props and props.build_info and props.build_info.startswith("b11045-"))
+    supported = explicit if isinstance(explicit, bool) else True if type(observed) is int or pinned_runtime else None
+    return RuntimeControlDescriptor(
+        key="reasoning_budget_tokens", label="Thinking limit",
+        description=("Maximum thinking tokens per response; the total response limit includes thinking and the answer."
+                     if supported is True else "This endpoint's thinking limit is unsupported." if supported is False else
+                     "Thinking-limit support has not been verified for this endpoint; the total response limit still applies."),
+        source="pinned_runtime" if pinned_runtime and explicit is None and observed is None else "server_properties" if supported is not None else "unavailable",
+        supported=supported, observed=observed, default_value=observed,
+        default_source="server_properties" if type(observed) is int else None,
+        options=[RuntimeControlOption(value=2048, label="Balanced · 2,048 tokens"),
+                 RuntimeControlOption(value=8192, label="Deep · 8,192 tokens")] if supported is not False else [],
+    )
+
+
+def response_presets(descriptors: dict[str, RuntimeControlDescriptor]) -> list[ResponsePreset]:
+    effort = descriptors["reasoning_effort"]
+    limit = descriptors["reasoning_budget_tokens"]
+    presets = []
+    for ident, label, desired, budget, output in (("balanced", "Balanced", "medium", 2048, 8192),
+                                                 ("deep", "Deep", "xhigh", 8192, 16384)):
+        values: dict[str, Any] = {"max_tokens": output}
+        if descriptors["reasoning"].supported is True:
+            values["reasoning"] = "on"
+        notes: list[str] = []
+        if limit.supported is not False:
+            values["reasoning_budget_tokens"] = budget
+        if limit.supported is not True:
+            notes.append(limit.description)
+        declared = [str(option.value) for option in effort.options if option.value != "default"]
+        if desired in declared:
+            values["reasoning_effort"] = desired
+        elif declared:
+            ordering = _ordered_reasoning_efforts()
+            below = [value for value in declared if value in ordering and ordering.index(value) <= ordering.index(desired)]
+            effective = below[-1] if below else declared[0]
+            values["reasoning_effort"] = effective
+            notes.append(f"This template uses {effective} thinking for {label}.")
+        elif effort.supported is False:
+            notes.append("This template has no adjustable thinking levels; its default is retained.")
+        else:
+            notes.append("Thinking levels are unverified; the model default is retained.")
+        presets.append(ResponsePreset(id=ident, label=label,
+            description="Bounded everyday responses." if ident == "balanced" else "More thinking and output for complex tasks.",
+            per_request=values, thinking_limit_supported=limit.supported, notes=notes))
+    return presets
+
+
 def validate_model_reasoning(deployment: Deployment, bag: SettingsBag) -> None:
     """Fail before dispatch for known-invalid inherited or explicit effort.
 
     Unknown templates stay usable with the bag's existing unverified marker.
     Do not silently lower effort or rewrite a frozen preset/run snapshot.
     """
+    budget = bag.applied.get("reasoning_budget_tokens")
+    if budget is not None:
+        if type(budget) is not int or budget < -1:
+            raise HarnessError("Thinking limit must be a whole token count, or -1 for unlimited thinking.",
+                               code="invalid_reasoning_budget", status_code=422)
+        if reasoning_budget_descriptor(deployment).supported is False:
+            raise HarnessError("This endpoint does not support a thinking limit. Use the total response limit instead.",
+                               code="model_reasoning_budget_unsupported", status_code=409,
+                               details={"key": "reasoning_budget_tokens", "requested": budget})
     value = bag.applied.get("reasoning_effort")
     inherited_startup = value is None or value == "default"
     if inherited_startup:

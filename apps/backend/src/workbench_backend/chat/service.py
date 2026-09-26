@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.harness_backend import roots_overlap, canonical_root
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
@@ -373,7 +374,15 @@ class ChatService:
                         conversation = self.store.put(updated)
                     else:
                         conversation, _terminal = self._reconcile_terminal_assistant(conversation, current)
-            return self._view(self._dispatch_request(conversation, request))
+            # Preserve FIFO admission across chats that share an actual folder.
+            if self._project_waiters(conversation.project_path):
+                return self._view(self._append_queue_item(conversation, request))
+            try:
+                return self._view(self._dispatch_request(conversation, request))
+            except HarnessError as exc:
+                if exc.code != "project_busy":
+                    raise
+                return self._view(self._append_queue_item(self._require(conversation.id), request))
 
     def enqueue(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         task = request.task.strip()
@@ -408,6 +417,7 @@ class ChatService:
         with self.store.conversation_lock(conversation_id):
             conversation = self._require(conversation_id)
             conversation = self._recover_dispatching_queue(conversation)
+            self.harness.require_thread_effects_confirmed(conversation.thread_id)
             if request.resume_paused:
                 conversation = self._unpause_queue(conversation, request)
             return self._view(self._dispatch_next_queued(conversation))
@@ -484,6 +494,7 @@ class ChatService:
                     item.content_blocks = request.content_blocks
                 if request.attachment_ids is not None:
                     item.attachment_ids = list(request.attachment_ids)
+                    item.intended_config["document_asset_ids"] = list(request.attachment_ids)
                 if request.output_schema is not None:
                     item.output_schema = request.output_schema
                 if request.intended_config is not None:
@@ -578,6 +589,7 @@ class ChatService:
             else self.store.list_conversations(include_archived=True)
         )
         dispatched = 0
+        candidates.sort(key=lambda item: (item.queue[0].admission_order, item.queue[0].created_at, item.queue[0].id) if item.queue else (float("inf"), "", item.id))
         for item in candidates:
             with self.store.conversation_lock(item.id):
                 conversation = self._require(item.id) if conversation_id is not None else self.store.get(item.id)
@@ -716,6 +728,17 @@ class ChatService:
         *,
         queue_item: ChatQueueItem | None = None,
     ) -> ChatConversation:
+        self.harness.require_thread_effects_confirmed(conversation.thread_id)
+        with self.harness.project_admission(conversation.project_path):
+            return self._dispatch_request_admitted(conversation, request, queue_item=queue_item)
+
+    def _dispatch_request_admitted(
+        self,
+        conversation: ChatConversation,
+        request: ChatStartRequest,
+        *,
+        queue_item: ChatQueueItem | None = None,
+    ) -> ChatConversation:
         next_conversation = conversation.model_copy(deep=True)
         self._reject_session_area_change(next_conversation, request)
         frozen = queue_item.execution_snapshot if queue_item is not None else None
@@ -725,21 +748,20 @@ class ChatService:
             # Queue records were admitted by this application. Reuse their
             # resolved values; current mutable defaults affect future messages.
             for key, value in queue_item.intended_config.items():
+                if key == "document_asset_ids":
+                    # Read frozen ids from the request without restoring a
+                    # document removed from future conversation selections.
+                    continue
                 if key in type(next_conversation).model_fields:
                     if key == "review":
                         value = ReviewConfiguration.model_validate(value)
                     setattr(next_conversation, key, value)
-            if (conversation.run_ids or conversation.source_checkpoint_id) and next_conversation.memory_version_refs != conversation.memory_version_refs:
-                raise ChatError(
-                    "This chat's memory is fixed. Start a new chat to use a different memory version.",
-                    code="memory_selection_locked",
-                    status_code=409,
-                )
         self._preflight_start_request(next_conversation, request)
         self._ensure_thread(next_conversation)
         now = utc_now()
         next_conversation.history_replaced = False
         input_message_id = self._dispatch_input_message_id(request, queue_item)
+        selected_document_ids = self._selected_document_ids(next_conversation, request)
         content_blocks = self._content_blocks_with_attachments(next_conversation, request)
         prepared_config = self._prepared_config(next_conversation, request) if frozen is None else None
         submission = self._submission_record(next_conversation, request, content_blocks,
@@ -764,7 +786,7 @@ class ChatService:
                     role="user",
                     content=request.task.strip(),
                     content_blocks=transcript_blocks,
-                    attachment_ids=list(request.attachment_ids),
+                    attachment_ids=selected_document_ids,
                     at=now,
                 )
             )
@@ -801,7 +823,7 @@ class ChatService:
                         task=request.task.strip(),
                         input_message_id=input_message_id,
                         content_blocks=content_blocks or None,
-                        retained_asset_ids=list(request.attachment_ids),
+                        retained_asset_ids=selected_document_ids,
                         output_schema=request.output_schema,
                         presented_tools=next_conversation.presented_tools,
                         approval_mode=next_conversation.approval_mode,
@@ -929,8 +951,9 @@ class ChatService:
     def _append_queue_item_reserved(self, conversation: ChatConversation, request: ChatStartRequest) -> ChatConversation:
         with self.app_store._lock:
             queued = conversation.model_copy(deep=True)
+            selected_document_ids = self._selected_document_ids(queued, request)
             self.assets.require_active_assets(
-                list(request.attachment_ids),
+                selected_document_ids,
                 session_id=queued.id,
                 project_path=queued.project_path,
             )
@@ -955,10 +978,11 @@ class ChatService:
                     )
             item = ChatQueueItem(
                 id=new_id("queue"),
+                admission_order=1 + max((entry.admission_order for chat in self.store.list_conversations(include_archived=True) for entry in chat.queue), default=0),
                 task=request.task.strip(),
                 input_message_id=request.input_message_id,
                 content_blocks=content_blocks,
-                attachment_ids=list(request.attachment_ids),
+                attachment_ids=selected_document_ids,
                 output_schema=output_schema,
                 intended_config=intended_config,
                 helper_snapshots=freeze_helpers(self._setups(), intended_config.get("helper_agent_ids", []), project_id=queued.project_id,
@@ -969,6 +993,7 @@ class ChatService:
             )
             item.execution_snapshot = self._execution_snapshot(item, queued.project_id)
             queued.queue.append(item)
+            queued.document_asset_ids = selected_document_ids
             self.app_store._clear_chat_draft_if_revision_locked(queued, request.draft_revision, now)
             queued.updated_at = now
             with ExitStack() as reservations:
@@ -979,7 +1004,7 @@ class ChatService:
                 return self.store.put(queued)
 
     def _dispatch_next_queued(self, conversation: ChatConversation) -> ChatConversation:
-        if not conversation.queue or conversation.queue[0].status != "queued":
+        if conversation.archived or not conversation.queue or conversation.queue[0].status != "queued":
             return conversation
         if conversation.current_run_id:
             try:
@@ -989,8 +1014,39 @@ class ChatService:
             if current is not None and is_run_lifecycle_live(current.status):
                 return conversation
         next_item = conversation.queue[0]
+        waiters = self._project_waiters(conversation.project_path)
+        if waiters and waiters[0][1].id != next_item.id:
+            return conversation
         request = self._request_from_queue_item(next_item)
-        return self._dispatch_request(conversation, request, queue_item=next_item)
+        try:
+            return self._dispatch_request(conversation, request, queue_item=next_item)
+        except HarnessError as exc:
+            if exc.code == "effects_unconfirmed":
+                return self._pause_queue(self._require(conversation.id), "effects_unconfirmed")
+            if exc.code != "project_busy":
+                raise
+            # No loading, snapshot or model/tool dispatch has occurred. The
+            # existing frozen queue record remains safely retryable.
+            return self._require(conversation.id)
+
+    def _project_waiters(self, project_path: str | None):
+        if not project_path:
+            return []
+        waiters = []
+        for chat in self.store.list_conversations():
+            if not chat.queue or chat.queue[0].status == "paused":
+                continue
+            if chat.project_path and roots_overlap(chat.project_path, project_path):
+                waiters.extend((chat, item) for item in chat.queue if item.status == "queued")
+        return sorted(waiters, key=lambda pair: (pair[1].admission_order, pair[1].created_at, pair[1].id))
+
+    def acknowledge_effects(self, conversation_id: str, run_id: str) -> ChatConversationView:
+        with self.store.conversation_lock(conversation_id):
+            conversation = self._require(conversation_id)
+            if run_id not in conversation.run_ids:
+                raise ChatError("This task does not belong to the selected chat.", code="run_missing", status_code=404)
+            self.harness.acknowledge_project_effects(run_id)
+            return self._view(self._require(conversation_id))
 
     def _recover_dispatching_queue(self, conversation: ChatConversation) -> ChatConversation:
         dispatching = next((item for item in conversation.queue if item.status == "dispatching"), None)
@@ -1159,7 +1215,7 @@ class ChatService:
         return (
             item.task == request.task.strip()
             and (item.content_blocks or None) == content_blocks
-            and item.attachment_ids == list(request.attachment_ids)
+            and item.attachment_ids == intended_config.get("document_asset_ids", list(request.attachment_ids))
             and item.output_schema == output_schema
             and item.intended_config == intended_config
         )
@@ -1192,7 +1248,7 @@ class ChatService:
             conversation.presented_tools,
             project_bound=conversation.project_path is not None,
             external_names=[tool.name for connection in connection_snapshots for tool in connection.tools],
-            attachment_available=bool(request.attachment_ids),
+            attachment_available=bool(self._selected_document_ids(conversation, request)),
             capture_routes=capture_routes,
             knowledge_routes=bool(
                 conversation.memory_version_refs
@@ -1200,9 +1256,6 @@ class ChatService:
                 or conversation.protected_instruction_version_refs
             ),
         )
-        if conversation.embedding_deployment_id:
-            from workbench_backend.agents.retrieval import SEARCH_KNOWLEDGE_TOOL_NAME
-            denied = [name for name in denied if name != SEARCH_KNOWLEDGE_TOOL_NAME]
         if denied:
             raise ChatError(
                 f"Tools are not in the enabled catalogue: {', '.join(denied)}",
@@ -1287,7 +1340,7 @@ class ChatService:
         except Exception:
             return "history_unverified"
         try:
-            validate_retained_messages(deployment, [SystemMessage(content="Chat"), *retained])
+            validate_retained_messages(deployment, [SystemMessage(content="Chat"), *retained], allow_recovery=True)
         except HarnessError as exc:
             raise ChatError(str(exc), code=exc.code, status_code=409) from exc
         if (deployment.server_props is None or deployment.status.value != "running"
@@ -1358,6 +1411,7 @@ class ChatService:
             payload["content_blocks"] = item.content_blocks
         if item.attachment_ids:
             payload["attachment_ids"] = item.attachment_ids
+        payload["document_asset_ids"] = list(item.attachment_ids)
         if item.output_schema is not None:
             payload["output_schema"] = item.output_schema
         return ChatStartRequest.model_validate(payload)
@@ -1368,23 +1422,40 @@ class ChatService:
         request: ChatStartRequest,
     ) -> list[object]:
         blocks: list[object] = list(request.content_blocks or [])
-        if request.attachment_ids:
+        selected_ids = self._selected_document_ids(conversation, request)
+        if selected_ids:
             deployment = self.manager.get_deployment(conversation.deployment_id)
             capacity = deployment.server_props.n_ctx if deployment.server_props else None
             # Reserve room for instructions, tool schemas, history and the answer.
             # The existing context guard still verifies the complete model request.
             max_chars = min(1_000_000, max(1500, int(capacity * 1.2) - len(request.task))) if capacity else 24000
             selected_tools = request.presented_tools if "presented_tools" in request.model_fields_set else conversation.presented_tools
+            # Harness supplies document search for an authorized selected corpus
+            # whenever tools are on, even if direct attachment reading was not
+            # selected. Match that authority rather than reinjecting whole files.
+            reading_available = selected_tools != []
+            # Images are supplied on explicit attachment only. Document text is
+            # available on demand across turns without repeated prompt copies.
+            image_ids = []
+            for asset_id in request.attachment_ids:
+                asset, _ = self.assets._load_content(asset_id, session_id=conversation.id, project_path=conversation.project_path)
+                if asset.content_kind.value == "image" or not reading_available:
+                    image_ids.append(asset_id)
             asset_blocks = self.assets.current_user_content(
                 RetainedAssetReuseRequest(
-                    asset_ids=list(request.attachment_ids),
+                    asset_ids=image_ids,
                     session_id=conversation.id,
                     project_path=conversation.project_path,
                     max_chars=max_chars,
                 ),
-                allow_scoped_read=selected_tools is None or "read_attachment" in selected_tools,
-            )
+                allow_scoped_read=False,
+            ) if image_ids else []
             blocks.extend(asset_blocks)
+            catalogue_ids = [asset_id for asset_id in selected_ids if asset_id not in image_ids]
+            if catalogue_ids:
+                blocks.extend(self.assets.document_catalogue(RetainedAssetReuseRequest(
+                    asset_ids=catalogue_ids, session_id=conversation.id, project_path=conversation.project_path),
+                    reading_available=reading_available))
         if len(blocks) > 32:
             raise ChatError(
                 "Current-user content is limited to 32 blocks. Remove attachments or content blocks.",
@@ -1392,6 +1463,14 @@ class ChatService:
                 status_code=413,
             )
         return blocks
+
+    @staticmethod
+    def _selected_document_ids(conversation: ChatConversation, request: ChatStartRequest) -> list[str]:
+        selected = conversation.document_asset_ids if request.document_asset_ids is None else request.document_asset_ids
+        result = list(dict.fromkeys([*selected, *request.attachment_ids]))
+        if len(result) > 32:
+            raise ChatError("Select at most 32 conversation files. Remove a document before attaching another.", code="document_selection_limit", status_code=413)
+        return result
 
     def _apply_start_configuration(
         self,
@@ -1402,15 +1481,7 @@ class ChatService:
         read_only: bool = False,
     ) -> ResolvedSetupSelection | None:
         resolved_selection = None
-        frozen_memory = (
-            list(conversation.memory_version_refs)
-            if conversation.run_ids or conversation.source_checkpoint_id
-            else None
-        )
-        explicit_memory_selection = bool(
-            request.model_fields_set
-            & {"memory_version_refs", "knowledge_version_refs", "agent_setup_version_id"}
-        )
+        conversation.document_asset_ids = self._selected_document_ids(conversation, request)
         fields_set = request.model_fields_set
         if request.profile_id:
             self._bind_profile(request.profile_id)
@@ -1528,14 +1599,6 @@ class ChatService:
             conversation.memory_version_refs = refs.memory_version_refs
             conversation.skill_version_refs = refs.skill_version_refs
             conversation.protected_instruction_version_refs = refs.protected_instruction_version_refs
-        if frozen_memory is not None and conversation.memory_version_refs != frozen_memory:
-            if explicit_memory_selection:
-                raise ChatError(
-                    "This chat's memory is fixed. Start a new chat to use a different memory version.",
-                    code="memory_selection_locked",
-                    status_code=409,
-                )
-            conversation.memory_version_refs = frozen_memory
         if "embedding_deployment_id" in fields_set:
             conversation.embedding_deployment_id = request.embedding_deployment_id
         if "retrieval_project_paths" in fields_set:
@@ -1573,7 +1636,7 @@ class ChatService:
 
     def _resolved_config(self, conversation: ChatConversation, request: ChatStartRequest) -> dict[str, object]:
         clone = conversation.model_copy(deep=True)
-        self._apply_start_configuration(clone, request)
+        self._apply_start_configuration(clone, request, prepare_model=False)
         return self._prepared_config(clone, request)
 
     @staticmethod
@@ -1598,6 +1661,7 @@ class ChatService:
             "model_configuration_id": conversation.model_configuration_id,
             "startup_overrides": conversation.startup_overrides,
             "attachment_ids": list(request.attachment_ids),
+            "document_asset_ids": list(conversation.document_asset_ids),
             "memory_version_refs": list(conversation.memory_version_refs),
             "skill_version_refs": list(conversation.skill_version_refs),
             "protected_instruction_version_refs": list(conversation.protected_instruction_version_refs),
@@ -1616,7 +1680,7 @@ class ChatService:
 
     def _instruction_snapshot(self, conversation: ChatConversation, request: ChatStartRequest):
         clone = conversation.model_copy(deep=True)
-        self._apply_start_configuration(clone, request)
+        self._apply_start_configuration(clone, request, prepare_model=False)
         return self._setups().resolve(project_id=clone.project_id, agent_setup_version_id=clone.agent_setup_version_id, overrides=clone.setup_overrides, override_cleared_fields=clone.setup_cleared_fields).instruction_layers
 
     def _execution_snapshot(self, item: ChatQueueItem, project_id: str | None):
@@ -1683,7 +1747,7 @@ class ChatService:
             resolved = Path(workspace.path).expanduser().resolve()
             if project_path:
                 given = Path(project_path).expanduser().resolve()
-                if given != resolved:
+                if canonical_root(given) != canonical_root(resolved):
                     raise ChatError(
                         "project_path does not match the selected workspace path.",
                         code="project_mismatch",
@@ -1785,6 +1849,28 @@ class ChatService:
                 ),
                 detail="The bound deployment record was not found.",
             )
+        if conversation.project_path and any(item.status == "queued" for item in conversation.queue):
+            conversation = conversation.model_copy(deep=True)
+            blocker = self.harness.project_blocker(conversation.project_path)
+            waiters = self._project_waiters(conversation.project_path)
+            positions = {item.id: index + 1 for index, (_chat, item) in enumerate(waiters)}
+            owner_title = None
+            if blocker:
+                owner = next((chat for chat in self.store.list_conversations(include_archived=True)
+                              if chat.thread_id == blocker["thread_id"]), None) if blocker["thread_id"] else None
+                if owner is not None:
+                    owner_title = _display_title(owner)
+                else:
+                    task_title = " ".join(blocker["task"].split())
+                    owner_title = f"{task_title[:51]}…" if len(task_title) > 52 else task_title
+            for item in conversation.queue:
+                if item.status != "queued":
+                    continue
+                item.queue_position = positions.get(item.id)
+                item.wait_reason = ("project_uncertain" if blocker["uncertain"] else "project_busy") if blocker else ("project_order" if item.queue_position and item.queue_position > 1 else None)
+                item.waiting_run_id = blocker["run_id"] if blocker else None
+                item.waiting_thread_id = blocker["thread_id"] if blocker else None
+                item.waiting_owner_title = owner_title
         return ChatConversationView(
             **conversation.model_dump(),
             display_title=_display_title(conversation),
@@ -1857,9 +1943,10 @@ class ChatService:
         for item in paused.queue:
                 if item.status == "queued":
                     item.status = "paused"
-                    item.pause_reason = "failed" if reason == "failed" else "cancelled"
+                    item.pause_reason = "cancelled" if reason == "cancelled" else "failed"
                     item.pause_error_code = reason
-                    item.pause_error = f"Queue paused because the previous turn {reason}."
+                    item.pause_error = ("Queue paused until the previous action has been inspected and acknowledged."
+                        if reason == "effects_unconfirmed" else f"Queue paused because the previous turn {reason}.")
                     item.updated_at = utc_now()
         paused.updated_at = utc_now()
         return self.store.put(paused)

@@ -354,6 +354,12 @@ export interface AgentRun {
   helper_snapshots?: SchemaAgentRun["helper_snapshots"];
   tool_authorizations?: Record<string, string>;
   tool_authorization_grants?: Record<string, MatchedPermissionGrant>;
+  tool_outcomes?: SchemaAgentRun["tool_outcomes"];
+  failure?: SchemaAgentRun["failure"];
+  activity_phase?: SchemaAgentRun["activity_phase"];
+  housekeeping_generation?: SchemaAgentRun["housekeeping_generation"];
+  housekeeping_context?: SchemaAgentRun["housekeeping_context"];
+  project_outline?: SchemaAgentRun["project_outline"];
   review_observation?: { enabled: boolean; max_revisions: number; status: string; evidence_scope?: string; evaluations: Array<{ iteration?: number; grading_run_id?: string; result?: unknown; explanation?: string; criteria?: Array<{ name: string; passed: boolean; gap?: string }> }> };
   input_message_id?: string | null;
   status: AgentRunStatus;
@@ -549,6 +555,7 @@ export type ChatQueueItem = SchemaChatQueueItem;
 export type ChatSearchResult = SchemaChatSearchResult;
 
 export interface ChatConversation {
+  document_asset_ids?: string[];
   project_id?: string | null;
   agent_setup_version_id?: string | null;
   setup_overrides?: import("./workspaceApi").SetupConfiguration;
@@ -643,6 +650,8 @@ export interface KnowledgeProvenance {
 }
 
 export interface KnowledgeEntry {
+  estimated_content_tokens?: number;
+  token_counting_method?: string;
   resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
   package_source?: string | null;
   active?: boolean;
@@ -664,6 +673,9 @@ export interface KnowledgeEntry {
 }
 
 export interface KnowledgeVersion {
+  kind?: KnowledgeKind;
+  estimated_content_tokens?: number;
+  token_counting_method?: string;
   resources?: Array<{ path: string; sha256: string; size_bytes: number }>;
   id: string;
   entry_id: string;
@@ -728,6 +740,7 @@ export interface RuntimeControlDescriptor {
 }
 
 export interface BundleConfigurationOptions {
+  response_presets?: Array<{ id: "balanced" | "deep"; label: string; description: string; source: "workbench"; per_request: Record<string, unknown>; thinking_limit_supported: boolean | null; notes: string[] }>;
   bundle_id: string | null;
   deployment_id: string | null;
   context_size: RuntimeControlDescriptor;

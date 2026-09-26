@@ -385,6 +385,7 @@ export const api = {
       body: JSON.stringify({ target_version_id, base_version }),
     }),
   knowledgeVersions: (id: string) => request<KnowledgeVersion[]>(`/v1/knowledge/entries/${id}/versions`),
+  knowledgeVersion: (id: string) => request<KnowledgeVersion>(`/v1/knowledge/versions/${id}`),
   createContextCapture: (content: string) =>
     request<ContextCapture>("/v1/knowledge/captures", {
       method: "POST",

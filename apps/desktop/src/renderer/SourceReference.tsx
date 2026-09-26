@@ -60,9 +60,10 @@ export function SourceLink({ href, children }: { href: string; children: ReactNo
 
 export function ReadSources({ text }: { text: string }) {
   try {
-    const result = JSON.parse(text) as { excerpts?: Array<{ source?: string; extracted_line?: number; source_url?: string }> };
-    const refs = result.excerpts?.filter(item => sourceReference(item.source_url)) ?? [];
+    type Source = { source?: string; source_label?: string; filename?: string; extracted_line?: number; source_url?: string };
+    const result = JSON.parse(text) as { excerpts?: Source[]; results?: Source[]; has_more?: boolean };
+    const refs = (result.excerpts ?? result.results)?.filter(item => sourceReference(item.source_url)) ?? [];
     if (!refs.length) return null;
-    return <details className="read-sources"><summary>Sources read · {refs.length} {refs.length === 1 ? "passage" : "passages"}</summary><ul>{refs.map((ref, i) => <li key={i}><SourceLink href={ref.source_url!}>{ref.source} · line {ref.extracted_line}</SourceLink></li>)}</ul></details>;
+    return <details className="read-sources"><summary>Sources read · {refs.length} {refs.length === 1 ? "passage" : "passages"}{result.has_more ? " · more available" : ""}</summary><ul>{refs.map((ref, i) => <li key={i}><SourceLink href={ref.source_url!}>{[ref.filename, ref.source_label ?? ref.source].filter(Boolean).join(" · ")} · line {ref.extracted_line}</SourceLink></li>)}</ul></details>;
   } catch { return null; }
 }

@@ -1,18 +1,25 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { getEventListeners } from "node:events";
 import { fileURLToPath } from "node:url";
 import React from "react";
 import { act, create } from "react-test-renderer";
 import { createServer as createViteServer } from "vite";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-globalThis.window = Object.assign(new EventTarget(), { workbench: { backendUrl: "http://chat-model-controls.test" } });
+const originalWindow = globalThis.window;
+// Node's EventTarget does not remove boolean-capture listeners like the DOM.
+class BrowserEventTarget extends EventTarget {
+  addEventListener(type, listener, options) { super.addEventListener(type, listener, typeof options === "boolean" ? { capture: options } : options); }
+  removeEventListener(type, listener, options) { super.removeEventListener(type, listener, typeof options === "boolean" ? { capture: options } : options); }
+}
+globalThis.window = Object.assign(new BrowserEventTarget(), { workbench: { backendUrl: "http://chat-model-controls.test" } });
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const vite = await createViteServer({ root, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 const { ChatModelControls } = await vite.ssrLoadModule("/src/renderer/ChatModelControls.tsx");
 const { api } = await vite.ssrLoadModule("/src/renderer/api.ts");
 const { workspaceApi } = await vite.ssrLoadModule("/src/renderer/workspaceApi.ts");
-const original = { modelConfiguration: api.modelConfiguration, startManaged: api.startManaged, resolveSetup: workspaceApi.resolveSetup, chatReadiness: workspaceApi.chatReadiness };
+const original = { deploymentConfiguration: api.deploymentConfiguration, modelConfiguration: api.modelConfiguration, startManaged: api.startManaged, resolveSetup: workspaceApi.resolveSetup, chatReadiness: workspaceApi.chatReadiness };
 const bag = (requested = {}) => ({ requested, applied: {}, overridden: [], unsupported: [], retired: [] });
 const profile = (id, bundle, name) => ({ id, bundle_id: bundle, display_name: name, bags: { startup: bag({ ctx_size: 32768 }), per_request: bag({ temperature: 0.7 }), agent: bag() } });
 const bundles = [
@@ -22,7 +29,10 @@ const bundles = [
 const profiles = [profile("config_a", "bundle_a", "Default"), profile("config_a_fast", "bundle_a", "Fast"), profile("config_b", "bundle_b", "Default")];
 const deployment = (id, bundle, config) => ({ id, profile_id: config, bundle_id: bundle, display_name: `managed:${id}`, scope: "managed", status: "running", health: { healthy: true }, settings: { startup: bag(), per_request: bag(), agent: bag() } });
 const option = value => ({ value, label: value[0].toUpperCase() + value.slice(1) });
-const options = { per_request_defaults: { reasoning: { supported: true, options: ["auto", "on", "off"].map(option) }, reasoning_effort: { supported: true, options: ["low", "medium", "high"].map(option) } } };
+const options = { response_presets: [
+  { id: "balanced", label: "Balanced", description: "Everyday responses", per_request: { reasoning: "on", reasoning_effort: "medium", reasoning_budget_tokens: 2048, max_tokens: 8192 }, thinking_limit_supported: true, notes: [] },
+  { id: "deep", label: "Deep", description: "More thinking", per_request: { reasoning: "on", reasoning_effort: "high", reasoning_budget_tokens: 8192, max_tokens: 16384 }, thinking_limit_supported: true, notes: [] },
+], per_request_defaults: { reasoning_budget_tokens: { supported: true }, reasoning: { supported: true, options: ["auto", "on", "off"].map(option) }, reasoning_effort: { supported: true, options: ["low", "medium", "high"].map(option) } } };
 const fact = value => ({ value, source: "Model default", known: value != null });
 function text(node) { return typeof node === "string" ? node : (node?.children ?? []).map(text).join(""); }
 function button(renderer, label) { const found = renderer.root.findAll(node => node.type === "button" && text(node).includes(label))[0]; assert.ok(found, `button ${label}`); return found; }
@@ -33,6 +43,7 @@ async function openPicker(renderer) {
   if (!trigger.props["aria-expanded"]) await act(async () => trigger.props.onClick());
 }
 
+let renderer;
 try {
   const applied = [], loaded = [], readinessCalls = [];
   let optionCalls = 0, previewCalls = 0;
@@ -41,7 +52,6 @@ try {
   api.modelConfiguration = async () => { optionCalls++; return options; };
   api.startManaged = async (bundle, config, startup) => { loaded.push({ bundle, config, startup }); return deployment(`dep_${config}`, bundle, config); };
   const props = { bundles, profiles, deployments: [deployment("dep_a", "bundle_a", "config_a")], selectedDeploymentId: "dep_a", configuration: { model_configuration_id: "config_a", deployment_id: "dep_a" }, conversationId: "chat_1", onApply: next => applied.push(next), onReloaded: async () => {} };
-  let renderer;
   await act(async () => { renderer = create(React.createElement(ChatModelControls, props)); });
   await flush();
   assert.deepEqual(loaded, [], "rendering the model picker never loads a model");
@@ -93,8 +103,24 @@ try {
   await act(async () => thinking.props.onChange({ target: { value: "1" } }));
   await flush();
   assert.equal(applied.length, 2, "thinking edit remains staged until applied");
-  await act(async () => button(renderer, "Apply thinking").props.onClick());
+  await act(async () => button(renderer, "Apply response settings").props.onClick());
   assert.equal(applied.at(-1).per_request_overrides.reasoning_effort, "medium");
+  const loadsBeforeMode = loaded.length;
+  const appliesBeforeMode = applied.length;
+  await openPicker(renderer);
+  await act(async () => renderer.root.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "balanced")[0].props.onChange());
+  await flush();
+  assert.equal(applied.length, appliesBeforeMode, "response mode remains staged until Apply");
+  await act(async () => button(renderer, "Apply response settings").props.onClick());
+  assert.deepEqual(applied.at(-1).per_request_overrides, { reasoning: "on", reasoning_effort: "medium", reasoning_budget_tokens: 2048, max_tokens: 8192 });
+  assert.equal(loaded.length, loadsBeforeMode, "response presets do not reload or change model startup");
+  await openPicker(renderer);
+  await act(async () => renderer.root.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "deep")[0].props.onChange());
+  await flush();
+  await act(async () => button(renderer, "Apply response settings").props.onClick());
+  assert.equal(applied.at(-1).per_request_overrides.reasoning_budget_tokens, 8192);
+  assert.equal(applied.at(-1).per_request_overrides.max_tokens, 16384);
+
 
   api.startManaged = async () => { throw new Error("Cannot load this model"); };
   await openPicker(renderer);
@@ -177,9 +203,34 @@ try {
   await flush();
   assert.equal(loaded.at(-1).config, "config_a_fast", "an unloaded named selection keeps its exact configuration when loaded");
   await act(async () => renderer.unmount());
+  let connectedOptionCalls = 0;
+  api.deploymentConfiguration = async id => { assert.equal(id, "connected_1"); connectedOptionCalls++; return options; };
+  const connectedProps = { ...props, bundles: [], profiles: [], deployments: [{ ...deployment("connected_1", null, null), scope: "connected" }], selectedDeploymentId: "connected_1", configuration: { deployment_id: "connected_1", per_request_overrides: { reasoning: "off", reasoning_effort: "medium", reasoning_budget_tokens: 2048, max_tokens: 8192 } }, openRequest: 0 };
+  await act(async () => { renderer = create(React.createElement(ChatModelControls, connectedProps)); });
+  await flush();
+  assert.equal(connectedOptionCalls, 0, "connected endpoint settings are lazy");
+  await act(async () => renderer.update(React.createElement(ChatModelControls, { ...connectedProps, openRequest: 1 })));
+  await flush();
+  assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.className === "menu-popover-trigger")[0].props["aria-expanded"], true, "response-limit recovery opens the actual model controls");
+  assert.equal(connectedOptionCalls, 1, "a connected endpoint gets its own capability controls without a bundle");
+  const connectedBalanced = renderer.root.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "balanced")[0];
+  assert.ok(connectedBalanced, "connected endpoints expose the same product presets");
+  assert.equal(connectedBalanced.props.checked, false, "Thinking Off is custom even when all Balanced limits match");
+  await act(async () => connectedBalanced.props.onChange());
+  await flush();
+  assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.role === "switch" && node.props["aria-label"] === "Thinking")[0]?.props["aria-checked"],
+    true, "selecting Balanced enables supported thinking, including a previous explicit Off");
+  await act(async () => button(renderer, "Apply response settings").props.onClick());
+  await flush();
+  assert.deepEqual(applied.at(-1).per_request_overrides, { reasoning: "on", reasoning_effort: "medium", reasoning_budget_tokens: 2048, max_tokens: 8192 });
+  await act(async () => renderer.unmount());
+  renderer = undefined;
+  for (const type of ["scroll", "resize"]) assert.equal(getEventListeners(window, type).length, 0, `${type} listeners are released after popovers unmount`);
   console.log("Chat model selection, deferred checks, explicit loads, compatibility, thinking, and recovery passed.");
 } finally {
-  Object.assign(api, { modelConfiguration: original.modelConfiguration, startManaged: original.startManaged });
+  if (renderer) await act(async () => renderer.unmount());
+  globalThis.window = originalWindow;
+  Object.assign(api, { deploymentConfiguration: original.deploymentConfiguration, modelConfiguration: original.modelConfiguration, startManaged: original.startManaged });
   workspaceApi.resolveSetup = original.resolveSetup;
   workspaceApi.chatReadiness = original.chatReadiness;
   await vite.close();

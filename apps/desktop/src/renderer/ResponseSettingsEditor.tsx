@@ -18,6 +18,34 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
   const effortOptions = (efforts?.options ?? []).filter(item => typeof item.value === "string" && item.value !== "default");
   const effectiveEffort = current("reasoning_effort");
   const effectiveMode = current("reasoning");
+  const budget = options?.per_request_defaults.reasoning_budget_tokens;
+  const presets = options?.response_presets ?? [];
+  const selectedPreset = presets.find(preset => Object.entries(preset.per_request).every(([key, expected]) =>
+    (Object.prototype.hasOwnProperty.call(value, key) ? value[key] : current(key)) === expected));
+  const choosePreset = (id: string) => {
+    const preset = presets.find(item => item.id === id);
+    if (!preset) return;
+    const next = { ...value };
+    for (const key of ["reasoning", "reasoning_effort", "reasoning_budget_tokens", "max_tokens"]) delete next[key];
+    onChange({ ...next, ...preset.per_request });
+  };
+  const presetControl = presets.length ? <>
+    <SegmentedChoice label="Response mode" description="Balanced for everyday replies; Deep for more demanding tasks. Applies to future turns."
+      value={selectedPreset?.id ?? ""} meta={selectedPreset?.description ?? "Custom settings"}
+      options={presets.map(preset => ({ value: preset.id, label: preset.label }))} onChange={choosePreset} disabled={disabled || loading} />
+    {selectedPreset?.notes.map(note => <p className="hint" key={note}>{note}</p>)}
+  </> : null;
+  const budgetControl = <SettingRow label="Thinking limit" htmlFor={`response-thinking-budget-${inheritance}`}
+    help="Maximum thinking tokens in each model response. The response limit includes both thinking and the answer."
+    provenance={budget?.supported === true ? "Supported by this runtime" : budget?.supported === false ? "Unsupported" : "Support unverified"}
+    hint={budget?.supported !== true ? budget?.description ?? "This endpoint has not reported thinking-limit support." : undefined}
+    onReset={Object.prototype.hasOwnProperty.call(value, "reasoning_budget_tokens") && !disabled ? () => inherit("reasoning_budget_tokens") : undefined}>
+    <NumberField id={`response-thinking-budget-${inheritance}`} label="Thinking limit" min={0} step={1} unit="tokens"
+      value={typeof value.reasoning_budget_tokens === "number" ? value.reasoning_budget_tokens : null}
+      placeholder={typeof current("reasoning_budget_tokens") === "number" ? String(current("reasoning_budget_tokens")) : "Model default"}
+      disabled={disabled || budget?.supported === false}
+      onChange={next => next === null ? inherit("reasoning_budget_tokens") : patch("reasoning_budget_tokens", next)} />
+  </SettingRow>;
   if (inheritance === "model") {
     const state = (key: string) => fact(key)?.source === "Unsaved changes" ? "Unsaved change" : Object.prototype.hasOwnProperty.call(value, key) ? "Set in configuration" : "Inherited";
     const readout = (key: string) => {
@@ -32,6 +60,7 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
       const effortValues = effortOptions.map(item => ({ value: String(item.value), label: item.label }));
       const inheritedEffort = typeof effectiveEffort === "string" ? effectiveEffort : undefined;
       return <>
+        {presetControl}
         {modes?.supported ? <SegmentedChoice label="Thinking" description="Whether the model generates thinking for future turns." value={String(value.reasoning ?? "auto") === "auto" ? "" : String(value.reasoning)} meta={readout("reasoning")}
           options={[{ value: "", label: "Inherited" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} onChange={next => next === "" ? inherit("reasoning") : patch("reasoning", next)} disabled={disabled} /> : null}
         {efforts?.supported && value.reasoning !== "off" && effectiveMode !== "off" ? (effortValues.length && effortValues.length <= 5
@@ -41,8 +70,9 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
               <select id="model-thinking-level" value={String(value.reasoning_effort ?? "default")} disabled={disabled} onChange={event => event.target.value === "default" ? inherit("reasoning_effort") : patch("reasoning_effort", event.target.value)}><option value="default" hidden>{effectiveEffort == null ? "Not reported" : settingValue(effectiveEffort)}</option>{effortOptions.map(item => <option key={String(item.value)} value={String(item.value)}>{item.label}</option>)}</select>
             </SettingRow>) : null}
         {!modes?.supported && !efforts?.supported ? <p className="hint">Thinking controls unavailable for this model.</p> : null}
-        <SettingRow label="Reply limit" htmlFor="model-response-max_tokens" help="Maximum tokens in one reply. Empty uses the inherited setting." provenance={readout("max_tokens")} onReset={set("max_tokens") && !disabled ? () => inherit("max_tokens") : undefined}>
-          <NumberField id="model-response-max_tokens" label="Reply limit" value={numberValue("max_tokens")} placeholder={resolvedNumber("max_tokens") == null ? undefined : String(resolvedNumber("max_tokens"))} min={1} step={1} unit="tokens" disabled={disabled} onChange={commit("max_tokens")} />
+        {budgetControl}
+        <SettingRow label="Response limit" htmlFor="model-response-max_tokens" help="Maximum tokens per response, including thinking and the answer. Empty uses the inherited setting." provenance={readout("max_tokens")} onReset={set("max_tokens") && !disabled ? () => inherit("max_tokens") : undefined}>
+          <NumberField id="model-response-max_tokens" label="Response limit" value={numberValue("max_tokens")} placeholder={resolvedNumber("max_tokens") == null ? undefined : String(resolvedNumber("max_tokens"))} min={1} step={1} unit="tokens" disabled={disabled} onChange={commit("max_tokens")} />
         </SettingRow>
       </>;
     }
@@ -64,6 +94,7 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
     {key in value ? <button type="button" className="text-button" disabled={disabled} onClick={() => inherit(key)}>Reset to inherited</button> : null}
   </span>;
   return <div className="response-settings-editor setting-rows">
+    {presetControl}
     {modes?.supported ? <CompactSwitch label="Thinking" checked={effectiveMode === "on" || effectiveMode === true} onChange={enabled => patch("reasoning", enabled ? "on" : "off")} disabled={disabled || effectiveMode == null}
       meta={effectiveMode == null ? "Default not reported. Choose a value below." : `${settingValue(effectiveMode)} · ${source("reasoning")}`}
       hint={<>{effectiveMode == null ? <SegmentedChoice bare label="Thinking choice" value={String(value.reasoning ?? "auto")} disabled={disabled} onChange={next => patch("reasoning", next)} options={[{ value: "auto", label: "Default" }, { value: "on", label: "On" }, { value: "off", label: "Off" }]} /> : null}{resets("reasoning")}</>} /> : null}
@@ -71,5 +102,15 @@ export function ResponseSettingsEditor({ value, onChange, facts, options, disabl
       {effortOptions.some(item => item.value === effectiveEffort) ? <CompactSlider hideHeading label="Thinking level" values={effortOptions.map((_, index) => index)} value={effortOptions.findIndex(item => item.value === effectiveEffort)} onChange={index => patch("reasoning_effort", effortOptions[index]?.value)} formatValue={index => effortOptions[index]?.label ?? "Unknown"} disabled={disabled || !effortOptions.length} /> : <select aria-label="Thinking level" value="" disabled={disabled || !effortOptions.length} onChange={event => { if (event.target.value) patch("reasoning_effort", event.target.value); }}><option value="">{effectiveEffort == null ? "Model default · unknown" : `${settingValue(effectiveEffort)} · unavailable`}</option>{effortOptions.map(item => <option key={String(item.value)} value={String(item.value)}>{item.label}</option>)}</select>}
     </SettingRow> : null}
     {!modes?.supported && !efforts?.supported ? <span className="hint">Thinking controls unavailable<HoverHelp title="Thinking availability">This model does not report configurable thinking. Its template controls reasoning.</HoverHelp></span> : null}
+    {budgetControl}
+    <SettingRow label="Response limit" htmlFor="chat-response-max_tokens"
+      help="Maximum tokens per response, including thinking and the answer. Active and queued turns retain their limits."
+      provenance={current("max_tokens") == null ? "Default not reported" : `${settingValue(current("max_tokens"))} · ${source("max_tokens")}`}
+      onReset={Object.prototype.hasOwnProperty.call(value, "max_tokens") && !disabled ? () => inherit("max_tokens") : undefined}>
+      <NumberField id="chat-response-max_tokens" label="Response limit" value={typeof value.max_tokens === "number" ? value.max_tokens : null}
+        placeholder={typeof current("max_tokens") === "number" ? String(current("max_tokens")) : "Model default"}
+        min={1} step={1} unit="tokens" disabled={disabled}
+        onChange={next => next === null ? inherit("max_tokens") : patch("max_tokens", next)} />
+    </SettingRow>
   </div>;
 }

@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import BaseModel
 
+from workbench_backend.agents.harness_backend import canonical_root
 from workbench_backend.errors import HarnessError
 
 TEXT_LIMIT = 256_000
@@ -30,13 +31,14 @@ def project_file(root: Path, value: str) -> Path:
             for part in parts) or parts[0].lower() in RESERVED_ROUTES):
         raise HarnessError("Choose a regular file inside this project, outside managed knowledge and history.", code="project_file_scope", status_code=403)
     base = root.resolve()
+    boundary = canonical_root(base)
     path = base.joinpath(*parts)
     for candidate in (path, *path.parents):
-        if candidate == base:
+        if canonical_root(candidate) == boundary:
             break
         if candidate.is_symlink() or candidate.is_junction():
             raise HarnessError("Project files cannot follow symbolic links or junctions.", code="project_file_link", status_code=403)
-    if not path.resolve().is_relative_to(base) or path == base:
+    if not canonical_root(path).is_relative_to(boundary) or canonical_root(path) == boundary:
         raise HarnessError("The file is outside this project.", code="project_file_scope", status_code=403)
     if path.exists() and not path.is_file():
         raise HarnessError("Choose a regular file rather than a folder.", code="project_file_not_regular", status_code=400)

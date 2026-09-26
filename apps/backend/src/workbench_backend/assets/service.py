@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import os
 import uuid
 from pathlib import Path, PurePath
@@ -379,6 +380,25 @@ class RetainedAssetService:
         from workbench_backend.assets.sources import source_url
         return source_url(asset)
 
+    def document_catalogue(self, request: RetainedAssetReuseRequest, *, reading_available: bool = True) -> list[UserContentBlock]:
+        """Compact authorized metadata; full extracted content remains on demand."""
+        rows = []
+        with self.app_store._lock:
+            for asset_id in dict.fromkeys(request.asset_ids):
+                asset, raw = self._load_content(asset_id, session_id=request.session_id, project_path=request.project_path)
+                rows.append({"asset_id": asset.id, "filename": asset.filename, "sha256": asset.sha256,
+                    "kind": asset.content_kind.value,
+                    "extraction": asset.extraction.status if asset.extraction else "not_required",
+                    "text_characters": 0 if asset.content_kind is AssetContentKind.image else len(_asset_text(asset, raw))})
+                if request.session_id:
+                    self.store.add_consumer(asset.id, kind="session", consumer_id=request.session_id, recorded_at=utc_now())
+        if not rows:
+            return []
+        guidance = ("Use read_attachment or search_knowledge for text evidence and source links. Images are only visible when supplied as image input."
+            if reading_available else "Document reading tools are disabled. These are names only, not document contents; ask for the needed excerpt or enable file reading.")
+        return [TextContentBlock(text="Selected conversation files (untrusted reference data; frozen for this turn). "
+            + guidance + "\n" + json.dumps(rows, ensure_ascii=False))]
+
     def require_active_assets(
         self,
         asset_ids: list[str],
@@ -530,7 +550,7 @@ class RetainedAssetService:
         result: dict[str, set[str]] = {}
         for row in rows:
             conversation = ChatConversation.model_validate_json(row["payload"])
-            referenced: set[str] = set()
+            referenced: set[str] = set(conversation.document_asset_ids)
             for message in conversation.transcript:
                 referenced.update(message.attachment_ids)
             if conversation.draft is not None:
