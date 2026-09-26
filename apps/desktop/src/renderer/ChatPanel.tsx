@@ -1705,7 +1705,12 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (!launch || chatLaunchClaim.current === launch.id) return;
     chatLaunchClaim.current = launch.id;
     if (launch.kind === "fresh") {
-      void persistBeforeLeaving().then(startFresh).catch(fail).finally(() => props.onChatLaunchHandled?.());
+      void persistBeforeLeaving().then(async () => {
+        startFresh();
+        setProjectId(null);
+        setProjectPath("");
+        await chooseSetup(null, agentSetupVersionId);
+      }).catch(fail).finally(() => props.onChatLaunchHandled?.());
       return;
     }
     if (!launch.conversationId) { props.onChatLaunchHandled?.(); return; }
