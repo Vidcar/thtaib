@@ -716,6 +716,7 @@ function makeHarness(options = {}) {
 
 function ChatHarness({ ChatPanel, WorkbenchSidebar, panelProps }) {
   const [chatLaunch, setChatLaunch] = useState(null);
+  const [workspaceLaunch, setWorkspaceLaunch] = useState(null);
   const [historyNotice, setHistoryNotice] = useState(null);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [activeConversationId, setActiveConversationId] = useState(null);
@@ -738,6 +739,7 @@ function ChatHarness({ ChatPanel, WorkbenchSidebar, panelProps }) {
       conversationListRef,
       onOpenConversation: (conversation) => setChatLaunch({ id: `open-${conversation.id}-${crypto.randomUUID()}`, kind: "open", conversationId: conversation.id, conversation }),
       onNewChat: () => setChatLaunch({ id: `fresh-${crypto.randomUUID()}`, kind: "fresh" }),
+      onNewChatInProject: project => setWorkspaceLaunch({ id: `project-${crypto.randomUUID()}`, projectId: project.id }),
       onAddProject: () => {},
       onHistoryNotice: (notice) => { setHistoryNotice(notice); setHistoryRevision(value => value + 1); },
       onBeforeConversationChange: () => preparation.current?.() ?? Promise.resolve(),
@@ -748,6 +750,8 @@ function ChatHarness({ ChatPanel, WorkbenchSidebar, panelProps }) {
       conversationListRef,
       chatLaunch,
       onChatLaunchHandled: () => setChatLaunch(null),
+      workspaceLaunch: workspaceLaunch ?? panelProps.workspaceLaunch,
+      onWorkspaceLaunchHandled: () => { setWorkspaceLaunch(null); panelProps.onWorkspaceLaunchHandled?.(); },
       historyNotice,
       onHistoryChanged: () => setHistoryRevision(value => value + 1),
       onActiveConversationId: setActiveConversationId,
@@ -3104,13 +3108,46 @@ async function testSelectedModelSurvivesAgentAndNewChat(vite) {
     await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, project.id), "project applied after model");
     assert.equal(picker().props.configuration.deployment_id, "dep_1", "project selection retains the submitted model");
     await act(async () => button(renderer, "New").props.onClick());
+    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, ""), "main New chat clears the project");
+    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "no-project setup resolved");
     await waitFor(() => assert.equal(picker().props.selectedDeploymentId, "dep_1"), "new chat retains the selected model");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep the selected model" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "new chat created");
     assert.equal(harness.state.requests.creates[0].deployment_id, "dep_1", "creation submits the selected model");
     assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "agent-one-version");
-    assert.equal(harness.state.requests.creates[0].project_id, project.id);
+    assert.equal(harness.state.requests.creates[0].project_id, undefined);
+    assert.equal(harness.state.requests.creates[0].project_path, null);
+  } finally { await closeHarness(renderer, harness); }
+}
+
+async function testSidebarNewChatScopesAndPreservesProjectDraft(vite) {
+  const project = { id: "project_empty", name: "Empty project", path: "D:\\Projects\\Empty", canonical_path: "d:\\projects\\empty", defaults: {}, active: true };
+  const harness = makeHarness({ aRun: null, threadARun: null, projects: [project] });
+  const renderer = await renderChat(vite, harness);
+  const projectField = () => renderer.root.findByProps({ "aria-label": "Chat project" });
+  try {
+    await waitFor(() => buttonByAriaLabel(renderer, "New chat in Empty project"), "empty project exposes its new-chat action");
+    await selectFixtureModel(renderer);
+    await act(async () => buttonByAriaLabel(renderer, "New chat in Empty project").props.onClick());
+    await waitFor(() => { assert.equal(projectField().props.value, project.id); assert.equal(textarea(renderer).props.disabled, false); }, "empty project's composer ready");
+    assert.equal(harness.state.requests.creates.length, 0, "opening a blank composer does not create an empty record");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep this project draft" } }));
+    await act(async () => buttonByAriaLabel(renderer, "New chat").props.onClick());
+    await waitFor(() => { assert.equal(projectField().props.value, ""); assert.equal(textarea(renderer).props.value, ""); assert.equal(textarea(renderer).props.disabled, false); }, "main New chat opens outside projects");
+    assert.equal(harness.state.requests.creates[0].project_id, project.id, "previous draft creates the project's first conversation");
+    const saved = harness.state.requests.draftUpdates.at(-1);
+    assert.equal(saved.payload.content, "Keep this project draft");
+    assert.equal(saved.payload.intended_config.project_id, project.id, "leaving a project keeps its draft's scope");
+    await act(async () => textarea(renderer).props.onChange({ target: { value: "Start outside projects" } }));
+    await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
+    await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "no-project submission admitted");
+    assert.equal(harness.state.requests.creates[1].project_id, undefined);
+    assert.equal(harness.state.requests.creates[1].project_path, null, "the previous project path cannot leak into creation");
+    const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
+    assert.equal(submitted.project_id, undefined);
+    assert.equal(submitted.project_path, null);
+    assert.equal(submitted.deployment_id, "dep_1", "scope change preserves the selected model");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -3396,6 +3433,7 @@ try {
     ["deleted history selection recovery", testDeletedHistorySelectionRecoversToNewChat],
     ["agent setup inheritance and future turns", testAgentSetupInheritanceAndFutureTurn],
     ["selected model survives agent and New Chat", testSelectedModelSurvivesAgentAndNewChat],
+    ["sidebar New chat scopes and preserves project draft", testSidebarNewChatScopesAndPreservesProjectDraft],
     ["sole healthy model fallback keeps configuration", testSoleHealthyModelFallbackKeepsConfigurationIdentity],
     ["stopped named configuration survives New Chat", testStoppedNamedConfigurationSurvivesNewChat],
     ["fetched chat visible while opening and late results ignored", testFetchedChatVisibleWhileOpeningAndLateResultsIgnored],

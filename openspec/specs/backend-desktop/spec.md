@@ -205,6 +205,8 @@ Closing the main window or event stream SHALL NOT cancel or resubmit a run. Ongo
 
 The desktop SHALL provide one collapsible sidebar on every page. Destinations SHALL stay fully visible without their own scrollbar. Below them, one list SHALL show collapsible named project folders containing only their permanently scoped conversations, then chats with no project labelled as having no project. The no-project group SHALL remain in that list when it is empty. A project row SHALL start a new chat in that project, and a separate control SHALL create a project. Right-clicking a project SHALL offer editing it, archiving its chats, and removing it from the sidebar without deleting its folder. New chat, cross-area retained-history search, rename, archive and reopen SHALL remain available from that sidebar. The conversation header SHALL show its project or non-project identity; choosing a different area SHALL open or create another conversation rather than move or detach the current one. Removed-project history SHALL retain its identity.
 
+The main New chat button SHALL start a conversation with no project, regardless of the previously selected chat or project. Each project's new-chat control SHALL start a conversation in that project, including when the project has no existing chats. Both paths SHALL preserve the selected main model and save the previous draft before leaving it.
+
 Adding a project SHALL ask for a name and one existing folder. It SHALL NOT choose memory or grant edit permission beyond the selected folder. Creating a project SHALL NOT start or move a chat.
 
 Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files and previews open in the dock through API-023 and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stays a side column or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
@@ -225,6 +227,16 @@ Light and dark themes SHALL follow Windows by default with a user override. Sett
 
 - **WHEN** a user adds a project with a name and one existing folder
 - **THEN** the project appears in the sidebar, no chat is created or moved, and memory is not chosen in that dialog.
+
+#### Scenario: Start outside the last-used project
+
+- **WHEN** a person selects the main New chat button after using a project chat
+- **THEN** the new conversation has no project, retains the selected model, and the previous conversation and its draft retain their original project.
+
+#### Scenario: Start a project's first chat
+
+- **WHEN** a person selects the new-chat control on a project with no chats
+- **THEN** the composer opens for that project and its first submitted message creates a conversation in that project.
 
 #### Scenario: Switch project without relocating a conversation
 

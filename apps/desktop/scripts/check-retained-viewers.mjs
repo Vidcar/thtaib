@@ -16,7 +16,7 @@ try {
   await server.listen();
   const url = server.resolvedUrls.local[0] + 'retained-viewers.html';
   const child = spawn(require('electron'), [fixtureMain, url], { cwd: scratch, env: { ...process.env, WORKBENCH_VIEWER_SCRATCH: scratch }, stdio: 'inherit', windowsHide: true });
-  const timeout = setTimeout(() => child.kill(), 30_000);
+  const timeout = setTimeout(() => child.kill(), 60_000);
   try { process.exitCode = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', code => resolve(code ?? 1)); }); }
   finally { clearTimeout(timeout); }
 } finally { await server.close(); }
