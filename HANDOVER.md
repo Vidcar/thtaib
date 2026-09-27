@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-27. Performance implementation is complete and locally delivered on `codex/agent-inference-performance` (base `ca7b4169`); Git publication/merge remains. Change: [improve-agent-inference-performance](openspec/changes/archive/2026-09-27-improve-agent-inference-performance/tasks.md).
+Updated 2026-09-27. Performance implementation is complete and locally delivered; [PR174](https://github.com/Vidcar/thtaib/pull/174) contains the validated changes from `codex/agent-inference-performance` (implementation `92390cd`, base `ca7b4169`). Change: [improve-agent-inference-performance](openspec/changes/archive/2026-09-27-improve-agent-inference-performance/tasks.md).
 
 Stable run-start outlines, canonical retained visual context with native compaction/byte bounds, admission-time image checks, linear strict streamed-tool validation and bounded Chat timing/cache history are implemented. Actual Qwen application checks passed edits, screenshot-to-tool continuity, exact 16,439-byte file writing and canvas-only visual recognition. Declaration continuation fell from 42.2s prefill to 0.383s with unchanged original runtime; tuned screenshot prefill fell from 33.33s to 9.19s. Evidence: `.scratch/prompt-cache-validation-20260927-1790508664/` and `.scratch/prompt-cache-validation-20260927-1790510677/`.
 
@@ -8,4 +8,4 @@ Runtime sweep passed repeated text/tool/vision fixtures. Cold prefill 32.495s to
 
 Normal shortcut recovery refreshed backend PID28644 and existing desktop PID14744, preserving router PID3064, loaded model and saved chats. A disposable read/edit/read run through the refreshed service passed; its records were deleted. Evidence: `.scratch/agent-performance-local-refresh/after.json`. Computer Use Electron inspection was unavailable; mounted native desktop checks and normal recovery verified delivery.
 
-Checks passed: default 942 (one skip), integration 200, focused regressions, desktop build/native checks, shared-contract freshness, OpenSpec and whitespace. Current specs synchronized and completed change archived. Next: commit/push/PR/merge, then update this snapshot with delivery pointers. Preserve unrelated untracked Lab/archive files and prior worktree `C:\Users\Dave_\.codex\worktrees\reliable-chat\thtaib`.
+Checks passed: default 942 (one skip), integration 200, focused regressions, desktop build/native checks, shared-contract freshness, OpenSpec and whitespace. Current specs synchronized and completed change archived. No outstanding implementation or local deployment work. Preserve unrelated untracked Lab/archive files and prior worktree `C:\Users\Dave_\.codex\worktrees\reliable-chat\thtaib`.
