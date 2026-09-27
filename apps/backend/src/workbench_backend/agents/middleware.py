@@ -516,7 +516,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
             return ToolMessage(content="Plan mode is read-only. This action was not executed. Switch to Work before requesting changes.", name=name, tool_call_id=call_id, status="error")
         if not self.run.presented_tools:
             return ToolMessage(content="Tools are explicitly off for this run; no action was executed.", name=name, tool_call_id=call_id, status="error")
-        if name == "read_file" and self.run.framework_read_paths:
+        if name == "read_file" and name not in self.run.presented_tools and self.run.framework_read_paths:
             path = str(args.get("file_path", "")).replace("\\", "/")
             parts = path.split("/")
             allowed = not path.startswith("//") and not any(part in {".", ".."} or ":" in part for part in parts)
@@ -595,7 +595,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         for item in tools or []:
             name = tool_name(item)
             if name is None or name in allowed:
-                if name == "read_file" and self.run.framework_read_paths:
+                if name == "read_file" and name not in self.run.presented_tools and self.run.framework_read_paths:
                     description = "Read framework-saved tool results or conversation history with offset and limit pagination. Only these paths are permitted: " + ", ".join(self.run.framework_read_paths) + ". Project and knowledge files are not authorized by this reader."
                     if hasattr(item, "model_copy"):
                         item = item.model_copy(update={"description": description})

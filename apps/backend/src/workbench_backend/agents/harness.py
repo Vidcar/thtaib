@@ -605,11 +605,13 @@ class HarnessService:
                         presented = [*presented, name]
             if capture_routes and request.presented_tools != [] and "read_file" not in presented:
                 presented = [*presented, "read_file"]
+            # This list scopes only the automatic result reader, never a
+            # selected file reader whose backend already enforces access.
             framework_read_paths = (
                 ["/large_tool_results/", "/conversation_history/"]
                 if presented and "read_file" not in presented and not recorded else []
             )
-            if retrieval_presented and "/retrieved/" not in framework_read_paths:
+            if retrieval_presented and framework_read_paths:
                 framework_read_paths.append("/retrieved/")
             if request.embedding_deployment_id and request.presented_tools == []:
                 raise HarnessError(
