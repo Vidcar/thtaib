@@ -891,6 +891,7 @@ const MessageBubble = memo(function MessageBubble(props: {
   toolsLive?: boolean;
   type: string;
   writing: boolean;
+  showLiveMessageStatus?: boolean;
   activityLabel?: string;
   waiting: boolean;
   onHelperOpen?: (runId: string, toolCallId: string) => void;
@@ -906,7 +907,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     <article className={`bubble bubble-${props.type === "human" ? "user" : props.type === "ai" ? "assistant" : "system"}${settled ? " bubble-settled" : ""}${props.continuation ? " bubble-continuation" : ""}`}>
       <header>
         <strong>{roleLabel(props.type)}</strong>
-        {props.incomplete ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? props.activityLabel ?? "Writing" : "Partial"}</span> : null}
+        {props.incomplete && (props.showLiveMessageStatus !== false || (!props.toolsLive && !props.waiting)) ? <span className="message-state" aria-label={props.waiting ? "Waiting for your response" : props.writing ? "Response in progress" : "Incomplete response"}>{props.waiting ? "Waiting" : props.writing ? props.activityLabel ?? "Writing" : "Partial"}</span> : null}
       </header>
       <div className="message-body">
         <ReasoningDetails
@@ -935,6 +936,7 @@ const MessageBubble = memo(function MessageBubble(props: {
     && previous.toolsKey === next.toolsKey
     && previous.toolsLive === next.toolsLive
     && previous.activityLabel === next.activityLabel
+    && previous.showLiveMessageStatus === next.showLiveMessageStatus
     && previous.waiting === next.waiting
     && previous.detailedStreams === next.detailedStreams
     && previous.openStates === next.openStates
@@ -959,6 +961,7 @@ interface AgentMessageFeedProps {
   waiting?: boolean;
   fallback?: React.ReactNode;
   detailedStreams?: boolean;
+  showLiveMessageStatus?: boolean;
   renderMessageFooter?: (message: BaseMessage) => React.ReactNode;
   renderAnswerActions?: (message: BaseMessage, incomplete: boolean, answerText: string) => React.ReactNode;
   userMessageContent?: (message: BaseMessage) => BaseMessage["content"] | undefined;
@@ -1165,6 +1168,7 @@ function AgentMessageFeedContent(props: AgentMessageFeedProps) {
             toolsLive={live}
             type={type}
             writing={Boolean(live && message.id === lastAiId)}
+            showLiveMessageStatus={props.showLiveMessageStatus}
             activityLabel={!live ? undefined : currentRun?.finalization_phase === "saving_changes" ? "Saving"
               : currentRun?.activity_phase === "summarizing" ? "Summarizing"
               : currentRun?.activity_phase === "using_tools" ? "Using tools"

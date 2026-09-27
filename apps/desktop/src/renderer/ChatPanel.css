@@ -323,9 +323,9 @@
 .chat-rail .chat-history-actions {position: static;}
 .chat-header {flex-wrap: wrap; align-items: flex-start;}
 .compose details[open] > summary {margin-bottom: 0;}
-.chat-measurements {width: 120px; justify-content: flex-end;}
-.chat-measurements .chat-usage-trigger {position: relative; width: 120px; justify-content: flex-end; padding-right: 9px;}
-.chat-measurements .chat-usage-trigger > span:first-of-type {width: 9ch; text-align: right;}
+.chat-measurements {width: auto; justify-content: flex-end;}
+.chat-measurements .chat-usage-trigger {position: relative; justify-content: flex-end; padding-right: 9px;}
+.chat-measurements .chat-usage-trigger > span:first-of-type {text-align: right;}
 .chat-measurements .usage-live-dot {position: absolute; right: 1px;}
 .approval-mode {display: grid; gap: var(--space-tight); background: transparent; padding: 0;}
 .approval-mode button {display: flex; align-items: flex-start; gap: var(--space-compact); text-align: left; padding: var(--pad-compact);}

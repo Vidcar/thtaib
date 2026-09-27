@@ -28,10 +28,11 @@
 .chat-usage-bubble .usage-meter {height: 4px; margin-top: var(--space-compact); overflow: hidden; border-radius: var(--radius-control); background: var(--border);}
 .chat-usage-bubble .usage-meter > span {display: block; height: 100%; background: var(--accent); border-radius: inherit;}
 .chat-usage-bubble .usage-caption {margin: var(--space-tight) 0 0; color: var(--muted); font-size: var(--text-small);}
-.chat-usage-bubble .usage-token-counts {display: flex; gap: var(--space-stack); margin: var(--space-compact) 0 0; font-variant-numeric: tabular-nums;}
-.chat-usage-bubble .usage-token-counts > div {display: flex; gap: var(--space-compact);}
-.chat-usage-bubble .usage-token-counts dt {color: var(--muted); font-size: var(--text-small);}
-.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--text-body);}
+.chat-usage-bubble .usage-token-counts {display: grid; gap: var(--space-tight); margin: var(--space-compact) 0 0; font-variant-numeric: tabular-nums;}
+.chat-usage-bubble .usage-token-counts > div {display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: baseline; gap: var(--space-compact);}
+.chat-usage-bubble .usage-token-counts dt {color: var(--muted); font-size: var(--text-small); overflow-wrap: normal;}
+.chat-usage-bubble .usage-token-counts dd {margin: 0; font-size: var(--text-body); text-align: right; white-space: nowrap; word-break: normal; overflow-wrap: normal;}
+.chat-usage-bubble .usage-context-value > :first-child, .chat-usage-bubble .usage-speed > strong {white-space: nowrap; word-break: normal; overflow-wrap: normal;}
 .chat-usage-bubble .usage-speed {padding-top: var(--pad-compact); margin-top: var(--space-compact); border-top: var(--line-hairline) solid var(--border); font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-speed > span {color: var(--muted);}
 .chat-measurements .usage-live-dot {width: 5px; height: 5px; border-radius: var(--radius-circle); background: var(--accent);}

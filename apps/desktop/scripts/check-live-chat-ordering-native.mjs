@@ -29,6 +29,16 @@ const scenario = orderingHarness({ browser: true, requestOverride: async ({ req,
   else if (action === "text") scenario.text(number);
   else if (action === "tool") scenario.tool(number, number === 2 ? { callId: "read_1", outcome: "failed" } : number === 3 ? { outcome: "stopped" } : {});
   else if (action === "startFinal") scenario.startFinal(number);
+  else if (action === "readoutTools" || action === "readoutGenerating") {
+    const run = scenario.values().workbench.run;
+    run.activity_phase = action === "readoutTools" ? "using_tools" : "thinking";
+    run.generation_observation = {
+      input_tokens: 265586, cached_input_tokens: 265506, processed_input_tokens: 80, output_tokens: 1915,
+      context_used_tokens: 267501, context_limit: 655360, elapsed_seconds: 37.2, tokens_per_second: 51.3,
+      measured_at: "2026-09-27T12:00:00Z", phase: "generating", basis: "llama_cpp_timings",
+    };
+    scenario.adopt(); scenario.emit("values", scenario.values());
+  }
   else if (action === "appendFinal") scenario.appendFinal(number, line);
   else if (action === "settle") scenario.settle(number, number === 2 ? "failed" : number === 3 ? "cancelled" : "completed");
   else if (action === "state") { json(res, 200, { streams: scenario.harness.state.allStreams.size, chatGets: scenario.harness.state.requests.chatGets.length }); return true; }

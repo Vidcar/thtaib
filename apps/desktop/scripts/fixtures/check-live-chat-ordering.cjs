@@ -12,9 +12,80 @@ app.whenReady().then(async () => {
     await js(`new Promise((resolve,reject)=>{const start=performance.now();function check(){try{if(${expression})return resolve()}catch{}if(performance.now()-start>5000)return reject(Error(${JSON.stringify(label)}));requestAnimationFrame(check)}check()})`);
   };
   const snapshot = () => js("window.fixture.snapshot()");
+  const usage = () => js("window.fixture.usage()");
   const action = async (name, number, line) => { await js(`window.fixture.action(${JSON.stringify(name)},${number ?? "undefined"},${line ?? "undefined"})`); };
   const latest = (s, label) => assert.ok(s.geometry.height - s.geometry.top - s.geometry.client <= 2, `${label} follows the bottom: ${JSON.stringify(s.geometry)}`);
   const stable = s => { assert.ok(s.feedSame, "feed remains mounted"); assert.ok(s.bubbleSame, "old assistant DOM row remains mounted"); assert.ok(s.toolSame, "old tool disclosure DOM remains mounted"); assert.ok(s.disclosureOpen, "explicit open state survives later turns and metadata"); };
+  const key = keyCode => { win.webContents.sendInputEvent({ type: "keyDown", keyCode }); win.webContents.sendInputEvent({ type: "keyUp", keyCode }); };
+  const dismissUsage = async () => { key("ESCAPE"); await wait("!window.fixture.usage().tooltip", "Escape did not dismiss usage panel"); };
+  const checkUsageLayout = (readout, label) => {
+    const tip = readout.tooltip;
+    assert.ok(tip, `${label} opens a usage panel`);
+    assert.equal(readout.liveStatusCount, 1, `${label} has one composer status`);
+    assert.deepEqual(readout.transcriptStates, [], `${label} has no active main-message badges`);
+    assert.match(readout.trigger, /^Generating/);
+    assert.ok(readout.triggerTextRect.right <= readout.triggerRect.right + 1, `${label} keeps the complete live label inside its trigger`);
+    assert.ok(readout.triggerRect.right <= readout.stopRect.left + 1, `${label} keeps activity and speed clear of Stop`);
+    assert.deepEqual(tip.rows.map(row => [row.label, row.value]), [
+      ["Input total", "265,586"], ["Cached input", "265,506"], ["Newly processed", "80"], ["Output", "1,915"],
+    ], `${label} retains all four complete labelled counts`);
+    assert.equal(tip.context, "267,501 / 655,36041%", `${label} retains context total, capacity and percentage`);
+    assert.ok(tip.horizontalOverflow <= 1, `${label} has no horizontal overflow: ${tip.horizontalOverflow}`);
+    assert.ok(tip.rect.left >= 7 && tip.rect.right <= readout.viewportWidth - 7, `${label} stays inside the narrow viewport`);
+    for (const row of tip.rows) {
+      assert.equal(row.lines, 1, `${label} keeps ${row.label}'s number on one line`);
+      assert.ok(row.valueRect.left >= row.labelRect.right - 1, `${label} separates ${row.label} from its value`);
+      assert.ok(row.valueRect.right <= tip.rect.right - 7, `${label} contains ${row.label}'s value`);
+      assert.ok(Math.abs(row.valueRect.right - tip.rows[0].valueRect.right) <= 1, `${label} aligns ${row.label}'s value`);
+    }
+    assert.match(tip.text, /Cached and newly processed tokens are parts of input total\./);
+    assert.match(tip.text, /Current generation average/);
+    assert.match(tip.text, /51\.3 tok\/s/);
+  };
+  const checkUsage = async () => {
+    // The hidden native test window needs a focused renderer to dispatch real
+    // focus events; keep it offscreen so it does not interrupt Dave's app.
+    win.webContents.debugger.attach("1.3");
+    await win.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
+    const layouts = [];
+    for (const larger of [false, true]) for (const theme of ["dark", "light"]) {
+      const label = `${theme}-${larger ? "narrow-large-text" : "wide"}`;
+      win.setContentSize(larger ? 420 : 1040, 850);
+      await js(`window.fixture.appearance(${JSON.stringify(theme)},${larger})`);
+      win.webContents.focus();
+      await js("document.activeElement?.blur()");
+      win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
+      const anchor = (await usage()).triggerRect;
+      assert.ok(anchor.left >= 0 && anchor.right <= (larger ? 420 : 1040), `${label} keeps the composer trigger visible`);
+      const point = { x: Math.round(anchor.x + anchor.width / 2), y: Math.round(anchor.y + anchor.height / 2) };
+      win.webContents.sendInputEvent({ type: "mouseMove", ...point });
+      await wait("window.fixture.usage().tooltip && getComputedStyle(document.querySelector('.chat-usage-bubble')).visibility==='visible'", `${label} pointer hover did not open panel`);
+      await js("window.fixture.frame()");
+      const hovered = { ...(await usage()), viewportWidth: larger ? 420 : 1040 };
+      checkUsageLayout(hovered, `${label} pointer hover`); layouts.push({ label, ...hovered });
+      const picture = await win.webContents.capturePage(); fs.writeFileSync(path.join(scratch, `usage-${label}.png`), picture.toPNG());
+      await dismissUsage();
+      win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
+      await js("document.querySelector('.compose button[aria-label=\"Named helpers\"]').focus();window.fixture.frame()");
+      key("Tab");
+      await wait("window.fixture.usage().focused && window.fixture.usage().tooltip", `${label} keyboard Tab did not open panel`);
+      checkUsageLayout({ ...(await usage()), viewportWidth: larger ? 420 : 1040 }, `${label} keyboard focus`);
+      await dismissUsage();
+      await js("document.activeElement?.blur()");
+      if (!win.webContents.debugger.isAttached()) win.webContents.debugger.attach("1.3");
+      await win.webContents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: true });
+      await win.webContents.debugger.sendCommand("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      await win.webContents.debugger.sendCommand("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await wait("window.fixture.usage().tooltip", `${label} touch tap did not open panel`);
+      checkUsageLayout({ ...(await usage()), viewportWidth: larger ? 420 : 1040 }, `${label} touch tap`);
+      await dismissUsage();
+      await win.webContents.debugger.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: false });
+    }
+    assert.notEqual(layouts[0].tooltip.background, layouts[1].tooltip.background, "usage panel follows the dark/light palette");
+    fs.writeFileSync(path.join(scratch, "usage-layouts.json"), JSON.stringify(layouts, null, 2));
+    win.setContentSize(1040, 850); await js("window.fixture.appearance('dark',false);document.activeElement?.blur()");
+    win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
+  };
   try {
     await win.loadURL(process.argv[2]);
     await wait("window.fixture?.labels().join('|')==='TURN ONE'", "initial conversation did not hydrate");
@@ -36,7 +107,15 @@ app.whenReady().then(async () => {
       }
       await action("text", number); await wait(`window.fixture.labels().includes('CHECK ${number}')`, "intermediate assistant row missing");
       await action("tool", number); await wait(`window.fixture.snapshot().tools===${number}`, "owned tool count mismatch");
+      if (number === 1) {
+        await action("readoutTools"); await wait("window.fixture.usage().trigger==='Using tools'", "native composer did not report tools");
+        assert.deepEqual((await usage()).transcriptStates, [], "main transcript has no duplicate active badge while tools run");
+      }
       await action("startFinal", number); await wait(`window.fixture.labels().includes('FINAL ${number}')`, "streamed final missing");
+      if (number === 1) {
+        await action("readoutGenerating"); await wait("window.fixture.usage().trigger?.startsWith('Generating')", "activity-only change did not reach the native composer");
+        await checkUsage();
+      }
       for (let line = 1; line <= 12; line++) {
         await action("appendFinal", number, line);
         await wait(`window.fixture.lastAnswer().includes('Paragraph ${line}.')`, "current answer's native delta did not render");
@@ -56,6 +135,7 @@ app.whenReady().then(async () => {
       }
       await action("settle", number); await js("window.fixture.frame()");
       const s = await snapshot(); assert.deepEqual(s.labels, expectRows(number)); assert.equal(s.tools, number); latest(s, `turn ${number} settled`);
+      assert.doesNotMatch((await usage()).trigger, /Generating|Using tools|Working|Starting|Stopping|Saving|Summarizing|Waiting|Preparing/, `settled turn ${number} does not retain a live activity label`);
       if (number === 1) { const remembered = await js("window.fixture.remember()"); stable(remembered); }
       else { stable(s); if (number === 2) { await action("releaseMetadata"); await js("window.fixture.frame()"); stable(await snapshot()); } }
     }
@@ -66,12 +146,13 @@ app.whenReady().then(async () => {
     const picture = await win.webContents.capturePage(); fs.writeFileSync(path.join(scratch, "warm-output.png"), picture.toPNG());
     await win.loadURL(process.argv[2]); await wait("window.fixture?.labels().length===12", "refreshed snapshot did not hydrate");
     const reopened = await snapshot(); assert.deepEqual(reopened.labels, warm.labels); assert.equal(reopened.tools, warm.tools);
+    assert.doesNotMatch((await usage()).trigger, /Generating|Using tools|Working|Starting|Stopping|Saving|Summarizing|Waiting|Preparing/, "reopened completed history does not regain a live label");
     // Compare exact readable content, excluding the user's intentionally open
     // disclosure. Hydration must change neither row chronology nor results.
     const normalize = text => text.replace(/\s+/g, " ");
     assert.equal(normalize(reopened.readableText), normalize(warm.readableText), "refresh must preserve the same readable transcript");
     fs.writeFileSync(path.join(scratch, "refreshed-output.json"), JSON.stringify(reopened, null, 2));
-    console.log("Native mounted ChatPanel actual-SDK ordering, identity, scrolling, selection and refresh checks passed.");
-  } catch (error) { console.error(error); try { console.error(JSON.stringify(await snapshot())); const picture=await win.webContents.capturePage();fs.writeFileSync(path.join(scratch,"failure.png"),picture.toPNG()); } catch {} process.exitCode = 1; }
+    console.log("Native mounted ChatPanel actual-SDK ordering, identity, scrolling, selection, refresh, single activity status and readable usage hover/focus/touch/Escape checks passed.");
+  } catch (error) { console.error(error); try { console.error(JSON.stringify(await snapshot())); console.error(JSON.stringify(await usage())); const picture=await win.webContents.capturePage();fs.writeFileSync(path.join(scratch,"failure.png"),picture.toPNG()); } catch {} process.exitCode = 1; }
   finally { win.destroy(); app.exit(process.exitCode ?? 0); }
 });
