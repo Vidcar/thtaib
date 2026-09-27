@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentStartRequest, InterruptDecisionRequest
+from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_catalogue, tool_descriptions
 from workbench_backend.chat.service import ChatService
+from workbench_backend.state.run_views import AgentRunOperational
 
 router = APIRouter(prefix="/v1")
 
@@ -26,7 +29,11 @@ def list_agent_tools() -> dict[str, object]:
 
 
 @router.get("/agent-runs")
-def list_agent_runs(request: Request) -> object:
+def list_agent_runs(
+    request: Request, view: Literal["diagnostic", "operational"] = "diagnostic",
+) -> list[AgentRun] | list[AgentRunOperational]:
+    if view == "operational":
+        return get_harness(request).list_runs_operational()
     return get_harness(request).list_runs()
 
 
@@ -38,7 +45,11 @@ def start_agent_run(request: Request, body: AgentStartRequest) -> object:
 
 
 @router.get("/agent-runs/{run_id}")
-def get_agent_run(request: Request, run_id: str) -> object:
+def get_agent_run(
+    request: Request, run_id: str, view: Literal["diagnostic", "operational"] = "diagnostic",
+) -> AgentRun | AgentRunOperational:
+    if view == "operational":
+        return get_harness(request).get_run_operational(run_id)
     return get_harness(request).get_run(run_id)
 
 

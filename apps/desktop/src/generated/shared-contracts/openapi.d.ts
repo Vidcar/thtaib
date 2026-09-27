@@ -2705,6 +2705,253 @@ export interface components {
             /** Workspace Id */
             workspace_id?: string | null;
         };
+        /** AgentRunOperational */
+        AgentRunOperational: {
+            /** Activity Phase */
+            activity_phase?: ("thinking" | "using_tools" | "summarizing" | "checking_images") | null;
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
+            /** Agent Setup Version Id */
+            agent_setup_version_id?: string | null;
+            /**
+             * Approval Mode
+             * @default ask
+             * @enum {string}
+             */
+            approval_mode: "ask" | "full_access";
+            /**
+             * Browser Control
+             * @default agent
+             * @enum {string}
+             */
+            browser_control: "agent" | "taking_control" | "user";
+            /** Browser Observation */
+            browser_observation?: string | null;
+            /** Browser Pause Dispatches */
+            browser_pause_dispatches?: {
+                [key: string]: number[];
+            };
+            /**
+             * Browser Revision
+             * @default 0
+             */
+            browser_revision: number;
+            /** Browser Tool Proposals */
+            browser_tool_proposals?: {
+                [key: string]: number;
+            };
+            budgets?: components["schemas"]["AgentBudgets"] | null;
+            /**
+             * Capture Routes Enabled
+             * @default false
+             */
+            capture_routes_enabled: boolean;
+            /** Checkpoint Ids */
+            checkpoint_ids?: string[];
+            /** Child Runs */
+            child_runs?: components["schemas"]["ChildRunActivity"][];
+            /** Completed Tool Ids */
+            completed_tool_ids?: string[];
+            completion?: components["schemas"]["CompletionReport"] | null;
+            /** Connection Ids */
+            connection_ids?: string[];
+            /** Connection Snapshots */
+            connection_snapshots?: components["schemas"]["ConnectionSnapshot"][];
+            /** Content Blocks */
+            content_blocks?: (components["schemas"]["TextContentBlock"] | components["schemas"]["ImageContentBlock"])[] | null;
+            context_observation?: components["schemas"]["ContextObservation"] | null;
+            /** Created At */
+            created_at: string;
+            criteria?: components["schemas"]["TaskCriteria"];
+            /** Denied Tools */
+            denied_tools?: string[];
+            /** Deployment Id */
+            deployment_id: string;
+            /**
+             * Desktop Access
+             * @default off
+             * @enum {string}
+             */
+            desktop_access: "off" | "selected" | "all";
+            /** Desktop Window */
+            desktop_window?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Dispatched Tool Calls
+             * @default 0
+             */
+            dispatched_tool_calls: number;
+            /** Dispatched Tool Ids */
+            dispatched_tool_ids?: string[];
+            effective_setup?: components["schemas"]["EffectiveSetup"] | null;
+            /** Embedding Deployment Id */
+            embedding_deployment_id?: string | null;
+            /** Enabled Tools */
+            enabled_tools: string[];
+            /** Error */
+            error?: string | null;
+            /** Events */
+            events?: components["schemas"]["AgentEvent"][];
+            failure?: components["schemas"]["RunFailure"] | null;
+            /** Final Snapshot Id */
+            final_snapshot_id?: string | null;
+            /** Finalization Phase */
+            finalization_phase?: "saving_changes" | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Framework Read Paths */
+            framework_read_paths?: string[];
+            /** Generation History */
+            generation_history?: components["schemas"]["GenerationObservation"][];
+            generation_observation?: components["schemas"]["GenerationObservation"] | null;
+            /**
+             * Harness
+             * @default deepagents
+             * @constant
+             */
+            harness: "deepagents";
+            /** Helper Agent Ids */
+            helper_agent_ids?: string[];
+            /** Helper Snapshots */
+            helper_snapshots?: components["schemas"]["FrozenHelperSelection"][];
+            host_shell?: components["schemas"]["HostShellFacts"];
+            /** Housekeeping Context */
+            housekeeping_context?: {
+                [key: string]: components["schemas"]["ContextObservation"];
+            };
+            /** Housekeeping Generation */
+            housekeeping_generation?: {
+                [key: string]: components["schemas"]["GenerationObservation"];
+            };
+            /** Id */
+            id: string;
+            /** Input Message Id */
+            input_message_id?: string | null;
+            /**
+             * Knowledge
+             * @default none
+             * @enum {string}
+             */
+            knowledge: "none" | "application_owned";
+            /** Memory Version Refs */
+            memory_version_refs?: string[];
+            /**
+             * Outer Graph
+             * @default deepagents-compiled-state-graph
+             * @constant
+             */
+            outer_graph: "deepagents-compiled-state-graph";
+            output_schema?: components["schemas"]["OutputSchemaRequest"] | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            pending_interrupt?: components["schemas"]["PendingInterrupt"] | null;
+            /** Pre Run Checkpoint Id */
+            pre_run_checkpoint_id?: string | null;
+            /** Presented Tools */
+            presented_tools: string[];
+            /** Profile Id */
+            profile_id?: string | null;
+            /** Project Id */
+            project_id?: string | null;
+            /** Project Outline */
+            project_outline?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project Path */
+            project_path?: string | null;
+            /** Protected Instruction Version Refs */
+            protected_instruction_version_refs?: string[];
+            /** Recorded Fixtures */
+            recorded_fixtures?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Recorded Is Not Live Proof
+             * @default false
+             */
+            recorded_is_not_live_proof: boolean;
+            /** Related Files */
+            related_files?: components["schemas"]["RelatedFile"][];
+            /**
+             * Requires Host Shell
+             * @default false
+             */
+            requires_host_shell: boolean;
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
+            /** Resume Checkpoint Id */
+            resume_checkpoint_id?: string | null;
+            /** Retained Asset Ids */
+            retained_asset_ids?: string[];
+            /** Retrieval Project Paths */
+            retrieval_project_paths?: string[];
+            /** Retrieved Material */
+            retrieved_material?: string[];
+            review?: components["schemas"]["ReviewConfiguration"];
+            review_observation?: components["schemas"]["ReviewObservation"];
+            /** Settled Status */
+            settled_status?: ("completed" | "failed" | "cancelled") | null;
+            /** Settled Stop Reason */
+            settled_stop_reason?: string | null;
+            /** Skill Version Refs */
+            skill_version_refs?: string[];
+            /**
+             * Source Surface
+             * @default agent-run
+             * @enum {string}
+             */
+            source_surface: "agent-run" | "chat" | "lab";
+            /** Starting Snapshot Id */
+            starting_snapshot_id?: string | null;
+            /** @default queued */
+            status: components["schemas"]["RunLifecycleStatus"];
+            /** Stop Reason */
+            stop_reason?: string | null;
+            structured_output?: components["schemas"]["StructuredOutputResult"] | null;
+            /** System Prompt */
+            system_prompt?: string | null;
+            /** Task */
+            task: string;
+            /** Thread Id */
+            thread_id?: string | null;
+            /** Tool Authorization Grants */
+            tool_authorization_grants?: {
+                [key: string]: components["schemas"]["MatchedPermissionGrant"];
+            };
+            /** Tool Authorizations */
+            tool_authorizations?: {
+                [key: string]: string;
+            };
+            /** Tool Invocations */
+            tool_invocations?: {
+                [key: string]: unknown;
+            }[];
+            /** @default live-tool */
+            tool_mode: components["schemas"]["ToolMode"];
+            /**
+             * Tool Mode Label
+             * @default live-tool
+             */
+            tool_mode_label: string;
+            /** Tool Outcomes */
+            tool_outcomes?: {
+                [key: string]: components["schemas"]["ToolOutcome"];
+            };
+            /** Updated At */
+            updated_at: string;
+            /**
+             * Work Mode
+             * @default work
+             * @enum {string}
+             */
+            work_mode: "work" | "plan";
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
         /** AgentSetupCreateRequest */
         AgentSetupCreateRequest: {
             configuration?: components["schemas"]["SetupConfiguration"];
@@ -3462,7 +3709,7 @@ export interface components {
             continuity?: components["schemas"]["ChatContinuity"] | null;
             /** Created At */
             created_at: string;
-            current_run?: components["schemas"]["AgentRun"] | null;
+            current_run?: components["schemas"]["AgentRunOperational"] | null;
             /** Current Run Id */
             current_run_id?: string | null;
             deploy_health?: components["schemas"]["ChatDeployHealth"] | null;
@@ -5671,6 +5918,8 @@ export interface components {
             }[];
             /** Presented Tools */
             presented_tools?: string[];
+            /** Privacy Fingerprint */
+            privacy_fingerprint?: string | null;
             /**
              * Purpose
              * @default work
@@ -7214,7 +7463,7 @@ export interface components {
             /** Interrupt Run Id */
             interrupt_run_id?: string | null;
             recovery?: components["schemas"]["InteractionRecovery"] | null;
-            run?: components["schemas"]["AgentRun"] | null;
+            run?: components["schemas"]["AgentRunOperational"] | null;
             /** Tool Origins */
             tool_origins?: components["schemas"]["InteractionToolOrigin"][];
         };
@@ -7228,6 +7477,7 @@ export interface components {
 export type SchemaAgentBudgets = components['schemas']['AgentBudgets'];
 export type SchemaAgentEvent = components['schemas']['AgentEvent'];
 export type SchemaAgentRun = components['schemas']['AgentRun'];
+export type SchemaAgentRunOperational = components['schemas']['AgentRunOperational'];
 export type SchemaAgentSetupCreateRequest = components['schemas']['AgentSetupCreateRequest'];
 export type SchemaAgentSetupDuplicateRequest = components['schemas']['AgentSetupDuplicateRequest'];
 export type SchemaAgentSetupUpdateRequest = components['schemas']['AgentSetupUpdateRequest'];
@@ -7626,7 +7876,9 @@ export interface operations {
     };
     list_agent_runs_v1_agent_runs_get: {
         parameters: {
-            query?: never;
+            query?: {
+                view?: "diagnostic" | "operational";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7639,7 +7891,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AgentRun"][] | components["schemas"]["AgentRunOperational"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7679,7 +7940,9 @@ export interface operations {
     };
     get_agent_run_v1_agent_runs__run_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                view?: "diagnostic" | "operational";
+            };
             header?: never;
             path: {
                 run_id: string;
@@ -7694,7 +7957,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AgentRun"] | components["schemas"]["AgentRunOperational"];
                 };
             };
             /** @description Validation Error */

@@ -1122,7 +1122,7 @@ class ModelManager:
         profile_ids = profile_ids or set()
         try:
             with open_application_store(self.paths) as app_store:
-                runs = app_store.list_runs()
+                runs = app_store.list_runs_operational()
         except Exception as exc:
             raise ManagerError("Could not check active model work. Retry after the local state store is available.", code="model_dependencies_unavailable", status_code=503) from exc
         consumers: list[LifecycleConsumer] = []

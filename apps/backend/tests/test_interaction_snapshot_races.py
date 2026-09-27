@@ -13,6 +13,7 @@ from workbench_backend.interaction.projection import event, partial_archive
 from workbench_backend.interaction.service import InteractionService
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore
+from workbench_backend.state.run_views import AgentRunOperational
 
 
 class SnapshotHarness:
@@ -20,13 +21,13 @@ class SnapshotHarness:
         self.run = run
         self.lock = threading.RLock()
 
-    def get_run(self, _run_id):
+    def get_run_operational(self, _run_id):
         with self.lock:
-            return self.run.model_copy(deep=True)
+            return AgentRunOperational.model_validate(self.run.model_dump(exclude={"model_requests"}))
 
     def projection_run(self, _run_id):
         with self.lock:
-            return self.run.model_dump(mode="json")
+            return self.get_run_operational(_run_id).model_dump(mode="json")
 
     @contextmanager
     def run_read_lock(self, _run_id):

@@ -89,7 +89,7 @@ class RetainedAssetService:
 
     def register_verified_output(self, request: RegisterVerifiedOutputRequest) -> RetainedAsset:
         conversation = self._require_session(request.session_id)
-        run = self.app_store.get_run(request.run_id)
+        run = self.app_store.get_run_operational(request.run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found.")
         if run.id not in conversation.run_ids:

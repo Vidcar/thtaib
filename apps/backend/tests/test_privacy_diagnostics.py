@@ -364,10 +364,13 @@ class PrivacyDiagnosticsApiTests(unittest.TestCase):
         conn = sqlite3.connect(self.paths.application_db)
         try:
             row = conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()
+            captures = conn.execute("SELECT payload FROM run_diagnostic_captures WHERE run_id = ? ORDER BY position", (run_id,)).fetchall()
         finally:
             conn.close()
         self.assertIsNotNone(row)
-        return json.loads(row[0])
+        operational = json.loads(row[0])
+        self.assertNotIn("model_requests", operational)
+        return {**operational, "model_requests": [json.loads(capture[0]) for capture in captures]}
 
     def test_default_redaction_applies_to_persisted_model_requests(self) -> None:
         body = self._start()
@@ -455,10 +458,13 @@ class FailedTransportDiagnosticsApiTests(unittest.TestCase):
         conn = sqlite3.connect(self.paths.application_db)
         try:
             row = conn.execute("SELECT payload FROM runs WHERE id = ?", (run_id,)).fetchone()
+            captures = conn.execute("SELECT payload FROM run_diagnostic_captures WHERE run_id = ? ORDER BY position", (run_id,)).fetchall()
         finally:
             conn.close()
         self.assertIsNotNone(row)
-        return json.loads(row[0])
+        operational = json.loads(row[0])
+        self.assertNotIn("model_requests", operational)
+        return {**operational, "model_requests": [json.loads(capture[0]) for capture in captures]}
 
     def test_failed_harness_run_persists_redacted_transport_evidence(self) -> None:
         started = self.client.post(

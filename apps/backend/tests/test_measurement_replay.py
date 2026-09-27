@@ -464,8 +464,8 @@ class MeasurementReplayTests(unittest.TestCase):
         snapshot = json.dumps(before["snapshot"], sort_keys=True)
         seq = before["seq"]
         started = time.perf_counter()
-        with patch("workbench_backend.agents.harness.apply_run_diagnostic_policy") as policy, \
-                patch.object(self.store, "put_run") as put_run:
+        with patch("workbench_backend.knowledge.diagnostics.apply_run_diagnostic_policy") as policy, \
+                patch.object(self.store, "put_execution_run") as put_run:
             for _index in range(200):
                 harness._observe_interaction(self.run, event("messages", {
                     "event": "content-block-delta", "index": 0,
@@ -504,8 +504,8 @@ class MeasurementReplayTests(unittest.TestCase):
         self.assertEqual(self.store.get_run(self.run.id).status, AgentRunStatus.completed)
         harness._startup_reconciled = True
         harness._runs[self.run.id] = self.run
-        with patch("workbench_backend.agents.harness.apply_run_diagnostic_policy") as policy:
+        with patch("workbench_backend.knowledge.diagnostics.apply_run_diagnostic_policy") as policy:
             projected = harness.projection_run(self.run.id)
         policy.assert_not_called()
-        self.assertEqual(projected["model_requests"], [])
+        self.assertNotIn("model_requests", projected)
         self.assertEqual(projected["status"], "completed")

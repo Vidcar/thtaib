@@ -672,7 +672,7 @@ class ChatHarnessTests(unittest.TestCase):
         conversation_id = self._create()["id"]
         store = self.app.state.app_store
         chat = self.app.state.chat
-        original_put_run = store.put_run
+        original_put_run = store.put_execution_run
         original_reconcile = chat._reconcile_terminal_assistant
         results: list[ChatConversationView] = []
         errors: list[BaseException] = []
@@ -688,7 +688,7 @@ class ChatHarnessTests(unittest.TestCase):
         ) -> tuple[ChatConversation, str | None]:
             result, terminal = original_reconcile(conversation, run)
             if not reconciled_running.is_set():
-                self.assertEqual(chat.harness.get_run(first_id).status.value, "running")
+                self.assertEqual(chat.harness.get_run_operational(first_id).status.value, "running")
                 self.assertEqual([item.role for item in result.transcript], ["user"])
                 reconciled_running.set()
                 if not admit_next.wait(timeout=10):
@@ -703,7 +703,7 @@ class ChatHarnessTests(unittest.TestCase):
 
         worker = threading.Thread(target=start_next)
         try:
-            with patch.object(store, "put_run", side_effect=observe_completion):
+            with patch.object(store, "put_execution_run", side_effect=observe_completion):
                 first_id = self._start(conversation_id, "user A")["current_run_id"]
                 wait_for_generate_hold()
                 with patch.object(chat, "_reconcile_terminal_assistant", side_effect=pause_after_reconciliation):
@@ -788,7 +788,8 @@ class ChatHarnessTests(unittest.TestCase):
         hold.set()
 
         self.assertEqual(sorted(status for status, _body in results), [200, 409], results)
-        accepted = next(body for _status, body in results if body["current_run"] is not None)
+        accepted = next(body for status, body in results if status == 200)
+        self.assertIsNotNone(accepted["current_run"])
         rejected = next(body for status, body in results if status == 409)
         self.assertEqual(rejected["code"], "chat_turn_active")
         fetched = self.client.get(f"/v1/chat/conversations/{conversation['id']}").json()

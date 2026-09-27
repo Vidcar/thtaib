@@ -22,7 +22,7 @@ from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.schemas import ModelBundle, RuntimeManifest
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.checkpointer import copy_checkpoints_for_backup
-from workbench_backend.state.store import ApplicationStore
+from workbench_backend.state.store import ApplicationStore, SCHEMA_VERSION
 
 BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
@@ -653,7 +653,26 @@ def _verify_application_schema_compatible(root: Path) -> None:
     """Validate and migrate supported application.sqlite schemas before restore activation."""
     store: ApplicationStore | None = None
     try:
+        conn = sqlite3.connect(str(WorkbenchPaths(root).application_db))
+        try:
+            tables = {item[0] for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            previous = conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone() if "schema_meta" in tables else None
+            if previous is not None and previous[0] == SCHEMA_VERSION:
+                # Current schemas must already contain the authoritative capture
+                # rows. Opening the store first would recreate a missing table
+                # or ignore leftover embedded history and hide the corruption.
+                if "run_diagnostic_captures" not in tables:
+                    raise BackupError("Application database is missing diagnostic capture storage.", code="application_db_invalid")
+                row = conn.execute(
+                    "SELECT id FROM runs WHERE json_type(payload, '$.model_requests') IS NOT NULL LIMIT 1"
+                ).fetchone()
+                if row is not None:
+                    raise BackupError("Application database has unmigrated diagnostic capture history.", code="application_db_invalid")
+        finally:
+            conn.close()
         store = ApplicationStore(WorkbenchPaths(root))
+    except BackupError:
+        raise
     except ValueError as exc:
         if "different runtime version" not in str(exc):
             raise BackupError(
@@ -679,6 +698,25 @@ def _verify_application_linkages(path: Path) -> None:
     conn.row_factory = sqlite3.Row
     try:
         tables = {item[0] for item in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "runs" in tables and "run_diagnostic_captures" in tables:
+            row = conn.execute(
+                "SELECT run_id FROM run_diagnostic_captures WHERE json_valid(payload) = 0 LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                raise BackupError("Application database has invalid diagnostic capture JSON.", code="application_db_invalid")
+            row = conn.execute(
+                """SELECT captures.run_id FROM run_diagnostic_captures AS captures
+                   LEFT JOIN runs ON runs.id = captures.run_id
+                   WHERE runs.id IS NULL LIMIT 1"""
+            ).fetchone()
+            if row is not None:
+                raise BackupError("Application database has diagnostic captures linked to a missing run.", code="application_linkage_invalid")
+            row = conn.execute(
+                """SELECT run_id FROM run_diagnostic_captures GROUP BY run_id
+                   HAVING MIN(position) != 0 OR MAX(position) + 1 != COUNT(*) LIMIT 1"""
+            ).fetchone()
+            if row is not None:
+                raise BackupError("Application database has an incomplete diagnostic capture sequence.", code="application_linkage_invalid")
         if "runs" in tables and "run_checkpoints" in tables:
             row = conn.execute(
                 """

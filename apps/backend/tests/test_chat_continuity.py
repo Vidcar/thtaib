@@ -120,6 +120,17 @@ class ChatContinuityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def _diagnostic_run(self, chat: dict[str, Any], client: TestClient | None = None) -> dict[str, Any]:
+        self.assertNotIn("model_requests", chat["current_run"])
+        response = (client or self.client).get(
+            f"/v1/agent-runs/{chat['current_run_id']}", params={"view": "diagnostic"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        run = response.json()
+        self.assertEqual(run["id"], chat["current_run"]["id"])
+        self.assertTrue(run["model_requests"])
+        return run
+
     def _knowledge(self, content: str = "permitted durable knowledge") -> dict[str, Any]:
         response = self.client.post(
             "/v1/knowledge/entries",
@@ -172,7 +183,7 @@ class ChatContinuityTests(unittest.TestCase):
             "completed",
             finished["current_run"].get("error"),
         )
-        harness_text = flatten_model_request_text(finished["current_run"])
+        harness_text = flatten_model_request_text(self._diagnostic_run(finished))
         adapter_text = flatten_received_prompts()
         self.assertIn(UNIQUE_DETAIL, harness_text)
         self.assertIn(UNIQUE_DETAIL, adapter_text)
@@ -231,7 +242,7 @@ class ChatContinuityTests(unittest.TestCase):
             finished["current_run"].get("error"),
         )
         self.assertEqual(finished["thread_id"], thread_id)
-        self.assertIn(UNIQUE_DETAIL, flatten_model_request_text(finished["current_run"]))
+        self.assertIn(UNIQUE_DETAIL, flatten_model_request_text(self._diagnostic_run(finished, client)))
         self.assertIn(UNIQUE_DETAIL, flatten_received_prompts())
 
     def test_fresh_conversation_resets_active_context_and_retains_project_knowledge(self) -> None:
@@ -260,7 +271,7 @@ class ChatContinuityTests(unittest.TestCase):
             finished["current_run"].get("error"),
         )
         self.assertEqual(finished["current_run"]["thread_id"], fresh["thread_id"])
-        harness_text = flatten_model_request_text(finished["current_run"])
+        harness_text = flatten_model_request_text(self._diagnostic_run(finished))
         adapter_text = flatten_received_prompts()
         self.assertNotIn(UNIQUE_DETAIL, harness_text)
         self.assertNotIn(UNIQUE_DETAIL, adapter_text)
@@ -297,7 +308,7 @@ class ChatContinuityTests(unittest.TestCase):
             finished["current_run"].get("error"),
         )
         self.assertEqual(finished["current_run"]["deployment_id"], self.other_deployment_id)
-        self.assertIn(UNIQUE_DETAIL, flatten_model_request_text(finished["current_run"]))
+        self.assertIn(UNIQUE_DETAIL, flatten_model_request_text(self._diagnostic_run(finished)))
 
     def test_history_edit_is_display_only_and_does_not_reset_thread(self) -> None:
         conversation = self._create()
@@ -350,7 +361,7 @@ class ChatContinuityTests(unittest.TestCase):
             "completed",
             finished["current_run"].get("error"),
         )
-        harness_text = flatten_model_request_text(finished["current_run"])
+        harness_text = flatten_model_request_text(self._diagnostic_run(finished))
         self.assertIn(UNIQUE_DETAIL, harness_text)
         transcript_blob = "\n".join(item["content"] for item in finished["transcript"])
         self.assertNotIn(UNIQUE_DETAIL, transcript_blob)

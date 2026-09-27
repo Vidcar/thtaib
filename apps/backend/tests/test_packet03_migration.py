@@ -14,7 +14,7 @@ from workbench_backend.chat.schemas import ChatMessage
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.migrate import open_application_store
-from workbench_backend.state.store import ApplicationStore, json_chat_root
+from workbench_backend.state.store import ApplicationStore, SCHEMA_VERSION, json_chat_root
 
 from tests.support import close_workbench_sqlite
 
@@ -174,7 +174,7 @@ class Packet03ApplicationMigrationTests(unittest.TestCase):
                 assert loaded_run is not None
                 self.assertEqual(loaded_run.thread_id, "thread_v1")
                 self.assertEqual(loaded_run.checkpoint_ids, ["checkpoint_v1"])
-                self.assertEqual(_schema_version(copied_paths.application_db), "2")
+                self.assertEqual(_schema_version(copied_paths.application_db), SCHEMA_VERSION)
                 self.assertEqual(copied_paths.checkpoints_db.read_bytes(), checkpoint_before)
             finally:
                 close_workbench_sqlite(store)

@@ -190,7 +190,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
     application.state.compatibility = CompatibilityService(application.state.manager.paths)
     def _lookup_run(run_id: str):
         try:
-            return application.state.harness.get_run(run_id)
+            return application.state.harness.get_run_lifecycle(run_id)
         except HarnessError:
             return None
 
@@ -242,7 +242,8 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         assets_provider=lambda: application.state.assets,
     )
     def _active_work():
-        active = [run.id for run in application.state.harness.list_runs() if is_run_lifecycle_live(run.status)]
+        active = [run.id for run in application.state.harness.list_run_lifecycle(
+            statuses={"queued", "running", "cancel_requested"}, details=False)]
         active.extend(job.id for job in application.state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"})
         return active
     def _reconcile_for_backup():
@@ -250,7 +251,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         # Persist terminal history/assets here without advancing any queue.
         for conversation in application.state.chat.store.list_conversations(include_archived=True):
             if conversation.current_run_id:
-                run = application.state.harness.get_run(conversation.current_run_id)
+                run = application.state.harness.get_run_operational(conversation.current_run_id)
                 if not is_run_lifecycle_live(run.status):
                     application.state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
         application.state.chat.reconcile_saved_queue_on_startup()

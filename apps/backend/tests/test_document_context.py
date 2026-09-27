@@ -207,12 +207,16 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         started = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
             "task": "Find the receipt", "attachment_ids": [asset.id]})
         self.assertEqual(started.status_code, 200, started.text)
-        run = chat_test_support.wait_for_chat(self.client, chat["id"])["current_run"]
+        finished = chat_test_support.wait_for_chat(self.client, chat["id"])
+        run = finished["current_run"]
         self.assertEqual(run["status"], "completed", run.get("error"))
         self.assertTrue(run["effective_setup"]["retrieval_presented"])
         self.assertNotIn("ORCHID delivery receipt", str(run["content_blocks"]))
         self.assertIsNone(run["effective_setup"]["loaded_embedding_deployment_id"])
-        self.assertIn('lexical', str(run["model_requests"][-1]["messages"]))
+        self.assertNotIn("model_requests", run)
+        diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={"view": "diagnostic"})
+        self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
+        self.assertIn('lexical', str(diagnostic.json()["model_requests"][-1]["messages"]))
         self.scripted = ScriptedChatModel([AIMessage(content="No documents selected now.")])
         removed = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={
             "task": "Continue after removing every document", "document_asset_ids": []})
@@ -248,7 +252,10 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
         read = chat_test_support.wait_for_chat(self.client, chat["id"])
         self.assertEqual(read["current_run"]["retained_asset_ids"], [asset.id])
         self.assertEqual(read["current_run"]["status"], "completed", read["current_run"].get("error"))
-        self.assertIn("ORCHID-PRIVATE-RECEIPT", str(read["current_run"]["model_requests"][-1]["messages"]))
+        self.assertNotIn("model_requests", read["current_run"])
+        diagnostic = self.client.get(f'/v1/agent-runs/{read["current_run_id"]}', params={"view": "diagnostic"})
+        self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
+        self.assertIn("ORCHID-PRIVATE-RECEIPT", str(diagnostic.json()["model_requests"][-1]["messages"]))
         self.scripted = ScriptedChatModel([AIMessage(content="Selection removed.")])
         removed = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "Continue without documents", "document_asset_ids": [], "presented_tools": []})
         self.assertEqual(removed.status_code, 200, removed.text)

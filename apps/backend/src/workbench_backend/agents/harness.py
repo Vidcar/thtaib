@@ -129,10 +129,8 @@ from workbench_backend.inference.connection_errors import (
 from workbench_backend.inference.ids import new_id, utc_now
 from workbench_backend.inference.schemas import Deployment
 from workbench_backend.inference.service import ModelManager
-from workbench_backend.knowledge.diagnostics import (
-    apply_run_diagnostic_policy,
-    capture_settings_for_paths,
-)
+from workbench_backend.knowledge.diagnostics import capture_settings_for_paths
+from workbench_backend.state.run_views import AgentRunOperational, RunLifecycleProjection
 from workbench_backend.knowledge.schemas import (
     ContextCaptureSettings,
     KnowledgeRefs,
@@ -219,29 +217,66 @@ class HarnessService:
 
     def list_runs(self) -> list[AgentRun]:
         self._reconcile_startup_once()
-        with self._lock:
-            stored = {item.id: item for item in self.store.list_runs()}
-            for run in self._runs.values():
-                stored[run.id] = run.model_copy(deep=True)
-            return [self._expose_run(item) for item in stored.values()]
+        return [self.get_run(item.id) for item in self.list_run_lifecycle()]
 
     def get_run(self, run_id: str) -> AgentRun:
+        """Explicit diagnostic inspection; privacy work never holds execution locks."""
+        self._reconcile_startup_once()
+        operational = self.get_run_operational(run_id)
+        captures = self.store.normalize_run_diagnostics(run_id)
+        if captures is None:
+            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+        return AgentRun.model_validate({
+            **operational.model_dump(mode="python"), "model_requests": captures,
+        })
+
+    def get_run_operational(self, run_id: str) -> AgentRunOperational:
         self._reconcile_startup_once()
         with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
                 return self._expose_run(run)
-            stored = self.store.get_run(run_id)
-            if stored is None:
-                raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
-            self._runs.setdefault(run_id, stored)
-            return self._expose_run(stored)
+        stored = self.store.get_run_operational(run_id)
+        if stored is None:
+            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+        return stored
+
+    def list_runs_operational(self) -> list[AgentRunOperational]:
+        self._reconcile_startup_once()
+        stored = {item.id: item for item in self.store.list_runs_operational()}
+        with self._lock:
+            stored.update({run.id: self._expose_run(run) for run in self._runs.values()})
+        return list(stored.values())
+
+    def get_run_lifecycle(self, run_id: str, *, details: bool = True) -> RunLifecycleProjection:
+        self._reconcile_startup_once()
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                return _lifecycle_projection(run, details=details)
+        stored = self.store.get_run_lifecycle(run_id, details=details)
+        if stored is None:
+            raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
+        return stored
+
+    def list_run_lifecycle(self, *, statuses: set[str] | None = None,
+                           details: bool = True) -> list[RunLifecycleProjection]:
+        self._reconcile_startup_once()
+        stored = {item.id: item for item in self.store.list_run_lifecycle(statuses=statuses, details=details)}
+        with self._lock:
+            for run in self._runs.values():
+                if statuses is not None and run.status not in statuses:
+                    stored.pop(run.id, None)
+                else:
+                    stored[run.id] = _lifecycle_projection(run, details=details)
+        return list(stored.values())
 
     @contextmanager
     def run_read_lock(self, run_id: str) -> Iterator[None]:
         """Keep a derived history read atomic with deletion of its run."""
         with self._lock:
-            self._require_run(run_id)
+            if run_id not in self._runs and self.store.get_run_lifecycle(run_id, details=False) is None:
+                raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
             yield
 
     @contextmanager
@@ -254,7 +289,7 @@ class HarnessService:
         """
         with self._lock:
             for run_id in run_ids:
-                run = self._runs.get(run_id) or self.store.get_run(run_id)
+                run = self._runs.get(run_id) or self.store.get_run_lifecycle(run_id)
                 worker = self._threads.get(run_id)
                 if (run is not None and is_run_lifecycle_live(run.status)) or (worker is not None and worker.is_alive()):
                     raise HarnessError(
@@ -285,7 +320,7 @@ class HarnessService:
             memory = {run.id: run for run in self._runs.values()}
             preparing = [token for token, (path, owner_thread) in self._project_admissions.items()
                          if owner_thread != threading.get_ident() and workspace is not None and roots_overlap(path, workspace.path)]
-        stored = {item.id: item for item in self.store.list_runs()}
+        stored = {item.id: item for item in self.store.list_run_lifecycle()}
         for run_id, run in memory.items():
             stored_run = stored.get(run_id)
             if stored_run is not None and not is_run_lifecycle_live(stored_run.status):
@@ -301,7 +336,7 @@ class HarnessService:
     def checkpoint_state_for_run(self, run: AgentRun, checkpoint_id: str) -> dict[str, Any]:
         # Use the execution graph's exact framework topology and state schema,
         # but never initialize inference, retrieval, or materialized storage.
-        agent = self._create_compiled_agent(run.model_copy(deep=True), [], None, inspection_only=True)
+        agent = self._create_compiled_agent(_copy_execution_run(run), [], None, inspection_only=True)
         snapshot = _graph_checkpoint_snapshot(agent, run.thread_id, checkpoint_id)
         return {"values": dict(snapshot.values), "next": tuple(snapshot.next)}
 
@@ -352,7 +387,7 @@ class HarnessService:
         for token, (path, owner_thread) in self._project_admissions.items():
             if owner_thread != threading.get_ident() and roots_overlap(project_path, path):
                 return {"run_id": None, "thread_id": None, "task": "Starting another task", "project_path": path, "uncertain": False}
-        stored = {item.id: item for item in self.store.list_runs()}
+        stored = {item.id: item for item in self.store.list_run_lifecycle()}
         stored.update(self._runs)
         for run in root_runs(list(stored.values())):
             if run.project_path and holds_project(run) and roots_overlap(project_path, run.project_path):
@@ -409,7 +444,7 @@ class HarnessService:
         if not thread_id:
             return
         with self._lock:
-            stored = {item.id: item for item in self.store.list_runs()}
+            stored = {item.id: item for item in self.store.list_run_lifecycle(thread_id=thread_id)}
             stored.update(self._runs)
             for run in root_runs(list(stored.values())):
                 if run.thread_id != thread_id:
@@ -427,12 +462,12 @@ class HarnessService:
         """Inspect first, then record explicit acceptance without replay or a success claim."""
         self._reconcile_startup_once()
         with self._lock:
-            run = self._runs.get(run_id) or self.store.get_run(run_id)
+            run = self._runs.get(run_id) or self.store.get_execution_run(run_id)
             if run is None:
                 raise HarnessError("Unknown task.", code="run_missing", status_code=404)
             if is_run_lifecycle_live(run.status) or run.finalization_phase is not None:
                 raise HarnessError("Wait for this task to stop before reviewing its effects.", code="run_still_live", status_code=409)
-            updated = run.model_copy(deep=True)
+            updated = _copy_execution_run(run)
             reconcile_effects(updated)
             now = utc_now()
             acknowledged = []
@@ -446,7 +481,7 @@ class HarnessService:
             updated.events.append(AgentEvent(at=now, kind="effects_acknowledged", detail={"call_ids": acknowledged, "replayed": False}))
             self._persist_and_notify(updated)
             self._runs[run_id] = updated
-            return updated.model_copy(deep=True)
+            return self._expose_run(updated)
 
     def start(self, request: AgentStartRequest, *, instruction_snapshot: list[InstructionLayer] | None = None, helper_snapshot: list[FrozenHelperSelection] | None = None, execution_snapshot: FrozenExecutionSelection | None = None) -> AgentRun:
         self.require_thread_effects_confirmed(request.thread_id)
@@ -887,7 +922,7 @@ class HarnessService:
         with self._lock:
             self._threads[run.id] = thread
         thread.start()
-        return run.model_copy(deep=True)
+        return self._expose_run(run)
 
     def close(self, *, timeout: float = 15.0) -> None:
         """Join worker threads so SQLite files can be closed on Windows."""
@@ -921,7 +956,7 @@ class HarnessService:
                     status_code=409,
                 )
             if run.parent_run_id:
-                parent = self._runs.get(run.parent_run_id) or self.store.get_run(run.parent_run_id)
+                parent = self._runs.get(run.parent_run_id) or self.store.get_execution_run(run.parent_run_id)
                 if parent is not None and any(item.run_id == run.id for item in parent.child_runs) and is_run_lifecycle_live(parent.status):
                     return self.cancel(parent.id)
             cancel = self._cancels.get(run_id)
@@ -971,11 +1006,11 @@ class HarnessService:
                 self._threads[run_id] = worker
             worker.start()
         with self._lock:
-            return run.model_copy(deep=True)
+            return self._expose_run(run)
 
     def _browser_root(self, thread_id: str) -> AgentRun | None:
         with self._lock:
-            stored = {run.id: run for run in self.store.list_runs()}
+            stored = {run.id: run for run in self.store.list_run_lifecycle(thread_id=thread_id, roots_only=True)}
             stored.update(self._runs)
             roots = [run for run in stored.values() if run.thread_id == thread_id
                 and not run.parent_run_id and is_run_lifecycle_live(run.status)]
@@ -984,7 +1019,7 @@ class HarnessService:
             if len(roots) != 1:
                 raise HarnessError("This chat has overlapping owned tasks; stop them before taking browser control.",
                     code="browser_task_ownership", status_code=409)
-            return self._runs.setdefault(roots[0].id, roots[0])
+            return self._require_run(roots[0].id)
 
     def _control_for_run(self, run: AgentRun) -> ExecutionControl:
         with self._lock:
@@ -994,7 +1029,7 @@ class HarnessService:
 
     async def request_browser_takeover(self, thread_id: str) -> None:
         """Close root/helper dispatch authority before yielding to the caller."""
-        run = self._browser_root(thread_id)
+        run = await asyncio.to_thread(self._browser_root, thread_id)
         if run is None:
             return
         control = self._control_for_run(run)
@@ -1002,7 +1037,7 @@ class HarnessService:
         await asyncio.to_thread(control.wait_for_browser_settle)
 
     async def release_browser_takeover(self, thread_id: str, observation: str) -> None:
-        run = self._browser_root(thread_id)
+        run = await asyncio.to_thread(self._browser_root, thread_id)
         if run is None:
             return
         control = self._control_for_run(run)
@@ -1024,7 +1059,7 @@ class HarnessService:
 
     async def invalidate_browser_state(self, thread_id: str, observation: str) -> None:
         """Close/Reset invalidate old page proposals, preserving native approvals."""
-        run = self._browser_root(thread_id)
+        run = await asyncio.to_thread(self._browser_root, thread_id)
         if run is not None:
             self._control_for_run(run).invalidate_browser_state(observation)
 
@@ -1042,7 +1077,7 @@ class HarnessService:
             run = self._require_run(run_id)
             pending = run.pending_interrupt
             if run.parent_run_id:
-                parent = self._runs.get(run.parent_run_id) or self.store.get_run(run.parent_run_id)
+                parent = self._runs.get(run.parent_run_id) or self.store.get_execution_run(run.parent_run_id)
                 if parent is not None and any(item.run_id == run.id for item in parent.child_runs):
                     raise HarnessError("Respond to this helper's approval in its parent conversation.", code="child_approval_owned_by_parent", status_code=409,
                         details={"parent_run_id": parent.id})
@@ -1126,7 +1161,7 @@ class HarnessService:
         with self._lock:
             self._threads[run_id] = worker
         worker.start()
-        return self.get_run(run_id)
+        return self.get_run_operational(run_id)
 
     def _execute(self, run_id: str) -> None:
         with self._lock:
@@ -1725,7 +1760,7 @@ class HarnessService:
             return pending
         with self._lock:
             for activity in run.child_runs:
-                child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+                child = self._runs.get(activity.run_id) or self.store.get_execution_run(activity.run_id)
                 owned = child.pending_interrupt if child is not None else None
                 if owned is not None and owned.interrupt_id == pending.interrupt_id and owned.namespace == activity.namespace:
                     return owned
@@ -1970,7 +2005,7 @@ class HarnessService:
                 run.housekeeping_generation[purpose] = measured
 
     def _commit_terminal_run(self, run: AgentRun, status: AgentRunStatus, stop_reason: str) -> None:
-        settled_copy = run.model_copy(deep=True)
+        settled_copy = _copy_execution_run(run)
         self._merge_latest_generation_sample(run)
         run.finalization_phase = None
         run.activity_phase = None
@@ -1985,7 +2020,7 @@ class HarnessService:
         run.updated_at = run.finished_at
         # Inline children have no detached worker once their owning graph ends.
         for activity in run.child_runs:
-            child = self._runs.get(activity.run_id) or self.store.get_run(activity.run_id)
+            child = self._runs.get(activity.run_id) or self.store.get_execution_run(activity.run_id)
             if child is None and activity.status not in {"completed", "failed", "cancelled"}:
                 activity.status = "cancelled" if status == AgentRunStatus.cancelled else "failed"
                 activity.error = (None if status == AgentRunStatus.cancelled else
@@ -2027,7 +2062,7 @@ class HarnessService:
             # Restore the saved settlement so a later read can retry without
             # publishing a second terminal event or recapturing the project.
             try:
-                saved = self.store.get_run(run.id)
+                saved = self.store.get_execution_run(run.id)
             except Exception:  # noqa: BLE001 - keep the original persistence error
                 saved = None
             if saved is None or is_run_lifecycle_live(saved.status):
@@ -2125,28 +2160,13 @@ class HarnessService:
     def _observe_interaction(self, run: AgentRun, event: dict[str, Any] | None, *, telemetry: bool = False) -> None:
         if self._interaction_observer is None:
             return
-        # Token and measurement updates must not scan or copy captured model
-        # requests. That copy was slower than generation and left Chat on Running
-        # after llama.cpp had already finished the call.
-        if event is not None or telemetry:
-            self._interaction_observer(run, event, **({"telemetry": True} if telemetry else {}))
-            return
-        safe = apply_run_diagnostic_policy(run, self._capture_settings())
-        self._interaction_observer(safe, None)
+        # Publication never carries captures. Its serializer excludes them at
+        # source; diagnostic inspection and capture creation own privacy policy.
+        self._interaction_observer(run, event, **({"telemetry": True} if telemetry else {}))
 
     def projection_run(self, run_id: str) -> dict[str, Any]:
         """Run fields for a live display frame, without captured model requests."""
-        self._reconcile_startup_once()
-        with self._lock:
-            run = self._runs.get(run_id)
-            if run is None:
-                stored = self.store.get_run(run_id)
-                if stored is None:
-                    raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
-                run = stored
-            data = run.model_dump(mode="json")
-        data["model_requests"] = []
-        return data
+        return self.get_run_operational(run_id).model_dump(mode="json")
 
     async def _close_native_stream(self, stream: Any) -> None:
         if stream is None:
@@ -2494,7 +2514,7 @@ class HarnessService:
         run = self._runs.get(run_id)
         if run is not None:
             return run
-        stored = self.store.get_run(run_id)
+        stored = self.store.get_execution_run(run_id)
         if stored is None:
             raise HarnessError("Unknown agent run", code="run_missing", status_code=404)
         return self._runs.setdefault(run_id, stored)
@@ -2505,7 +2525,12 @@ class HarnessService:
         with self._lock:
             if self._startup_reconciled:
                 return
-            for run in self.store.list_runs():
+            for lifecycle in self.store.list_run_lifecycle():
+                if not is_run_lifecycle_live(lifecycle.status) and lifecycle.id not in self._terminal_retries:
+                    continue
+                run = self.store.get_execution_run(lifecycle.id)
+                if run is None:
+                    continue
                 if not is_run_lifecycle_live(run.status):
                     if run.id in self._terminal_retries:
                         # A failed follow-up read may have hidden a successful
@@ -2625,9 +2650,7 @@ class HarnessService:
         return any(channel == "__interrupt__" for _task, channel, _value in latest.pending_writes or [])
 
     def _persist(self, run: AgentRun) -> None:
-        sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
-        run.model_requests = sanitized.model_requests
-        self.store.put_run(run.model_copy(deep=True))
+        self.store.put_execution_run(run)
 
     def _persist_and_notify(self, run: AgentRun, *, telemetry: bool = False) -> None:
         if not telemetry:
@@ -2647,12 +2670,9 @@ class HarnessService:
             return self._knowledge_provider().get_config().context_captures
         return capture_settings_for_paths(self.manager.paths)
 
-    def _expose_run(self, run: AgentRun) -> AgentRun:
-        sanitized = apply_run_diagnostic_policy(run, self._capture_settings())
-        if sanitized.model_requests != run.model_requests:
-            run.model_requests = sanitized.model_requests
-            self.store.put_run(run.model_copy(deep=True))
-        return sanitized.model_copy(deep=True)
+    def _expose_run(self, run: AgentRun) -> AgentRunOperational:
+        return AgentRunOperational.model_validate(
+            run.model_dump(mode="python", exclude={"model_requests"}))
 
     def _capture_starting_snapshot(
         self,
@@ -2703,6 +2723,21 @@ def _resolved_project_path(project_path: str | None) -> str | None:
             status_code=400,
         )
     return str(path)
+
+
+def _copy_execution_run(run: AgentRun | AgentRunOperational) -> AgentRun:
+    """Copy mutable operational state without recopying immutable capture bodies."""
+    copied = AgentRun.model_validate(run.model_dump(exclude={"model_requests"}))
+    copied.model_requests = list(getattr(run, "model_requests", ()))
+    return copied
+
+
+def _lifecycle_projection(run: AgentRun, *, details: bool) -> RunLifecycleProjection:
+    fields = set(RunLifecycleProjection.model_fields) if details else {
+        "id", "status", "thread_id", "workspace_id", "project_path",
+        "parent_run_id", "source_surface", "created_at", "updated_at",
+    }
+    return RunLifecycleProjection.model_validate(run.model_dump(include=fields))
 
 
 def _pending_from_chunk(chunk: Any) -> Any:

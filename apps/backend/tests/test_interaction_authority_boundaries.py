@@ -22,6 +22,7 @@ from workbench_backend.inference.ids import utc_now
 from workbench_backend.interaction.service import InteractionService
 from workbench_backend.paths import WorkbenchPaths
 from workbench_backend.state.store import ApplicationStore
+from workbench_backend.state.run_views import AgentRunOperational
 
 
 class _FakeHarness:
@@ -29,10 +30,10 @@ class _FakeHarness:
         self.run = run
         self.resume_calls: list[tuple[str, Any, dict[str, Any]]] = []
 
-    def get_run(self, run_id: str) -> AgentRun:
+    def get_run_operational(self, run_id: str) -> AgentRunOperational:
         if run_id != self.run.id:
             raise AssertionError(f'unexpected run id {run_id}')
-        return self.run
+        return AgentRunOperational.model_validate(self.run.model_dump(exclude={"model_requests"}))
 
     def resume_interrupt(self, run_id: str, request: Any, **kwargs: Any) -> AgentRun:
         if not kwargs.get('require_interrupt_identity'):

@@ -115,7 +115,7 @@ class AssetLifecycleService:
         conversation = self.app_store.get_conversation(conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found.")
-        runs = [run for run_id in conversation.run_ids if (run := self.app_store.get_run(run_id)) is not None]
+        runs = [run for run_id in conversation.run_ids if (run := self.app_store.get_run_lifecycle(run_id, details=False)) is not None]
         blockers = [
             {"kind": "run", "id": run.id, "status": run.status.value}
             for run in runs
@@ -155,7 +155,7 @@ class AssetLifecycleService:
         conversation = self.app_store.get_conversation(conversation_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found.")
-        runs = [run for run_id in conversation.run_ids if (run := self.app_store.get_run(run_id)) is not None]
+        runs = [run for run_id in conversation.run_ids if (run := self.app_store.get_run_lifecycle(run_id, details=False)) is not None]
         shared_run_ids = self._surviving_run_ids(conversation.id, {run.id for run in runs})
         deletable_run_ids = [run.id for run in runs if run.id not in shared_run_ids]
         guard = self._harness_provider().deleting_idle_runs(deletable_run_ids) if self._harness_provider else nullcontext()
@@ -183,7 +183,7 @@ class AssetLifecycleService:
 
     def collect_verified_outputs_for_run(self, session_id: str, run_id: str) -> OutputCollectionResult:
         conversation = self.app_store.get_conversation(session_id)
-        run = self.app_store.get_run(run_id)
+        run = self.app_store.get_run_operational(run_id)
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found.")
         if run is None:
@@ -263,7 +263,7 @@ class AssetLifecycleService:
             ):
                 if value:
                     threads.add(value)
-        for run in self.app_store.list_runs():
+        for run in self.app_store.list_run_lifecycle(details=False):
             if run.id in excluding_run_ids:
                 continue
             if run.thread_id:

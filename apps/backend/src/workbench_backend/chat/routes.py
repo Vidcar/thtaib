@@ -108,7 +108,7 @@ def enqueue_conversation_turn(
         coordinator = getattr(request.app.state, "chat_coordinator", None)
         if coordinator is not None:
             try:
-                predecessor = request.app.state.harness.get_run(body.queue_after_run_id)
+                predecessor = request.app.state.harness.get_run_operational(body.queue_after_run_id)
             except HarnessError:
                 pass
             else:

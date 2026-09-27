@@ -11,7 +11,7 @@ from workbench_backend.agents.context import observe_context
 from workbench_backend.agents.effective_setup import resolve_effective_setup
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL, PLAN_INSTRUCTIONS, PLAN_TOOLS, require_setup_capabilities
 from workbench_backend.agents.host_shell import approval_mode_instructions
-from workbench_backend.agents.schemas import AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria, ToolOutcome
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, AgentStartRequest, ChildRunActivity, ReviewObservation, TaskCriteria, ToolOutcome
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
 from workbench_backend.agents.setup_schemas import ReviewConfiguration
 from workbench_backend.errors import HarnessError
@@ -37,7 +37,7 @@ def _saved_child_message_identities(child):
 
 def _child_run(owner, parent, snapshot, call_id, payload):
     child_id = _child_run_id(parent, snapshot, call_id)
-    existing = owner.store.get_run(child_id)
+    existing = owner.store.get_execution_run(child_id)
     if existing is not None:
         return existing
     config = snapshot.configuration
@@ -86,7 +86,9 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         system_prompt=setup.system_prompt, task=task, content_blocks=model_content_blocks, output_schema=None,
         tool_count=len(presented), continuing_thread=False)
     now = utc_now()
-    child = parent.model_copy(deep=True, update=dict(id=child_id, parent_run_id=parent.id,
+    # Exclude the parent's captured history before copying; a helper owns new
+    # captures rather than inheriting or inspecting the parent's diagnostics.
+    child = AgentRun.model_validate(parent.model_dump(exclude={"model_requests"})).model_copy(update=dict(id=child_id, parent_run_id=parent.id,
         deployment_id=deployment.id, task=task, input_message_id=None, content_blocks=None,
         agent_setup_id=snapshot.agent_id, agent_setup_version_id=snapshot.version_id,
         presented_tools=presented, enabled_tools=[name for name in parent.enabled_tools if name != "task"],

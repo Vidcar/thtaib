@@ -11,16 +11,20 @@ is retained when diagnostic bodies are discarded or expired.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from typing import Any
 
 from workbench_backend.agents.schemas import AgentRun, ModelRequestCapture
 from workbench_backend.knowledge.redaction import redact_structured
+from workbench_backend.knowledge import redaction
 from workbench_backend.knowledge.schemas import ContextCaptureSettings
 from workbench_backend.knowledge.store import KnowledgeStore
 from workbench_backend.paths import WorkbenchPaths
 
 POLICY_DISCARD_GAP = "diagnostic content discarded by Knowledge capture policy"
 POLICY_EXPIRED_GAP = "diagnostic content expired by Knowledge capture retention"
+POLICY_VERSION = 1
 
 
 def capture_settings_for_paths(paths: WorkbenchPaths) -> ContextCaptureSettings:
@@ -33,14 +37,13 @@ def apply_run_diagnostic_policy(
     *,
     now: datetime | None = None,
 ) -> AgentRun:
-    """Return a copy whose model_requests follow the Knowledge capture policy."""
+    """Normalize changed captures without copying operational run state."""
 
     moment = now or datetime.now(timezone.utc).replace(microsecond=0)
-    updated = run.model_copy(deep=True)
-    updated.model_requests = [
-        apply_capture_policy(item, settings, now=moment) for item in updated.model_requests
-    ]
-    return updated
+    captures = [apply_capture_policy(item, settings, now=moment) for item in run.model_requests]
+    if all(before is after for before, after in zip(run.model_requests, captures, strict=True)):
+        return run
+    return run.model_copy(update={"model_requests": captures})
 
 
 def apply_capture_policy(
@@ -54,12 +57,15 @@ def apply_capture_policy(
     moment = now or datetime.now(timezone.utc).replace(microsecond=0)
     expires_at = _expires_at(capture, settings, moment)
     expired = expires_at is not None and expires_at <= moment
+    fingerprint = _privacy_fingerprint(capture, settings, expires_at, expired)
+    if capture.privacy_fingerprint == fingerprint:
+        return capture
     discarded_mode = settings.redaction_mode == "discard"
     drop_content = discarded_mode or expired
     gaps = _policy_gaps(capture.capture_gaps, discarded_mode, expired)
 
     if drop_content:
-        return capture.model_copy(
+        updated = capture.model_copy(
             update={
                 "instructions": None,
                 "messages": [],
@@ -73,14 +79,17 @@ def apply_capture_policy(
                 "retention_seconds": settings.retention_seconds,
                 "expires_at": expires_at.isoformat() if expires_at else None,
                 "retained": False,
-                "redacted": False,
+                "redacted": capture.redacted,
                 "discarded": discarded_mode,
                 "expired": expired,
-                "redacted_fields": [],
+                "redacted_fields": list(capture.redacted_fields),
             }
         )
+        return _with_fingerprint(updated, settings, expires_at, expired)
 
-    redacted_fields: list[str] = []
+    # Reapplying a changed policy must not erase prior redaction provenance just
+    # because the already-redacted text contains no remaining detector hit.
+    redacted_fields: list[str] = list(capture.redacted_fields)
     instructions, redacted_fields = _redact_text(capture.instructions, redacted_fields)
     messages, redacted_fields = _redact_value(capture.messages, redacted_fields)
     generation_settings, redacted_fields = _redact_value(
@@ -93,7 +102,7 @@ def apply_capture_policy(
     http_payloads, redacted_fields = _redact_value(capture.http_payloads, redacted_fields)
     failure, redacted_fields = _redact_value(capture.failure, redacted_fields)
     unique = list(dict.fromkeys(redacted_fields))
-    return capture.model_copy(
+    updated = capture.model_copy(
         update={
             "instructions": instructions,
             "messages": messages if isinstance(messages, list) else [],
@@ -117,6 +126,38 @@ def apply_capture_policy(
             "redacted_fields": unique,
         }
     )
+    return _with_fingerprint(updated, settings, expires_at, expired)
+
+
+def _privacy_fingerprint(
+    capture: ModelRequestCapture,
+    settings: ContextCaptureSettings,
+    expires_at: datetime | None,
+    expired: bool,
+) -> str:
+    # Hash the current content on every entry: a retained fingerprint alone
+    # cannot certify an object whose nested dictionaries were edited in place.
+    canonical = {
+        "capture": capture.model_dump(mode="json", exclude={"privacy_fingerprint"}),
+        "policy": settings.model_dump(mode="json"),
+        "policy_version": POLICY_VERSION,
+        "detector_version": redaction.DETECTOR_VERSION,
+        "detector_patterns": [(name, pattern.pattern, pattern.flags) for name, pattern in redaction.SECRET_PATTERNS],
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "expired": expired,
+    }
+    encoded = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _with_fingerprint(
+    capture: ModelRequestCapture,
+    settings: ContextCaptureSettings,
+    expires_at: datetime | None,
+    expired: bool,
+) -> ModelRequestCapture:
+    capture.privacy_fingerprint = _privacy_fingerprint(capture, settings, expires_at, expired)
+    return capture
 
 
 def _expires_at(

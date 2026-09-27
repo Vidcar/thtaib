@@ -6,7 +6,7 @@ import json
 from fastapi import APIRouter, Request, BackgroundTasks
 from pydantic import BaseModel
 
-from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
+from workbench_backend.contracts.lifecycle import LIVE_RUN_LIFECYCLE_STATUSES, is_run_lifecycle_live
 from workbench_backend.errors import WorkbenchError
 from workbench_backend.state.backup import BackupError
 from workbench_backend.state.checkpointer import submit_checkpoint_task
@@ -35,19 +35,17 @@ def attention(request: Request) -> list[AttentionItem]:
     state = request.app.state
     conversations = state.chat.store.list_conversations(include_archived=True)
     wanted = {"failed", "queued", "running", "cancel_requested"}
-    if state.preferences.preferences().success_notifications:
+    success_notifications = state.preferences.preferences().success_notifications
+    if success_notifications:
         wanted.add("completed")
     items = []
-    for run_id, _status in state.app_store.run_ids_with_status(wanted):
-        run = state.app_store.get_run(run_id)
-        if run is None:
-            continue
+    for run in state.app_store.list_run_attention(wanted):
         pending = run.pending_interrupt
         kind = (
-            "question" if pending and any(action.name == "ask_user" for action in pending.action_requests)
+            "question" if pending and "ask_user" in pending.action_names
             else "approval" if pending
             else "failure" if run.status == "failed"
-            else "success" if run.status == "completed" and state.preferences.preferences().success_notifications
+            else "success" if run.status == "completed" and success_notifications
             else None
         )
         if kind is None or run.status == "cancel_requested":
@@ -82,7 +80,7 @@ def claim_notification(request: Request, identity: str) -> dict:
 @router.get("/work")
 def active_work(request: Request) -> dict:
     state = request.app.state
-    runs = [run.id for run in state.harness.list_runs() if is_run_lifecycle_live(run.status)]
+    runs = [run.id for run in state.harness.list_run_lifecycle(statuses=set(LIVE_RUN_LIFECYCLE_STATUSES), details=False)]
     imports = [job.id for job in state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"}]
     return {"active_run_ids": runs, "active_import_ids": imports}
 
@@ -100,14 +98,14 @@ def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict
         for conversation in state.chat.store.list_conversations(include_archived=True):
             with state.chat.store.conversation_lock(conversation.id):
                 state.chat._pause_queue(state.chat._require(conversation.id), "cancelled")
-        live = [run for run in state.harness.list_runs() if is_run_lifecycle_live(run.status)]
+        live = state.harness.list_run_lifecycle(statuses=set(LIVE_RUN_LIFECYCLE_STATUSES), details=False)
         for run in live:
             state.harness.cancel(run.id)
         imports = [job for job in state.manager.imports.list_jobs() if job.status.value in {"pending", "running", "stopping"}]
         for job in imports:
             state.manager.imports.cancel_job(job.id)
         deadline = time.monotonic() + 15
-        while (any(is_run_lifecycle_live(state.harness.get_run(run.id).status) for run in live)
+        while (any(is_run_lifecycle_live(state.harness.get_run_lifecycle(run.id, details=False).status) for run in live)
                or any(job.status.value in {"pending", "running", "stopping"} for job in state.manager.imports.list_jobs())):
             if time.monotonic() >= deadline:
                 raise WorkbenchError("Some work has not confirmed stopping. Keep the app open and inspect its status.", code="shutdown_pending", status_code=409)

@@ -18,6 +18,7 @@ app.whenReady().then(async () => {
     await js(`${button("Take control")}.click()`);
     await wait(`document.querySelector('.browser-viewport').getAttribute('aria-disabled')==='false'`);
     await click();
+    await wait(`document.activeElement===document.querySelector('.browser-viewport') && window.fixture.calls.some(call=>call.body?.action?.event==='up')`);
     await js(`(()=>{const data=new DataTransfer();data.setData('text/plain','native fixture paste');document.activeElement.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,clipboardData:data}))})()`);
     await wait(`window.fixture.calls.some(call=>call.body?.action?.type==='text' && call.body.action.text==='native fixture paste')`);
     for (const width of [1040, 600, 360]) {
