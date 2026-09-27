@@ -563,14 +563,20 @@ def _reasoning_replay_scope(deployment: Deployment) -> ReasoningReplayScope:
     return "full_history" if descriptor.default_value is True else "current_turn"
 
 
-def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:
+def image_model_profile(deployment: Deployment, per_request: SettingsBag | None = None) -> ModelProfile:
+    """Resolve only image capabilities for this exact deployment/request setup."""
+
     props = deployment.server_props
     image_input = (
         (props is None or props.modalities.get("vision") is not False)
         and capability_support(deployment, "image", per_request) == "passed"
     )
     tool_image = image_input and capability_support(deployment, "tool_image", per_request) == "passed"
-    profile = ModelProfile(image_inputs=image_input, image_tool_message=tool_image)
+    return ModelProfile(image_inputs=image_input, image_tool_message=tool_image)
+
+
+def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelProfile:
+    profile = image_model_profile(deployment, per_request)
     capacity = deployment.server_props.n_ctx if deployment.server_props is not None else None
     if not isinstance(capacity, int) or capacity <= 0:
         return profile

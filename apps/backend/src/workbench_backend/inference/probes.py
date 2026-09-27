@@ -9,7 +9,9 @@ import struct
 import zlib
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.constants import TAG_NOSTREAM
 from openai import BadRequestError
 
 from workbench_backend.errors import HarnessError
@@ -103,6 +105,11 @@ def run_capability_probe(manager: Any, deployment_id: str, request: CapabilityPr
         wire: list[dict[str, Any]] = []
         try:
             model = model_factory(deployment, per_request=bag, timeout=60.0, capture_sink=wire)
+            if isinstance(model, BaseChatModel):
+                # Probe calls inherit the active tool's graph callbacks. Tag the
+                # owned model so bindings and both halves of a tool exchange stay
+                # internal, while cleanup still closes the original client.
+                model.tags = [*(model.tags or []), TAG_NOSTREAM]
             _exercise(model, request.capability, record)
         except Exception as exc:
             # A rejected request is a failure for this exact setup. Network,

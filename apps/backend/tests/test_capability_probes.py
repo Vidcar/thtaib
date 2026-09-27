@@ -14,8 +14,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
-from pydantic import ValidationError
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langgraph.constants import END, START, TAG_NOSTREAM
+from langgraph.graph import MessagesState, StateGraph
+from pydantic import Field, ValidationError
 
 from workbench_backend.inference.capabilities import (
     CapabilityEvidence,
@@ -148,6 +152,37 @@ class InterruptedStreamModel:
         yield AIMessageChunk(content="READY ")
         yield AIMessageChunk(content="so far")
         raise RuntimeError("connection lost mid-stream")
+
+
+class ProbeStreamModel(BaseChatModel):
+    """Deterministic responses through the installed model callback machinery."""
+
+    responses: list[AIMessage]
+    requests: list[tuple[list[Any], dict[str, Any]]] = Field(default_factory=list)
+    closed: bool = False
+
+    @property
+    def _llm_type(self) -> str:
+        return "probe-stream-fixture"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        response = self.responses[len(self.requests)]
+        self.requests.append((messages, kwargs))
+        return ChatResult(generations=[ChatGeneration(message=response)])
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        response = self._generate(messages, stop, run_manager, **kwargs).generations[0].message
+        for index, block in enumerate(response.content):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=[{**block, "index": index}]))
+        yield ChatGenerationChunk(message=AIMessageChunk(
+            content=[], tool_calls=response.tool_calls, chunk_position="last",
+        ))
+
+    def bind_tools(self, tools, **kwargs):
+        return self.bind(tools=tools, **kwargs)
+
+    def close(self):
+        self.closed = True
 
 
 class CapabilityProbeTests(unittest.TestCase):
@@ -385,6 +420,91 @@ class CapabilityProbeTests(unittest.TestCase):
                 self.assertEqual(len(model.exchanges), 2)
                 self.assertEqual(model.forced_calls, 2)
                 self.assertEqual(len(model.asserted_tools), 1)
+
+    def test_automatic_image_probes_stay_private_in_installed_graph_streams(self) -> None:
+        def reply(text: str, *, tool_call: bool = False) -> AIMessage:
+            return AIMessage(
+                content=[
+                    {"type": "reasoning", "reasoning": "private-probe-thought"},
+                    {"type": "text", "text": text},
+                ],
+                tool_calls=[{"name": "workbench_probe_echo", "args": {"text": "image-check"},
+                             "id": f"probe-{text}"}] if tool_call else [],
+            )
+
+        for stream_kind in ("messages", "v3"):
+            with self.subTest(stream_kind=stream_kind):
+                deployment = self.deployment.model_copy(deep=True)
+                deployment.id = f"deploy-{stream_kind}"
+                self.store.put_deployment(deployment)
+                manager = FakeManager(self.store, deployment)
+                manager.get_deployment = self.store.get_deployment
+                per_request = {"temperature": 0.2, "max_tokens": 256}
+                models = [
+                    ProbeStreamModel(responses=[reply("red"), reply("blue")], tags=["probe-diagnostic"]),
+                    ProbeStreamModel(responses=[reply("call-red", tool_call=True), reply("red"),
+                                               reply("call-blue", tool_call=True), reply("blue")]),
+                ]
+                ordinary = ProbeStreamModel(responses=[AIMessage(content=[
+                    {"type": "reasoning", "reasoning": "ordinary-agent-thought"},
+                    {"type": "text", "text": "Actual screenshot is ready."},
+                ])])
+                records = []
+
+                def probe(_manager, identifier, request):
+                    model = models[len(records)]
+
+                    def factory(actual_deployment, **kwargs):
+                        self.assertIs(actual_deployment, deployment)
+                        self.assertEqual(kwargs["per_request"].applied, per_request)
+                        self.assertEqual(kwargs["timeout"], 60.0)
+                        self.assertIsInstance(kwargs["capture_sink"], list)
+                        return model
+
+                    record = run_capability_probe(manager, identifier, request, model_factory=factory)
+                    records.append(record)
+                    return record
+
+                def screenshot_node(state):
+                    self.assertTrue(ensure_tool_image_support(manager, deployment.id, per_request, probe=probe))
+                    return {"messages": [ordinary.invoke(state["messages"])]}
+
+                builder = StateGraph(MessagesState)
+                builder.add_node("screenshot", screenshot_node)
+                builder.add_edge(START, "screenshot")
+                builder.add_edge("screenshot", END)
+                graph = builder.compile()
+                payload = {"messages": [HumanMessage(content="Describe the screenshot.")]}
+                if stream_kind == "messages":
+                    visible = [message.model_dump(mode="json") for message, _metadata
+                               in graph.stream(payload, stream_mode="messages")]
+                else:
+                    visible = list(graph.stream_events(payload, version="v3"))
+                rendered = json.dumps(visible, default=lambda value: value.model_dump(mode="json"))
+                self.assertIn("ordinary-agent-thought", rendered)
+                self.assertIn("Actual screenshot is ready.", rendered)
+                for private_content in ("private-probe-thought", "workbench_probe_echo", "image-check", '"red"', '"blue"'):
+                    self.assertNotIn(private_content, rendered)
+                self.assertEqual([record.status for record in records], ["passed", "passed"])
+                self.assertEqual([len(model.requests) for model in models], [2, 4])
+                self.assertTrue(all(model.closed for model in models))
+                self.assertEqual(models[0].tags, ["probe-diagnostic", TAG_NOSTREAM])
+                self.assertEqual(ordinary.tags, None)
+                for record in records:
+                    self.assertEqual(record.fingerprint, setup_fingerprint(deployment, per_request))
+                    self.assertEqual([sample["answer"] for sample in record.observations["samples"]], ["red", "blue"])
+                tool_model = models[1]
+                for index, colour in ((1, "red"), (3, "blue")):
+                    messages, kwargs = tool_model.requests[index]
+                    self.assertNotIn("tool_choice", kwargs, "probe answers must remain free to answer")
+                    self.assertIsInstance(messages[-1], ToolMessage)
+                    self.assertEqual(messages[-1].tool_call_id, messages[-2].tool_calls[0]["id"])
+                    self.assertEqual(messages[-1].content_blocks[0]["base64"], _image_fixture(colour).partition(",")[2])
+                persisted = self.store.list_capability_evidence(deployment.id)
+                self.assertEqual([item["id"] for item in persisted], [record.id for record in records])
+                restored = self.store.get_deployment(deployment.id)
+                self.assertEqual(capability_support(restored, "image", per_request), "passed")
+                self.assertEqual(capability_support(restored, "tool_image", per_request), "passed")
 
     def test_cleanup_failure_still_saves_rerunnable_inconclusive_evidence(self) -> None:
         class CloseFailure:
