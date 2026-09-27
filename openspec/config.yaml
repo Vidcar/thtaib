@@ -4,7 +4,11 @@ context: |
   Local AI Workbench (thtaib) is a Windows-first, local-first desktop for using,
   exploring and understanding models, Chat, Lab and visual Workflows. The product
   exposes powerful capabilities with progressive disclosure and reports requested,
-  applied, observed and unverified values honestly.
+  applied, observed and unverified values honestly. Main specs include accepted
+  integration constraints; they are not proof of implementation. Active change
+  tasks record remaining delivery. Lab replacement belongs to lab-workbench;
+  workflow/registry and media delivery belongs to consolidate-product-contract;
+  initial catalogue failure recovery belongs to startup-catalogue.
 
   The application has one FastAPI backend (`apps/backend`) and one Electron/React
   desktop (`apps/desktop`). Reuse upstream mechanisms: Hugging Face for model

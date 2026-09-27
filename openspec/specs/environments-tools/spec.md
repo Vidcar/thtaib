@@ -4,6 +4,8 @@
 
 Specify how agent tools interact with real files, shell, browser, graphical, MCP, interpreter, and creative-job capabilities while preserving declared environments, permissions, approvals, cancellation, and side-effect truth.
 
+MCP, public web search, host shell and visual browser/Windows tools have implementation paths. ComfyUI and speech connections and their user controls remain outstanding in [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Optional adapter requirements do not imply that an adapter is installed or available.
+
 ## Requirements
 
 ### Requirement: ENV-001 - Execute against the declared real environment

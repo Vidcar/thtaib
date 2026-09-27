@@ -528,7 +528,7 @@ Automatic capability checks SHALL retain their outcomes as setup evidence withou
 - **THEN** the image remains withheld and the page text remains available without presenting visual inspection as verified
 - **AND** internal test output remains absent from the conversation.
 
-### Requirement: MOD-032 - Bound managed model residency
+### Requirement: MOD-035 - Bound managed model residency
 
 The application SHALL save one positive maximum-loaded-model count for managed llama.cpp configurations. A fresh installation SHALL default to one. Every loaded launch configuration SHALL consume one slot, even when two configurations use the same weights; the count SHALL remain distinct from each model's parallel request slots. Connected endpoints SHALL remain outside this owned count. A different or unloaded requested model SHALL load on explicit model selection or on the first submitted turn that needs an unloaded selection. Re-selecting the exact healthy loaded configuration SHALL not request another model start. Successive turns on an already loaded configuration SHALL avoid reading the complete weight file again while still checking its saved identity; an evicted configuration SHALL undergo full bundle verification before it loads again. Application launch, chat restoration, passive status reads and navigation SHALL NOT warm or load a model. Loading SHALL show pending, loaded or failed state, and MUST NOT silently substitute weights, quantization, device or settings.
 

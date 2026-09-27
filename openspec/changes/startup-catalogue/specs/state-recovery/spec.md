@@ -1,22 +1,31 @@
-## ADDED Requirements
+# Spec Delta
 
-### Requirement: STATE-TOKEN - Keep tokens only while a turn is unfinished
+## MODIFIED Requirements
 
-A turn that is still running SHALL keep its token rows so a disconnect can continue. When that turn's answer is in the saved transcript, the token rows and older snapshots for that turn SHALL be removed. The latest display snapshot and the execution checkpoint SHALL remain. Archive and removing a project SHALL NOT remove these rows. Deleting a chat SHALL still remove that chat's rows. Existing finished chats SHALL be collapsed once, and the freed database space SHALL be reclaimed. The collapse SHALL NOT delete the chats.
+### Requirement: STATE-022 - Keep long interaction histories responsive
 
-#### Scenario: A saved answer drops its token rows
+Routine live polling and append SHALL use durable scalar cursor and display-cutover metadata rather than decoding the full transcript. Replay and recovery work SHALL not block the HTTP event loop. In-progress message reconstruction SHALL happen once per subscriber join and then advance incrementally. Checkpoint linkage SHALL visit bounded history pages and stop at the saved prior boundary. While a run is active, its raw ordered interaction events SHALL remain available; after completion, token deltas MAY be compacted into ordered final message replay while retaining tool, lifecycle, and namespace identities. Only deliberate compaction gaps SHALL trigger a bridge.
 
-- WHEN a chat turn is saved into the transcript
-- THEN its token rows and older snapshots are removed
-- AND the chat, its latest snapshot, and its checkpoint remain
+#### Scenario: Long conversation with a late subscriber
 
-#### Scenario: Archive and remove-project do not delete the log
+- **WHEN** a long conversation is live and a subscriber joins for tool or nested detail
+- **THEN** it receives available ordered matching activity without a full transcript decode on every poll
+- **AND** unrelated event-loop work remains responsive.
 
-- WHEN a person archives a chat or removes a project from the sidebar
-- THEN the chat and its saved answer remain available
-- AND those actions do not by themselves delete the token log
+#### Scenario: Completed replay after compaction
 
-#### Scenario: A running turn can still resume
+- **WHEN** a completed run's token deltas have been compacted
+- **THEN** final message replay remains ordered with retained tool, lifecycle and namespace events
+- **AND** a missing legacy detail is reported as unavailable.
 
-- WHEN a reply is still running and the desktop reconnects
-- THEN continuation uses the token rows written for that live turn
+#### Scenario: Saved turn retains ordered completion without raw token history
+
+- **WHEN** an unfinished turn settles and its terminal display projection is durably published
+- **THEN** its finished token deltas MAY be compacted into ordered final message records, retaining tool, nested, lifecycle and partial outcomes, the latest display snapshot and execution checkpoint
+- **AND** an active subscriber or prepared reconnect seed MUST NOT lose its visible answer during compaction.
+
+#### Scenario: Catalogue-first token maintenance
+
+- **WHEN** startup maintenance finds a substantial finished interaction log after the first catalogue request
+- **THEN** it MAY compact settled message deltas and reclaim freed database space without deleting chats or loading a model
+- **AND** archive or removing a project MUST NOT independently delete interaction records.

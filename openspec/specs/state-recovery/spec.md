@@ -163,8 +163,6 @@ Already-registered faulty legacy projections SHALL be repaired narrowly and idem
 
 ### Requirement: STATE-009 - Retain authorized files and verify actual outputs
 
-This requirement SHALL retain the verified `repair-local-interaction-boundaries` guarantees: repeated-text legacy chronology and multiplicity, stable or deterministic display identity, narrow idempotent repair, preserved later/partial/tool output and display-edit replay cutovers, with no hidden-message resurrection or execution replay. That prerequisite does not implement retained uploads, deletion or backup features.
-
 One retained-file/artifact contract SHALL identify origin, session/project/access scope, storage ownership, content type, size/hash, observation time and source run/tool where applicable. Mutable project references SHALL be distinct from immutable retained upload/output snapshots; access and mutable identity are rechecked on open/reuse. Old path-only records remain unverified until checked. Tool arguments/model-written paths are attempted operations, not artifacts: successful result and required file observations establish outputs. Scratch/history/offloads are not project outputs.
 
 Chat SHALL support text/code picker and drag/drop, actual content/encoding/limit validation, removable staging and attachment-only turns. Sent originals are retained session-scoped by default without a project or automatic knowledge promotion. Fitting source-labelled content SHALL enter current-user input even with tools off. Larger material requires authorized scoped reading or an actionable capacity outcome, not silent truncation or tool/host authority. Copy bytes only for deliberate retention; persist attachment provenance across reopening.
@@ -188,8 +186,6 @@ A shared Library SHALL browse retained attachments and verified outputs across a
 
 ### Requirement: STATE-010 - Delete deliberately while preserving shared dependencies
 
-This requirement SHALL retain the verified `repair-local-interaction-boundaries` guarantees: repeated-text legacy chronology and multiplicity, stable or deterministic display identity, narrow idempotent repair, preserved later/partial/tool output and display-edit replay cutovers, with no hidden-message resurrection or execution replay. That prerequisite does not implement retained uploads, deletion or backup features.
-
 Conversations, sent originals and verified retained outputs SHALL remain until deliberate dependency-aware deletion. Diagnostics SHALL have separately inspectable collection/retention controls; staging cleanup must not erase submitted assets. Deletion SHALL preview affected/retained sessions, runs, branches, checkpoints, scratch, originals, outputs and diagnostics; coordinate active work and use supported checkpoint APIs. Surviving branches, Lab cases and Workflows retain needed shared content. Project source files, committed knowledge, remote copies and earlier backups/exports MUST NOT be incidentally deleted. Unlink, archive, delete and diagnostic cleanup have distinct effects; secure physical erasure or complete forgetting MUST NOT be claimed.
 
 #### Scenario: Shared asset deletion
@@ -198,8 +194,6 @@ Conversations, sent originals and verified retained outputs SHALL remain until d
 - **THEN** the preview and cleanup preserve required references and state accurately what remains, including external/backup copies.
 
 ### Requirement: STATE-011 - Back up manually and restore to a clean verified destination
-
-This requirement SHALL retain the verified `repair-local-interaction-boundaries` guarantees: repeated-text legacy chronology and multiplicity, stable or deterministic display identity, narrow idempotent repair, preserved later/partial/tool output and display-edit replay cutovers, with no hidden-message resurrection or execution replay. That prerequisite does not implement retained uploads, deletion or backup features.
 
 The system SHALL provide readable conversation export and a separate on-demand versioned application backup; no automatic backup schedule is required or activated. Backup SHALL consistently capture application records, compatible checkpoints, retained assets and linkage through verified snapshot/quiescence handling, with manifests/integrity checks. Exclude credentials by default, flag sensitive content and distinguish included bytes from external project/model references.
 
@@ -238,7 +232,7 @@ A skill SHALL be importable as one skill file or as a folder or archive that con
 
 ### Requirement: STATE-020 - Extract supported documents without a source-inspection journey
 
-A retained text, code, CSV, JSON, text-bearing PDF, or DOCX file SHALL be extractable locally. The result keeps the parser outcome: read, empty, encrypted, malformed, or unsupported. A scanned document without optical character recognition MUST NOT be described as understood. Accepted attachments SHALL remain available throughout their conversation until removed from future selection. Each submitted turn SHALL freeze its selected document identities; future catalogue injection SHALL remain compact and text SHALL be read on demand. Source links SHALL open the existing retained viewer at the available page/section/line. Search limits and match pagination SHALL be truthful; removal MUST NOT widen other conversations' access.
+A retained text, code, CSV, JSON, text-bearing PDF, or DOCX file SHALL be extractable locally. Accepted retained files SHALL keep their extraction outcome and parser provenance, distinguishing readable text from an empty or scanned document. Encrypted, malformed or unsupported uploads MAY be rejected before retention with an explicit unreadable reason; rejection MUST NOT be presented as successful extraction or invented text. A scanned document without optical character recognition MUST NOT be described as understood. Accepted attachments SHALL remain available throughout their conversation until removed from future selection. Each submitted turn SHALL freeze its selected document identities; future catalogue injection SHALL remain compact and text SHALL be read on demand. Source links SHALL open the existing retained viewer at the available page/section/line. Search limits and match pagination SHALL be truthful; removal MUST NOT widen other conversations' access.
 
 Document reading SHALL bound the complete serialized model-visible result, including citation metadata and escaping. Ready-to-copy immutable source links SHALL identify original content and exact locations; continuation SHALL cover remaining matches or clipped content without silently dropping it. Source identity SHOULD be shared within a result where it does not require the model to construct its own citation URL.
 
@@ -290,6 +284,18 @@ Routine live polling and append SHALL use durable scalar cursor and display-cuto
 - **WHEN** a completed run's token deltas have been compacted
 - **THEN** final message replay remains ordered with retained tool, lifecycle and namespace events
 - **AND** a missing legacy detail is reported as unavailable.
+
+#### Scenario: Saved turn retains ordered completion without raw token history
+
+- **WHEN** an unfinished turn settles and its terminal display projection is durably published
+- **THEN** its finished token deltas MAY be compacted into ordered final message records, retaining tool, nested, lifecycle and partial outcomes, the latest display snapshot and execution checkpoint
+- **AND** an active subscriber or prepared reconnect seed MUST NOT lose its visible answer during compaction.
+
+#### Scenario: Catalogue-first token maintenance
+
+- **WHEN** startup maintenance finds a substantial finished interaction log after the first catalogue request
+- **THEN** it MAY compact settled message deltas and reclaim freed database space without deleting chats or loading a model
+- **AND** archive or removing a project MUST NOT independently delete interaction records.
 
 ### Requirement: STATE-023 - Retain scoped visual captures and session truth
 

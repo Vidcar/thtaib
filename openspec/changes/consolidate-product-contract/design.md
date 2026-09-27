@@ -2,73 +2,40 @@
 
 ## Context
 
-See proposal.md. The current contract already loads Deep Agents, Monaco, and a file tree, and it draws Chat as a conversation with one dock. This change adds the screens and behaviour that lived only in older plan folders.
+The surviving contracts were synced previously. Everyday workspace, native skills/document reading, current Connections/public web and named helpers are implemented. The existing Agent run panel is a task runner; typed definition checks are not a full visual workflow runtime or versioned registry. There is no React Flow dependency or ComfyUI/speech connection kind yet.
 
 ## Goals / Non-Goals
 
-**Goals:**
-
-- Each new area has a specified screen: what is on it, what is empty, what a failure looks like, and what stays out of the way.
-- Lab, helpers, Workflows, and media reuse runners and engines that already exist. The app owns configuration, records, and presentation.
-- Later features have an obvious place to land.
-
-**Non-Goals:**
-
-- Building the screens in this change.
-- The memory-proposal review journey, a separate document-source inspection product, the skill walkthrough, or a claim that half-screen review was accepted. Document source links use the existing retained viewer under the current STATE-020 contract.
-- Shipping ComfyUI, Whisper, Kokoro, Piper, or a chart engine inside the app.
-- Requiring Inspect, RULER, voice cloning, always-on listening, or automatic schedules now.
-- Saying those later features are forbidden.
+Deliver the remaining workflow and media contracts using the existing backend and desktop. Retain accepted behaviour and newer Chat/model contracts. Lab is owned only by [lab-workbench](../lab-workbench/design.md). This change does not build the older llama-bench views/reservation, another execution engine/store, bundled media engines, schedules or voice cloning.
 
 ## Decisions
 
-### Screens are part of the requirement
+### Workflows are more than a canvas
 
-Every new area specifies the surface a person uses: layout, primary control, empty state, progress, failure, and the thing that must not be mixed in. Raw JSON, internal ids, and backend words are not the way through the main path. Technical detail opens on demand.
+Use the current configuration compiler as a starting point, without assuming its one resolved setup and cycle rejection satisfy per-step ownership or authored repeat. The application owns versioned definitions, typed configuration/workflow/data links, effective setup, validation, permissions and run attribution under `registry` and `agents-workflows`. LangGraph owns sequence, branch, parallel/join, repeat, agent/workflow invocation and durable interrupts. Deep Agents owns each agent step's model/tool loop. Exactly one owner controls a review cycle.
 
-Shared visual rules: the compact type and spacing already used by Chat, Windows light and dark, readable labels, visible focus, and help on hover or keyboard focus. A disclosure may use a chevron. Motion follows the system setting.
+React Flow presents a palette, canvas and selected-step inspector. Invalid steps show their reason before Run; history sits above the canvas. A placed grader is an explicit agent/workflow step. Imported arbitrary code is rejected. Use shared setup controls, named activity and existing approval/question cards. Retain API-020's approved detailed layout and separate technical versus Dave UX acceptance.
 
-### Lab is three screens, one reservation
+### Media extends Connections
 
-Measurements is the front door. A settings column shows the model, the probed context as a fact, and editable prompt sizes and depths. The chart is a loaded chart component with prefill and decode as separate series. Saved runs compare on that chart and can be deleted after confirmation.
+Add ComfyUI and speech kinds to the existing Settings connection list; MCP and public web do not need rebuilding. Keep credential values backend-only and write-only in the desktop. Disconnect preserves chats and past results. New media connection removal remains explicit and confirms the effect.
 
-The needle test is its own screen. Depths are chips the person can edit. The default set is 0, 25, 50, 75, and 100 percent, with room left to answer. Results are one row per depth, pass or fail, not a single blended score.
+Image generation calls a saved ComfyUI address and existing workflow, showing progress and retaining the returned image in the reply/library. It does not install ComfyUI or its nodes. Dictation and Speak use a saved OpenAI-compatible speech address, model and voice. Label non-local addresses before use; never send audio to an unsaved destination. Dictation leaves editable text unsent; Speak plays one finished answer. Engine names in ENV-024 are examples, not bundled products.
 
-Challenges are a short list on a third screen. Each card shows the task in plain language and the exact check. Adding one later is a new versioned card, not a new product. Vision, when the bundle already has it, uses the same image control as Chat.
+### Keep delivered work and later extensions coherent
 
-A reservation banner is visible on Chat, Workflows, and media while Lab holds the machine. It says what is running and how to stop it. It is not an error toast after the fact.
-
-llama-bench is the speed runner. The shared agent runs challenges. Inspect is not required.
-
-### Helpers and workflows are opt-in pictures
-
-The setup popover gains a Helpers section. Empty copy says this chat will not hand work to another agent. Chosen helpers are named rows, removable, with their model visible. The general-purpose helper stays off.
-
-The activity list uses the agent's name, a plain status (working, waiting for approval, waiting for the model, failed), and the same one-line tool rows. Child rows are indented under the parent. Stopping says what will stop.
-
-Changing or unloading a model opens a confirmation that names the conversation being kept and any work that must finish or be stopped. It does not happen from a silent menu.
-
-The Workflows screen is a canvas: a step palette, the graph, and an inspector for the selected step. Steps use ordinary names (Ask a person, Run an agent, Grade with a workflow, Branch, Repeat). Invalid steps show the reason on the step. Run and history sit above the canvas. Nothing on the palette runs until it is placed and the workflow is started.
-
-### Media is a configured plug
-
-Image generation calls a ComfyUI address the person saved, using a workflow they already created there. Progress and the image appear in the reply and in the library.
-
-Dictation and speech use an OpenAI-compatible base address, model, and voice. The settings screen states when that address is not on this machine. Dictation writes into the composer and leaves the message unsent. Speak is a button on a finished answer.
-
-Example engines named in the spec are plugs, not bundled products: whisper.cpp or faster-whisper, Kokoro, Piper, and later Chatterbox for cloning. MCP may point at the same engines.
+Named helpers remain opt-in under the current conversation authority. Current API-028 uses explicit safe model selection without a second confirmation; stop/unload protects active work. No older confirmation-only model-swap delta may overwrite it. Imported skills never execute scripts. Accepted documents retain parser outcomes; encrypted/malformed uploads may be explicitly rejected before retention. Later features extend the existing workflow, Lab or media boundaries rather than creating a parallel product.
 
 ## Risks / Trade-offs
 
-- [A beautiful chart becomes a custom drawing] → Require a loaded chart component and specify the series, axes, and comparison. Do not specify pixel geometry.
-- [Lab's three screens feel like three products] → One Lab destination, three clearly named views, one reservation.
-- [OpenAI-compatible speech is mistaken for a cloud requirement] → The default copy assumes a local address. A non-local address is labelled on the screen.
-- [Deleting the old plan folders drops nuance] → The deltas below carry the behaviour that is still wanted. Archived changes stay.
+- A frontend-only canvas would claim execution the backend cannot perform; validate and run real LangGraph steps before declaring it delivered.
+- A registry rewrite could duplicate current catalogues; extend existing definition/tool/configuration owners and prove one authority across consumers.
+- Missing media services must produce an unavailable/failure state without breaking text Chat or inventing output.
 
 ## Migration Plan
 
-Sync these deltas into `openspec/specs/`, then remove the seven open plan folders named in the proposal. No product-data migration. Rollback is restoring those folders from git and reverting the spec commit.
+The original old-plan consolidation and sync are complete. Implement the remaining tasks, preserve current main-spec scenarios during archive, and leave Lab's change independent. Keep any new durable records in the existing application database and use the established migration/recovery contract.
 
 ## Open Questions
 
-None. Voice cloning, always-on listening, phone-call conversation, RULER, Inspect, and schedules are deferred extensions, not open product choices.
+None. API-020 still requires an approved detailed workflow layout before substantial interface implementation; this documentation review does not provide that visual acceptance.

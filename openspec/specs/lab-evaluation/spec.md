@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Specify Lab as a measurements-first destination on this machine, with a separate memory test and a small expandable set of exact task challenges. Task replay stays distinct from speed measurements.
+Specify the existing case-capture, restore and recorded/live replay boundaries, plus the previous trait-testing contract. The shipped implementation has case replay and a small llama-bench invocation smoke path; the Measurements, Memory and Challenges screens and exclusive reservation described below were not delivered. [lab-workbench](../../changes/lab-workbench/proposal.md) is the sole pending replacement of LAB-001, LAB-005, LAB-006, LAB-008 and LAB-014 with loaded-server Performance, Memory and Challenges. Implement that change rather than building the older target in parallel; its deltas become the current contract on delivery and archive.
 
 ## Requirements
 

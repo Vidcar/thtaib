@@ -45,18 +45,6 @@ Dictation listens, then inserts editable text into the composer. It MUST NOT sen
 - **WHEN** the saved speech address is not on this machine
 - **THEN** the settings screen says it is not local before the person uses it.
 
-### Requirement: ENV-025 - Search the public web through one configured integration
-
-The product SHALL offer one configured public web search and one public page reader. Search snippets and fetched page text stay distinct, and each keeps its address, title, and the time it was read. A documentation connection does not count as this search. When no search is configured, Chat still works offline and the tool is absent rather than failing closed after the model has called it. Secrets for the search stay in the backend.
-
-The activity line for a search uses the same one-line pattern as other tools: the query, not a dump of the page.
-
-#### Scenario: Search then open a page
-
-- **WHEN** web search is configured and the agent searches and then reads one result
-- **THEN** the snippet and the page text are separate retained results
-- **AND** Chat without that configuration never offers the search tool.
-
 ### Requirement: ENV-026 - Keep connection secrets in the backend
 
 Tool connections, including MCP, web search, ComfyUI, and speech, SHALL be one list in Settings. Each row shows the name, the kind, and whether it is ready. The address and options are editable. A secret can be replaced and cleared. It is never shown again after it is saved. Removing a connection asks for confirmation and does not delete chats that used it. A connection that fails to start shows the reason on the row and leaves Chat usable.

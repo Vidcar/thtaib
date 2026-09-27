@@ -2,7 +2,7 @@
 
 ## Why
 
-The agent loop already runs through Deep Agents, but the original contract left room to rebuild file tools and a second planning list. Chat also painted Setup and conversation actions over the answer, and tool activity was a raw name plus JSON instead of the checklist and one-line rows people expect while work is happening. The later [Deep Agents simplification](../archive/2026-09-24-upgrade-deepagents-simplify-workbench/proposal.md) retired this change's custom file mutations and Changes view; the deltas here now match the current contract and cannot restore them.
+The agent loop already runs through Deep Agents, but the original contract left room to rebuild file tools and a second planning list. Chat also painted Setup and conversation actions over the answer, and tool activity was a raw name plus JSON instead of the checklist and one-line rows people expect while work is happening. The later [Deep Agents simplification](../2026-09-24-upgrade-deepagents-simplify-workbench/proposal.md) retired this change's custom file mutations and Changes view; the deltas here now match the current contract and cannot restore them.
 
 ## What Changes
 
