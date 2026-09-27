@@ -102,7 +102,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         embedding_deployment_id=config.embedding_deployment_id,
         events=[], model_requests=[], tool_invocations=[], related_files=[],
         completion=None, output_schema=None, structured_output=None, context_observation=observation,
-        generation_observation=None, housekeeping_context={}, housekeeping_generation={}, project_outline=None,
+        generation_observation=None, generation_history=[], housekeeping_context={}, housekeeping_generation={}, project_outline=None,
         tool_outcomes={}, failure=None, activity_phase=None, finalization_phase=None,
         settled_status=None, settled_stop_reason=None, retrieved_material=[],
         starting_snapshot_id=None, final_snapshot_id=None, pre_run_checkpoint_id=None,
@@ -155,8 +155,9 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
             try:
                 child = await asyncio.to_thread(admit)
                 async with owner._worker_tools_context(child) as external:
-                    graph = await asyncio.to_thread(owner._create_compiled_agent, child, sink, None,
-                        external_tools=external, execution_control=control, is_child=True, inspection_only=inspection_only)
+                    async with control.model_lock(child.deployment_id):
+                        graph = await asyncio.to_thread(owner._create_compiled_agent, child, sink, None,
+                            external_tools=external, execution_control=control, is_child=True, inspection_only=inspection_only)
                     stream = None
                     result = None
                     seen_messages = _saved_child_message_identities(child)

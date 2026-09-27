@@ -28,7 +28,8 @@ app.whenReady().then(async () => {
     assert.ok(readout.triggerRect.right <= readout.stopRect.left + 1, `${label} keeps activity and speed clear of Stop`);
     assert.deepEqual(tip.rows.map(row => [row.label, row.value]), [
       ["Input total", "265,586"], ["Cached input", "265,506"], ["Newly processed", "80"], ["Output", "1,915"],
-    ], `${label} retains all four complete labelled counts`);
+      ["Prompt processing", "42.21 s"], ["First output delay", "42.48 s"],
+    ], `${label} retains complete labelled counts and separate timings`);
     assert.equal(tip.context, "267,501 / 655,36041%", `${label} retains context total, capacity and percentage`);
     assert.ok(tip.horizontalOverflow <= 1, `${label} has no horizontal overflow: ${tip.horizontalOverflow}`);
     assert.ok(tip.rect.left >= 7 && tip.rect.right <= readout.viewportWidth - 7, `${label} stays inside the narrow viewport`);
@@ -83,6 +84,24 @@ app.whenReady().then(async () => {
     }
     assert.notEqual(layouts[0].tooltip.background, layouts[1].tooltip.background, "usage panel follows the dark/light palette");
     fs.writeFileSync(path.join(scratch, "usage-layouts.json"), JSON.stringify(layouts, null, 2));
+    await action("readoutHistory");
+    await wait("window.fixture.usage().trigger?.startsWith('Generating')", "history did not preserve current generation");
+    await js("document.activeElement?.blur();window.fixture.frame()");
+    await js("document.querySelector('.chat-usage-trigger').focus()");
+    await wait("document.querySelector('.usage-history summary')", "history did not reach live measurements");
+    key("Tab");
+    await wait("document.activeElement === document.querySelector('.usage-history summary')", "keyboard could not reach call history");
+    key("Space");
+    await wait("document.querySelector('.usage-history').open", "keyboard did not expand call history");
+    key("Tab");
+    await wait("document.activeElement === document.querySelector('.usage-history ol')", "keyboard could not reach scrollable call measurements");
+    const history = await js(`(()=>{const panel=document.querySelector('.chat-usage-bubble'),list=document.querySelector('.usage-history ol');return {text:list.textContent,overflow:panel.scrollWidth-panel.clientWidth,listOverflow:list.scrollWidth-list.clientWidth,rows:[...list.querySelectorAll('dl > div')].map(row=>{const label=row.querySelector('dt').getBoundingClientRect(),value=row.querySelector('dd').getBoundingClientRect();return {labelRight:label.right,valueLeft:value.left,valueRight:value.right,panelRight:panel.getBoundingClientRect().right}})}})()`);
+    assert.match(history.text, /Summary.*Stopped.*Not reported.*Work.*Complete.*6,065.*29.*0.41 s/);
+    assert.ok(history.overflow <= 1, "expanded narrow history has no horizontal overflow");
+    assert.ok(history.listOverflow <= 1, "narrow call history has no horizontal scrolling");
+    for (const row of history.rows) { assert.ok(row.valueLeft >= row.labelRight - 1, "history keeps labels and values separate"); assert.ok(row.valueRight <= row.panelRight - 7, "history retains complete values"); }
+    const picture = await win.webContents.capturePage(); fs.writeFileSync(path.join(scratch, "usage-history-narrow.png"), picture.toPNG());
+    await dismissUsage();
     win.setContentSize(1040, 850); await js("window.fixture.appearance('dark',false);document.activeElement?.blur()");
     win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
   };

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Literal
 
@@ -35,16 +36,23 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
         return "SummarizationMiddleware"
 
     def __init__(self, *args: Any, allowed_tools: set[str] | None = None,
-                 on_context_failure: Any = None, **kwargs: Any) -> None:
+                 on_context_failure: Any = None, request_preparer: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.allowed_tools = allowed_tools
         self.on_context_failure = on_context_failure
+        self.request_preparer = request_preparer
 
     def _selected_request(self, request: Any) -> Any:
-        if self.allowed_tools is None:
-            return request
-        from workbench_backend.agents.tools import tool_name
-        return request.override(tools=[tool for tool in request.tools if tool_name(tool) in self.allowed_tools])
+        if self.allowed_tools is not None:
+            from workbench_backend.agents.tools import tool_name
+            request = request.override(tools=[tool for tool in request.tools if tool_name(tool) in self.allowed_tools])
+        if self.request_preparer is not None:
+            # Admission may contain raw checkpoint history already covered by a
+            # native summary. Decide optional context against the active prompt,
+            # then preserve canonical indices for the summarizer's own cutoff.
+            prepared = self.request_preparer(request.override(messages=self._get_effective_messages(request)))
+            request = prepared.override(messages=request.messages)
+        return request
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         try:
@@ -56,7 +64,8 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         try:
-            return await super().awrap_model_call(self._selected_request(request), handler)
+            selected = await asyncio.to_thread(self._selected_request, request)
+            return await super().awrap_model_call(selected, handler)
         except ContextOverflowError as exc:
             if isinstance(exc, HarnessError):
                 raise
@@ -212,13 +221,15 @@ def count_context_tokens(messages: list[Any], *, tools: list[Any] | None = None)
     return estimate_payload(project_context_payload(messages, tools=tools))
 
 
-def token_counter_for_model(model: Any, *, response_format: Any = None) -> Any:
+def token_counter_for_model(model: Any, *, response_format: Any = None, message_projection: Any = None) -> Any:
     """Bind native compaction counting to this adapter's actual replay policy."""
     projection = getattr(model, "project_context_payload", None)
     if projection is None:
         projection = project_context_payload
 
     def count(messages: list[Any], *, tools: list[Any] | None = None) -> int:
+        if message_projection is not None:
+            messages = message_projection(messages)
         return estimate_payload(projection(messages, tools=tools, response_format=response_format))
     return count
 

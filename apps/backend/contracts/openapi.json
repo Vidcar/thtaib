@@ -63,7 +63,8 @@
                 "enum": [
                   "thinking",
                   "using_tools",
-                  "summarizing"
+                  "summarizing",
+                  "checking_images"
                 ],
                 "type": "string"
               },
@@ -358,6 +359,14 @@
               "type": "string"
             },
             "title": "Framework Read Paths",
+            "type": "array"
+          },
+          "generation_history": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationObservation"
+            },
+            "maxItems": 64,
+            "title": "Generation History",
             "type": "array"
           },
           "generation_observation": {
@@ -6065,6 +6074,18 @@
             "title": "Phase",
             "type": "string"
           },
+          "prefill_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prefill Seconds"
+          },
           "processed_input_tokens": {
             "anyOf": [
               {
@@ -6097,6 +6118,29 @@
               }
             ],
             "title": "Request Id"
+          },
+          "request_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Started At"
+          },
+          "time_to_first_token_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time To First Token Seconds"
           },
           "tokens_per_second": {
             "anyOf": [

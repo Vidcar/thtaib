@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
 from workbench_backend.agents.effective_setup import MEMORY_GAP, RAG_GAP, SKILL_GAP
-from workbench_backend.agents.context import estimate_payload
+from workbench_backend.agents.context import estimate_payload, ContextCapacityExceeded
 from workbench_backend.agents.project_outline import ProjectOutlineCache
 from workbench_backend.agents.harness_backend import CAPTURES_PREFIX, is_reserved_framework_path
 from workbench_backend.agents.memory_skills import (
@@ -74,6 +74,7 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         asset_service: Any = None,
         capture_backend: Any = None,
         tool_image_preparer: Callable[[], bool] | None = None,
+        generation_recorder: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.run = run
@@ -84,7 +85,10 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         self.asset_service = asset_service
         self.capture_backend = capture_backend
         self.tool_image_preparer = tool_image_preparer
+        self.generation_recorder = generation_recorder
         self.outline_cache = ProjectOutlineCache()
+        self._outline_initialized = "snapshot_text" in (run.project_outline or {})
+        self._outline_text = (run.project_outline or {}).get("snapshot_text", "")
 
     def wrap_model_call(
         self,
@@ -100,6 +104,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         try:
             response = handler(filtered)
         except Exception as exc:
+            if self.generation_recorder is not None:
+                self.generation_recorder()
             self._record_undispatched_model_calls(exc)
             self._safe_capture(
                 filtered,
@@ -109,6 +115,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 failure=exc,
             )
             raise
+        if self.generation_recorder is not None:
+            self.generation_recorder()
         self._safe_capture(
             filtered,
             _payload_after(self.http_sink, before),
@@ -137,6 +145,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         try:
             response = await handler(filtered)
         except Exception as exc:
+            if self.generation_recorder is not None:
+                self.generation_recorder()
             self._record_undispatched_model_calls(exc)
             self._safe_capture(
                 filtered,
@@ -146,6 +156,8 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
                 failure=exc,
             )
             raise
+        if self.generation_recorder is not None:
+            self.generation_recorder()
         self._safe_capture(
             filtered,
             _payload_after(self.http_sink, before),
@@ -382,59 +394,81 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
         return bool(flag()) if callable(flag) else bool(flag)
 
     def _with_current_tool_images(self, request: ModelRequest) -> ModelRequest:
-        """Attach only the trailing tool batch's images to this model request."""
-
+        """Hydrate canonical capture references at their original tool boundaries."""
         if self.capture_backend is None or not self.run.capture_routes_enabled:
             return request
         messages = list(request.messages)
-        batch_start = len(messages)
-        while batch_start > 0 and isinstance(messages[batch_start - 1], ToolMessage):
-            batch_start -= 1
-        if (batch_start == len(messages) or batch_start == 0
-            or not isinstance(messages[batch_start - 1], AIMessage)
-            or not messages[batch_start - 1].tool_calls):
-            return request
-        saved = [(message, self._saved_screenshot(message)) for message in messages[batch_start:]]
-        if any(item is not None for _, item in saved) and self.tool_image_preparer is not None:
+        if self.run.presented_tools and any(isinstance(message, ToolMessage) and self._saved_screenshot(message) for message in messages) and self.tool_image_preparer is not None:
             try:
                 self.tool_image_preparer()
             except Exception:
                 # A check that cannot finish leaves the page text usable.
                 pass
+        return request.override(messages=self._tool_image_messages(messages, hydrate=True))
+
+    def tool_image_messages_for_count(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Count the same visual positions without loading bytes or running probes.
+
+        Native summarization keeps canonical message indices; inserting derived
+        messages before it would invalidate its checkpoint cutoff positions.
+        """
+        return self._tool_image_messages(messages, hydrate=False)
+
+    def _tool_image_messages(self, messages: list[BaseMessage], *, hydrate: bool) -> list[BaseMessage]:
+        if self.capture_backend is None or not self.run.capture_routes_enabled:
+            return messages
+        projected: list[BaseMessage] = []
         content: list[dict[str, Any]] = []
         image_bytes = 0
         denied = False
         allowed = self._images_allowed_now()
-        for message, item in saved:
+        batch_calls: set[str] = set()
+
+        def finish_batch() -> None:
+            nonlocal content, denied
+            if content:
+                projected.append(HumanMessage(content=[{"type": "text", "text": "<tool_response>\n"}, *content,
+                    {"type": "text", "text": "\n</tool_response>"}], additional_kwargs={TOOL_CONTEXT_MARKER: True}))
+            elif denied:
+                projected.append(HumanMessage(content=f"<tool_response>\n{CANNOT_READ_IMAGE}\n</tool_response>",
+                    additional_kwargs={TOOL_CONTEXT_MARKER: True}))
+            content, denied = [], False
+
+        for message in messages:
+            if not isinstance(message, ToolMessage):
+                finish_batch()
+                batch_calls = {call["id"] for call in message.tool_calls} if isinstance(message, AIMessage) else set()
+            projected.append(message)
+            if not isinstance(message, ToolMessage) or message.tool_call_id not in batch_calls:
+                continue
+            item = self._saved_screenshot(message)
             if item is None:
                 continue
             path, mime_type = item
             if not allowed:
-                denied = CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
+                denied = denied or CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
                 continue
-            loaded = self.capture_backend.read(path.removeprefix("/captures"))
-            if loaded.error or loaded.file_data is None:
-                if loaded.error and CANNOT_READ_IMAGE in loaded.error:
-                    denied = CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
-                    continue
-                from workbench_backend.errors import HarnessError
-                raise HarnessError("The retained image is unavailable. Read or capture it again.",
-                    code="capture_unavailable", status_code=409)
-            image_bytes += len(loaded.file_data["content"]) * 3 // 4
-            if image_bytes > MAX_TOOL_IMAGE_BYTES_PER_REQUEST:
-                from workbench_backend.errors import HarnessError
-                raise HarnessError("Too many image bytes for one model request. Read fewer images.",
-                    code="tool_images_too_large", status_code=422)
+            encoded = ""
+            if hydrate:
+                loaded = self.capture_backend.read(path.removeprefix("/captures"))
+                if loaded.error or loaded.file_data is None:
+                    if loaded.error and CANNOT_READ_IMAGE in loaded.error:
+                        denied = denied or CANNOT_READ_IMAGE not in (message.content if isinstance(message.content, str) else "")
+                        continue
+                    raise HarnessError("The retained image is unavailable. Read or capture it again.",
+                        code="capture_unavailable", status_code=409)
+                encoded = loaded.file_data["content"]
+                image_bytes += len(encoded) * 3 // 4
+                if image_bytes > MAX_TOOL_IMAGE_BYTES_PER_REQUEST:
+                    raise ContextCapacityExceeded("Retained images exceed the model request's image byte budget. "
+                        "Native context compaction could not retain all of them. Read fewer images or start a fresh conversation.",
+                        code="tool_images_too_large", status_code=422)
             content.extend([
                 {"type": "text", "text": f"Image from tool call {message.tool_call_id} at {path}:"},
-                {"type": "image", "base64": loaded.file_data["content"], "mime_type": mime_type},
+                {"type": "image", "base64": encoded, "mime_type": mime_type},
             ])
-        if not content:
-            if not denied:
-                return request
-            return request.override(messages=[*messages, HumanMessage(content=f"<tool_response>\n{CANNOT_READ_IMAGE}\n</tool_response>", additional_kwargs={TOOL_CONTEXT_MARKER: True})])
-        return request.override(messages=[*messages, HumanMessage(content=[{"type": "text", "text": "<tool_response>\n"}, *content,
-            {"type": "text", "text": "\n</tool_response>"}], additional_kwargs={TOOL_CONTEXT_MARKER: True})])
+        finish_batch()
+        return projected
 
     async def _awrap_tool_call(self, request, handler):
         if self.fixture_bank is None:
@@ -576,26 +610,34 @@ class WorkbenchHarnessMiddleware(AgentMiddleware):
 
     def _with_outline(self, request):
         self.run.activity_phase = "thinking"
-        outline = self.outline_cache.build(self.run.project_path, self.run.task, self.run.presented_tools)
-        from dataclasses import asdict
-        self.run.project_outline = {key: value for key, value in asdict(outline).items() if key != "text"}
-        if not outline.text:
-            return request
         system = request.system_message
         content = system.content if system else ""
         if not isinstance(content, str):
             return request
-        candidate = request.override(system_message=SystemMessage(content=content + "\n\n" + outline.text))
-        project = getattr(request.model, "project_context_payload", None)
-        limit = self.run.context_observation.usable_input_tokens if self.run.context_observation else None
-        if project is not None and limit is not None:
-            payload = project([candidate.system_message, *candidate.messages], tools=candidate.tools,
-                response_format=candidate.response_format)
-            if estimate_payload(payload) > limit:
-                self.run.project_outline["omitted_for_capacity"] = True
-                return request
-        self.run.project_outline["included"] = True
-        return candidate
+        if not self._outline_initialized:
+            self._outline_initialized = True
+            preface = "Initial project snapshot for this run. Files may change; use tool results and fresh reads for current facts.\n"
+            outline = self.outline_cache.build(self.run.project_path, self.run.task, self.run.presented_tools,
+                max_tokens=1024 - (len(preface) + 2) // 3)
+            from dataclasses import asdict
+            self.run.project_outline = {key: value for key, value in asdict(outline).items() if key != "text"}
+            if outline.text:
+                text = preface + outline.text
+                candidate = request.override(system_message=SystemMessage(content=content + "\n\n" + text))
+                project = getattr(request.model, "project_context_payload", None)
+                limit = self.run.context_observation.usable_input_tokens if self.run.context_observation else None
+                payload = project([candidate.system_message, *self.tool_image_messages_for_count(candidate.messages)],
+                    tools=candidate.tools, response_format=candidate.response_format) if project is not None and limit is not None else None
+                if payload is not None and estimate_payload(payload) > limit:
+                    self.run.project_outline["omitted_for_capacity"] = True
+                else:
+                    self._outline_text = text
+                    self.run.project_outline["included"] = True
+                    self.run.project_outline["estimated_tokens"] = (len(text) + 2) // 3
+            self.run.project_outline["snapshot_text"] = self._outline_text
+        if not self._outline_text or content.endswith(self._outline_text):
+            return request
+        return request.override(system_message=SystemMessage(content=content + "\n\n" + self._outline_text))
 
     def _capture(
         self,

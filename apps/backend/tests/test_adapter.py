@@ -11,11 +11,15 @@ from unittest.mock import patch
 from typing import Any
 
 import httpx
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGenerationChunk
+from langchain_openai import ChatOpenAI
 
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.adapter import (
     RecordingTransport,
+    _StreamToolCallValidation,
+    _raise_for_invalid_completed_tool_calls,
     adapter_target,
     chat_model_for_deployment,
     image_model_profile,
@@ -1276,6 +1280,106 @@ class AdapterTests(unittest.TestCase):
                 for block in combined.content_blocks),
             combined.content_blocks,
         )
+
+    def test_large_tool_arguments_validate_once_without_response_aggregation(self) -> None:
+        arguments = json.dumps({"file_path": "large.txt", "content": "x" * 65536})
+        chunks = [ChatGenerationChunk(message=AIMessageChunk(content="", additional_kwargs={"reasoning_content": "brief"}))]
+        chunks.extend(ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=[{
+            "index": 0, "id": "large-call" if offset == 0 else None,
+            "name": "write_file" if offset == 0 else None, "args": arguments[offset:offset + 16],
+        }])) for offset in range(0, len(arguments), 16))
+        chunks.append(ChatGenerationChunk(message=AIMessageChunk(content=""), generation_info={"finish_reason": "tool_calls"}))
+
+        async def upstream(*_args, **_kwargs):
+            for chunk in chunks:
+                yield chunk
+
+        model = chat_model_for_deployment(self._deployment())
+        try:
+            for asynchronous in (False, True):
+                with self.subTest(asynchronous=asynchronous), \
+                     patch.object(ChatOpenAI, "_stream", return_value=iter(chunks)), \
+                     patch.object(ChatOpenAI, "_astream", upstream), \
+                     patch.object(ChatGenerationChunk, "__add__", side_effect=AssertionError("Adapter accumulated response")), \
+                     patch("workbench_backend.inference.adapter._raise_for_invalid_completed_tool_calls",
+                           wraps=_raise_for_invalid_completed_tool_calls) as validate:
+                    if asynchronous:
+                        async def exercise():
+                            return [chunk async for chunk in model._astream([])]
+                        streamed = asyncio.run(exercise())
+                    else:
+                        streamed = list(model._stream([]))
+                    self.assertEqual(streamed, chunks)
+                    self.assertIs(streamed[1], chunks[1])
+                    self.assertEqual(streamed[0].message.additional_kwargs["reasoning_content"], "brief")
+                    validate.assert_called_once()
+                    completed = validate.call_args.args[0].message
+                    self.assertEqual(completed.tool_calls[0]["args"], json.loads(arguments))
+                    self.assertEqual(completed.tool_calls[0]["id"], "large-call")
+                    self.assertEqual(completed.content, "")
+                    self.assertEqual(completed.additional_kwargs, {})
+        finally:
+            model.close()
+
+    def test_tool_validation_matches_native_index_and_call_identity_merging(self) -> None:
+        fragments = [
+            [{"index": 0, "id": "call-a", "name": "al", "args": '{"x"'},
+             {"index": 1, "id": "call-b", "name": "beta", "args": '{"y"'},
+             {"index": None, "id": "call-c", "name": "gamma", "args": '{}'}],
+            [{"index": 1, "id": "call-b", "name": None, "args": ':2}'},
+             {"index": 0, "id": "", "name": "pha", "args": ':1}'},
+             {"index": 0, "id": "call-d", "name": "delta", "args": '{}'},
+             {"index": None, "id": "call-e", "name": "epsilon", "args": '{}'}],
+        ]
+        chunks = [ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=calls)) for calls in fragments]
+        native = chunks[0] + chunks[1]
+        validation = _StreamToolCallValidation()
+        with patch("workbench_backend.inference.adapter._raise_for_invalid_completed_tool_calls",
+                   wraps=_raise_for_invalid_completed_tool_calls) as validate:
+            for chunk in chunks:
+                validation.receive(chunk)
+            validation.finish()
+        completed = validate.call_args.args[0].message
+        self.assertEqual(completed.tool_call_chunks, native.message.tool_call_chunks)
+        self.assertEqual(completed.tool_calls, native.message.tool_calls)
+
+    def test_sync_and_async_final_validation_preserves_failure_and_batch_details(self) -> None:
+        async def upstream(*_args, **_kwargs):
+            for chunk in chunks:
+                yield chunk
+
+        model = chat_model_for_deployment(self._deployment())
+        try:
+            for arguments, finish_reason, code in (
+                ('{"file_path":"partial.txt","content":"PRIVATE', "length", "response_limit_reached"),
+                ('{"file_path":"partial.txt","content":"PRIVATE', "tool_calls", "adapter_incomplete_tool_call"),
+                ('not-json', "tool_calls", "adapter_invalid_tool_call"),
+                ('[1,2]', "tool_calls", "adapter_invalid_tool_call"),
+            ):
+                chunks = [ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=[
+                    {"index": 0, "id": "ready-call", "name": "write_file", "args": '{"file_path":"ready.txt","content":"PRIVATE BODY"}'},
+                    {"index": 1, "id": "bad-call", "name": "write_file", "args": arguments},
+                ])), ChatGenerationChunk(message=AIMessageChunk(content=""), generation_info={"finish_reason": finish_reason})]
+                for asynchronous in (False, True):
+                    with self.subTest(code=code, arguments=arguments, asynchronous=asynchronous), \
+                         patch.object(ChatOpenAI, "_stream", return_value=iter(chunks)), \
+                         patch.object(ChatOpenAI, "_astream", upstream), \
+                         self.assertRaises(HarnessError) as failure:
+                        if asynchronous:
+                            async def exercise():
+                                return [chunk async for chunk in model._astream([])]
+                            asyncio.run(exercise())
+                        else:
+                            list(model._stream([]))
+                    self.assertEqual(failure.exception.code, code)
+                    outcomes = failure.exception.details["tool_calls"]
+                    self.assertEqual(outcomes[0], {"call_id": "ready-call", "name": "write_file",
+                                                 "outcome": "not_dispatched", "file_path": "ready.txt"})
+                    self.assertEqual(outcomes[1]["call_id"], "bad-call")
+                    self.assertEqual(outcomes[1]["outcome"], "incomplete_arguments")
+                    self.assertNotIn("PRIVATE", json.dumps(failure.exception.details))
+        finally:
+            model.close()
 
     def test_stream_events_expose_reasoning_deltas_before_text(self) -> None:
         _RecordingHandler.stream_chunks = [

@@ -3,13 +3,14 @@ import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 
 /** Help is available to pointer, keyboard and touch without occupying the page. */
-export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below" }: {
+export function HoverHelp({ title = "About this setting", children, triggerContent, triggerClassName, bubbleClassName, placement = "below", interactive = false }: {
   title?: string;
   children: ReactNode;
   triggerContent?: ReactNode;
   triggerClassName?: string;
   bubbleClassName?: string;
   placement?: "above" | "below";
+  interactive?: boolean;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -51,7 +52,7 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
     const outside = (event: PointerEvent) => {
       if (!trigger.current?.contains(event.target as Node) && !bubble.current?.contains(event.target as Node)) dismiss();
     };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); dismiss(); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); if (bubble.current?.contains(document.activeElement)) trigger.current?.focus(); dismiss(); } };
     window.addEventListener("resize", locate);
     document.addEventListener("scroll", locate, true);
     document.addEventListener("pointerdown", outside);
@@ -68,10 +69,18 @@ export function HoverHelp({ title = "About this setting", children, triggerConte
   }, [open, locate, dismiss]);
   useEffect(() => clearClose, [clearClose]);
   return <span className="hover-help" onMouseEnter={() => { hovered.current = true; show(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>
-    <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={title} aria-describedby={open ? id : undefined}
-      onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}>{triggerContent ?? <Icon name="info" size={14} />}</button>
-    {open && typeof document !== "undefined" ? createPortal(<div ref={bubble} id={id} role="tooltip" className={["hover-help-bubble", bubbleClassName].filter(Boolean).join(" ")}
+    <button ref={trigger} type="button" className={triggerClassName ?? "help-icon"} aria-label={title} aria-describedby={open && !interactive ? id : undefined}
+      aria-haspopup={interactive ? "dialog" : undefined} aria-expanded={interactive ? open : undefined} aria-controls={open && interactive ? id : undefined}
+      onFocus={() => { focused.current = true; show(); }} onBlur={() => { focused.current = false; leave(); }} onClick={show}
+      onKeyDown={(event) => {
+        if (open && event.key === "Tab" && !event.shiftKey) {
+          const control = bubble.current?.querySelector<HTMLElement>("button, a[href], input, select, textarea, summary, [tabindex='0']");
+          if (control) { event.preventDefault(); control.focus(); }
+        }
+      }}>{triggerContent ?? <Icon name="info" size={14} />}</button>
+    {open && typeof document !== "undefined" ? createPortal(<div ref={bubble} id={id} role={interactive ? "dialog" : "tooltip"} aria-label={interactive ? title : undefined} className={["hover-help-bubble", bubbleClassName].filter(Boolean).join(" ")}
       style={{ left: position?.left ?? 8, top: position?.top ?? 8, visibility: position ? "visible" : "hidden" }}
+      onFocus={() => { focused.current = true; clearClose(); }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { focused.current = false; leave(); } }}
       onMouseEnter={() => { hovered.current = true; clearClose(); }} onMouseLeave={() => { hovered.current = false; leave(); }}>{children}</div>, document.body) : null}
   </span>;
 }

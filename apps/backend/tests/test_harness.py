@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -253,6 +254,55 @@ class HarnessApiTests(unittest.TestCase):
         self.assertEqual(len(retained), 1)
         self.assertIn("/captures/asset_", retained[0].content)
         self.assertNotIn(_image_fixture("red").partition(",")[2], json.dumps(checkpoint, default=str))
+
+    def test_image_capability_preparation_precedes_main_model_construction(self) -> None:
+        deployment = self.manager.get_deployment(self.deployment_id)
+        deployment.server_props = ServerProperties(fetched=utc_now(), source_url="http://fixture/props", modalities={"vision": True})
+        self.manager.store.put_deployment(deployment)
+        harness = self.app.state.harness
+        ordering = []
+        original_factory = harness._model_factory
+        def factory(run, sink):
+            ordering.append("model")
+            return original_factory(run, sink)
+        def prepare(run, **kwargs):
+            ordering.append("check")
+            self.assertEqual(run.activity_phase, "checking_images")
+            self._record_capability("image")
+            self._record_capability("tool_image")
+            return True
+        run = AgentRun(id="admission-image-check", deployment_id=self.deployment_id, task="Inspect",
+            enabled_tools=["browser_take_screenshot"], presented_tools=["browser_take_screenshot"], capture_routes_enabled=True,
+            created_at=utc_now(), updated_at=utc_now())
+        with patch.object(harness, "prepare_screenshot_reading", side_effect=prepare), patch.object(harness, "_model_factory", side_effect=factory):
+            harness._create_compiled_agent(run, [], None)
+            self.assertEqual(ordering, ["check", "model"])
+            harness._create_compiled_agent(run, [], None)
+            self.assertEqual(ordering, ["check", "model", "model"])
+        with patch.object(harness, "prepare_screenshot_reading", side_effect=AssertionError("Passive inspection probed")):
+            harness._create_compiled_agent(run.model_copy(deep=True), [], None, inspection_only=True)
+        ordinary = run.model_copy(update={"enabled_tools": [], "presented_tools": []}, deep=True)
+        with patch.object(harness, "prepare_screenshot_reading", side_effect=AssertionError("Ordinary text Chat probed")):
+            harness._create_compiled_agent(ordinary, [], None)
+
+    def test_completed_generation_history_survives_reset_and_is_durable(self) -> None:
+        run = AgentRun(id="history", deployment_id=self.deployment_id, task="Measure",
+            enabled_tools=[], presented_tools=[], created_at=utc_now(), updated_at=utc_now())
+        samples = [{"request_id": f"request-{i}", "phase": "completed", "purpose": "work",
+            "cached_input_tokens": 1000+i, "processed_input_tokens": 20,
+            "prefill_seconds": 0.1, "time_to_first_token_seconds": 0.2,
+            "elapsed_seconds": 1.0, "measured_at": utc_now()} for i in range(70)]
+        self.app.state.harness._adapter_models[run.id] = SimpleNamespace(
+            generation_request_samples=lambda: samples,
+            latest_generation_samples=lambda: {"work": {"request_id": "next", "reset": True}})
+        self.app.state.harness._merge_latest_generation_sample(run)
+        self.assertIsNone(run.generation_observation)
+        self.assertEqual([sample.request_id for sample in run.generation_history], [f"request-{i}" for i in range(6,70)])
+        self.app.state.harness._merge_latest_generation_sample(run)
+        self.assertEqual(len(run.generation_history), 64)
+        self.app.state.harness.store.put_run(run)
+        retained = self.app.state.harness.store.get_run(run.id)
+        self.assertEqual(retained.generation_history, run.generation_history)
 
     def test_native_driver_observer_and_audit_details(self) -> None:
         observed: list[tuple[str, str | None]] = []

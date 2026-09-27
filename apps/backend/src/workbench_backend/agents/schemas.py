@@ -245,6 +245,9 @@ class GenerationObservation(BaseModel):
     input_tokens: int | None = None
     cached_input_tokens: int | None = None
     processed_input_tokens: int | None = None
+    prefill_seconds: float | None = Field(default=None, ge=0)
+    request_started_at: str | None = None
+    time_to_first_token_seconds: float | None = Field(default=None, ge=0)
     output_tokens: int | None = None
     context_limit: int | None = None
     context_used_tokens: int | None = None
@@ -322,11 +325,12 @@ class AgentRun(BaseModel):
     structured_output: StructuredOutputResult | None = None
     context_observation: ContextObservation | None = None
     generation_observation: GenerationObservation | None = None
+    generation_history: list[GenerationObservation] = Field(default_factory=list, max_length=64)
     housekeeping_context: dict[str, ContextObservation] = Field(default_factory=dict)
     housekeeping_generation: dict[str, GenerationObservation] = Field(default_factory=dict)
     project_outline: dict[str, Any] | None = None
     finalization_phase: Literal["saving_changes"] | None = None
-    activity_phase: Literal["thinking", "using_tools", "summarizing"] | None = None
+    activity_phase: Literal["thinking", "using_tools", "summarizing", "checking_images"] | None = None
     settled_status: Literal["completed", "failed", "cancelled"] | None = None
     settled_stop_reason: str | None = None
     stop_reason: str | None = None
