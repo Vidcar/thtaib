@@ -358,6 +358,7 @@ export interface AgentRun {
   failure?: SchemaAgentRun["failure"];
   activity_phase?: SchemaAgentRun["activity_phase"];
   housekeeping_generation?: SchemaAgentRun["housekeeping_generation"];
+  generation_history?: SchemaAgentRun["generation_history"];
   housekeeping_context?: SchemaAgentRun["housekeeping_context"];
   project_outline?: SchemaAgentRun["project_outline"];
   review_observation?: { enabled: boolean; max_revisions: number; status: string; evidence_scope?: string; evaluations: Array<{ iteration?: number; grading_run_id?: string; result?: unknown; explanation?: string; criteria?: Array<{ name: string; passed: boolean; gap?: string }> }> };

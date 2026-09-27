@@ -35,8 +35,17 @@ const scenario = orderingHarness({ browser: true, requestOverride: async ({ req,
     run.generation_observation = {
       input_tokens: 265586, cached_input_tokens: 265506, processed_input_tokens: 80, output_tokens: 1915,
       context_used_tokens: 267501, context_limit: 655360, elapsed_seconds: 37.2, tokens_per_second: 51.3,
+      prefill_seconds: 42.21, time_to_first_token_seconds: 42.48,
       measured_at: "2026-09-27T12:00:00Z", phase: "generating", basis: "llama_cpp_timings",
     };
+    scenario.adopt(); scenario.emit("values", scenario.values());
+  }
+  else if (action === "readoutHistory") {
+    const run = scenario.values().workbench.run;
+    run.generation_history = [
+      { request_id: "history-work", purpose: "work", phase: "completed", elapsed_seconds: 1, measured_at: "2026-09-27T12:00:00Z", cached_input_tokens: 6065, processed_input_tokens: 29, prefill_seconds: .41, time_to_first_token_seconds: .46 },
+      { request_id: "history-summary", purpose: "summary", phase: "interrupted", elapsed_seconds: 1, measured_at: "2026-09-27T12:00:01Z", cached_input_tokens: null, processed_input_tokens: null, prefill_seconds: null, time_to_first_token_seconds: null },
+    ];
     scenario.adopt(); scenario.emit("values", scenario.values());
   }
   else if (action === "appendFinal") scenario.appendFinal(number, line);

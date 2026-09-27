@@ -36,7 +36,7 @@ from workbench_backend.agents.helpers import freeze_helpers
 from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOOLS, PLAN_INSTRUCTIONS, require_setup_capabilities
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, token_counter_for_model, validate_retained_messages
-from workbench_backend.inference.telemetry import current_request_purpose
+from workbench_backend.inference.telemetry import current_request_purpose, request_purpose
 from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
 from workbench_backend.agents.project_admission import holds_project, root_runs
@@ -1235,8 +1235,10 @@ class HarnessService:
     @asynccontextmanager
     async def _compiled_agent_context(self, run, http_sink, fixture_bank):
         async with self._worker_tools_context(run) as external_tools:
-            agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
-                external_tools=external_tools)
+            control = ExecutionControl(run, lambda: self._publish_control_update(run))
+            async with control.model_lock(run.deployment_id):
+                agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
+                    external_tools=external_tools, execution_control=control)
             yield agent
 
     @property
@@ -1269,7 +1271,8 @@ class HarnessService:
 
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
         try:
-            ready = ensure_tool_image_support(self.manager, run.deployment_id, per_request)
+            with request_purpose("probe"):
+                ready = ensure_tool_image_support(self.manager, run.deployment_id, per_request)
             if model is not None:
                 # The compiled agent predates this evidence. Refresh its actual
                 # model before upstream filtering, preserving the context budget.
@@ -1294,6 +1297,24 @@ class HarnessService:
         is_child: bool = False,
     ) -> Any:
         execution_control = execution_control or ExecutionControl(run, lambda: self._publish_control_update(run))
+        visual_access = any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in run.presented_tools)
+        if not visual_access and run.capture_routes_enabled and "read_file" in run.presented_tools and self.assets is not None:
+            session = self.assets.session_for_run(run)
+            visual_access = bool(session and self.assets.list_assets(RetainedAssetListFilters(
+                session_id=session.id, origin=RetainedAssetOrigin.capture)))
+        if not inspection_only and run.capture_routes_enabled and visual_access:
+            from workbench_backend.inference.capabilities import capability_support
+            deployment = self.manager.ensure_deployment_ready(run.deployment_id)
+            per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
+            statuses = [capability_support(deployment, name, per_request) for name in ("image", "tool_image")]
+            needs_check = "untested" in statuses and not any(value in {"failed", "inconclusive"} for value in statuses)
+            if needs_check and (deployment.server_props is None or deployment.server_props.modalities.get("vision") is not False):
+                run.activity_phase = "checking_images"
+                self._publish_control_update(run)
+                self.prepare_screenshot_reading(run)
+                execution_control.require_dispatch(run)
+                run.activity_phase = "thinking"
+                self._publish_control_update(run)
         model = _CheckpointInspectionModel() if inspection_only else self._model_factory(run, http_sink)
         media_profile = dict(model.profile) if isinstance(model.profile, dict) else {}
         agent_kwargs: dict[str, Any] = {}
@@ -1428,12 +1449,21 @@ class HarnessService:
             failed.notes.append("Native context recovery exhausted before a new work request could be sent.")
             run.context_observation = failed
 
+        workbench_middleware = WorkbenchHarnessMiddleware(
+            run, http_sink, settings_provider=self._capture_settings,
+            fixture_bank=fixture_bank, execution_control=execution_control,
+            asset_service=self.assets, capture_backend=capture_backend,
+            tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run, model=model),
+            generation_recorder=None if inspection_only else lambda: self._merge_latest_generation_sample(run),
+        )
         summarization = BudgetedSummarizationMiddleware(
             model=model, backend=backend or (lambda runtime: StateBackend(runtime)),
             allowed_tools=set(run.presented_tools) | ({"read_file"} if run.framework_read_paths else set()),
             trigger=native_summarization["trigger"] if native_summarization else None,
             keep=native_summarization["keep"] if native_summarization else ("messages", 6),
-            token_counter=token_counter_for_model(model, response_format=provider_format),
+            token_counter=token_counter_for_model(model, response_format=provider_format,
+                message_projection=workbench_middleware.tool_image_messages_for_count),
+            request_preparer=workbench_middleware._with_outline,
             on_context_failure=retain_failed_context,
             trim_tokens_to_summarize=None,
         )
@@ -1462,16 +1492,7 @@ class HarnessService:
                 *([TodoListMiddleware()] if "write_todos" in run.presented_tools else []),
                 *([review_middleware(run, model, http_sink, execution_control, self._capture_settings,
                     lambda mutation=None: self._publish_control_update(run, mutation))] if run.review.enabled and not is_child else []),
-                WorkbenchHarnessMiddleware(
-                    run,
-                    http_sink,
-                    settings_provider=self._capture_settings,
-                    fixture_bank=fixture_bank,
-                    execution_control=execution_control,
-                    asset_service=self.assets,
-                    capture_backend=capture_backend,
-                    tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run, model=model),
-                )
+                workbench_middleware,
             ],
             name="workbench-embedded-harness",
             response_format=response_format,
@@ -1786,6 +1807,18 @@ class HarnessService:
 
     def _merge_latest_generation_sample(self, run: AgentRun) -> None:
         model = self._adapter_models.get(run.id)
+        completed = getattr(model, "generation_request_samples", None)
+        if callable(completed):
+            retained = {sample.request_id: sample for sample in run.generation_history if sample.request_id}
+            for sample in completed():
+                if not isinstance(sample, dict) or not sample.get("request_id"):
+                    continue
+                try:
+                    retained[sample["request_id"]] = GenerationObservation(**sample,
+                        context_limit=run.context_observation.capacity_tokens if run.context_observation else None)
+                except (TypeError, ValueError):
+                    continue
+            run.generation_history = list(retained.values())[-64:]
         all_samples = getattr(model, "latest_generation_samples", None)
         if callable(all_samples):
             samples = all_samples()

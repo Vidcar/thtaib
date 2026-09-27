@@ -352,6 +352,7 @@ function ChatInteractionStreamContent(props: {
       finalizationPhase: run.finalization_phase,
       waiting: Boolean(run.pending_interrupt),
       generation: run.generation_observation,
+      history: run.generation_history,
       context: run.context_observation,
     });
     if (projectionSignature.current === signature) {

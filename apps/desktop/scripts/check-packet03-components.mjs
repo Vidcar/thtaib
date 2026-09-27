@@ -106,7 +106,7 @@ async function checkChatMeasurements(ChatMeasurements) {
   const context = { estimated_input_tokens: 2516, capacity_tokens: 65536 };
   let run = { id: "usage", status: "running", context_observation: context };
   let renderer;
-  const tipText = () => textOf(renderer.root.findByProps({ role: "tooltip" }));
+  const tipText = () => textOf(renderer.root.findByProps({ className: "hover-help-bubble chat-usage-bubble" }));
   const update = async observation => {
     run = { ...run, generation_observation: observation };
     await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
@@ -126,7 +126,7 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.match(tipText(), /43.3 tok\/s/);
     assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Generating", "the screen-reader stage matches the visible model stage");
     assert.match(textOf(trigger), /Generating.*43.3 tok\/s/, "generation is visible without opening the measurements popover");
-    for (const [phase, label] of [["using_tools", "Using tools"], ["summarizing", "Summarizing"]]) {
+    for (const [phase, label] of [["using_tools", "Using tools"], ["summarizing", "Summarizing"], ["checking_images", "Checking image support"]]) {
       run = { ...run, activity_phase: phase };
       await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
       assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), label);
@@ -157,20 +157,33 @@ async function checkChatMeasurements(ChatMeasurements) {
     await update({ phase: "completed", input_tokens: 1946, output_tokens: 59, tokens_per_second: 38.7, basis: "reported_tokens_model_call_wall_time" });
     assert.match(tipText(), /including prompt processing/);
     assert.match(tipText(), /2,005/, "reported legacy usage is actual even without native timing fields");
-    await update({ phase: "completed", input_tokens: 26587, cached_input_tokens: 26506, processed_input_tokens: 81, output_tokens: 914, context_used_tokens: 27501, context_limit: 65536, tokens_per_second: 51.3, basis: "llama_cpp_timings" });
+    await update({ phase: "completed", input_tokens: 26587, cached_input_tokens: 26506, processed_input_tokens: 81, output_tokens: 914, context_used_tokens: 27501, context_limit: 65536, tokens_per_second: 51.3, prefill_seconds: 42.21, time_to_first_token_seconds: 42.48, basis: "llama_cpp_timings" });
     const rows = renderer.root.findByProps({ className: "usage-token-counts" }).children;
     assert.deepEqual(rows.map(textOf), ["Input total26,587", "Cached input26,506", "Newly processed81", "Output914"]);
     assert.match(tipText(), /parts of input total/);
     assert.match(tipText(), /27,501.*65,536.*42%/);
+    assert.match(tipText(), /Prompt processing42.21 s.*First output delay42.48 s/);
+    run = { ...run, generation_history: [
+      { request_id: "call-old", purpose: "work", phase: "completed", cached_input_tokens: 6065, processed_input_tokens: 29, prefill_seconds: .41, time_to_first_token_seconds: .46 },
+      { request_id: "call-summary", purpose: "summary", phase: "interrupted", cached_input_tokens: null, processed_input_tokens: null, prefill_seconds: null, time_to_first_token_seconds: null },
+    ] };
+    await update(null);
+    assert.match(tipText(), /Recent model calls \(2\)/, "a reset preserves earlier call evidence");
+    assert.equal(renderer.root.findByProps({ "aria-label": "Context and speed", role: "dialog" }).props.role, "dialog", "interactive call history uses a labelled nonmodal dialog");
+    const calls = renderer.root.findByProps({ "aria-label": "Completed model call measurements" });
+    assert.equal(calls.props.tabIndex, 0, "call history is keyboard scrollable");
+    assert.match(textOf(calls), /Summary.*Stopped.*Cached inputNot reported.*Newly processedNot reported.*Work.*Complete.*Cached input6,065.*Newly processed29.*0.41 s/);
+    await update({ phase: "completed", prefill_seconds: -1, time_to_first_token_seconds: Infinity });
+    assert.deepEqual(renderer.root.findByProps({ className: "usage-token-counts usage-timings" }).children.map(textOf), ["Prompt processingNot reported", "First output delayNot reported"]);
     for (const [patch, label] of [[{pending_interrupt:{}}, "Waiting"], [{pending_interrupt:null,status:"cancel_requested"}, "Stopping"], [{status:"queued"}, "Starting"]]) {
       run = {...run,...patch};
       await act(async () => renderer.update(React.createElement(ChatMeasurements, {run})));
       assert.equal(renderer.root.findByProps({role:"status"}).children.join(""), label);
     }
     await act(async () => listeners.get("keydown")({ key: "Escape", stopPropagation() {} }));
-    assert.equal(renderer.root.findAllByProps({ role: "tooltip" }).length, 0);
+    assert.equal(renderer.root.findAllByProps({ className: "hover-help-bubble chat-usage-bubble" }).length, 0);
     await act(async () => trigger.props.onFocus());
-    assert.equal(renderer.root.findAllByProps({ role: "tooltip" }).length, 1, "keyboard focus opens the same context details");
+    assert.equal(renderer.root.findAllByProps({ className: "hover-help-bubble chat-usage-bubble" }).length, 1, "keyboard focus opens the same context details");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     Object.assign(globalThis, originals);

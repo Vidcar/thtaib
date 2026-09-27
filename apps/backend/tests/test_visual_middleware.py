@@ -1,4 +1,4 @@
-"""One native media result is retained before state and attached only to its next request."""
+"""Canonical capture references reconstruct stable active visual context."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from tests.scripted_model import ScriptedChatModel
 from workbench_backend.agents.effective_setup import EffectiveSetup
 from workbench_backend.agents.execution_policy import CURRENT_TOOL_CALL
 from workbench_backend.agents.harness import HarnessService
+from workbench_backend.agents.context import count_context_tokens, token_counter_for_model
 from workbench_backend.agents.harness_backend import BoundedImageFilesystemBackend
 from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
 from workbench_backend.agents.schemas import AgentRun
@@ -90,7 +91,7 @@ class VisualMiddlewareTests(unittest.TestCase):
             "id": "image-call"})
         return encoded, assets, captures, middleware, result, call
 
-    def test_offload_preserves_tool_pair_and_rehydrates_only_current_batch(self) -> None:
+    def test_offload_preserves_tool_pair_and_rehydrates_historical_batches(self) -> None:
         encoded, assets, captures, middleware, original, call = self._setup()
         retained = middleware.wrap_tool_call(call, lambda _: original)
         self.assertEqual(retained.tool_call_id, "image-call")
@@ -116,7 +117,37 @@ class VisualMiddlewareTests(unittest.TestCase):
         self.assertEqual(captures.reads, ["/asset_" + "a" * 32 + ".png"])
         next_turn = request.override(messages=[*preceding, HumanMessage(content="Continue")])
         self.assertEqual(middleware._with_current_tool_images(next_turn).messages,
-            next_turn.messages)
+            [*projected.messages, next_turn.messages[-1]])
+
+        continued = request.override(messages=[*preceding,
+            AIMessage(content="red", tool_calls=[{"name": "echo", "args": {}, "id": "next"}]),
+            ToolMessage(content="continued", name="echo", tool_call_id="next")])
+        self.assertEqual(middleware._with_current_tool_images(continued).messages,
+            [*projected.messages, *continued.messages[len(preceding):]])
+
+    def test_native_counter_counts_visual_context_without_hydrating_or_probing(self) -> None:
+        encoded, _, captures, middleware, original, call = self._setup()
+        retained = middleware.wrap_tool_call(call, lambda _: original)
+        messages = [AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "image-call"}]), retained]
+        model = ScriptedChatModel([], profile={"image_inputs": True, "image_tool_message": True})
+        middleware.tool_image_preparer = lambda: self.fail("Counting cannot run capability inference")
+        count = token_counter_for_model(model, message_projection=middleware.tool_image_messages_for_count)
+        self.assertGreater(count(messages), count_context_tokens(messages) + 2048)
+        self.assertEqual(captures.reads, [])
+        self.assertNotIn(encoded, json.dumps([message.model_dump() for message in messages]))
+        self.assertEqual(middleware.tool_image_messages_for_count([HumanMessage(content="Compacted history")]),
+            [HumanMessage(content="Compacted history")])
+
+    def test_disabled_capture_context_cannot_probe_historical_images(self) -> None:
+        _, _, _, middleware, original, call = self._setup()
+        retained = middleware.wrap_tool_call(call, lambda _: original)
+        request = ModelRequest(model=ScriptedChatModel([]), messages=[retained], tools=[], model_settings={})
+        middleware.tool_image_preparer = lambda: self.fail("Disabled capture routes ran a probe")
+        middleware.run.capture_routes_enabled = False
+        self.assertIs(middleware._with_current_tool_images(request), request)
+        middleware.run.capture_routes_enabled = True
+        middleware.capture_backend = None
+        self.assertIs(middleware._with_current_tool_images(request), request)
 
     def test_async_tool_hook_offloads_before_return(self) -> None:
         encoded, assets, _, middleware, original, call = self._setup()

@@ -17,6 +17,7 @@ from workbench_backend.inference.ids import utc_now
 
 _logger = logging.getLogger(__name__)
 RequestPurpose = Literal["work", "summary", "review", "probe"]
+COMPLETED_REQUEST_LIMIT = 64
 _request_purpose: contextvars.ContextVar[RequestPurpose] = contextvars.ContextVar("inference_request_purpose", default="work")
 
 
@@ -49,6 +50,7 @@ class LatestGenerationPublisher:
         self._condition = threading.Condition()
         self._latest: dict[str, Any] | None = None
         self._latest_by_purpose: dict[str, dict[str, Any]] = {}
+        self._completed: dict[str, dict[str, Any]] = {}
         self._request_ids: dict[str, str | None] = {}
         self._pending: dict[tuple[str, str], dict[str, Any]] = {}
         self._publishing = False
@@ -63,6 +65,12 @@ class LatestGenerationPublisher:
         with self._condition:
             if self._closed:
                 return
+            # Final evidence belongs to its request, even when the live display
+            # has already reset for the next call. Keep only small measurements.
+            if isinstance(request_id, str) and recorded.get("phase") in {"completed", "interrupted"}:
+                self._completed[request_id] = recorded
+                while len(self._completed) > COMPLETED_REQUEST_LIMIT:
+                    self._completed.pop(next(iter(self._completed)))
             if recorded.get("reset"):
                 self._request_ids[purpose] = request_id
                 if not self._publication_disabled:
@@ -93,6 +101,11 @@ class LatestGenerationPublisher:
     def latest_samples(self) -> dict[str, dict[str, Any]]:
         with self._condition:
             return {purpose: dict(sample) for purpose, sample in self._latest_by_purpose.items()}
+
+    def completed_samples(self) -> list[dict[str, Any]]:
+        """Return bounded final call evidence without waiting for publication."""
+        with self._condition:
+            return [dict(sample) for sample in self._completed.values()]
 
     def wait_idle(self, timeout: float) -> bool:
         """Wait for a test or diagnostic, never from the generation path."""
@@ -149,6 +162,9 @@ class RequestTelemetry:
         self.purpose = current_request_purpose()
         self.request_id = uuid4().hex
         self.response_id: str | None = None
+        self.started_at = utc_now()
+        self.started_monotonic = time.monotonic()
+        self.first_output_seconds: float | None = None
         self.latest: dict[str, Any] | None = None
         self.last_emitted = 0.0
         self.last_phase: str | None = None
@@ -161,6 +177,8 @@ class RequestTelemetry:
         if self.response_id is not None and response_id != self.response_id:
             return
         self.response_id = response_id
+        if self.first_output_seconds is None and _has_output_delta(response):
+            self.first_output_seconds = max(0.0, time.monotonic() - self.started_monotonic)
         timings = response.get("timings")
         progress = response.get("prompt_progress")
         if not isinstance(timings, dict):
@@ -178,6 +196,7 @@ class RequestTelemetry:
         if isinstance(usage, dict) and _count(usage.get("prompt_tokens")) is not None:
             input_tokens = usage["prompt_tokens"]
         elapsed_ms = _number(timings.get("predicted_ms"))
+        prompt_ms = _number(timings.get("prompt_ms"))
         speed = _number(timings.get("predicted_per_second"))
         # A zero-duration first token carries no meaningful generation rate.
         if output < 2 or elapsed_ms is None or elapsed_ms <= 0:
@@ -189,6 +208,9 @@ class RequestTelemetry:
             "purpose": self.purpose,
             "cached_input_tokens": cached,
             "processed_input_tokens": processed,
+            "prefill_seconds": prompt_ms / 1000 if prompt_ms is not None else None,
+            "request_started_at": self.started_at,
+            "time_to_first_token_seconds": self.first_output_seconds,
             "phase": phase,
             "input_tokens": input_tokens,
             "output_tokens": output,
@@ -218,6 +240,20 @@ class RequestTelemetry:
 
 def _count(value: Any) -> int | None:
     return value if type(value) is int and value >= 0 else None
+
+
+def _has_output_delta(response: dict[str, Any]) -> bool:
+    """A complete nonstream response cannot establish its first-output time."""
+    for choice in response.get("choices") or []:
+        if not isinstance(choice, dict) or not isinstance(delta := choice.get("delta"), dict):
+            continue
+        if any(isinstance(delta.get(key), str) and delta[key] for key in ("content", "reasoning_content", "reasoning")):
+            return True
+        for call in delta.get("tool_calls") or []:
+            function = call.get("function") if isinstance(call, dict) else None
+            if isinstance(function, dict) and any(isinstance(function.get(key), str) and function[key] for key in ("name", "arguments")):
+                return True
+    return False
 
 
 def _number(value: Any) -> float | None:

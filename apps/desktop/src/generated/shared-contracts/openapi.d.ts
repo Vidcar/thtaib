@@ -2374,7 +2374,7 @@ export interface components {
         /** AgentRun */
         AgentRun: {
             /** Activity Phase */
-            activity_phase?: ("thinking" | "using_tools" | "summarizing") | null;
+            activity_phase?: ("thinking" | "using_tools" | "summarizing" | "checking_images") | null;
             /** Agent Setup Id */
             agent_setup_id?: string | null;
             /** Agent Setup Version Id */
@@ -2447,6 +2447,8 @@ export interface components {
             finished_at?: string | null;
             /** Framework Read Paths */
             framework_read_paths?: string[];
+            /** Generation History */
+            generation_history?: components["schemas"]["GenerationObservation"][];
             generation_observation?: components["schemas"]["GenerationObservation"] | null;
             /**
              * Harness
@@ -4308,6 +4310,8 @@ export interface components {
              * @enum {string}
              */
             phase: "prompt_processing" | "generating" | "completed" | "interrupted";
+            /** Prefill Seconds */
+            prefill_seconds?: number | null;
             /** Processed Input Tokens */
             processed_input_tokens?: number | null;
             /**
@@ -4318,6 +4322,10 @@ export interface components {
             purpose: "work" | "summary" | "review" | "probe";
             /** Request Id */
             request_id?: string | null;
+            /** Request Started At */
+            request_started_at?: string | null;
+            /** Time To First Token Seconds */
+            time_to_first_token_seconds?: number | null;
             /** Tokens Per Second */
             tokens_per_second?: number | null;
         };

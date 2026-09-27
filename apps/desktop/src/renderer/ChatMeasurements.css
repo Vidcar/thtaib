@@ -36,3 +36,10 @@
 .chat-usage-bubble .usage-speed {padding-top: var(--pad-compact); margin-top: var(--space-compact); border-top: var(--line-hairline) solid var(--border); font-variant-numeric: tabular-nums;}
 .chat-usage-bubble .usage-speed > span {color: var(--muted);}
 .chat-measurements .usage-live-dot {width: 5px; height: 5px; border-radius: var(--radius-circle); background: var(--accent);}
+.chat-usage-bubble .usage-history {margin-top: var(--space-compact); border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.chat-usage-bubble .usage-history summary {cursor: pointer; font-size: var(--text-small); color: var(--muted);}
+.chat-usage-bubble .usage-history ol {max-height: 15rem; overflow: auto; overscroll-behavior: contain; list-style: none; margin: var(--space-compact) 0 0; padding: 0;}
+.chat-usage-bubble .usage-history li + li {border-top: var(--line-hairline) solid var(--border); margin-top: var(--space-compact); padding-top: var(--pad-compact);}
+.chat-usage-bubble .usage-history-heading {display: flex; justify-content: space-between; gap: var(--space-compact); font-size: var(--text-small);}
+.chat-usage-bubble .usage-history-heading strong {min-width: 0;}
+.chat-usage-bubble .usage-history-heading span {min-width: 0; max-width: 5rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; color: var(--muted);}

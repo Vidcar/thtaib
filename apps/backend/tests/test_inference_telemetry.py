@@ -4,7 +4,7 @@ import unittest
 import threading
 from unittest.mock import patch
 
-from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry
+from workbench_backend.inference.telemetry import COMPLETED_REQUEST_LIMIT, LatestGenerationPublisher, RequestTelemetry, request_purpose
 
 
 def sample(*, ident="request-one", output=10, cached=80, processed=20, **extra):
@@ -13,6 +13,62 @@ def sample(*, ident="request-one", output=10, cached=80, processed=20, **extra):
 
 
 class RequestTelemetryTests(unittest.TestCase):
+    def test_prefill_is_server_reported_and_first_output_is_local_stream_delay(self):
+        seen = []
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=10.0):
+            telemetry = RequestTelemetry(seen.append)
+            telemetry.receive(sample(output=0, choices=[{"delta": {"role": "assistant", "content": ""}}]))
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=14.5):
+            value = sample(choices=[{"delta": {"reasoning_content": "Check"}}])
+            value["timings"]["prompt_ms"] = 4200.0
+            telemetry.receive(value)
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=18.0):
+            telemetry.receive({**value, "choices": [{"delta": {"content": "Answer"}}]})
+            telemetry.finish()
+        self.assertEqual(seen[-1]["prefill_seconds"], 4.2)
+        self.assertEqual(seen[-1]["time_to_first_token_seconds"], 4.5)
+        self.assertEqual(seen[-1]["elapsed_seconds"], .2, "decode duration remains separate")
+        self.assertTrue(seen[-1]["request_started_at"])
+
+    def test_nonstream_and_empty_deltas_cannot_invent_first_output_delay(self):
+        for choices in ([{"message": {"content": "completed answer"}}], [{"delta": {"role": "assistant"}}], []):
+            seen = []
+            telemetry = RequestTelemetry(seen.append)
+            telemetry.receive(sample(choices=choices))
+            telemetry.finish()
+            self.assertIsNone(seen[-1]["time_to_first_token_seconds"])
+
+    def test_function_argument_delta_is_substantive_output(self):
+        seen = []
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=1.0):
+            telemetry = RequestTelemetry(seen.append)
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=2.0):
+            telemetry.receive(sample(choices=[{"delta": {"tool_calls": [{"function": {"arguments": "{"}}]}}]))
+            telemetry.finish(interrupted=True)
+        self.assertEqual(seen[-1]["time_to_first_token_seconds"], 1)
+
+    def test_delta_without_timing_retains_first_output_time_for_later_measurement(self):
+        seen = []
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=1.0):
+            telemetry = RequestTelemetry(seen.append)
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=3.0):
+            telemetry.receive({"id": "request-one", "choices": [{"delta": {"content": "First"}}]})
+        with patch("workbench_backend.inference.telemetry.time.monotonic", return_value=5.0):
+            telemetry.receive(sample())
+            telemetry.finish()
+        self.assertEqual(seen[-1]["time_to_first_token_seconds"], 2)
+
+    def test_missing_invalid_prompt_timings_are_unavailable(self):
+        for duration in (None, -1, True, float("nan"), float("inf"), "450"):
+            with self.subTest(duration=duration):
+                seen = []
+                telemetry = RequestTelemetry(seen.append)
+                value = sample()
+                value["timings"]["prompt_ms"] = duration
+                telemetry.receive(value)
+                telemetry.finish()
+                self.assertIsNone(seen[-1]["prefill_seconds"])
+
     def test_prefill_reports_full_prompt_then_generation_includes_cached_tokens(self):
         seen = []
         telemetry = RequestTelemetry(seen.append)
@@ -71,6 +127,54 @@ class RequestTelemetryTests(unittest.TestCase):
 
 
 class LatestGenerationPublisherTests(unittest.TestCase):
+    def test_terminal_history_survives_reset_and_slow_display_publication(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def callback(value):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("measurement publisher was not released")
+
+        publisher = LatestGenerationPublisher(callback)
+        try:
+            work = RequestTelemetry(publisher.publish)
+            self.assertTrue(entered.wait(2))
+            work.receive(sample())
+            work.finish()
+            with request_purpose("summary"):
+                summary = RequestTelemetry(publisher.publish)
+                summary.receive(sample(ident="summary"))
+                summary.finish(interrupted=True)
+            RequestTelemetry(publisher.publish)
+            history = publisher.completed_samples()
+            self.assertEqual([item["purpose"] for item in history], ["work", "summary"])
+            self.assertEqual([item["phase"] for item in history], ["completed", "interrupted"])
+            self.assertTrue(publisher.latest_sample("work")["reset"])
+            history[0]["output_tokens"] = 999
+            self.assertEqual(publisher.completed_samples()[0]["output_tokens"], 10)
+        finally:
+            release.set()
+            publisher.close()
+
+    def test_history_is_bounded_and_updates_same_request_without_duplicates(self):
+        publisher = LatestGenerationPublisher(lambda _: None)
+        try:
+            for index in range(COMPLETED_REQUEST_LIMIT + 3):
+                ident = str(index)
+                publisher.publish({"request_id": ident, "reset": True})
+                publisher.publish({"request_id": ident, "phase": "completed", "output_tokens": index})
+            publisher.publish({"request_id": ident, "phase": "completed", "output_tokens": 999})
+            history = publisher.completed_samples()
+            self.assertEqual(len(history), COMPLETED_REQUEST_LIMIT)
+            self.assertEqual(history[0]["request_id"], "3")
+            self.assertEqual(history[-1]["output_tokens"], 999)
+            publisher.publish({"request_id": "new", "reset": True})
+            publisher.publish({"request_id": ident, "phase": "interrupted", "output_tokens": 999})
+            self.assertEqual(publisher.completed_samples()[-1]["phase"], "interrupted")
+            self.assertEqual(publisher.latest_sample()["request_id"], "new")
+        finally:
+            publisher.close()
+
     def test_blocked_publication_keeps_only_newest_request_reset_and_sample(self):
         entered, release = threading.Event(), threading.Event()
         seen = []

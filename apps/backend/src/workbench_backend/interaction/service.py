@@ -557,6 +557,11 @@ class InteractionService:
         patched = dict(workbench.get("run") or {})
         observation = run.generation_observation.model_dump(mode="json") if run.generation_observation else None
         patched["generation_observation"] = observation
+        # The harness refreshes this bounded list only at model boundaries.
+        # Reuse the serialized list throughout the replaceable live updates.
+        retained_ids = [(item.get("request_id"), item.get("phase"), item.get("measured_at")) for item in patched.get("generation_history") or []]
+        if retained_ids != [(item.request_id, item.phase, item.measured_at) for item in run.generation_history]:
+            patched["generation_history"] = [item.model_dump(mode="json") for item in run.generation_history]
         patched["context_observation"] = run.context_observation.model_dump(mode="json") if run.context_observation else None
         patched["housekeeping_generation"] = {key: value.model_dump(mode="json") for key, value in run.housekeeping_generation.items()}
         patched["housekeeping_context"] = {key: value.model_dump(mode="json") for key, value in run.housekeeping_context.items()}
@@ -576,7 +581,7 @@ class InteractionService:
             workbench = snapshot.get("workbench", {})
             run = workbench.get("run") or {}
             return {**snapshot, "workbench": {**workbench, "run": {
-                key: value for key, value in run.items() if key not in {"generation_observation", "updated_at"}
+                key: value for key, value in run.items() if key not in {"generation_observation", "generation_history", "updated_at"}
             }}}
         return without_measurement(previous) == without_measurement(current)
 

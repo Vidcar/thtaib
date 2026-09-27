@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import httpx
 from langchain_core.language_models.model_profile import ModelProfile
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
@@ -186,6 +186,10 @@ class WorkbenchChatOpenAI(ChatOpenAI):
         publisher = self._generation_publisher
         return publisher.latest_samples() if publisher is not None else {}
 
+    def generation_request_samples(self) -> list[dict[str, Any]]:
+        publisher = self._generation_publisher
+        return publisher.completed_samples() if publisher is not None else []
+
     def invoke(self, *args: Any, **kwargs: Any) -> BaseMessage:
         result = super().invoke(*args, **kwargs)
         _clear_openai_provider_tag(result)
@@ -254,14 +258,14 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     def _stream(self, *args: Any, **kwargs: Any) -> Any:
         token = _stream_chunk_count.set(0)
         telemetry_token = _request_telemetry.set(None)
-        combined: ChatGenerationChunk | None = None
+        validation = _StreamToolCallValidation()
         telemetry: RequestTelemetry | None = None
         try:
             for chunk in super()._stream(*args, **kwargs):
                 telemetry = _request_telemetry.get()
-                combined = chunk if combined is None else combined + chunk
+                validation.receive(chunk)
                 yield chunk
-            _raise_for_invalid_completed_tool_calls(combined)
+            validation.finish()
             if telemetry is not None:
                 telemetry.finish()
         except BaseException as exc:
@@ -276,14 +280,14 @@ class WorkbenchChatOpenAI(ChatOpenAI):
     async def _astream(self, *args: Any, **kwargs: Any) -> Any:
         token = _stream_chunk_count.set(0)
         telemetry_token = _request_telemetry.set(None)
-        combined: ChatGenerationChunk | None = None
+        validation = _StreamToolCallValidation()
         telemetry: RequestTelemetry | None = None
         try:
             async for chunk in super()._astream(*args, **kwargs):
                 telemetry = _request_telemetry.get()
-                combined = chunk if combined is None else combined + chunk
+                validation.receive(chunk)
                 yield chunk
-            _raise_for_invalid_completed_tool_calls(combined)
+            validation.finish()
             if telemetry is not None:
                 telemetry.finish()
         except BaseException as exc:
@@ -615,6 +619,75 @@ def _clear_openai_provider_tag(message: Any) -> None:
     metadata = getattr(message, "response_metadata", None)
     if isinstance(metadata, dict) and metadata.get("model_provider") == "openai":
         metadata.pop("model_provider", None)
+
+
+class _ToolCallFragments:
+    def __init__(self, call: dict[str, Any]) -> None:
+        self.index = call.get("index")
+        self.call_id: str | None = None
+        self.names: list[str] = []
+        self.arguments: list[str] = []
+        self.append(call)
+
+    def append(self, call: dict[str, Any]) -> None:
+        if call.get("id") is not None and (self.call_id is None or call["id"]):
+            self.call_id = call["id"]
+        if call.get("name") is not None:
+            self.names.append(call["name"])
+        if call.get("args") is not None:
+            self.arguments.append(call["args"])
+
+    def joined(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "id": self.call_id,
+            "name": "".join(self.names) if self.names else None,
+            "args": "".join(self.arguments) if self.arguments else None,
+        }
+
+
+class _StreamToolCallValidation:
+    """Retain only validation fragments; LangChain owns response accumulation.
+
+    Indexed fragments use the pinned native merge identity rule. Joining once
+    avoids reparsing growing JSON and copying answer/reasoning text per delta.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[_ToolCallFragments] = []
+        self.indexed: dict[int | str, list[_ToolCallFragments]] = {}
+        self.finish_reason: str | None = None
+
+    def receive(self, chunk: ChatGenerationChunk) -> None:
+        finish_reason = ((chunk.generation_info or {}).get("finish_reason")
+                         or chunk.message.response_metadata.get("finish_reason"))
+        if finish_reason:
+            self.finish_reason = finish_reason
+        for call in getattr(chunk.message, "tool_call_chunks", []) or []:
+            index = call.get("index")
+            indexed = isinstance(index, int) or (isinstance(index, str) and index.startswith("lc_"))
+            candidates = self.indexed.get(index, []) if indexed else []
+            fragments = next((item for item in candidates
+                              if item.call_id in (None, "") or call.get("id") in (None, "")
+                              or item.call_id == call.get("id")), None)
+            if fragments is not None:
+                fragments.append(call)
+                continue
+            fragments = _ToolCallFragments(call)
+            self.calls.append(fragments)
+            if indexed:
+                self.indexed.setdefault(index, []).append(fragments)
+
+    def finish(self) -> None:
+        if not self.calls:
+            return
+        # Native final classification remains authoritative; strict JSON and
+        # bounded failure details are enforced by the existing adapter guard.
+        chunk = ChatGenerationChunk(
+            message=AIMessageChunk(content="", tool_call_chunks=[item.joined() for item in self.calls]),
+            generation_info={"finish_reason": self.finish_reason},
+        )
+        _raise_for_invalid_completed_tool_calls(chunk)
 
 
 def _raise_for_invalid_completed_tool_calls(chunk: ChatGenerationChunk | None) -> None:

@@ -4,16 +4,43 @@ from __future__ import annotations
 
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from workbench_backend.agents.harness import HarnessService
-from workbench_backend.agents.schemas import AgentRun, AgentRunStatus
+from workbench_backend.agents.schemas import AgentRun, AgentRunStatus, GenerationObservation
+from workbench_backend.interaction.service import InteractionService
 from workbench_backend.interaction.projection import archive_messages, message_dict, message_resume_seed, native_event, open_tool_starts
 
 
 class InteractionProjectionTests(unittest.TestCase):
+    def test_measurement_projection_retains_history_without_rebuilding_it_for_each_sample(self):
+        service = object.__new__(InteractionService)
+        service.store = SimpleNamespace(append_interaction=Mock())
+        at = "2026-09-27T12:00:00Z"
+        run = AgentRun(id="run-measurement", deployment_id="deployment", task="Check",
+            enabled_tools=[], presented_tools=[], status=AgentRunStatus.running,
+            created_at=at, updated_at=at)
+        run.generation_history = [GenerationObservation(request_id="old", purpose="work", phase="completed",
+            elapsed_seconds=1, prefill_seconds=42.2, cached_input_tokens=713, processed_input_tokens=5370,
+            measured_at=at, basis="llama_cpp_timings")]
+        transcript = [{"id": "answer", "content": "Retained answer"}]
+        binding = {"id": "thread", "snapshot": {"messages": transcript, "workbench": {"run": {"id": run.id}}}}
+        service._observe_measurement(binding, run)
+        first = service.store.append_interaction.call_args.kwargs["snapshot"]
+        history = first["workbench"]["run"]["generation_history"]
+        self.assertEqual(history[0]["prefill_seconds"], 42.2)
+        self.assertIs(first["messages"], transcript)
+        binding["snapshot"] = first
+        service._observe_measurement(binding, run)
+        second = service.store.append_interaction.call_args.kwargs["snapshot"]
+        self.assertIs(second["workbench"]["run"]["generation_history"], history)
+        self.assertIs(second["messages"], transcript)
+        self.assertEqual(AgentRun.model_validate({**run.model_dump(), "generation_history": history}).generation_history[0].processed_input_tokens, 5370)
+
     def test_resume_seed_keeps_text_already_shown_and_leaves_the_new_delta(self) -> None:
         prefix = [
             {"method": "messages", "params": {"namespace": [], "timestamp": 1, "node": "model",
