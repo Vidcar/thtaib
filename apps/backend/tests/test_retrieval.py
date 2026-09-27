@@ -320,6 +320,80 @@ class RetrievalHarnessTests(unittest.TestCase):
         self.assertEqual(len(view['run_ids']), 2)
         self.assertEqual(len([message for message in view['transcript'] if message['role'] == 'user']), 2)
 
+    def test_chat_native_project_reader_coexists_with_retrieval_across_turns(self) -> None:
+        project = self.root / "reader-project"
+        project.mkdir()
+        (project / "script_extracted.js").write_text("PROJECT-READ-SENTINEL", encoding="utf-8")
+        (project / "evidence.txt").write_text("PROJECT-READ-SENTINEL", encoding="utf-8")
+        chat = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.chat_deployment_id, "project_path": str(project),
+            "retrieval_project_paths": ["evidence.txt"],
+            "presented_tools": ["read_file", "search_knowledge"],
+        }).json()
+
+        def read_call(path: str, ident: str) -> dict:
+            return {"name": "read_file", "args": {"file_path": path}, "id": ident}
+
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[
+                {"name": "search_knowledge", "args": {"query": "PROJECT-READ-SENTINEL"}, "id": "search"},
+                read_call("script_extracted.js", "relative"), read_call("/script_extracted.js", "virtual"),
+            ]), AIMessage(content="Read project and searched evidence."),
+        ])
+        started = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "Read and search."})
+        self.assertEqual(started.status_code, 200, started.text)
+        first = wait_for_run(self.client, started.json()["current_run_id"])
+        self.assertEqual(first["status"], "completed", first.get("error"))
+        self.assertEqual(first["framework_read_paths"], [])
+        for ident in ("relative", "virtual", "search"):
+            self.assertEqual(first["tool_outcomes"][ident]["outcome"], "succeeded")
+            self.assertIn("PROJECT-READ-SENTINEL", first["tool_outcomes"][ident]["result"])
+
+        scratch = harness_scratch_root(self.manager.paths, chat["thread_id"])
+        evidence = next((scratch / "retrieved").rglob("chunk_*.md"))
+        paths = ["/" + evidence.relative_to(scratch).as_posix(), "/large_tool_results/result.txt", "/conversation_history/result.txt"]
+        for prefix in ("large_tool_results", "conversation_history"):
+            (scratch / prefix / "result.txt").write_text("SAVED-READ-SENTINEL", encoding="utf-8")
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[read_call(path, f"saved-{i}") for i, path in enumerate(paths)]),
+            AIMessage(content="Read retained evidence and saved results."),
+        ])
+        started = self.client.post(f'/v1/chat/conversations/{chat["id"]}/start', json={"task": "Read the saved evidence."})
+        self.assertEqual(started.status_code, 200, started.text)
+        second = wait_for_run(self.client, started.json()["current_run_id"])
+        self.assertEqual(second["status"], "completed", second.get("error"))
+        self.assertEqual(second["framework_read_paths"], [])
+        for i in range(len(paths)):
+            outcome = second["tool_outcomes"][f"saved-{i}"]
+            self.assertEqual(outcome["outcome"], "succeeded", outcome)
+            self.assertIn("PROJECT-READ-SENTINEL" if i == 0 else "SAVED-READ-SENTINEL", outcome["result"])
+        reopened = self.client.get(f'/v1/chat/conversations/{chat["id"]}').json()
+        self.assertEqual(reopened["run_ids"], [first["id"], second["id"]])
+
+    def test_retrieval_without_selected_reader_cannot_open_bound_project_files(self) -> None:
+        project = self.root / "restricted-reader-project"
+        project.mkdir()
+        (project / "script_extracted.js").write_text("PRIVATE-PROJECT-SENTINEL", encoding="utf-8")
+        (project / "evidence.txt").write_text("PUBLIC-SEARCH-SENTINEL", encoding="utf-8")
+        self.scripted = ScriptedChatModel([
+            AIMessage(content="", tool_calls=[{"name": "read_file", "args": {"file_path": "/script_extracted.js"}, "id": "denied"}]),
+            AIMessage(content="File reading was not selected."),
+        ])
+        started = self.client.post("/v1/agent-runs", json={
+            "deployment_id": self.chat_deployment_id, "project_path": str(project),
+            "task": "Search only", "presented_tools": ["search_knowledge"],
+            "retrieval_project_paths": ["evidence.txt"],
+        })
+        self.assertEqual(started.status_code, 200, started.text)
+        run = wait_for_run(self.client, started.json()["id"])
+        self.assertEqual(run["status"], "completed", run.get("error"))
+        self.assertNotIn("read_file", run["presented_tools"])
+        self.assertEqual(run["framework_read_paths"], ["/large_tool_results/", "/conversation_history/", "/retrieved/"])
+        self.assertEqual(run["tool_outcomes"]["denied"]["outcome"], "failed")
+        self.assertNotIn("PRIVATE-PROJECT-SENTINEL", run["tool_outcomes"]["denied"]["result"])
+        offered = next(tool for tool in self.scripted.bound_tools if getattr(tool, "name", None) == "read_file")
+        self.assertIn("Only these paths are permitted", offered.description)
+
     def test_pooling_none_fails_closed(self) -> None:
         memory = self._knowledge()
         now = utc_now()
