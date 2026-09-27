@@ -20,4 +20,4 @@
 
 - [x] 4.1 Validate actual Windows app and three uninterrupted real-model browser turns, reopen equivalence, files and takeover; retain isolated evidence and verify no external browser windows or process leaks.
 - [x] 4.2 Run backend default/integration, native desktop, OpenSpec and whitespace gates; fix failures and record exact outcomes.
-- [ ] 4.3 Synchronize/archive the completed change, update concise handover, commit/push/PR/merge and refresh the established local application; verify installed tool schema and real browser readiness without replaying work.
+- [x] 4.3 Synchronize/archive the completed change, update concise handover, commit/push/PR/merge and refresh the established local application; verify installed tool schema and real browser readiness without replaying work.
