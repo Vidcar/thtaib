@@ -15,10 +15,11 @@ try {
   await checkSelectedEntryOwnsVersionHistory(KnowledgePanel);
   await checkKnowledgeOwnershipAndReview(KnowledgePanel);
   await checkSkillResourceNavigation((await vite.ssrLoadModule("/src/renderer/SkillPackageControls.tsx")).SkillResources);
+  await checkGuidedSkillDraft((await vite.ssrLoadModule("/src/renderer/SkillEditor.tsx")).SkillEditor);
   await checkAgentDraftConflict((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkAgentSavedActions((await vite.ssrLoadModule("/src/renderer/AgentSetupsPanel.tsx")).AgentSetupsPanel);
   await checkKnowledgeSavedActions(KnowledgePanel);
-  await checkNextTurnConversationMemory((await vite.ssrLoadModule("/src/renderer/ConversationSetup.tsx")).ConversationSetup);
+  await checkCurrentKnowledgeRecordSelection((await vite.ssrLoadModule("/src/renderer/SetupConfigurationEditor.tsx")).SetupConfigurationEditor);
   await checkConnectionCredentialsAndTest((await vite.ssrLoadModule("/src/renderer/ConnectionsPanel.tsx")).ConnectionsPanel);
   await checkRunProposalConflict((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
   await checkSavedMemoryNeedsSelection((await vite.ssrLoadModule("/src/renderer/RunMemoryProposals.tsx")).RunMemoryProposals);
@@ -26,46 +27,76 @@ try {
 } finally { await vite.close(); }
 console.log("Knowledge workspace checks passed.");
 
-async function checkNextTurnConversationMemory(Component) {
-  globalThis.fetch = async url => {
-    const pathname = new URL(String(url)).pathname;
-    if (pathname === "/v1/agent-tools") return json({ tools: [] });
-    if (pathname === "/v1/knowledge/versions/memory-v1") return json({ id: "memory-v1", entry_id: "memory", kind: "memory", content: "Earlier fact", estimated_content_tokens: 4 });
-    throw new Error(`unexpected ${pathname}`);
+async function checkGuidedSkillDraft(Editor) {
+  const original = '---\nname: original\ndescription: Read references.\nlicense: MIT\n---\nInstructions.';
+  const pending = [];
+  const preview = (source, fields) => ({ content: fields ? source.replace('name: original', `name: ${fields.name}`).replace('description: Read references.', `description: ${fields.description}`) : source, name: fields?.name ?? 'original', description: fields?.description ?? 'Read references.', instructions: fields?.instructions ?? 'Instructions.', guided_available: true, valid: true, issues: [] });
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(String(url)).pathname, '/v1/knowledge/skills/preview');
+    const body = JSON.parse(init.body);
+    if (body.fields) { const response = deferred(); pending.push({ ...response, body }); return response.promise; }
+    return json(preview(body.content));
   };
-  const entries = [
-    { ...entry("memory", "Versioned memory"), current_version_id: "memory-v2", estimated_content_tokens: 10 },
-    { ...entry("skill", "Current skill"), kind: "skill", current_version_id: "skill-v1" },
-  ];
-  let toggled = "";
-  let replaced = [];
+  let value = original, changes = [], valid = false, renderer;
+  function Host() {
+    const [source, setSource] = React.useState(original);
+    const [resources, setResources] = React.useState([]);
+    return React.createElement(Editor, { content: source, scope: 'user', resources: [{ path: 'guide.md', size_bytes: 8 }], resourceChanges: resources,
+      onChange: next => { value = next; setSource(next); }, onResourceChanges: next => { changes = next; setResources(next); }, onStateChange: next => { valid = next; } });
+  }
+  try {
+    await act(async () => { renderer = create(React.createElement(Host)); await tick(); });
+    assert.equal(valid, true);
+    await act(async () => field(renderer, 'Name', 'input').props.onChange({ target: { value: 'older-name' } }));
+    assert.equal(valid, false, 'an unconfirmed source transformation cannot save');
+    await act(async () => field(renderer, 'Name', 'input').props.onChange({ target: { value: 'latest-name' } }));
+    assert.equal(button(renderer, 'Source').props.disabled, true, 'Source cannot discard an outstanding guided edit');
+    await act(async () => { pending[1].resolve(json(preview(pending[1].body.content, pending[1].body.fields))); await tick(); });
+    assert.match(value, /name: latest-name/); assert.match(value, /license: MIT/);
+    await act(async () => { pending[0].resolve(json(preview(pending[0].body.content, pending[0].body.fields))); await tick(); });
+    assert.match(value, /name: latest-name/, 'a stale preview cannot overwrite the latest human edit');
+    await act(async () => button(renderer, 'Source').props.onClick());
+    assert.equal(field(renderer, 'SKILL.md', 'textarea').props.value, value, 'both views share one native source draft');
+    await act(async () => button(renderer, 'Remove').props.onClick());
+    assert.deepEqual(changes, [{ path: 'guide.md', remove: true }], 'resource removal remains in the unsaved skill draft');
+    const bytes = new TextEncoder().encode('Replacement file');
+    await act(async () => { field(renderer, 'File path', 'input').props.onChange({ target: { value: 'guide.md' } }); });
+    await act(async () => { field(renderer, 'Add or replace file', 'input').props.onChange({ target: { value: 'file', files: [{ name: 'replacement.md', size: bytes.length, arrayBuffer: async () => bytes.buffer }] } }); await tick(); });
+    assert.equal(changes.length, 1); assert.equal(changes[0].path, 'guide.md');
+    assert.equal(atob(changes[0].content_base64), 'Replacement file');
+    assert.equal(pending.length, 2, 'adding a supporting file does not dispatch it or write a saved version');
+  } finally { for (const item of pending) item.resolve(json(preview(item.body.content, item.body.fields))); if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function checkCurrentKnowledgeRecordSelection(Component) {
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    requests.push({ path: new URL(String(url)).pathname, body: JSON.parse(init.body) });
+    assert.equal(requests.at(-1).path, "/v1/setup-resolution");
+    return json({ configuration: requests.at(-1).body.overrides, effective: {}, instruction_layers: [], missing_dependencies: [] });
+  };
+  const catalogue = { deployments: [], bundles: [], profiles: [], tools: [], connections: [], knowledge: [
+    { ...entry("memory", "Saved memory"), current_version_id: "memory-v2" },
+    { ...entry("skill", "Saved skill"), kind: "skill", current_version_id: "skill-v1" },
+  ] };
+  const edits = [];
+  const props = { catalogue, value: { memory_entry_ids: ["memory"], skill_entry_ids: ["skill"] },
+    sections: ["knowledge"], onChange: value => edits.push(value) };
+  const choice = name => renderer.root.findAllByType("button").find(node => node.props.role === "switch" && node.props["aria-label"] === name);
   let renderer;
   try {
-    await act(async () => { renderer = create(React.createElement(Component, {
-      projectId: null, projects: [], conversation: true, selectionBusy: false, sending: false,
-      agentSetupVersionId: null, agentSetups: [], onProject() {}, onAgent() {}, setupResolving: false,
-      onManageAgents() {}, instructionLayers: [], missingDeployment: false, selectedProfile: null,
-      embeddingDeploymentId: "", onEmbedding() {}, embedderDeployments: [], deployments: [],
-      knowledgeEntries: entries, selectedKnowledgeIds: ["memory-v1", "skill-v1"],
-      onToggleKnowledge: (value, previous = []) => { toggled = value; replaced = previous; },
-      tools: [], filesystemToolsAvailable: true, shellToolsAvailable: true,
-    })); await tick(); });
-    const labels = renderer.root.findAllByType("label");
-    const memory = labels.find(label => text(label).includes("Versioned memory")).findByType("input");
-    const skill = labels.find(label => text(label).includes("Current skill")).findByType("input");
-    assert.equal(memory.props.disabled, false, "an existing chat can select a newer version for its next turn");
-    assert.equal(memory.props.checked, false, "a newer memory version must not appear selected");
-    assert.match(text(renderer.root), /memory-v1/, "the selected earlier version remains visible");
-    assert.match(text(renderer.root), /~10 tokens/, "memory cost is disclosed");
-    assert.match(text(renderer.root), /None.*local text search/, "no embedder still permits document text search");
-    const latest = renderer.root.findAllByType("button").find(button => text(button) === "Use latest version");
-    assert.ok(latest, "version updates require an explicit choice");
-    await act(async () => latest.props.onClick());
-    assert.equal(toggled, "memory-v2");
-    assert.deepEqual(replaced, ["memory-v1"]);
-    assert.equal(skill.props.disabled, false, "skills remain selectable on later turns");
-    await act(async () => skill.props.onChange());
-    assert.equal(toggled, "skill-v1");
+    await act(async () => { renderer = create(React.createElement(Component, props)); await tick(); });
+    assert.equal(choice("Saved memory").props["aria-checked"], true);
+    assert.equal(choice("Saved skill").props["aria-checked"], true);
+    const updatedCatalogue = { ...catalogue, knowledge: catalogue.knowledge.map(item => ({ ...item, current_version_id: `${item.id}-new-version` })) };
+    await act(async () => { renderer.update(React.createElement(Component, { ...props, catalogue: updatedCatalogue })); await tick(); });
+    assert.equal(choice("Saved memory").props["aria-checked"], true, "a saved version update cannot deselect its chosen record");
+    assert.equal(choice("Saved skill").props["aria-checked"], true);
+    await act(async () => choice("Saved memory").props.onClick());
+    assert.deepEqual(edits.at(-1).memory_entry_ids, [], "explicit deselection is saved as an empty record selection");
+    assert.deepEqual(edits.at(-1).skill_entry_ids, ["skill"]);
+    assert.equal(Object.hasOwn(edits.at(-1), "memory_version_refs"), false, "the editor leaves exact version resolution to admission");
+    assert.equal(requests.some(request => request.path.includes("/knowledge/versions/")), false, "record choices do not fetch or pin earlier native bodies");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 

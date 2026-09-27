@@ -85,7 +85,7 @@ const props = { threadId: "one", visible: true, enabled: true, projectBound: tru
 const vite = await createViteServer({ root: desktop, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 let renderer;
 try {
-  const { BrowserRail, browserPoint, browserFrameMatches, useBrowserRailAutoOpen } = await vite.ssrLoadModule("/src/renderer/BrowserRail.tsx");
+  const { BrowserRail, browserPoint, browserFrameMatches, useBrowserRailActivity } = await vite.ssrLoadModule("/src/renderer/BrowserRail.tsx");
   const { visiblePendingInterrupt } = await vite.ssrLoadModule("/src/renderer/types.ts");
   const { visibleApprovalInterrupt } = await vite.ssrLoadModule("/src/renderer/InteractionStream.tsx");
   assert.deepEqual(browserPoint({ left: 10, top: 20, width: 640, height: 500 }, { width: 1440, height: 900 }, 330, 270), { x: 720, y: 450 });
@@ -169,15 +169,18 @@ try {
   await act(async () => renderer.unmount());
   assert.ok(aborted >= 3); assert.equal(streams.size, 0); assert.equal(frames.size, 0);
 
-  let opened = 0;
-  function AutoOpen({ thread }) { useBrowserRailAutoOpen(thread, true, () => { opened += 1; }); return null; }
-  await act(async () => { renderer = create(React.createElement(AutoOpen, { thread: "one" })); await tick(); });
-  assert.equal(opened, 1);
+  const activities = [];
+  function Activity({ thread }) { useBrowserRailActivity(thread, true, active => activities.push(active)); return null; }
+  await act(async () => { renderer = create(React.createElement(Activity, { thread: "one" })); await tick(); });
+  assert.deepEqual(activities, [false, true], "background activity is observable without opening the dock");
   await act(async () => { for (const poll of intervals.values()) poll(); await tick(); });
-  assert.equal(opened, 1, "the hidden existing session is not repeatedly reopened");
+  assert.deepEqual(activities, [false, true], "unchanged activity does not repeat notifications");
   states.set("one", state("one", { session_id: "replacement_session" }));
   await act(async () => { for (const poll of intervals.values()) poll(); await tick(); });
-  assert.equal(opened, 2, "new browsing in the selected chat opens Browser");
+  assert.deepEqual(activities, [false, true], "new browsing leaves the dock preference unchanged");
+  states.set("one", state("one", { state: "closed" }));
+  await act(async () => { for (const poll of intervals.values()) poll(); await tick(); });
+  assert.deepEqual(activities, [false, true, false], "closed sessions clear the activity indicator");
   await act(async () => renderer.unmount());
   assert.equal(intervals.size, 0);
   console.log("Browser rail identity, scaled input, handoff, files and visible-stream checks passed.");

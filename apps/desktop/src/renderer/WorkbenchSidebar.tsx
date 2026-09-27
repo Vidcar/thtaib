@@ -60,6 +60,8 @@ export function WorkbenchSidebar(props: {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [listExpanded, setListExpanded] = useState(false);
   const [searchResults, setSearchResults] = useState<ChatConversation[] | null>(null);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -295,31 +297,33 @@ export function WorkbenchSidebar(props: {
   const menuProject = projects.find(project => project.id === projectMenu?.projectId) ?? null;
 
   return (
-    <aside className="app-nav" aria-label="Workbench">
+    <aside className={"workbench-navigation" + (searchOpen ? " search-active" : "") + (listExpanded ? " list-expanded" : "")} aria-label="Workbench">
       {deleting ? <DeleteChatDialog key={deleting.id} conversation={deleting} onClose={() => setDeleting(null)} onDeleted={id => { setConversations(current => current.filter(item => item.id !== id)); notice({ deletedId: id }); }} /> : null}
+      <div className="destination-rail">
+        <button type="button" className="tab" aria-label="Search chats" aria-expanded={searchOpen} title="Search chats" onClick={() => { props.onNavigate("chat"); props.onCollapsedChange(false); setSearchOpen(true); window.requestAnimationFrame(() => { if (typeof document !== "undefined") document.querySelector<HTMLInputElement>('.chat-search input')?.focus(); }); }}><Icon name="search" size={18} /></button>
+        <AttentionButton active={props.tab === "attention"} collapsed onOpen={() => props.onNavigate("attention")} />
+        <nav className="side-tabs" aria-label="Destinations">
+          {workbenchTabs.filter(item => item !== "attention" && item !== "settings").map(item => <button key={item} type="button" className={item === props.tab ? "tab destination-current" : "tab"} aria-label={tabLabel(item)} title={tabLabel(item)} onClick={() => props.onNavigate(item)}><Icon name={tabIcons[item]} size={18} /></button>)}
+        </nav>
+        <div className="rail-bottom"><button type="button" className={props.tab === "settings" ? "tab destination-current" : "tab"} aria-label="Settings" title="Settings" onClick={() => props.onNavigate("settings")}><Icon name="settings" size={18} /></button><div className="service-indicator" title={props.dotTitle ?? props.backendStatus}><span className={`status-dot${props.dotReady ? " ready" : ""}`} /><span className="sr-only">{props.backendOk === false ? "Service unavailable" : "Local"}</span></div></div>
+      </div>
+      <div className="app-nav chat-navigation" hidden={props.tab !== "chat" || props.collapsed}>
       <div className="app-nav-head">
         <div><h1>Workbench</h1></div>
-        <button type="button" className="nav-collapse" aria-label={props.collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!props.collapsed} onClick={() => props.onCollapsedChange(!props.collapsed)}>
+        <button type="button" className="nav-collapse" aria-label={props.collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!props.collapsed} onClick={() => { setListExpanded(false); setSearchOpen(false); setSearchQuery(""); props.onCollapsedChange(!props.collapsed); }}>
           <Icon name="panel" size={18} />
         </button>
       </div>
       <button type="button" className="new-chat-button" aria-label="New chat" title="New chat" onClick={props.onNewChat}><Icon name="edit" size={18} /><span>New chat</span></button>
       <div className="sidebar-tools">
-        <label className="chat-search">
+        <label className="chat-search" hidden={!searchOpen}>
           <span className="sr-only">Search chats</span><Icon name="search" size={15} />
-          <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search chats" />
+          <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search chats" onKeyDown={event => { if (event.key === "Escape") { setSearchOpen(false); setSearchQuery(""); } }} />
+          <button type="button" className="icon-button" aria-label="Close search" onClick={() => { setSearchOpen(false); setSearchQuery(""); }}><Icon name="close" size={12} /></button>
         </label>
         <button type="button" className="icon-button" aria-label="Add project" title="New project" onClick={props.onAddProject}><Icon name="plus" size={14} /></button>
         <label className="archive-filter" title="Include archived chats"><input type="checkbox" aria-label="Show archived" checked={includeArchived} onChange={event => setIncludeArchived(event.target.checked)} /><Icon name="archive" size={14} /></label>
       </div>
-      <nav className="side-tabs" aria-label="Destinations">
-        {workbenchTabs.map(item => item === "attention" ? <AttentionButton key={item} active={props.tab === item} collapsed={props.collapsed} onOpen={() => props.onNavigate("attention")} /> : (
-          <button key={item} type="button" className={item === props.tab ? "tab destination-current" : "tab"} aria-label={tabLabel(item)} title={tabLabel(item)} onClick={() => props.onNavigate(item)}>
-            <Icon name={tabIcons[item]} size={18} />
-            {props.collapsed ? <span className="sr-only">{tabLabel(item)}</span> : <span>{tabLabel(item)}</span>}
-          </button>
-        ))}
-      </nav>
       <div className="sidebar-scroll">
         {listError ? <p className="hint">{listError}</p> : null}
         {searchMiss ? <p className="hint">No matching conversations</p> : null}
@@ -355,8 +359,9 @@ export function WorkbenchSidebar(props: {
         </div>,
         document.body,
       ) : null}
-      <div className="service-indicator" title={props.dotTitle ?? props.backendStatus}><span className={`status-dot${props.dotReady ? " ready" : ""}`} /><span>{props.backendOk === false ? "Service unavailable" : "Local"}</span></div>
       {!props.collapsed ? <PanelResize label="Resize navigation" width={props.width} onResize={props.onWidthChange} reset={232} /> : null}
+      </div>
+      {props.tab === "chat" ? <button type="button" className="chat-list-reopen icon-button" aria-label="Expand chat list" title="Expand chat list" onClick={() => { setListExpanded(true); props.onCollapsedChange(false); }}><Icon name="panel" size={16} /></button> : null}
     </aside>
   );
 }

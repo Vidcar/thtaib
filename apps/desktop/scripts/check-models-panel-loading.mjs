@@ -208,12 +208,14 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     await act(async () => { second.resolve(jsonResponse(repository)); await tick(); });
     await act(async () => { first.resolve(jsonResponse({ ...repository, repo_id: "org/first", variants: [] })); await tick(); });
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Repository files" })).includes("org/second"), "late first selection cannot replace the latest repository files");
-    let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
-    assert.equal(download.props.disabled, true, "a repository offering vision requires an explicit vision or text-only choice");
+    let review = renderer.root.findAllByType("button").find(node => textOf(node) === "Review download");
+    assert.equal(review.props.disabled, true, "a repository offering vision requires an explicit vision or text-only choice");
     await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "image-input" && node.props.value === "vision").props.onChange());
-    download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
+    review = renderer.root.findAllByType("button").find(node => textOf(node) === "Review download");
+    await act(async () => review.props.onClick());
+    let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null }], "download pins the inspected revision and exact files, escaping glob syntax and deduplicating clicks");
+    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: { cache_type_k:"f16", cache_type_v:"f16", kv_offload:true } }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
     assert.equal(completions, 1);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -372,17 +374,36 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.equal(choices.length, 3);
     assert.equal(choices.find(node => node.props.value === files[1]).props.checked, true, "the linked LOW-MTP variant is selected exactly");
     assert.ok(choices.find(node => node.props.value === files[1]).props["aria-label"].includes("LOW-MTP"), "the variant kind is accessible");
-    assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "the selected kind and exact file are shown before download");
     const recipes = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
     assert.equal(recipes.length, 4, "mode-neutral recipes are offered and malformed card settings remain hidden");
     assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "Add models shows that the recipe preserves thinking mode");
     assert.ok(textOf(renderer.root).includes("Not copied: Launch flags are guidance only"), "Add models labels omitted card guidance");
     await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
     await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.onChange());
+    await act(async () => {
+      renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.onChange({ target:{value:"16384"} });
+      renderer.root.findByProps({ "aria-label":"Import cache location" }).props.onChange({ target:{value:"cpu"} });
+    });
+    assert.equal(downloads.length, 0, "Choose never transfers weights");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(calls.length, 1, "returning to an unchanged exact source must not re-inspect or reset choices");
+    assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant" && node.props.value === files[1]).props.checked, true);
+    assert.equal(renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.value, "16384");
+    assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu");
+    assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.checked, true);
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
+    assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "review shows the selected kind and exact file before download");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    assert.equal(renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.value, "16384", "Back preserves context");
+    assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu", "Back preserves KV placement");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: "general" }], "download retains exact LOW-MTP file and explicit recipe/default choices");
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: "general", initial_startup:{cache_type_k:"f16", cache_type_v:"f16", kv_offload:false, ctx_size:16384} }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
     inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
-    await act(async () => query.props.onChange({ target: { value: `https://huggingface.co/${repo_id}?show_file_info=missing-IQ4_XS.gguf` } }));
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    await act(async () => renderer.root.findByProps({id:"model-search-query"}).props.onChange({ target: { value: `https://huggingface.co/${repo_id}?show_file_info=missing-IQ4_XS.gguf` } }));
     await act(async () => { renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.ok(textOf(renderer.root).includes("Linked GGUF file unavailable"), "an unavailable file hint is visible");
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant").props.checked, false, "an unavailable hint cannot fall back to a different file even when only one variant is listed");
@@ -510,11 +531,12 @@ async function checkRepositorySelectionLoadsFiles(ModelsPanel) {
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("Q4_K_M"), "selected repository reveals the actual model variant");
-    assert.ok(renderer.root.findAllByType("button").some(node => textOf(node).startsWith("Download") && node.props.disabled === false), "one complete text variant is ready to download after inspection");
+    assert.ok(renderer.root.findAllByType("button").some(node => textOf(node) === "Review download" && node.props.disabled === false), "one complete text variant is ready to review after inspection");
     await act(async () => renderer.root.findByProps({ id: "models-tab-downloads" }).props.onClick());
     await act(async () => renderer.root.findByProps({ id: "models-tab-add" }).props.onClick());
-    assert.equal(renderer.root.findByProps({ id: "model-search-query" }).props.value, "model", "search text survives tab changes");
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Repository files" })).includes("Q4_K_M"), "inspected selection survives tab changes");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
+    assert.equal(renderer.root.findByProps({ id: "model-search-query" }).props.value, "model", "search text survives tab changes and Back");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;

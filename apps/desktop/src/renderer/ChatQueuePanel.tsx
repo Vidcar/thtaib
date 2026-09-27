@@ -17,27 +17,25 @@ interface ChatQueuePanelProps {
   onUpdated: (next: ChatConversation) => void;
   onError: (message: string) => void;
   onOpenOwner?: (threadId: string) => void;
+  getCurrentSetup?: () => Record<string, unknown>;
 }
 
 interface QueueDraft {
   task: string;
   attachmentIds: string[];
-  deploymentId: string;
-  profileId: string;
-  inheritDeploymentSettings: boolean;
-  perRequestOverrides: Record<string, unknown>;
   dirty: boolean;
 }
 
 const EMPTY_QUEUE: ChatQueueItem[] = [];
 
-export function ChatQueuePanel({ conversation, deployments, profiles, disabled = false, onUpdated, onError, onOpenOwner }: ChatQueuePanelProps) {
+export function ChatQueuePanel({ conversation, deployments, profiles, disabled = false, onUpdated, onError, onOpenOwner, getCurrentSetup }: ChatQueuePanelProps) {
   const queue = conversation.queue ?? EMPTY_QUEUE;
   const [drafts, setDrafts] = useState<Record<string, QueueDraft>>({});
   const [openEditors, setOpenEditors] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [continueBusy, setContinueBusy] = useState(false);
   const [ackUncertain, setAckUncertain] = useState(false);
+  const [itemErrors, setItemErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setDrafts((current) => {
@@ -58,25 +56,35 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
     return null;
   }
 
-  async function updateQueueItem(item: ChatQueueItem): Promise<void> {
+  async function updateQueueItem(item: ChatQueueItem, useCurrentSetup = false): Promise<void> {
     const draft = drafts[item.id] ?? draftFromQueueItem(item, conversation);
     const locked = isQueueItemLocked(item);
     if (locked || disabled || itemBusy || !hasSendableContent(draft)) {
       return;
     }
+    // Only an explicit action replaces captured intent. Frozen defaults never
+    // become editable choices when saving message text or attachments.
+    const intendedConfig = useCurrentSetup ? getCurrentSetup?.() : undefined;
+    if (useCurrentSetup && !intendedConfig) return;
     setBusyItemId(item.id);
+    setItemErrors(current => { const next = { ...current }; delete next[item.id]; return next; });
     try {
       const next = await packet03Request<ChatConversation>(queueItemPath(conversation.id, item.id), {
         method: "PATCH",
         body: JSON.stringify({
+          expected_revision: item.revision,
           task: draft.task.trim(),
           attachment_ids: draft.attachmentIds,
+          ...(intendedConfig ? { intended_config: intendedConfig } : {}),
+          ...(intendedConfig ? { replace_setup: true } : {}),
         }),
       });
       setDrafts((current) => ({ ...current, [item.id]: { ...draftFromQueueItem(next.queue?.find((entry) => entry.id === item.id) ?? item, next), dirty: false } }));
       onUpdated(next);
     } catch (error) {
-      onError(errorMessage(error));
+      const message = errorMessage(error);
+      setItemErrors(current => ({ ...current, [item.id]: message }));
+      onError(message);
     } finally {
       setBusyItemId(null);
     }
@@ -172,12 +180,15 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                       }
                     }}
                   />
-                  <p className="hint">{configurationLabel(findConfiguration(profiles, draft.profileId)) ?? deployments.find(deployment => deployment.id === draft.deploymentId)?.display_name ?? "Captured model configuration"} · settings captured when queued</p>
-                  {item.pause_error ? <Notice tone="error">{item.pause_error}</Notice> : null}
+                  <p className="hint">{capturedModelLabel(item, profiles, deployments)} · settings captured when queued</p>
                   {item.frozen_config ? <p className="hint">{frozenConfigLabel(item)}</p> : null}
-                  <button type="button" aria-label="Save queued turn" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
-                    {savingThisItem ? "Saving..." : "Save"}
-                  </button>
+                  <div className="composer-queue-editor-actions">
+                    <button type="button" aria-label="Save queued turn" disabled={itemDisabled || !draft.dirty || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item)}>
+                      {savingThisItem ? "Saving..." : "Save"}
+                    </button>
+                    {getCurrentSetup ? <button type="button" disabled={itemDisabled || !hasSendableContent(draft)} onClick={() => void updateQueueItem(item, true)}>Use current setup</button> : null}
+                  </div>
+                  {getCurrentSetup ? <p className="hint">Use current setup saves this message with your current composer choices.</p> : null}
                 </div>
               ) : (
                 <div className="composer-queue-text"><p title={preview}>{preview}</p>{item.wait_reason ? <div className="queue-project-wait" role="status"><span>Waiting for project{item.queue_position ? ` · position ${item.queue_position}` : ""}{item.waiting_owner_title ? ` · ${item.waiting_owner_title}` : ""}{item.wait_reason === "project_uncertain" ? " · effects need review" : ""}</span>{item.waiting_thread_id && onOpenOwner ? <button type="button" onClick={() => onOpenOwner(item.waiting_thread_id!)}>Open active chat</button> : null}</div> : null}</div>
@@ -190,6 +201,7 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
                   <Icon name="close" size={14} />
                 </button>
               </div>
+              {itemErrors[item.id] ? <div className="composer-queue-error"><Notice tone="error">{itemErrors[item.id]} Your edits are kept.</Notice></div> : item.status === "paused" && item.pause_error ? <div className="composer-queue-error"><Notice tone="error">{item.pause_error} {item.pause_reason === "dispatch_uncertain" ? "Review earlier effects before continuing." : editorOpen ? "Correct the composer setup, then use it here to try again." : "Edit this message to apply a corrected setup."}</Notice></div> : null}
             </li>
           );
         })}
@@ -216,22 +228,18 @@ export function ChatQueuePanel({ conversation, deployments, profiles, disabled =
   }
 }
 
-function draftFromQueueItem(item: ChatQueueItem, conversation: ChatConversation): QueueDraft {
-  const config = (item.frozen_config ?? item.intended_config ?? {}) as Record<string, unknown>;
-  const profile = typeof config.profile_id === "string" ? config.profile_id : config.profile_id === null ? "!none" : conversation.profile_id ?? "";
+function draftFromQueueItem(item: ChatQueueItem, _conversation: ChatConversation): QueueDraft {
   return {
     task: item.task,
     attachmentIds: [...(item.attachment_ids ?? [])],
-    deploymentId: typeof config.deployment_id === "string" ? config.deployment_id : conversation.deployment_id,
-    profileId: profile,
-    inheritDeploymentSettings: typeof config.inherit_deployment_settings === "boolean" ? config.inherit_deployment_settings : profile !== "!none",
-    perRequestOverrides: objectRecord(config.per_request_overrides),
     dirty: false,
   };
 }
 
-function objectRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+function capturedModelLabel(item: ChatQueueItem, profiles: RunProfile[], deployments: Deployment[]): string {
+  const config = (item.frozen_config ?? item.intended_config ?? {}) as Record<string, unknown>;
+  const profileId = typeof config.model_configuration_id === "string" ? config.model_configuration_id : typeof config.profile_id === "string" ? config.profile_id : "";
+  return configurationLabel(findConfiguration(profiles, profileId)) ?? deployments.find(deployment => deployment.id === config.deployment_id)?.display_name ?? "Captured model configuration";
 }
 
 function sameStrings(left: string[], right: string[]): boolean {

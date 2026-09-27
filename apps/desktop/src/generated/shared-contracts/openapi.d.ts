@@ -1068,6 +1068,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/chat/shortcuts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Task Shortcuts */
+        get: operations["task_shortcuts_v1_chat_shortcuts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/compatibility/assess": {
         parameters: {
             query?: never;
@@ -1859,6 +1876,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/knowledge/skills/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Skill */
+        post: operations["preview_skill_v1_knowledge_skills_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/knowledge/versions/{version_id}": {
         parameters: {
             query?: never;
@@ -1887,6 +1921,23 @@ export interface paths {
         get: operations["skill_resource_v1_knowledge_versions__version_id__resource_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Estimate Model */
+        post: operations["estimate_model_v1_models_estimate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3460,6 +3511,12 @@ export interface components {
         };
         /** ChatConversation */
         ChatConversation: {
+            /** Accepted Inputs */
+            accepted_inputs?: {
+                [key: string]: components["schemas"]["FrozenExecutionSelection"];
+            };
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /**
@@ -3530,6 +3587,8 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            /** Memory Entry Ids */
+            memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[];
             /** Model Configuration Id */
@@ -3546,6 +3605,8 @@ export interface components {
             project_id?: string | null;
             /** Project Path */
             project_path?: string | null;
+            /** Protected Instruction Entry Ids */
+            protected_instruction_entry_ids?: string[] | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[];
             /** Queue */
@@ -3564,6 +3625,8 @@ export interface components {
             /** Setup Cleared Fields */
             setup_cleared_fields?: string[];
             setup_overrides?: components["schemas"]["SetupConfiguration"];
+            /** Skill Entry Ids */
+            skill_entry_ids?: string[] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /** Source Checkpoint Id */
@@ -3609,6 +3672,8 @@ export interface components {
         };
         /** ChatConversationCreateRequest */
         ChatConversationCreateRequest: {
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /** Approval Mode */
@@ -3632,6 +3697,8 @@ export interface components {
             instructions?: string | null;
             /** Knowledge Version Refs */
             knowledge_version_refs?: string[];
+            /** Memory Entry Ids */
+            memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[];
             /** Model Configuration Id */
@@ -3648,11 +3715,15 @@ export interface components {
             project_id?: string | null;
             /** Project Path */
             project_path?: string | null;
+            /** Protected Instruction Entry Ids */
+            protected_instruction_entry_ids?: string[] | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[];
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[];
             review?: components["schemas"]["ReviewConfiguration"] | null;
+            /** Skill Entry Ids */
+            skill_entry_ids?: string[] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /** Startup Overrides */
@@ -3673,6 +3744,12 @@ export interface components {
         };
         /** ChatConversationView */
         ChatConversationView: {
+            /** Accepted Inputs */
+            accepted_inputs?: {
+                [key: string]: components["schemas"]["FrozenExecutionSelection"];
+            };
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /**
@@ -3763,6 +3840,8 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            /** Memory Entry Ids */
+            memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[];
             /** Model Configuration Id */
@@ -3786,6 +3865,8 @@ export interface components {
             project_id?: string | null;
             /** Project Path */
             project_path?: string | null;
+            /** Protected Instruction Entry Ids */
+            protected_instruction_entry_ids?: string[] | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[];
             /** Queue */
@@ -3809,6 +3890,8 @@ export interface components {
              * @default false
              */
             shell_tools_available: boolean;
+            /** Skill Entry Ids */
+            skill_entry_ids?: string[] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[];
             /** Source Checkpoint Id */
@@ -3978,6 +4061,11 @@ export interface components {
             pause_reason?: ("failed" | "cancelled" | "dispatch_uncertain") | null;
             /** Queue Position */
             queue_position?: number | null;
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
             /** Run Id */
             run_id?: string | null;
             /**
@@ -4007,6 +4095,8 @@ export interface components {
             content_blocks?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Expected Revision */
+            expected_revision: number;
             /** Input Message Id */
             input_message_id?: string | null;
             /** Intended Config */
@@ -4017,6 +4107,11 @@ export interface components {
             output_schema?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Replace Setup
+             * @default false
+             */
+            replace_setup: boolean;
             /** Task */
             task?: string | null;
         };
@@ -4060,6 +4155,8 @@ export interface components {
          * @description Preview a saved conversation or one candidate choice without changing it.
          */
         ChatReadinessRequest: {
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             overrides?: components["schemas"]["SetupConfiguration"];
@@ -4072,6 +4169,8 @@ export interface components {
         };
         /** ChatStartRequest */
         ChatStartRequest: {
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /** Approval Mode */
@@ -4105,6 +4204,8 @@ export interface components {
             instructions?: string | null;
             /** Knowledge Version Refs */
             knowledge_version_refs?: string[] | null;
+            /** Memory Entry Ids */
+            memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
             /** Model Configuration Id */
@@ -4118,10 +4219,14 @@ export interface components {
             presented_tools?: string[] | null;
             /** Profile Id */
             profile_id?: string | null;
+            /** Project File Refs */
+            project_file_refs?: string[];
             /** Project Id */
             project_id?: string | null;
             /** Project Path */
             project_path?: string | null;
+            /** Protected Instruction Entry Ids */
+            protected_instruction_entry_ids?: string[] | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[] | null;
             /** Queue After Run Id */
@@ -4129,6 +4234,10 @@ export interface components {
             /** Retrieval Project Paths */
             retrieval_project_paths?: string[] | null;
             review?: components["schemas"]["ReviewConfiguration"] | null;
+            /** Shortcut Ids */
+            shortcut_ids?: string[];
+            /** Skill Entry Ids */
+            skill_entry_ids?: string[] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[] | null;
             /** Startup Overrides */
@@ -4754,11 +4863,26 @@ export interface components {
          * @description Trusted app-owned queue snapshot; never accepted as start-request input.
          */
         FrozenExecutionSelection: {
+            /** Cleared Fields */
+            cleared_fields?: string[];
+            conversation_overrides?: components["schemas"]["SetupConfiguration"] | null;
+            /** Helper Snapshots */
+            helper_snapshots?: components["schemas"]["FrozenHelperSelection"][];
+            /** Intended Config */
+            intended_config?: {
+                [key: string]: unknown;
+            };
+            /** Request Fingerprint */
+            request_fingerprint?: string | null;
             selection: components["schemas"]["ResolvedSetupSelection"];
             /** Settings */
             settings: {
                 [key: string]: unknown;
             };
+            /** Shortcuts */
+            shortcuts?: {
+                [key: string]: string;
+            }[];
             /** System Prompt */
             system_prompt?: string | null;
         };
@@ -4837,6 +4961,37 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HardwareDeviceMemory */
+        HardwareDeviceMemory: {
+            /** Available Bytes */
+            available_bytes?: number | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Total Bytes */
+            total_bytes?: number | null;
+        };
+        /** HardwareMemoryObservation */
+        HardwareMemoryObservation: {
+            /** Gpu Devices */
+            gpu_devices?: components["schemas"]["HardwareDeviceMemory"][];
+            /** Observed At */
+            observed_at: string;
+            /** Ram Available Bytes */
+            ram_available_bytes?: number | null;
+            /** Ram Total Bytes */
+            ram_total_bytes?: number | null;
+            /** Reasons */
+            reasons?: string[];
+            /** Source */
+            source: string;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /** HealthReport */
         HealthReport: {
@@ -5005,6 +5160,10 @@ export interface components {
             default_recipe_id?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Initial Startup */
+            initial_startup?: {
+                [key: string]: unknown;
+            };
             /** Recipe Ids */
             recipe_ids?: string[];
             /** Repo Id */
@@ -5079,6 +5238,10 @@ export interface components {
             finished_at?: string | null;
             /** Id */
             id: string;
+            /** Initial Startup */
+            initial_startup?: {
+                [key: string]: unknown;
+            };
             /** Install Root */
             install_root?: string | null;
             kind: components["schemas"]["BundleSourceKind"];
@@ -5358,6 +5521,8 @@ export interface components {
              */
             kind: "memory" | "skill" | "protected_instruction";
             provenance?: components["schemas"]["KnowledgeProvenance"] | null;
+            /** Resource Changes */
+            resource_changes?: components["schemas"]["SkillResourceChange"][];
             /**
              * Scope
              * @enum {string}
@@ -5373,6 +5538,8 @@ export interface components {
             /** Content */
             content: string;
             provenance?: components["schemas"]["KnowledgeProvenance"] | null;
+            /** Resource Changes */
+            resource_changes?: components["schemas"]["SkillResourceChange"][];
         };
         /** KnowledgeEntryView */
         KnowledgeEntryView: {
@@ -5844,6 +6011,31 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ModelEstimateRequest */
+        ModelEstimateRequest: {
+            /** Bundle Id */
+            bundle_id?: string | null;
+            /** Primary Files */
+            primary_files?: string[];
+            /** Projector Files */
+            projector_files?: string[];
+            /**
+             * Refresh
+             * @default false
+             */
+            refresh: boolean;
+            /** Repo Id */
+            repo_id?: string | null;
+            /**
+             * Revision
+             * @default main
+             */
+            revision: string;
+            /** Startup */
+            startup?: {
+                [key: string]: unknown;
+            };
+        };
         /** ModelJudgement */
         ModelJudgement: {
             /** Model Review */
@@ -5859,6 +6051,62 @@ export interface components {
              * @enum {string}
              */
             source: "assistant_message" | "rubric_review" | "not_requested";
+        };
+        /** ModelMemoryEstimate */
+        ModelMemoryEstimate: {
+            /** Architecture */
+            architecture?: string | null;
+            /** Assumptions */
+            assumptions?: string[];
+            /** Context Marker */
+            context_marker?: number | null;
+            /** Context Marker Kind */
+            context_marker_kind?: ("upper_bound" | "native_prediction") | null;
+            /** Context Maximum */
+            context_maximum?: number | null;
+            /** Devices */
+            devices?: {
+                [key: string]: unknown;
+            }[];
+            /** Estimated At */
+            estimated_at: string;
+            /** Evaluated Startup */
+            evaluated_startup?: {
+                [key: string]: unknown;
+            };
+            /** Gpu Bytes */
+            gpu_bytes?: number | null;
+            hardware: components["schemas"]["HardwareMemoryObservation"];
+            /** Kv Bytes */
+            kv_bytes?: number | null;
+            /** Model Disk Bytes */
+            model_disk_bytes?: number | null;
+            /** Observed Runtime */
+            observed_runtime?: {
+                [key: string]: unknown;
+            } | null;
+            /** Projector Disk Bytes */
+            projector_disk_bytes?: number | null;
+            /** Ram Bytes */
+            ram_bytes?: number | null;
+            /** Runtime Overhead Bytes */
+            runtime_overhead_bytes?: number | null;
+            /** Selected Startup */
+            selected_startup?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Source
+             * @default metadata
+             * @enum {string}
+             */
+            source: "metadata" | "native_prediction";
+            /** Source Identity */
+            source_identity: string;
+            /** Unknown Reasons */
+            unknown_reasons?: string[];
+            /** Weights Bytes */
+            weights_bytes?: number | null;
         };
         /** ModelRequestCapture */
         ModelRequestCapture: {
@@ -7034,6 +7282,8 @@ export interface components {
             inherit_deployment_settings?: boolean | null;
             /** Instructions */
             instructions?: string | null;
+            /** Memory Entry Ids */
+            memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
             memory_version_refs?: string[] | null;
             /** Model Configuration Id */
@@ -7046,6 +7296,8 @@ export interface components {
             presented_tools?: string[] | null;
             /** Profile Id */
             profile_id?: string | null;
+            /** Protected Instruction Entry Ids */
+            protected_instruction_entry_ids?: string[] | null;
             /** Protected Instruction Version Refs */
             protected_instruction_version_refs?: string[] | null;
             /** Requires Host Shell */
@@ -7053,6 +7305,8 @@ export interface components {
             /** Requires Project */
             requires_project?: boolean | null;
             review?: components["schemas"]["ReviewConfiguration"] | null;
+            /** Skill Entry Ids */
+            skill_entry_ids?: string[] | null;
             /** Skill Version Refs */
             skill_version_refs?: string[] | null;
             /** Startup Overrides */
@@ -7073,6 +7327,8 @@ export interface components {
         };
         /** SetupResolutionRequest */
         SetupResolutionRequest: {
+            /** Agent Setup Id */
+            agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
             /**
@@ -7093,6 +7349,15 @@ export interface components {
              */
             type: "back" | "forward" | "reload";
         };
+        /** SkillGuidedFields */
+        SkillGuidedFields: {
+            /** Description */
+            description: string;
+            /** Instructions */
+            instructions: string;
+            /** Name */
+            name: string;
+        };
         /** SkillPackageImportRequest */
         SkillPackageImportRequest: {
             /** Base Version */
@@ -7112,6 +7377,41 @@ export interface components {
             /** Source Path */
             source_path: string;
         };
+        /** SkillPreview */
+        SkillPreview: {
+            /** Content */
+            content: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Guided Available
+             * @default false
+             */
+            guided_available: boolean;
+            /** Instructions */
+            instructions?: string | null;
+            /** Issues */
+            issues?: string[];
+            /** Name */
+            name?: string | null;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
+        };
+        /** SkillPreviewRequest */
+        SkillPreviewRequest: {
+            /** Content */
+            content: string;
+            /** Entry Id */
+            entry_id?: string | null;
+            fields?: components["schemas"]["SkillGuidedFields"] | null;
+            /** Scope */
+            scope?: ("user" | "agent" | "project") | null;
+            /** Scope Id */
+            scope_id?: string | null;
+        };
         /** SkillResource */
         SkillResource: {
             /** Path */
@@ -7120,6 +7420,18 @@ export interface components {
             sha256: string;
             /** Size Bytes */
             size_bytes: number;
+        };
+        /** SkillResourceChange */
+        SkillResourceChange: {
+            /** Content Base64 */
+            content_base64?: string | null;
+            /** Path */
+            path: string;
+            /**
+             * Remove
+             * @default false
+             */
+            remove: boolean;
         };
         /** SkillResourceView */
         SkillResourceView: {
@@ -7557,6 +7869,8 @@ export type SchemaFrozenExecutionSelection = components['schemas']['FrozenExecut
 export type SchemaFrozenHelperSelection = components['schemas']['FrozenHelperSelection'];
 export type SchemaGenerationObservation = components['schemas']['GenerationObservation'];
 export type SchemaHttpValidationError = components['schemas']['HTTPValidationError'];
+export type SchemaHardwareDeviceMemory = components['schemas']['HardwareDeviceMemory'];
+export type SchemaHardwareMemoryObservation = components['schemas']['HardwareMemoryObservation'];
 export type SchemaHealthReport = components['schemas']['HealthReport'];
 export type SchemaHostShellFacts = components['schemas']['HostShellFacts'];
 export type SchemaHubRepository = components['schemas']['HubRepository'];
@@ -7609,7 +7923,9 @@ export type SchemaMaterializedKnowledgeFact = components['schemas']['Materialize
 export type SchemaModelBundle = components['schemas']['ModelBundle'];
 export type SchemaModelCardResponse = components['schemas']['ModelCardResponse'];
 export type SchemaModelConfigurationWriteRequest = components['schemas']['ModelConfigurationWriteRequest'];
+export type SchemaModelEstimateRequest = components['schemas']['ModelEstimateRequest'];
 export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
+export type SchemaModelMemoryEstimate = components['schemas']['ModelMemoryEstimate'];
 export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
 export type SchemaNavigateAction = components['schemas']['NavigateAction'];
 export type SchemaNewTabAction = components['schemas']['NewTabAction'];
@@ -7670,8 +7986,12 @@ export type SchemaSetupConfiguration = components['schemas']['SetupConfiguration
 export type SchemaSetupDependencyIssue = components['schemas']['SetupDependencyIssue'];
 export type SchemaSetupResolutionRequest = components['schemas']['SetupResolutionRequest'];
 export type SchemaSimpleAction = components['schemas']['SimpleAction'];
+export type SchemaSkillGuidedFields = components['schemas']['SkillGuidedFields'];
 export type SchemaSkillPackageImportRequest = components['schemas']['SkillPackageImportRequest'];
+export type SchemaSkillPreview = components['schemas']['SkillPreview'];
+export type SchemaSkillPreviewRequest = components['schemas']['SkillPreviewRequest'];
 export type SchemaSkillResource = components['schemas']['SkillResource'];
+export type SchemaSkillResourceChange = components['schemas']['SkillResourceChange'];
 export type SchemaSkillResourceView = components['schemas']['SkillResourceView'];
 export type SchemaSmokeResult = components['schemas']['SmokeResult'];
 export type SchemaSourceRange = components['schemas']['SourceRange'];
@@ -10042,6 +10362,28 @@ export interface operations {
             };
         };
     };
+    task_shortcuts_v1_chat_shortcuts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
+                };
+            };
+        };
+    };
     assess_v1_compatibility_assess_post: {
         parameters: {
             query?: never;
@@ -11728,6 +12070,39 @@ export interface operations {
             };
         };
     };
+    preview_skill_v1_knowledge_skills_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_version_v1_knowledge_versions__version_id__get: {
         parameters: {
             query?: never;
@@ -11779,6 +12154,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillResourceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    estimate_model_v1_models_estimate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelEstimateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelMemoryEstimate"];
                 };
             };
             /** @description Validation Error */

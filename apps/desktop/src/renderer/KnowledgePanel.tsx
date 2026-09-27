@@ -11,7 +11,8 @@ import { Notice } from "./Notice";
 import { LifecycleAction } from "./LifecycleAction";
 import { StatusBadge } from "./StatusBadge";
 import { SkillPackageImport, SkillResources } from "./SkillPackageControls";
-import { knowledgeApi, type KnowledgeScopeOption, type KnowledgeProposal } from "./knowledgeApi";
+import { knowledgeApi, type KnowledgeScopeOption, type KnowledgeProposal, type SkillResourceChange } from "./knowledgeApi";
+import { SkillEditor } from "./SkillEditor";
 import { MemoryProposalCard } from "./MemoryProposalCard";
 import "./WorkspacePanels.css";
 import { CompactSwitch } from "./CompactControls";
@@ -35,19 +36,6 @@ description: Describe when the assistant should use this skill.
 Explain the steps the assistant should follow.
 `;
 
-function skillDocumentIssue(content: string): string | null {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const frontmatter = normalized.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1];
-  if (!frontmatter) return "A skill needs SKILL.md frontmatter between --- lines.";
-  const name = frontmatter.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) {
-    return "Set name to a unique lowercase kebab-case value, up to 64 characters.";
-  }
-  const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
-  if (!description || description.length > 1024) return "Add a description of when to use the skill (up to 1024 characters).";
-  return null;
-}
-
 export function KnowledgePanel() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selected, setSelected] = useState<KnowledgeEntry | null>(null);
@@ -66,7 +54,10 @@ export function KnowledgePanel() {
   const [policyDestination, setPolicyDestination] = useState("user:");
   const [filterKind, setFilterKind] = useState<KnowledgeKind>("memory");
   const [query, setQuery] = useState("");
-  const [drafts, setDrafts] = useState<Record<string, { content: string; baseVersion: string }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { content: string; baseVersion: string; resourceChanges?: SkillResourceChange[] }>>({});
+  const [newResources, setNewResources] = useState<SkillResourceChange[]>([]);
+  const [newSkillValid, setNewSkillValid] = useState(false);
+  const [editSkillValid, setEditSkillValid] = useState(false);
   const [busy, setBusy] = useState(false);
   const actionPending = useRef(false);
   const [content, setContent] = useState("");
@@ -95,6 +86,7 @@ export function KnowledgePanel() {
 
   useEffect(() => {
     setVersions([]);
+    setEditSkillValid(false);
     setRename(null);
     if (!selected) {
       return;
@@ -149,12 +141,11 @@ export function KnowledgePanel() {
   return (
     <section className="surface workspace-records-surface knowledge-surface">
       <header className="surface-head">
-        <div className="entity-head"><h2>Knowledge</h2><HoverHelp title="About Knowledge">Save memories, skills and instructions here. Choose which entries each chat uses.</HoverHelp></div>
-        <button type="button" disabled={busy} onClick={() => { setKind(filterKind); setDisplayName(""); setContent(filterKind === "skill" ? SKILL_STARTER : ""); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
+        <div className="entity-head"><h2>Knowledge</h2><HoverHelp title="About Knowledge">Save memories, skills and instructions. New messages use the latest saved selected entries.</HoverHelp></div>
+        <button type="button" disabled={busy} onClick={() => { setKind(filterKind); setDisplayName(""); setContent(filterKind === "skill" ? SKILL_STARTER : ""); setNewResources([]); setNewSkillValid(false); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
       </header>
 
       <nav className="model-tabs" aria-label="Knowledge types">{([["memory", "Memories"], ["skill", "Skills"], ["protected_instruction", "Instructions"]] as const).map(([value, label]) => <button type="button" key={value} disabled={busy} aria-current={filterKind === value ? "page" : undefined} onClick={() => { setFilterKind(value); setKind(value); setCreating(false); setSelected(entries.find(entry => entry.kind === value) ?? null); }}>{label} <span>{entries.filter(entry => entry.kind === value).length}</span></button>)}</nav>
-      <p className="hint">{filterKind === "memory" ? "Facts and preferences to use again." : filterKind === "skill" ? "Reusable ways of working and their supporting files." : "Guidance you control. Agents cannot rewrite these instructions."}</p>
       {filterKind === "skill" ? <details className="card"><summary>Import a skill package</summary><SkillPackageImport onImported={async next => { await refresh(); setSelected(next); setCreating(false); }} /></details> : null}
 
       {creating ? <section className="card">
@@ -167,14 +158,16 @@ export function KnowledgePanel() {
             setMessage("Write some content before creating an entry.");
             return;
           }
+          if (kind === "skill" && !newSkillValid) return;
           if (scope !== "user" && !scopeId) { setMessage("Choose a real project or agent for this entry."); return; }
-          void action(async () => { await api
-            .createKnowledgeEntry({
+          void action(async () => { await knowledgeApi
+            .createEntry({
               scope,
               kind,
               content,
               display_name: displayName.trim() || undefined,
               scope_id: scope === "user" ? undefined : scopeId,
+              resource_changes: kind === "skill" ? newResources : [],
             })
             .then(async (next) => {
               setMessage(`Created ${entryTitle(next)}.`);
@@ -210,12 +203,8 @@ export function KnowledgePanel() {
           Display name (optional)
           <input disabled={busy} value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
         </label>
-        <label>
-          {kind === "skill" ? "SKILL.md content" : "Content"}
-          <textarea disabled={busy} value={content} onChange={(event) => setContent(event.target.value)} />
-        </label>
-        {kind === "skill" ? <><p className="hint">Deep Agents uses the name and description inside SKILL.md. Give each skill a unique name; the display name only labels it here.</p>{skillDocumentIssue(content) ? <Notice tone="warn">{skillDocumentIssue(content)}</Notice> : null}</> : null}
-        <div className="actions"><button type="submit" className="primary-button" disabled={busy || !content.trim() || (scope !== "user" && !scopeId)}><Icon name="plus" size={14} /> Save</button><button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button></div>
+        {kind === "skill" ? <SkillEditor content={content} onChange={value => { setContent(value); setNewSkillValid(false); }} disabled={busy} scope={scope} scopeId={scope === "user" ? null : scopeId} resourceChanges={newResources} onResourceChanges={setNewResources} onStateChange={setNewSkillValid} /> : <label>Content<textarea disabled={busy} value={content} onChange={event => setContent(event.target.value)} /></label>}
+        <div className="actions"><button type="submit" className="primary-button" disabled={busy || !content.trim() || (kind === "skill" && !newSkillValid) || (scope !== "user" && !scopeId)}><Icon name="plus" size={14} /> Save</button><button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button></div>
       </form>
       </section> : null}
 
@@ -258,7 +247,7 @@ export function KnowledgePanel() {
               <p className="hint">
                 {scopeLabel(selected)} · updated {formatWhen(selected.updated_at)}
               </p>
-              {selected.kind === "memory" ? <p className="hint" title={selected.token_counting_method}>{selected.estimated_content_tokens != null ? `~${selected.estimated_content_tokens.toLocaleString()} tokens when selected. ` : ""}Memory is included in full. Saving here creates a version; choose Use latest version in Chat setup to use it on your next turn.</p> : null}
+              {selected.kind === "memory" ? <p className="hint" title={selected.token_counting_method}>{selected.estimated_content_tokens != null ? `~${selected.estimated_content_tokens.toLocaleString()} tokens when selected.` : "Memory is included in full."}</p> : null}
               {selected.scope_bound === false ? <Notice tone="warn">This entry's project or agent is unavailable. Its history remains readable, but it cannot be used in a new run.</Notice> : null}
               <div className="actions"><button type="button" disabled={busy} onClick={() => setRename(selected.display_name ?? "")}>Rename</button>{selected.enabled === false ? <><button type="button" disabled={busy} onClick={() => void action(async () => { await knowledgeApi.updateEntry(selected.id, { enabled: true }); await refresh(); })}>Enable</button><StatusBadge label="Disabled" /></> : <LifecycleAction key={`disable:${selected.id}`} path={`/v1/knowledge/entries/${selected.id}`} name={entryTitle(selected)} label="Disable" confirmLabel="Disable entry" method="PATCH" body={{ enabled: false }} disabled={busy} onBusyChange={setBusy} onComplete={async () => { await refresh(); }} />}<LifecycleAction key={`remove:${selected.id}`} path={`/v1/knowledge/entries/${selected.id}`} name={entryTitle(selected)} label="Remove" confirmLabel="Remove entry" disabled={busy} onBusyChange={setBusy} onComplete={async () => { setDrafts(current => { const next = { ...current }; delete next[selected.id]; return next; }); await refresh(); }} /></div>
               {rename !== null ? <form className="actions" onSubmit={event => { event.preventDefault(); void action(async () => { await knowledgeApi.updateEntry(selected.id, { display_name: rename.trim() }); await refresh(); setRename(null); }); }}><label>Name<input autoFocus value={rename} disabled={busy} onChange={event => setRename(event.target.value)} /></label><button type="submit" disabled={busy || !rename.trim()}>Save name</button><button type="button" disabled={busy} onClick={() => setRename(null)}>Cancel</button></form> : null}
@@ -268,19 +257,14 @@ export function KnowledgePanel() {
                   Entry ID: {selected.id} · current version: {selected.current_version_id}
                 </p>
               </details>
-              {selected.kind === "skill" ? <><SkillResources key={selected.current_version_id} versionId={selected.current_version_id} resources={selected.resources} /><details><summary>Update from a package</summary><SkillPackageImport key={selected.id} entry={selected} onImported={async next => { await refresh(); setSelected(next); setDrafts(current => { const drafts = { ...current }; delete drafts[next.id]; return drafts; }); }} /></details></> : null}
-              <label>
-                {selected.kind === "skill" ? "SKILL.md content" : "Content"}
-                <textarea disabled={busy} value={editContent} onChange={(event) => { const value = event.target.value; setEditContent(value); setDrafts(current => ({ ...current, [selected.id]: { content: value, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id } })); }} />
-              </label>
-              {selected.kind === "skill" && skillDocumentIssue(editContent) ? <Notice tone="warn">{skillDocumentIssue(editContent)}</Notice> : null}
+              {selected.kind === "skill" ? <><SkillEditor key={selected.id} content={editContent} onChange={value => { setEditContent(value); setEditSkillValid(false); setDrafts(current => ({ ...current, [selected.id]: { ...current[selected.id], content: value, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id } })); }} disabled={busy} scope={selected.scope} scopeId={selected.scope_id} entryId={selected.id} versionId={selected.current_version_id} resources={selected.resources} resourceChanges={drafts[selected.id]?.resourceChanges ?? []} onResourceChanges={resourceChanges => setDrafts(current => ({ ...current, [selected.id]: { ...current[selected.id], content: editContent, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id, resourceChanges } }))} onStateChange={setEditSkillValid} /><details><summary>Update from a package</summary><SkillPackageImport key={selected.id} entry={selected} onImported={async next => { await refresh(); setSelected(next); setDrafts(current => { const drafts = { ...current }; delete drafts[next.id]; return drafts; }); }} /></details></> : <label>Content<textarea disabled={busy} value={editContent} onChange={event => { const value = event.target.value; setEditContent(value); setDrafts(current => ({ ...current, [selected.id]: { content: value, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id } })); }} /></label>}
               <div className="actions">
                 <button
                   type="button"
-                  disabled={busy || !editContent.trim() || editContent === selected.content}
+                  disabled={busy || !editContent.trim() || (selected.kind === "skill" && !editSkillValid) || (editContent === selected.content && !drafts[selected.id]?.resourceChanges?.length)}
                   onClick={() => {
-                    void action(async () => { await api
-                      .editKnowledgeEntry(selected.id, editContent, drafts[selected.id]?.baseVersion ?? selected.current_version_id)
+                    void action(async () => { await knowledgeApi
+                      .editEntry(selected.id, editContent, drafts[selected.id]?.baseVersion ?? selected.current_version_id, drafts[selected.id]?.resourceChanges ?? [])
                       .then(async (next) => {
                         setMessage("Saved a new version.");
                         await refresh();

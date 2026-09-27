@@ -21,13 +21,14 @@ export function browserFrameMatches(frame: BrowserFrame | null, status: BrowserS
   return Boolean(frame && status?.state === "active" && frame.session_id === status.session_id && frame.page_id === status.active_page_id && frame.revision === status.revision && frame.viewport.width === status.viewport.width && frame.viewport.height === status.viewport.height);
 }
 
-/** Watching for a new session never reopens a session which the user hid. */
-export function useBrowserRailAutoOpen(threadId: string | null, enabled: boolean, onOpen: () => void): void {
-  const observed = useRef(new Map<string, string>());
-  const openRef = useRef(onOpen);
-  openRef.current = onOpen;
+/** Activity is observable without opening the user's dock. */
+export function useBrowserRailActivity(threadId: string | null, enabled: boolean, onActivity: (active: boolean) => void): void {
+  const activityRef = useRef(onActivity);
+  activityRef.current = onActivity;
   useEffect(() => {
+    activityRef.current(false);
     if (!threadId || !enabled) return;
+    let observed = false;
     let stale = false;
     let polling = false;
     async function poll() {
@@ -35,10 +36,7 @@ export function useBrowserRailAutoOpen(threadId: string | null, enabled: boolean
       polling = true;
       try {
         const state = await api.browserSession(threadId!);
-        if (!stale && state.state === "active" && state.session_id && observed.current.get(threadId!) !== state.session_id) {
-          observed.current.set(threadId!, state.session_id);
-          openRef.current();
-        }
+        if (!stale && observed !== (state.state === "active")) { observed = state.state === "active"; activityRef.current(observed); }
       } catch { /* Readiness and the Browser tab own actionable failures. */ }
       finally { polling = false; }
     }
@@ -55,12 +53,13 @@ interface BrowserRailProps {
   projectBound: boolean;
   attachments: Array<{ id: string; filename: string }>;
   onConfigure: () => void;
+  onSettings?: () => void;
   onOpenLibrary: () => void;
   onDownloadsChanged?: () => void;
   onReadinessChange?: () => void;
 }
 
-export function BrowserRail({ threadId, visible, enabled, projectBound, attachments, onConfigure, onOpenLibrary, onDownloadsChanged, onReadinessChange }: BrowserRailProps) {
+export function BrowserRail({ threadId, visible, enabled, projectBound, attachments, onConfigure, onSettings = onConfigure, onOpenLibrary, onDownloadsChanged, onReadinessChange }: BrowserRailProps) {
   const [status, setStatus] = useState<BrowserSessionStatus | null>(null);
   const statusRef = useRef(status);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
@@ -227,9 +226,9 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
       <button type="button" disabled={!threadId || Boolean(busy)} onClick={() => setResetConfirm(true)}>Reset</button>
     </div>
     {!threadId ? <p className="hint">Create a chat to start its browser.</p> : null}
-    {!enabled ? <p className="hint">Select Browser and switch to Work to start or control pages. <button type="button" onClick={onConfigure}>Browser tools</button></p> : null}
+    {!enabled ? <p className="hint">Enable Browser tools in <button type="button" onClick={onConfigure}>Agents</button> and switch to Work to start or control pages.</p> : null}
     {status?.worker.chrome_available === false ? <p role="alert">Chrome is unavailable. Install Chrome, then reopen this tab.</p> : null}
-    {status?.worker.installed === false ? <p className="hint">Install the browser worker in <button type="button" onClick={onConfigure}>Browser tools</button>.</p> : null}
+    {status?.worker.installed === false ? <p className="hint">Install the browser worker in <button type="button" onClick={onSettings}>Settings</button>.</p> : null}
     {status?.state === "lost" ? <p className="hint">Close this session, then start Chrome again to keep this chat’s sign-ins. The new session opens fresh pages.</p> : null}
     {resetConfirm ? <div className="browser-confirm" role="alertdialog" aria-label="Reset this chat browser"><p>Reset closes Chrome and clears this chat’s sign-ins and browser data.</p><button type="button" disabled={Boolean(busy)} onClick={() => { setResetConfirm(false); if (threadId) void perform("reset", () => api.resetBrowserSession(threadId)); }}>Clear sign-ins and reset</button><button type="button" onClick={() => setResetConfirm(false)}>Cancel</button></div> : null}
     <div className="browser-navigation">

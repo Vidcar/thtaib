@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api";
+import { api, request } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { Help } from "./ModelControls";
 import { Icon } from "./Icon";
 import { Notice } from "./Notice";
 import { presentVariant, variantFamilies } from "./modelVariantPresentation";
+import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
 import type { ImportJob, ResponseRecipe } from "./types";
 import type { SchemaHubRepository } from "../generated/shared-contracts/openapi";
 import "./HuggingFaceImport.css";
@@ -53,6 +54,12 @@ function recipeSummary(recipe: ResponseRecipe): string {
 
 export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) => Promise<void> }) {
   const [query, setQuery] = useState("");
+  const [step, setStep] = useState<0 | 1 | 2>(0);
+  const [context, setContext] = useState("");
+  const [keyPrecision, setKeyPrecision] = useState("f16");
+  const [valuePrecision, setValuePrecision] = useState("f16");
+  const [kvOffload, setKvOffload] = useState(true);
+  const [metadataContextMaximum, setMetadataContextMaximum] = useState<number | null>(null);
   const [results, setResults] = useState<Array<{ repo_id: string; downloads: number | null }>>([]);
   const [selectedRepo, setSelectedRepo] = useState("");
   const [hub, setHub] = useState<InspectedRepository | null>(null);
@@ -66,23 +73,32 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const generation = useRef(0);
+  const inspectedSource = useRef("");
   const downloadPending = useRef(false);
   useEffect(() => () => { generation.current += 1; }, []);
 
   async function inspectRepository(repo: string) {
     if (downloadPending.current) return;
+    const source = repo.trim();
+    if (hub && source === inspectedSource.current) {
+      setError(""); setMessage(""); setStep(1);
+      return;
+    }
     const current = ++generation.current;
     setSelectedRepo(repo); setHub(null); setVariant(""); setProjector(""); setBitFilter("all");
     setRecipeIds([]); setDefaultRecipeId("");
     setError(""); setMessage(""); setBusy("inspect");
+    setContext(""); setKeyPrecision("f16"); setValuePrecision("f16"); setKvOffload(true); setMetadataContextMaximum(null);
     try {
       const next = inspectedRepository(await api.inspectHf(repo));
       if (current !== generation.current) return;
+      inspectedSource.current = source;
       setHub(next); setSelectedRepo(next.repo_id);
       const hint = next.file_hint;
       const hinted = hint ? next.variants.find(item => item.name === hint || item.files.includes(hint)) : undefined;
       setVariant(next.file_hint ? (hinted?.complete ? hinted.name : "") : next.variants.length === 1 && next.variants[0].complete ? next.variants[0].name : "");
       setProjector(next.projectors.length ? "" : "text-only");
+      setStep(1);
     } catch (failure) { if (current === generation.current) setError(errorMessage(failure)); }
     finally { if (current === generation.current) setBusy(""); }
   }
@@ -96,7 +112,7 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
       return;
     }
     const current = ++generation.current;
-    setBusy("search"); setError(""); setMessage(""); setHub(null); setSelectedRepo(""); setResults([]);
+    setBusy("search"); setError(""); setMessage(""); setResults([]);
     try {
       const next = await api.searchHf(value);
       if (current !== generation.current) return;
@@ -116,6 +132,10 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
   const families = variantFamilies(hub?.variants ?? [], bitFilter, sizeOrder);
   const recipes = hub?.response_recipes ?? [];
   const selectedRecipes = recipes.filter(recipe => recipeIds.includes(recipe.id));
+  const startup: Record<string, unknown> = { cache_type_k: keyPrecision, cache_type_v: valuePrecision, kv_offload: kvOffload };
+  if (context && Number.isSafeInteger(Number(context)) && Number(context) > 0) startup.ctx_size = Number(context);
+  const validContext = context === "" || (Number.isSafeInteger(Number(context)) && Number(context) > 0);
+  const canReview = Boolean(selectedVariant?.complete && projector && validContext);
 
   function toggleRecipe(id: string, checked: boolean) {
     setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
@@ -129,7 +149,10 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
     setBusy("download"); setError(""); setMessage("");
     try {
       const exactFiles = files.map(file => file.replaceAll("[", "[[]").replaceAll("?", "[?]").replaceAll("*", "[*]"));
-      const job = await api.importHf(hub.repo_id, hub.resolved_revision, exactFiles, recipeIds, defaultRecipeId || null);
+      const job = await request<ImportJob>("/v1/imports/huggingface", { method: "POST", body: JSON.stringify({
+        repo_id: hub.repo_id, revision: hub.resolved_revision, allow_patterns: exactFiles,
+        recipe_ids: recipeIds, default_recipe_id: defaultRecipeId || null, initial_startup: startup,
+      }) });
       if (current !== generation.current) return;
       setMessage(job.error ? `Download ${job.status}: ${job.error}` : job.status === "complete" ? "Model added to your library." : "Download started. Track progress in Downloads.");
       await onStarted(job);
@@ -138,7 +161,9 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
   }
 
   return <section className="card model-finder" aria-label="Find a model">
-    <div className="setting-title"><h3>Hugging Face</h3><Help label="Find a model">Search by model or publisher, or paste a repository link. Choose one complete GGUF variant; image input also needs a compatible vision file.</Help></div>
+    <div className="setting-title"><h3>Add a model</h3><Help label="Find a model">Search Hugging Face or paste an exact model file link.</Help></div>
+    <nav className="model-import-steps" aria-label="Model import steps">{["Find", "Choose", "Review"].map((label, index) => <span key={label} aria-current={step === index ? "step" : undefined}>{index + 1}. {label}</span>)}</nav>
+    {step === 0 ? <>
     <form className="model-search" onSubmit={event => { event.preventDefault(); void search(); }}>
       <label htmlFor="model-search-query" className="visually-hidden">Model name or Hugging Face repository</label>
       <input id="model-search-query" maxLength={2048} value={query} disabled={busy === "download"} onChange={event => setQuery(event.target.value)} placeholder="Search models or paste a Hugging Face link" />
@@ -148,14 +173,17 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
       <div><strong>{result.repo_id}</strong>{result.downloads != null ? <span className="hint">{result.downloads.toLocaleString()} downloads</span> : null}</div>
       <button type="button" disabled={busy === "download"} aria-pressed={selectedRepo === result.repo_id} onClick={() => void inspectRepository(result.repo_id)}>{selectedRepo === result.repo_id ? "Selected" : "Select repository"}</button>
     </li>)}</ul> : null}
+    </> : null}
     {busy === "inspect" ? <p role="status">Loading model files for <strong>{selectedRepo}</strong>…</p> : null}
     {error ? <Notice tone="error" action={selectedRepo && !hub ? <button type="button" disabled={Boolean(busy)} onClick={() => void inspectRepository(selectedRepo)}>Retry loading files</button> : undefined}>{error}</Notice> : null}
-    {hub ? <section className="model-download-selection" aria-label="Repository files">
+    {hub && step !== 0 ? <section className="model-download-selection" aria-label="Repository files">
+      <div className="actions"><button type="button" disabled={Boolean(busy)} onClick={() => setStep(step === 2 ? 1 : 0)}>Back</button></div>
       <div className="section-heading"><strong>{hub.repo_id}</strong><a href={`https://huggingface.co/${hub.repo_id}/blob/${hub.resolved_revision}/README.md`} target="_blank" rel="noreferrer">Model guide ↗</a></div>
       {hub.file_hint ? <p className="hint" role="status">{selectedVariant?.files.includes(hub.file_hint) ? "Linked GGUF file selected: " : "Linked GGUF file unavailable; choose a listed variant: "}<strong>{hub.file_hint}</strong></p> : null}
-      {hub.source ? <p className="hint">Publisher settings: {hub.source.repo_id}{hub.source.resolved_revision ? ` @ ${hub.source.resolved_revision.slice(0, 8)}` : ""} · {hub.source.verified ? "source commit verified" : "source unverified; publisher settings will not be applied"}</p> : null}
+      {hub.source ? <details className="technical-details"><summary>Publisher settings</summary><p className="hint">{hub.source.repo_id}{hub.source.resolved_revision ? ` @ ${hub.source.resolved_revision.slice(0, 8)}` : ""} · {hub.source.verified ? "source commit verified" : "source unverified; publisher settings will not be applied"}</p></details> : null}
+      {step === 1 ? <>
       {hub.variants.length ? <div className="variant-picker">
-        <div className="variant-picker-heading"><div><h4>Choose a GGUF variant</h4><p className="hint">Quantization and variant labels come from filenames; capabilities are checked after loading. Size is disk usage, not a RAM or GPU estimate.</p></div><label>Size within groups<select value={sizeOrder} onChange={event => setSizeOrder(event.target.value as "asc" | "desc")}><option value="asc">Smallest first</option><option value="desc">Largest first</option></select></label></div>
+        <div className="variant-picker-heading"><div><h4>Quantization <Help label="Quantization">Labels come from filenames; capabilities are checked after loading. Listed size is disk usage. Memory predictions below are approximate.</Help></h4></div><label>Sort<select value={sizeOrder} onChange={event => setSizeOrder(event.target.value as "asc" | "desc")}><option value="asc">Smallest first</option><option value="desc">Largest first</option></select></label></div>
         <div className="variant-filters" role="group" aria-label="Filter by bit family"><button type="button" aria-pressed={bitFilter === "all"} onClick={() => setBitFilter("all")}>All <span>{hub.variants.length}</span></button>{bits.map(bit => <button key={bit ?? "unknown"} type="button" aria-pressed={bitFilter === (bit ?? "unknown")} onClick={() => setBitFilter(bit ?? "unknown")}>{bit == null ? "Unknown" : `${bit}-bit`}</button>)}</div>
         <div className="variant-table-scroll"><table className="variant-table"><thead><tr><th scope="col"><span className="visually-hidden">Select</span></th><th scope="col">Variant</th><th scope="col">Disk size</th><th scope="col">Files</th><th scope="col">Availability</th></tr></thead>{families.map(group => <tbody key={group.family}><tr className="variant-family"><th scope="rowgroup" colSpan={5}>{group.family}</th></tr>{group.items.map(({ variant: item, quant, flavour }) => <tr key={item.name} className={variant === item.name ? "is-selected" : undefined}><td><input type="radio" name="model-variant" value={item.name} aria-label={`${quant} ${flavour}, ${item.name}, ${item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}, ${item.complete ? "complete" : "missing files"}`} checked={variant === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setVariant(item.name)} /></td><td><label title={item.name} onClick={() => { if (!busy && item.complete) setVariant(item.name); }}><strong>{quant} · {flavour}</strong><small>{item.name}</small></label></td><td>{item.size_bytes == null ? "Unknown" : formatBytes(item.size_bytes)}</td><td>{item.files.length} {item.files.length === 1 ? "file" : "files"}</td><td><span className={item.complete ? "variant-ready" : "variant-missing"}>{item.complete ? "Complete" : "Missing shards"}</span></td></tr>)}</tbody>)}</table></div>
         {hub.projectors.length ? <fieldset className="projector-choices"><legend>Image input</legend><p className="hint">Choose a vision file explicitly or use text only. Listed files may still be incompatible.</p><label><input type="radio" name="image-input" value="text-only" checked={projector === "text-only"} disabled={Boolean(busy)} onChange={() => setProjector("text-only")} />Text only</label>{hub.projectors.map(item => <label key={item.name} title={item.name}><input type="radio" name="image-input" value={item.name} checked={projector === item.name} disabled={Boolean(busy) || !item.complete} onChange={() => setProjector(item.name)} /><span>{item.name}</span><small>{item.size_bytes == null ? "Size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing files"}</small></label>)}</fieldset> : null}
@@ -166,7 +194,17 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
       {hub.warnings.length ? <details className="technical-details"><summary>Repository notes ({hub.warnings.length})</summary>{hub.warnings.map(warning => <p key={warning}>{warning}</p>)}</details> : null}
       {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. Listing an MTP file does not establish draft-head compatibility.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
       {recipes.length ? <fieldset className="response-recipe-choices"><legend>Response recipes</legend><p className="hint">Optional model-card recommendations. Choose recipes to create saved Model configurations when the download completes.</p>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small><small>From {recipe.source_repo_id} · {recipe.section} · revision {recipe.source_revision.slice(0, 8)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}{selectedRecipes.length ? <fieldset><legend>Default Model configuration</legend><label><input type="radio" name="recipe-default" value="" checked={!defaultRecipeId} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId("")} />Keep the current default</label>{selectedRecipes.map(recipe => <label key={recipe.id}><input type="radio" name="recipe-default" value={recipe.id} checked={defaultRecipeId === recipe.id} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId(recipe.id)} />{recipe.name}</label>)}</fieldset> : null}</fieldset> : null}
-      {selectedVariant ? <><div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !selectedVariant.complete || !projector} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
+      {selectedVariant ? <fieldset className="model-import-settings"><legend>Initial settings</legend>
+        <label>Context<div className="field-group"><input type="range" aria-label="Import context slider" min={1024} max={metadataContextMaximum ?? 262144} step={1024} value={context ? Math.max(1024, Math.min(metadataContextMaximum ?? 262144, Number(context))) : Math.min(8192, metadataContextMaximum ?? 262144)} disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><input type="number" aria-label="Import context tokens" min={1} value={context} placeholder="Automatic" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><button type="button" onClick={() => setContext("")} disabled={Boolean(busy)}>Auto</button></div></label>
+        <div className="field-group"><label>K cache<select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
+        <label>V cache<select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
+        <label>Cache location<select aria-label="Import cache location" value={kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "gpu")} disabled={Boolean(busy)}><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></label></div>
+        {validContext && projector ? <ModelHardwareEstimate selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setMetadataContextMaximum(estimate.context_maximum ?? null)} /> : null}
+      </fieldset> : null}
+      <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
+      </> : null}
+      {step === 2 && selectedVariant ? <><div className="model-download-footer"><span className="hint">{size == null ? "Size unknown" : formatBytes(size)} · {selectedVariant.files.length} model file{selectedVariant.files.length === 1 ? "" : "s"}{selectedProjector ? " + vision file" : ""}</span><Help label="Download and vision files">Allow room for temporary and installed copies, roughly twice the selected size. Vision compatibility is checked after loading the model; a file being listed does not prove it is compatible.</Help><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => void download()}><Icon name="download" size={15} />{busy === "download" ? "Starting…" : "Download model"}</button></div>
+        <p>Context: {context || "Automatic"} · K: {keyPrecision} · V: {valuePrecision} · KV: {kvOffload ? "GPU" : "CPU / RAM"}</p>
         <div className="selected-download-files"><strong>Download selection: {selectedPresentation?.quant} · {selectedPresentation?.flavour}</strong><span className="hint">Pinned revision <code>{hub.resolved_revision}</code></span><ul>{files.map(file => <li key={file}>{file}</li>)}{hub.source?.verified ? (hub.source.guidance_files ?? []).map(file => <li key={`source-${file}`}>{hub.source?.repo_id} / {file}</li>) : null}</ul>{selectedRecipes.length ? <p className="hint">Create {selectedRecipes.length} Model configuration{selectedRecipes.length === 1 ? "" : "s"}: {selectedRecipes.map(item => item.name).join(", ")}. Default: {selectedRecipes.find(item => item.id === defaultRecipeId)?.name ?? "keep current"}.</p> : null}</div></> : null}
     </section> : null}
     {message ? <p role="status">{message}</p> : null}

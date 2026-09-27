@@ -15,13 +15,14 @@ import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { effectiveSettingDisplay, settingValue } from "./effectiveSettings";
 import { useSetupPreview } from "./effectiveSettings";
 import { ModelProjectorControls } from "./ModelProjectorControls";
+import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
 import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ManagedModelsRuntime, ModelBundle, RunProfile, RuntimeManifest, SettingsBags } from "./types";
 import "./deploymentReadouts.css";
 
 const cacheTypes = ["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"];
 const choices = (values: string[]) => values.map(value => ({ value, label: value }));
 const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
-const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "", flash_attn: "", fit: "", cache_type_k: "", cache_type_v: "", threads: "", threads_batch: "", load_mode: "", parallel: "", port: "", batch_size: "", ubatch_size: "", reasoning: "", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "", reasoning_budget: "", embedding: "", pooling: "", spec_type: "", spec_draft_n_max: "" };
+const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "", flash_attn: "", fit: "", cache_type_k: "", cache_type_v: "", kv_offload: "", threads: "", threads_batch: "", load_mode: "", parallel: "", port: "", batch_size: "", ubatch_size: "", reasoning: "", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "", reasoning_budget: "", embedding: "", pooling: "", spec_type: "", spec_draft_n_max: "" };
 const EMPTY_BUNDLES: ModelBundle[] = [];
 const EMPTY_PROFILES: RunProfile[] = [];
 type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; name: string; advanced: string; changed: string[] };
@@ -451,6 +452,8 @@ export function DeploymentsPanel({
         {field("flash_attn", "Flash attention", "Faster, more memory-efficient attention when supported.", [...switches, ...(settings.flash_attn === "auto" ? [{ value: "auto", label: "Engine automatic" }] : [])])}
         {field("cache_type_k", "Key cache precision", "Stores attention keys. Lower precision saves memory with a possible quality trade-off.", choices(cacheTypes))}
         {field("cache_type_v", "Value cache precision", "Stores attention values. Some lower-precision combinations require Flash attention.", choices(cacheTypes))}
+        {field("kv_offload", "Cache location", "CPU keeps KV cache in RAM independently of weight-layer offloading.", [{ value: "true", label: "GPU" }, { value: "false", label: "CPU" }])}
+        <ModelHardwareEstimate selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {}) }} />
         {field("spec_type", "Speculative mode", configuration?.startup_defaults.spec_type?.description ?? "Drafts ahead to accelerate generation where supported.", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
         {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens drafted per step.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
       </SettingSection>

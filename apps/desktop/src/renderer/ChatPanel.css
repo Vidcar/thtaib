@@ -90,6 +90,26 @@
 .compose .send-button:disabled {opacity: var(--fade-disabled);}
 .compose .stop-button[data-idle="true"] {visibility: hidden; pointer-events: none;}
 .composer-spacer {flex: 1; min-width: 0;}
+.composer-chips {display: flex; flex-wrap: wrap; gap: var(--space-tight); padding-bottom: var(--pad-tight);}
+.composer-chip {display: inline-flex; align-items: center; gap: var(--space-tight); min-width: 0; max-width: 16rem; padding: var(--pad-tight) var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-pill); background: var(--bg-panel); font-size: var(--text-small);}
+.composer-picker {position: absolute; bottom: calc(100% - var(--pad-tight)); left: var(--pad-card); right: var(--pad-card); z-index: 65; max-height: min(330px, 45vh); padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); background: var(--bg-raised); box-shadow: var(--shadow); display: flex; flex-direction: column;}
+.composer-picker-head {display: flex; align-items: center; gap: var(--space-compact);}
+.composer-picker-head input, .composer-picker-head > span {flex: 1; min-width: 0;}
+.composer-picker-list {overflow: auto; margin-top: var(--space-tight);}
+.composer-picker-list > button {display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; gap: var(--space-compact); border: 0; padding: var(--pad-compact); background: transparent; text-align: left;}
+.composer-picker-list > button span {overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.composer-picker-list > button small {color: var(--muted);}
+.composer-picker-list > button.is-highlighted, .composer-picker-list > button:hover {background: var(--hover); border-radius: var(--radius-control);}
+.message-task-actions {display: flex; justify-content: flex-end; gap: var(--space-tight); margin-top: var(--space-tight);}
+.message-task-actions .icon-button, .message-task-actions .menu-popover-trigger {padding: var(--pad-tight); width: var(--control-height); height: var(--control-height); border: 0; background: transparent; color: var(--muted);}
+.bubble-user {width: fit-content; max-width: min(var(--layout-message, 46rem), 80%); padding: var(--pad-compact) var(--pad-card); border-radius: var(--radius-card); background: var(--bg-panel);}
+.bubble-assistant {max-width: var(--layout-reading, 46rem); width: 100%; padding-inline: 0; border: 0; background: transparent;}
+.combined-action:hover:not(:disabled), .combined-action:focus-visible {background: var(--accent); color: var(--bg);}
+.chat-actions-menu {width: min(360px, calc(100vw - 24px));}
+.chat-actions-menu .chat-history-actions {position: static; padding: 0; border: 0; background: transparent; box-shadow: none;}
+.chat-actions-menu .chat-history-action-grid {display: grid; grid-template-columns: 1fr;}
+@container chat-workspace (max-width: 650px) { .compose .chat-agent-label {max-width: 7rem;} .compose .chat-model-controls-model {max-width: 8rem;} .compose > .actions {gap: var(--space-tight);} }
+@container chat-workspace (max-width: 500px) { .compose > .actions {flex-wrap: wrap;} .compose .composer-spacer {min-width: 8px;} }
 .chat-header .icon-button {border: none; background: transparent; border-radius: var(--radius-control);}
 .chat-tools-popover .chat-tools-row {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); min-height: var(--control-height);}
 .chat-tools-popover .chat-tools-row .check-row {display: flex; align-items: center; gap: var(--space-compact); flex: 1; padding: var(--pad-tight) 0; margin: 0; font-size: var(--text-body); line-height: var(--leading-tight);}
@@ -171,7 +191,7 @@
 .chat-setup .setup-grid {margin-top: 0;}
 .transcript {padding: var(--pad-compact) max(var(--pad-section), calc((100% - 760px) / 2)) var(--pad-section);}
 .bubble {font-size: var(--text-ui); line-height: var(--leading-body); margin-bottom: var(--space-stack); padding: var(--pad-compact) 0;}
-.bubble-user {padding: var(--pad-compact) var(--pad-card); border-radius: var(--radius-composer); background: var(--bg-raised); max-width: var(--layout-message);}
+.bubble-user {padding: var(--pad-compact) var(--pad-card); border-radius: var(--radius-composer); background: var(--bg-raised); max-width: min(var(--layout-message), 80%); width: fit-content;}
 .bubble-user header {display: none;}
 .bubble-assistant header {font-size: var(--text-small); color: var(--muted); margin-bottom: var(--space-tight);}
 .message-body h1, .message-body h2 {font-size: var(--text-heading);}
@@ -310,7 +330,10 @@
 .chat-conversation {grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;}
 .chat-workspace > .compose {grid-area: 2 / 1; min-width: 0;}
 .chat-workspace.files-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 380px), 48%));}
-.chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 640px), 68%));}
+.chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 640px), 48%));}
+@container chat-workspace (max-width: 760px) {
+  .chat-workspace.files-open, .chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(40%, calc(100% - 400px)));}
+}
 .chat-workspace.browser-open > .chat-rail {display: flex; flex-direction: column; overflow: hidden;}
 .chat-workspace.browser-open .chat-rail-body {flex: 1; overflow: hidden;}
 .chat-workspace.browser-open .chat-rail-tabs {flex: 0 0 auto;}

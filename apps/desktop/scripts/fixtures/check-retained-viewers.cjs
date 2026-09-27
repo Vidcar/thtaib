@@ -71,10 +71,10 @@ app.whenReady().then(async () => {
     await js(`document.documentElement.dataset.theme='light';window.fixture.showToolMenu()`);
     for (const width of [360, 600]) {
       win.setContentSize(width, 750);
-      await ready(`Math.abs(innerWidth-${width})<=1 && document.querySelector('button[aria-label="Add to message"]')`);
-      await js(`document.querySelector('button[aria-label="Add to message"]').click()`);
+      await ready(`Math.abs(innerWidth-${width})<=1 && document.querySelector('button[aria-label="Approval mode"]')`);
+      await js(`document.querySelector('button[aria-label="Approval mode"]').click()`);
       await ready(`document.querySelector('.visual-testing-controls')`);
-      for (const capability of ['Browser', 'Windows']) {
+      for (const capability of ['Windows']) {
         await js(`Array.from(document.querySelectorAll('.visual-testing-disclosure')).find(button=>button.textContent.includes('${capability}')).click()`);
         await ready(`Array.from(document.querySelectorAll('.visual-testing-disclosure')).some(button=>button.textContent.includes('${capability}') && button.getAttribute('aria-expanded')==='true')`);
         const geometry = await js(`(()=>{const panel=document.querySelector('.chat-tools-popover-panel'),rect=panel.getBoundingClientRect();return {innerWidth,innerHeight,rect:{left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom},scrollWidth:panel.scrollWidth,clientWidth:panel.clientWidth,pageScrollWidth:document.documentElement.scrollWidth,active:document.querySelector('.visual-testing-disclosure[aria-expanded="true"]')?.textContent}})()`);
@@ -83,10 +83,10 @@ app.whenReady().then(async () => {
         if (width === 360) { await js(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`); fs.writeFileSync(path.join(scratch, `chat-tools-${capability.toLowerCase()}-360.png`), (await win.webContents.capturePage()).toPNG()); }
         console.log(JSON.stringify({ capability, ...geometry }));
       }
-      await js(`document.querySelector('button[aria-label="Add to message"]').click()`);
-      await ready(`document.querySelector('button[aria-label="Add to message"]').getAttribute('aria-expanded')==='false'`);
+      await js(`document.querySelector('button[aria-label="Approval mode"]').click()`);
+      await ready(`document.querySelector('button[aria-label="Approval mode"]').getAttribute('aria-expanded')==='false'`);
     }
-    console.log('Chat tools native 360px and 600px geometry checks passed.');
+    console.log('Chat Access native 360px and 600px geometry checks passed.');
     win.setContentSize(1280, 900);
     for (const width of [208, 232, 280]) {
       await js(`window.fixture.showSidebar(${width});window.fixture.chatClicks=0;window.fixture.openedChat=null`);
@@ -113,6 +113,7 @@ app.whenReady().then(async () => {
     }
     await js(`Array.from(document.querySelectorAll('.chat-group-toggle')).find(item=>item.textContent.includes('Game project')).click()`);
     await ready(`!document.querySelector('.conversation-row')`);
+    await js(`document.querySelector('[aria-label=\"Search chats\"]').click()`);
     await js(`(()=>{const input=document.querySelector('.chat-search input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'driving');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await ready(`document.querySelector('.conversation-row') && document.querySelectorAll('.chat-group').length===1`);
     assert.equal(await js(`document.querySelector('.chat-group-toggle').textContent`),'Game project','search retains only the project with a match');
@@ -121,7 +122,26 @@ app.whenReady().then(async () => {
     await js(`(()=>{const input=document.querySelector('.chat-search input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'absent');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await ready(`document.querySelector('.sidebar-scroll').textContent.includes('No matching conversations')`);
     assert.equal(await js(`document.querySelectorAll('.chat-group,.sidebar-loose').length`),0,'an empty search renders a single truthful empty state');
-    console.log('Sidebar title and action native hit-target checks passed.');
+    win.setContentSize(600, 900);
+    await js(`document.querySelector('[aria-label="Close search"]').click();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await js(`document.querySelector('.destination-rail').getBoundingClientRect().width`),54,'the destination rail keeps its exact width');
+    assert.equal(await js(`document.querySelector('.chat-navigation').getBoundingClientRect().width`),0,'narrow layout collapses the secondary list first');
+    await js(`document.querySelector('[aria-label="Expand chat list"]').click();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.ok(await js(`document.querySelector('.chat-navigation').getBoundingClientRect().width`)>=160,'an explicit choice reopens the existing list at narrow width');
+    await js(`document.querySelector('[aria-label="Collapse sidebar"]').click();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await js(`document.querySelector('.chat-navigation').getBoundingClientRect().width`),0,'explicit collapse restores the compact layout');
+    for (const width of [600, 760, 794]) {
+      win.setContentSize(width, 850);
+      await js(`window.fixture.showSidebar(232,'models')`);
+      await ready(`document.querySelector('[aria-label="Models"].destination-current')`);
+      const geometry = await js(`(()=>{const app=document.querySelector('.app'),rail=document.querySelector('.destination-rail').getBoundingClientRect(),nav=document.querySelector('.workbench-navigation').getBoundingClientRect(),main=document.querySelector('.app > main').getBoundingClientRect(),list=document.querySelector('.chat-navigation').getBoundingClientRect();return {rail:rail.width,nav:nav.width,mainLeft:main.left,mainWidth:main.width,list:list.width,viewport:innerWidth,grid:getComputedStyle(app).gridTemplateColumns}})()`);
+      assert.equal(geometry.rail,54,`${width}px Models retains the 54px rail`);
+      assert.equal(geometry.nav,54,`${width}px Models reserves no empty Chat list column`);
+      assert.equal(geometry.list,0,`${width}px Models hides the Chat-only list`);
+      assert.ok(Math.abs(geometry.mainLeft-54)<=1 && geometry.mainWidth>=geometry.viewport-55,`${width}px Models receives the remaining viewport width: ${JSON.stringify(geometry)}`);
+    }
+    console.log('Sidebar title, action hit targets and persistent rail/list native geometry checks passed.');
+    win.setContentSize(1280, 900);
     await js(`window.fixture.showFileTree()`);
     const fileButton = name => `Array.from(document.querySelectorAll('.project-file-row button')).find(button=>button.textContent.trim().replace(/^[▸▾]\\s*/, '')===${JSON.stringify(name)})`;
     await ready(fileButton('src'));

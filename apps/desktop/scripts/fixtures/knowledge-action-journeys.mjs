@@ -46,11 +46,18 @@ export async function checkAgentSavedActions(Component) {
   try {
     await settle(() => { renderer = create(React.createElement(Component, { onUse: item => used.push(item) })); });
     await change(renderer.root, "Name", "input", "Reader");
-    await change(renderer.root, "Purpose", "input", "Compare source material");
+    await change(renderer.root, "Role", "input", "Compare source material");
     await change(renderer.root, "Instructions", "textarea", "Read precisely.");
     await submit(renderer.root);
+    assert.equal(calls.some(call => call.path === "/v1/agent-setups" && call.method === "POST"), false, "Role advances without saving");
+    await submit(renderer.root);
+    assert.equal(calls.some(call => call.path === "/v1/agent-setups" && call.method === "POST"), false, "Setup advances without saving");
+    await submit(renderer.root);
     assert.match(text(renderer.root), /Agent save failed/);
+    await click(renderer.root, "Back"); await click(renderer.root, "Back");
     assert.equal(field(renderer.root, "Name", "input").props.value, "Reader", "failed creation preserves the complete draft");
+    assert.equal(field(renderer.root, "Instructions", "textarea").props.value, "Read precisely.");
+    await submit(renderer.root); await submit(renderer.root);
     rejectCreate = false;
     await submit(renderer.root);
     assert.equal(records.length, 1); assert.equal(records[0].configuration.instructions, "Read precisely.");
@@ -80,6 +87,7 @@ export async function checkAgentSavedActions(Component) {
 }
 
 export async function checkKnowledgeSavedActions(Component) {
+  const skillSource = body => `---\nname: example-skill\ndescription: Read references.\n---\n${body}`;
   let serial = 1, records = [{ id: "memory", display_name: "Useful fact", scope: "user", scope_id: null, kind: "memory", content: "Original fact", current_version_id: "memory-v1", enabled: false, provenance: { actor: "human" }, created_at: when, updated_at: when }];
   const history = new Map([["memory", [{ ...records[0], id: "memory-v1", entry_id: "memory" }]]]);
   let config = { context_captures: { redaction_mode: "redact_secrets", retention_seconds: null }, automatic_save_policies: [] };
@@ -98,9 +106,13 @@ export async function checkKnowledgeSavedActions(Component) {
     if (path === "/v1/knowledge/captures") return json({ id: "capture-real", redacted: config.context_captures.redaction_mode === "redact_secrets", discarded: config.context_captures.redaction_mode === "discard", expired: false });
     if (path === "/v1/knowledge/skills/import") {
       if (rejectImport) return failure("Package unavailable; choose its current location.");
-      if (body.entry_id) { assert.equal(body.base_version, records.find(item => item.id === body.entry_id).current_version_id); return json(version(body.entry_id, "Updated skill body", { resources: [{ path: "second.md", size_bytes: 8 }] })); }
-      const item = { ...records[0], id: "skill", kind: "skill", display_name: "Packaged skill", scope: body.scope, scope_id: body.scope_id, content: "Imported skill body", current_version_id: "skill-v1", resources: [{ path: "guide.md", size_bytes: 8 }] };
+      if (body.entry_id) { assert.equal(body.base_version, records.find(item => item.id === body.entry_id).current_version_id); return json(version(body.entry_id, skillSource("Updated skill body"), { resources: [{ path: "second.md", size_bytes: 8 }] })); }
+      const item = { ...records[0], id: "skill", kind: "skill", display_name: "Packaged skill", scope: body.scope, scope_id: body.scope_id, content: skillSource("Imported skill body"), current_version_id: "skill-v1", resources: [{ path: "guide.md", size_bytes: 8 }] };
       records.push(item); history.set(item.id, [{ ...item, id: item.current_version_id, entry_id: item.id }]); return json(item);
+    }
+    if (path === "/v1/knowledge/skills/preview") {
+      const match = body.content.match(/^---\nname: (.+)\ndescription: (.+)\n---\n([\s\S]*)$/);
+      return json({ content: body.content, guided_available: Boolean(match), valid: Boolean(match), name: match?.[1] ?? null, description: match?.[2] ?? null, instructions: match?.[3] ?? null, issues: match ? [] : ["Open Source and add SKILL.md frontmatter."] });
     }
     const match = path.match(/^\/v1\/knowledge\/entries\/([^/]+)(?:\/(.+))?$/);
     if (match) {
@@ -139,17 +151,19 @@ export async function checkKnowledgeSavedActions(Component) {
     assert.match(text(renderer.root), /Package unavailable/); assert.equal(field(importForm, "Package path", "input").props.value, "D:/isolated-skill/SKILL.md");
     rejectImport = false; await submit(importForm);
     const imported = records.find(item => item.id === "skill"); assert.equal(imported.scope_id, "project-real");
-    assert.equal(field(renderer.root, "SKILL.md content", "textarea").props.value, "Imported skill body");
+    assert.equal(field(renderer.root, "Instructions", "textarea").props.value, "Imported skill body");
     const updateForm = renderer.root.findAllByType("form").find(form => text(form).includes("Import as new version"));
     await change(updateForm, "Package path", "input", "D:/isolated-skill/updated.zip"); await submit(updateForm);
     const request = calls.filter(call => call.path.endsWith("/skills/import")).at(-1).body;
     assert.deepEqual(request, { source_path: "D:/isolated-skill/updated.zip", scope: "project", scope_id: "project-real", entry_id: "skill", base_version: "skill-v1" });
-    assert.equal(field(renderer.root, "SKILL.md content", "textarea").props.value, "Updated skill body");
+    assert.equal(field(renderer.root, "Instructions", "textarea").props.value, "Updated skill body");
     await click(renderer.root, "Remove"); assert.equal(calls.some(call => call.method === "DELETE"), false); await click(renderer.root, "Remove entry");
     assert.equal(records.some(item => item.id === "skill"), false); assert.equal(records[0].content, "Original fact");
     await click(renderer.root, "New skill");
-    assert.match(field(renderer.root, "SKILL.md content", "textarea").props.value, /^---\nname: my-skill\ndescription: /, "new skills start as native SKILL.md documents");
-    await change(renderer.root, "SKILL.md content", "textarea", "Plain text is not a skill document");
-    assert.match(text(renderer.root), /A skill needs SKILL.md frontmatter/, "the editor explains the required native format");
+    const editor = renderer.root.findAll(node => node.props.className === "skill-editor workspace-editor").at(-1);
+    await click(editor, "Source");
+    assert.match(field(editor, "SKILL.md", "textarea").props.value, /^---\nname: my-skill\ndescription: /, "new skills start as native SKILL.md documents");
+    await change(editor, "SKILL.md", "textarea", "Plain text is not a skill document");
+    assert.match(text(renderer.root), /Open Source and add SKILL.md frontmatter/, "the editor explains the required native format");
   } finally { if (renderer) await settle(() => renderer.unmount()); }
 }
