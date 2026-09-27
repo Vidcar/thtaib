@@ -20,7 +20,12 @@
 .chat-model-controls-panel .setting-reset-actions {display: flex; flex-wrap: wrap; gap: var(--space-compact);}
 .chat-model-controls-actions {display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-compact); margin: 0; padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border);}
 
-@container chat-workspace (max-width: 620px) {
-  .compose .chat-model-controls {order: -1; flex: 1 0 100%;}
-  .compose .chat-model-controls > .menu-popover-trigger {max-width: none; width: 100%; justify-content: flex-start;}
-}
+.chat-model-primary {display: flex; align-items: center; min-width: 0;}
+.chat-model-primary .chat-model-choice {flex: 1;}
+.chat-model-variants {padding-left: var(--pad-card); border-left: var(--line-hairline) solid var(--border); margin-left: var(--pad-compact);}
+.model-state-dot {display: inline-block; flex: 0 0 6px; width: 6px; height: 6px; border-radius: var(--radius-circle); background: var(--muted);}
+.model-state-dot.is-ready {background: var(--ok);}
+.model-state-dot.is-loading {background: var(--warn);}
+.model-state-dot.is-attention {background: var(--danger);}
+.chat-tuning .menu-popover-trigger {padding-inline: var(--pad-tight); color: var(--muted);}
+.menu-popover-panel.chat-tuning-panel {width: min(320px, calc(100vw - 24px));}

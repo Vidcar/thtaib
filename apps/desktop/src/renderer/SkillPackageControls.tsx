@@ -3,7 +3,7 @@ import { request } from "./api";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
 import { PathBrowseButton } from "./PathField";
-import { knowledgeApi, type KnowledgeScopeOption } from "./knowledgeApi";
+import { knowledgeApi, type KnowledgeScopeOption, type SkillResourceChange } from "./knowledgeApi";
 import type { KnowledgeEntry } from "./types";
 import type { SchemaSkillResource, SchemaSkillResourceView } from "../generated/shared-contracts/openapi";
 
@@ -42,4 +42,33 @@ export function SkillResources({ versionId, resources = [] }: { versionId: strin
     return () => { cancelled = true; };
   }, [versionId, path]);
   return <details><summary>Supporting files · {resources.length}</summary>{resources.length ? <div className="setup-selection-options">{resources.map(item => <button key={item.path} type="button" onClick={() => setSelection({ versionId, path: item.path })} aria-pressed={path === item.path}>{item.path} <span className="hint">{Math.ceil(item.size_bytes / 1024)} KB</span></button>)}</div> : <p className="hint">This version has no supporting files.</p>}{current?.loading ? <p role="status">Loading file…</p> : null}{current?.error ? <Notice tone="error">{current.error}</Notice> : null}{current?.resource ? <section><h4>{current.resource.path}</h4>{current.resource.binary ? <p className="hint">Binary file retained with the skill; text preview is unavailable.</p> : <pre className="wrapped-text">{current.resource.content}</pre>}<p className="hint">Read-only supporting content. Execution is unavailable.</p></section> : null}</details>;
+}
+
+export function SkillResourceEditor({ versionId, resources = [], changes, onChange, disabled = false, onPendingChange }: { versionId?: string; resources?: SkillResource[]; changes: SkillResourceChange[]; onChange: (changes: SkillResourceChange[]) => void; disabled?: boolean; onPendingChange?: (pending: boolean) => void }) {
+  const [path, setPath] = useState("");
+  const [error, setError] = useState("");
+  const [reading, setReading] = useState(false);
+  const currentChanges = useRef(changes); currentChanges.current = changes;
+  const paths = [...new Set([...resources.map(resource => resource.path), ...changes.map(change => change.path)])].sort();
+  async function upload(file: File) {
+    if (reading) return;
+    if (file.size > 16 * 1024 * 1024) { setError("Choose a file up to 16 MB."); return; }
+    setReading(true); onPendingChange?.(true); setError("");
+    try {
+      const target = path.trim() || file.name;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += 8192) binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
+      onChange([...currentChanges.current.filter(change => change.path !== target), { path: target, content_base64: btoa(binary) }]);
+      setPath("");
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setReading(false); onPendingChange?.(false); }
+  }
+  return <details className="setup-options"><summary>Supporting files · {paths.filter(path => !changes.find(change => change.path === path)?.remove).length}</summary>
+    <label>File path<input value={path} disabled={disabled || reading} onChange={event => setPath(event.target.value)} placeholder="references/guide.md" /></label>
+    <label>Add or replace file<input type="file" disabled={disabled || reading} onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file); }} /></label>
+    {reading ? <p className="hint" role="status">Reading file…</p> : null}{error ? <Notice tone="error">{error}</Notice> : null}
+    <ul className="plain-list">{paths.map(resourcePath => { const change = changes.find(change => change.path === resourcePath); const saved = resources.some(resource => resource.path === resourcePath); return <li key={resourcePath} className="actions"><span>{resourcePath}{change ? change.remove ? " · removed" : saved ? " · replaced" : " · added" : ""}</span>{change ? <button type="button" disabled={disabled || reading} onClick={() => onChange(changes.filter(item => item.path !== resourcePath))}>{saved ? "Undo" : "Remove"}</button> : <button type="button" disabled={disabled || reading} onClick={() => onChange([...changes, { path: resourcePath, remove: true }])}>Remove</button>}</li>; })}</ul>
+    {versionId && resources.length ? <SkillResources versionId={versionId} resources={resources} /> : null}
+  </details>;
 }

@@ -99,6 +99,9 @@ class ModelManager:
             lifecycle=self.lifecycle,
             require_no_live_dependencies=self._require_no_live_deployment_dependencies,
         )
+        from workbench_backend.inference.memory_estimates import MemoryEstimator
+        self.memory_estimator = MemoryEstimator(self)
+        self.validate_chat_reconfiguration = None
 
     def describe_paths(self) -> dict[str, str]:
         return self.paths.as_public_dict()
@@ -777,9 +780,11 @@ class ModelManager:
                     conversation = app_store.get_conversation(request.conversation_id)
                 if conversation is None or conversation.deployment_id != deployment.id:
                     raise ManagerError("This conversation does not use the selected model.", code="context_conversation_mismatch", status_code=409)
-                if conversation.run_ids or conversation.transcript:
-                    raise ManagerError("Start a new chat to reduce context. This session keeps its retained model history.", code="context_history_requires_new_chat", status_code=409,
-                        details={"deployment_id": deployment.id, "applied_context": old_context, "requested_context": new_context})
+                if self.validate_chat_reconfiguration is not None:
+                    self.validate_chat_reconfiguration(request.conversation_id, deployment.id, requested, profile.id if profile else deployment.profile_id)
+                elif conversation.run_ids or conversation.transcript:
+                    raise ManagerError("Conversation compatibility cannot be checked. Retry after opening Chat.",
+                        code="context_compatibility_unavailable", status_code=409)
             # Response settings belong to requests, not the loaded process. An
             # explicit configuration switch with the identical frozen launch
             # can update that binding without unloading the model. Keep every

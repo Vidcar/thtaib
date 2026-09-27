@@ -2540,6 +2540,21 @@
           "default": null,
           "title": "Instructions"
         },
+        "memory_entry_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Entry Ids"
+        },
         "memory_version_refs": {
           "anyOf": [
             {
@@ -2607,6 +2622,21 @@
           "default": null,
           "title": "Profile Id"
         },
+        "protected_instruction_entry_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protected Instruction Entry Ids"
+        },
         "protected_instruction_version_refs": {
           "anyOf": [
             {
@@ -2656,6 +2686,21 @@
             }
           ],
           "default": null
+        },
+        "skill_entry_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill Entry Ids"
         },
         "skill_version_refs": {
           "anyOf": [

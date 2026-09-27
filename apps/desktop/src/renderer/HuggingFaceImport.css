@@ -41,3 +41,11 @@
 
 .models-surface .response-recipe-choices small {color: var(--muted);}
 .models-surface .selected-download-files > p {grid-column: 1 / -1; margin: 0;}
+
+.model-import-steps { display: flex; gap: var(--space-stack); margin: var(--space-compact) 0 var(--space-stack); color: var(--muted); }
+.model-import-steps [aria-current="step"] { color: var(--text); font-weight: var(--weight-semibold); }
+.model-import-settings { border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact); margin: var(--space-compact) 0; min-width: 0; }
+.model-import-settings > label { display: grid; gap: var(--space-tight); }
+.model-import-settings .field-group { flex-wrap: wrap; }
+.model-import-settings input[type="range"] { min-width: var(--layout-narrow); flex: 1; }
+.model-import-settings input[type="number"] { width: var(--layout-narrow); }

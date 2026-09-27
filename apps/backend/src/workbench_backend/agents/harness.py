@@ -37,7 +37,7 @@ from workbench_backend.agents.execution_policy import ExecutionControl, PLAN_TOO
 from workbench_backend.agents.evidence import build_completion
 from workbench_backend.agents.context import BudgetedSummarizationMiddleware, observe_context, require_context_fit, observe_payload, token_counter_for_model, validate_retained_messages
 from workbench_backend.inference.telemetry import current_request_purpose, request_purpose
-from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run
+from workbench_backend.agents.tool_outcomes import reconcile_effects, failure_for_run, result_outcome
 from workbench_backend.agents.harness_backend import build_run_backend, is_reserved_framework_path, harness_scratch_root, canonical_root, roots_overlap
 from workbench_backend.agents.project_admission import holds_project, root_runs
 from workbench_backend.agents.harness_profile import ensure_ordinary_chat_profile
@@ -504,7 +504,7 @@ class HarnessService:
             prepare_model=True,
         )
         if execution_snapshot is not None:
-            issues = selection_service.dependencies(selection.configuration)
+            issues = selection_service.dependencies(selection.configuration, frozen=True)
             if issues:
                 raise HarnessError("The queued setup has unavailable dependencies. Edit its selections before running.", code="setup_dependencies_missing", status_code=409,
                     details={"missing_dependencies": [item.model_dump() for item in issues]})
@@ -555,7 +555,7 @@ class HarnessService:
                     code="recorded_fixtures_required",
                     status_code=400,
                 )
-            refs = self._resolve_knowledge_refs(request)
+            refs = self._resolve_knowledge_refs(request, frozen=execution_snapshot is not None)
             versions = self._load_knowledge_versions(refs)
             from workbench_backend.agents.memory_skills import memory_selection_notice
             # The native memory middleware derives the same model-only notice.
@@ -586,7 +586,7 @@ class HarnessService:
                 and request.tool_mode is ToolMode.live_tool
                 and (
                     any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (request.presented_tools or []))
-                    or self.assets.list_assets(RetainedAssetListFilters(
+                    or "read_file" in (request.presented_tools or []) and self.assets.list_assets(RetainedAssetListFilters(
                         session_id=capture_session.id, origin=RetainedAssetOrigin.capture,
                     ))
                 )
@@ -2211,6 +2211,7 @@ class HarnessService:
             run.updated_at = now
             return emitted
         if isinstance(message, ToolMessage):
+            self._settle_answered_question(run, message)
             run.events.append(
                 AgentEvent(
                     at=now,
@@ -2240,6 +2241,19 @@ class HarnessService:
             emitted = True
         run.updated_at = now
         return emitted
+
+    @staticmethod
+    def _settle_answered_question(run: AgentRun, message: ToolMessage) -> None:
+        """HITL answers bypass tool dispatch; the native result settles their ledger row."""
+        if message.name != "ask_user" or not message.tool_call_id:
+            return
+        previous = run.tool_outcomes.get(message.tool_call_id)
+        if previous is None or previous.name != "ask_user" or previous.outcome != "not_dispatched":
+            return
+        settled = result_outcome(message.tool_call_id, "ask_user", message, previous.evidence)
+        if message.status == "error":
+            settled = settled.model_copy(update={"failure_category": "cancelled"})
+        run.tool_outcomes[message.tool_call_id] = settled
 
     def _deployment_model(self, run: AgentRun, http_sink: list[dict[str, Any]]) -> BaseChatModel:
         deployment = self.manager.ensure_deployment_ready(run.deployment_id)
@@ -2305,7 +2319,7 @@ class HarnessService:
             embeddings_factory=embeddings if run.embedding_deployment_id else None,
             on_retrieved=on_retrieved)
 
-    def _resolve_knowledge_refs(self, request: AgentStartRequest) -> KnowledgeRefs:
+    def _resolve_knowledge_refs(self, request: AgentStartRequest, *, frozen: bool = False) -> KnowledgeRefs:
         requested = (
             request.memory_version_refs
             or request.skill_version_refs
@@ -2325,6 +2339,7 @@ class HarnessService:
             skill_version_refs=request.skill_version_refs,
             protected_instruction_version_refs=request.protected_instruction_version_refs,
             knowledge_version_refs=request.knowledge_version_refs,
+            frozen=frozen,
         )
 
     def _load_knowledge_versions(self, refs: KnowledgeRefs) -> list[KnowledgeVersion]:
@@ -2364,6 +2379,9 @@ class HarnessService:
         # pairs on the next user turn; neither path invokes an old action.
         reconcile_effects(run)
         messages = list(values.get("messages", []))
+        for message in messages:
+            if isinstance(message, ToolMessage):
+                self._settle_answered_question(run, message)
         answered = {message.tool_call_id for message in messages if isinstance(message, ToolMessage)}
         repaired = []
         restored = []

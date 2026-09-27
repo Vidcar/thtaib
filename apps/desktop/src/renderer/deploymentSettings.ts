@@ -24,7 +24,7 @@ export function startupPayload(settings: Record<string, string>, advanced: strin
       continue;
     }
     if (value === "custom") throw new Error(`Enter a value for ${key.replaceAll("_", " ")}.`);
-    extra[key] = key === "reasoning_preserve" ? value === "keep"
+    extra[key] = key === "reasoning_preserve" ? value === "keep" : key === "kv_offload" ? value === "true"
       : numeric.includes(key) && value !== "auto" && value !== "all" ? Number(value) : value;
   }
   return extra;

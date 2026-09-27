@@ -1,0 +1,7 @@
+.model-memory-estimate { border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); padding: var(--pad-compact) var(--pad-card); margin: var(--space-compact) 0; font-size: var(--text-body); }
+.estimate-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-stack); }
+.estimate-summary { display: flex; flex-wrap: wrap; gap: var(--space-compact) var(--space-stack); margin: var(--space-tight) 0; }
+.estimate-summary strong { white-space: nowrap; }
+.model-memory-estimate details { margin-top: var(--space-tight); }
+.model-memory-estimate details p { margin: var(--space-tight) 0; }
+.estimate-shortage { color: var(--warn); margin: var(--space-tight) 0; }

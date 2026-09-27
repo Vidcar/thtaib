@@ -5,7 +5,7 @@ import type { BrowserRuntimeStatus, BrowserSessionStatus, DesktopAccess, TestWin
 import "./VisualTestingControls.css";
 
 /** Runtime details for the Browser and Windows rows in the Chat + menu. */
-export function VisualTestingControls({ conversationId, threadId, browserEnabled, onBrowserEnabled, desktopAccess, onDesktopAccess, onPrepareConversation, canPrepareConversation = true, onReadinessChange, disabled = false, workMode = "work", focusSection, focusNonce = 0 }: {
+export function VisualTestingControls({ conversationId, threadId, browserEnabled, onBrowserEnabled, desktopAccess, onDesktopAccess, onPrepareConversation, canPrepareConversation = true, onReadinessChange, disabled = false, workMode = "work", focusSection, focusNonce = 0, windowsOnly = false, onSettings }: {
   conversationId: string | null;
   threadId: string | null;
   browserEnabled: boolean;
@@ -19,6 +19,8 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   workMode?: "work" | "plan";
   focusSection?: "browser" | "windows" | null;
   focusNonce?: number;
+  windowsOnly?: boolean;
+  onSettings?: () => void;
 }) {
   const [expanded, setExpanded] = useState<"browser" | "windows" | null>(focusSection ?? null);
   const browserButton = useRef<HTMLButtonElement>(null);
@@ -56,8 +58,8 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
     let stale = false;
     setBrowserSession(null); setWindowAccess(null); setWindows([]); setChoosingWindow(false); setError(""); setConfirmBrowserReset(false);
     void Promise.allSettled([
-      api.browserRuntime(), api.windowRuntime(),
-      threadId ? api.browserSession(threadId) : Promise.resolve(null),
+      windowsOnly ? Promise.resolve(null) : api.browserRuntime(), api.windowRuntime(),
+      threadId && !windowsOnly ? api.browserSession(threadId) : Promise.resolve(null),
       conversationId ? api.windowAccess(conversationId) : Promise.resolve(null),
     ]).then(([browser, native, session, access]) => {
       if (stale) return;
@@ -69,18 +71,18 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
       if (failures.length) setError(errorMessage((failures[0] as PromiseRejectedResult).reason));
     });
     return () => { stale = true; };
-  }, [conversationId, threadId]);
+  }, [conversationId, threadId, windowsOnly]);
 
   useEffect(() => {
     let stale = false;
     const timer = window.setInterval(() => {
-      void api.browserRuntime().then(value => { if (!stale) setBrowserRuntime(value); }).catch(() => {});
+      if (!windowsOnly) void api.browserRuntime().then(value => { if (!stale) setBrowserRuntime(value); }).catch(() => {});
       void api.windowRuntime().then(value => { if (!stale) setWindowRuntime(value); }).catch(() => {});
-      if (threadId) void api.browserSession(threadId).then(value => { if (!stale) setBrowserSession(value); }).catch(() => {});
+      if (threadId && !windowsOnly) void api.browserSession(threadId).then(value => { if (!stale) setBrowserSession(value); }).catch(() => {});
       if (conversationId) void api.windowAccess(conversationId).then(value => { if (!stale) setWindowAccess(value); }).catch(() => {});
     }, 5000);
     return () => { stale = true; window.clearInterval(timer); };
-  }, [conversationId, threadId]);
+  }, [conversationId, threadId, windowsOnly]);
 
   useEffect(() => {
     if (!conversationId || !pendingWindowChoice || desktopAccess !== "selected") return;
@@ -134,8 +136,8 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   const browserStatus = browserRuntime?.supported === false ? "Unsupported" : browserRuntime?.chrome_available === false ? "Needs Chrome" : browserRuntime?.installed ? browserSession?.state ?? "Installed" : browserRuntime ? "Needs install" : "Checking";
   const windowsStatus = windowRuntime?.available ? desktopAccess === "off" ? "Off" : needsWindowGrant || !conversationId ? "Needs grant" : desktopAccess === "selected" ? "Selected" : "All" : windowRuntime?.installed ? "Unavailable" : windowRuntime ? "Needs install" : "Checking";
 
-  return <div className="visual-testing-controls" role="group" aria-label="Browser and Windows tools">
-    <div className="visual-testing-capability">
+  return <div className="visual-testing-controls" role="group" aria-label={windowsOnly ? "Live Windows access" : "Browser and Windows tools"}>
+    {!windowsOnly ? <div className="visual-testing-capability">
       <div className="visual-testing-row">
         <button ref={browserButton} type="button" className="visual-testing-disclosure" aria-expanded={expanded === "browser"} onClick={() => setExpanded(current => current === "browser" ? null : "browser")}><strong>Browser</strong><small>{browserStatus}</small></button>
         <label className="visual-testing-switch"><input type="checkbox" aria-label="Browser tools" checked={browserEnabled} disabled={disabled || Boolean(busy)} onChange={event => { onBrowserEnabled(event.target.checked); onReadinessChange?.(); }} />{browserEnabled ? "On" : "Off"}</label>
@@ -148,12 +150,11 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
         {browserRuntime?.installed ? <div className="visual-testing-session"><span>Session: {threadId ? browserSession?.state ?? "checking" : "starts with this chat"}</span>{threadId ? <><button type="button" disabled={disabled || Boolean(busy)} onClick={() => setConfirmBrowserReset(true)}>Reset</button><button type="button" disabled={disabled || Boolean(busy) || browserSession?.state === "closed"} onClick={() => void perform("close-browser", async () => { setBrowserSession(await api.closeBrowserSession(threadId)); onReadinessChange?.(); })}>Close</button></> : null}</div> : null}
         {confirmBrowserReset && threadId ? <div className="visual-testing-session" role="alertdialog" aria-label="Reset this chat browser"><p>Reset closes Chrome and clears this chat’s sign-ins and browser data.</p><button type="button" disabled={disabled || Boolean(busy)} onClick={() => { setConfirmBrowserReset(false); void perform("reset-browser", async () => { setBrowserSession(await api.resetBrowserSession(threadId)); onReadinessChange?.(); }); }}>Clear sign-ins and reset</button><button type="button" onClick={() => setConfirmBrowserReset(false)}>Cancel</button></div> : null}
       </div> : null}
-    </div>
+    </div> : null}
     <div className="visual-testing-capability">
       <button ref={windowsButton} type="button" className="visual-testing-disclosure" aria-expanded={expanded === "windows"} onClick={() => setExpanded(current => current === "windows" ? null : "windows")}><strong>Windows</strong><small>{windowsStatus}</small></button>
       {expanded === "windows" ? <div className="visual-testing-detail">
-        <p className="hint">Control open app windows with this conversation’s access.</p>
-        {!windowRuntime?.available && !windowRuntime?.installed ? <button type="button" disabled={disabled || Boolean(busy)} onClick={() => void perform("install-windows", async () => { setWindowRuntime(await api.installWindowRuntime()); onReadinessChange?.(); })}>{busy === "install-windows" ? "Installing…" : "Install Windows worker"}</button> : null}
+        {!windowRuntime?.available && !windowRuntime?.installed ? windowsOnly ? <button type="button" onClick={onSettings}>Install worker in Settings</button> : <button type="button" disabled={disabled || Boolean(busy)} onClick={() => void perform("install-windows", async () => { setWindowRuntime(await api.installWindowRuntime()); onReadinessChange?.(); })}>{busy === "install-windows" ? "Installing…" : "Install Windows worker"}</button> : null}
         {windowRuntime?.installed && windowRuntime.available === false ? <p className="hint">Windows worker unavailable{windowRuntime.reason ? `: ${windowRuntime.reason}` : "."}</p> : null}
         <label>Windows access <select aria-label="Windows access" value={desktopAccess} disabled={disabled || Boolean(busy)} onChange={event => void changeWindows(event.target.value as DesktopAccess)}><option value="off">Off</option><option value="selected">Selected window</option><option value="all">All windows</option></select></label>
         {needsWindowGrant ? <div className="visual-testing-session" role="status"><span>This chat needs a fresh Windows grant before sending.</span><button type="button" disabled={disabled || Boolean(busy)} onClick={() => void changeWindows(desktopAccess)}>{desktopAccess === "selected" ? "Choose window" : "Grant all windows"}</button></div> : null}

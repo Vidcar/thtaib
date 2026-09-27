@@ -71,13 +71,12 @@ window.fixture.showHelperDensity = () => root.render(<HelperDensityFixture />);
 window.fixture.showLibrary = () => root.render(<main style={{ padding: 20 }}><LibraryPanel /></main>);
 function ToolMenuFixture() {
   const [open, setOpen] = React.useState(false);
-  const [browserEnabled, setBrowserEnabled] = React.useState(true);
   const [desktopAccess, setDesktopAccess] = React.useState<"off" | "selected" | "all">("selected");
-  return <main style={{ padding: 12, display: "flex", justifyContent: "flex-end", height: "100vh" }}><MenuPopover label="Add to message" trigger="+" placement="below" panelClassName="chat-tools-popover-panel" onOpenChange={setOpen}><div className="menu-section chat-capability-group"><div className="chat-capability-summary">Project files <small>Choose a project</small></div><button type="button" className="menu-action">Shell <small>Off</small></button>{open ? <VisualTestingControls conversationId={null} threadId={null} browserEnabled={browserEnabled} onBrowserEnabled={setBrowserEnabled} desktopAccess={desktopAccess} onDesktopAccess={setDesktopAccess} /> : null}</div></MenuPopover></main>;
+  return <main style={{ padding: 12, display: "flex", justifyContent: "flex-end", height: "100vh" }}><MenuPopover label="Approval mode" trigger="Access" placement="below" panelClassName="chat-tools-popover-panel" onOpenChange={setOpen}>{open ? <VisualTestingControls windowsOnly conversationId={null} threadId={null} browserEnabled={false} onBrowserEnabled={() => {}} desktopAccess={desktopAccess} onDesktopAccess={setDesktopAccess} /> : null}</MenuPopover></main>;
 }
 window.fixture.showToolMenu = () => root.render(<ToolMenuFixture />);
-window.fixture.showSidebar = (width = 232) => root.render(<div className="app" style={{ "--navigation-width": `${width}px`, height: "100vh" } as React.CSSProperties}><WorkbenchSidebar
-  tab="chat" collapsed={false} width={width} onCollapsedChange={() => {}} onWidthChange={() => {}} onNavigate={() => {}}
+window.fixture.showSidebar = (width = 232, tab = "chat") => root.render(<div className={`app${tab === "chat" ? " app-chat" : ""}`} style={{ "--navigation-width": `${width}px`, height: "100vh" } as React.CSSProperties}><WorkbenchSidebar
+  tab={tab} collapsed={false} width={width} onCollapsedChange={() => {}} onWidthChange={() => {}} onNavigate={() => {}}
   backendOk={true} backendStatus="Ready" activeConversationId={null} historyRevision={0} projectRevision={0}
   onOpenConversation={item => { window.fixture.openedChat = item.id; window.fixture.chatClicks = (window.fixture.chatClicks ?? 0) + 1; }}
   onNewChat={() => {}} onAddProject={() => {}} onHistoryNotice={() => {}}

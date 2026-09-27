@@ -61,7 +61,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     request = AgentStartRequest(deployment_id=deployment.id, task="Helper task",
         memory_version_refs=list(config.memory_version_refs or []), skill_version_refs=list(config.skill_version_refs or []),
         protected_instruction_version_refs=list(dict.fromkeys([*parent.protected_instruction_version_refs, *(config.protected_instruction_version_refs or [])])))
-    refs = owner._resolve_knowledge_refs(request)
+    refs = owner._resolve_knowledge_refs(request, frozen=True)
     versions = owner._load_knowledge_versions(refs)
     setup = resolve_effective_setup(deployment=deployment.model_copy(update={"settings": SettingsBags.model_validate(snapshot.settings_snapshot)}) if snapshot.settings_snapshot is not None else deployment,
         profile=owner.manager.get_profile(config.profile_id) if config.profile_id and snapshot.settings_snapshot is None else None,

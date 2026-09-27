@@ -477,6 +477,12 @@ def _startup_defaults(*, recommended_threads: int | None) -> dict[str, RuntimeCo
             source="pinned_runtime_default",
             applied="f16",
         ),
+        "kv_offload": RuntimeControlDescriptor(
+            key="kv_offload", flag="--kv-offload / --no-kv-offload", label="KV placement",
+            description="GPU follows each layer's device; CPU keeps the cache in RAM independently of weight offloading.",
+            source="pinned_runtime_default", applied=True, supported=True,
+            options=[RuntimeControlOption(value=True, label="GPU"), RuntimeControlOption(value=False, label="CPU")],
+        ),
         "cache_type_v": RuntimeControlDescriptor(
             key="cache_type_v",
             flag="--cache-type-v",

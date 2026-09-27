@@ -1,6 +1,7 @@
 """Native skill packages, same-thread skill reload and fixed chat memory."""
 
 import stat
+import base64
 import tempfile
 import unittest
 import zipfile
@@ -43,6 +44,8 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_directory_and_archive_retain_resources_without_execution(self):
         imported = self.import_package()
+        self.assertEqual(imported['display_name'], 'example-skill')
+        self.assertIsNone(self.app.state.knowledge.store.get_entry(imported['id']).display_name)
         self.assertEqual({r['path'] for r in imported['resources']}, {'references/checklist.txt', 'scripts/optional.py'})
         resource = self.client.get(f'/v1/knowledge/versions/{imported["current_version_id"]}/resource', params={'path': 'references/checklist.txt'}).json()
         self.assertEqual(resource['content'], 'RESOURCE-ONE')
@@ -52,8 +55,102 @@ class SkillPackageTests(unittest.TestCase):
         with zipfile.ZipFile(archive, 'w') as z:
             z.write(self.package / 'SKILL.md', 'example/SKILL.md')
             z.write(self.package / 'references' / 'checklist.txt', 'example/references/checklist.txt')
-        imported_zip = self.import_package(archive)
+        imported_zip = self.import_package(archive, entry_id=imported['id'], base_version=imported['current_version_id'])
+        self.assertEqual(imported_zip['display_name'], 'example-skill')
         self.assertEqual(imported_zip['resources'][0]['sha256'], next(r['sha256'] for r in imported['resources'] if r['path'].endswith('checklist.txt')))
+
+    def test_skill_label_tracks_saved_name_unless_explicitly_renamed(self):
+        created = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'skill', 'content': MARKDOWN})
+        self.assertEqual(created.status_code, 200, created.text)
+        skill = created.json()
+        self.assertEqual(skill['display_name'], 'example-skill')
+        self.assertIsNone(self.app.state.knowledge.store.get_entry(skill['id']).display_name)
+
+        revised_source = MARKDOWN.replace('name: example-skill', 'name: native-review')
+        revised = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={
+            'base_version': skill['current_version_id'], 'content': revised_source,
+        })
+        self.assertEqual(revised.status_code, 200, revised.text)
+        revised = revised.json()
+        self.assertEqual(revised['content'], revised_source)
+        self.assertEqual(revised['display_name'], 'native-review')
+        self.assertEqual(self.client.get(f'/v1/knowledge/entries/{skill["id"]}').json()['display_name'], 'native-review')
+        self.assertEqual(next(item for item in self.client.get('/v1/knowledge/entries').json() if item['id'] == skill['id'])['display_name'], 'native-review')
+
+        renamed = self.client.patch(f'/v1/knowledge/entries/{skill["id"]}', json={'display_name': 'My review skill'})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()['display_name'], 'My review skill')
+        restored = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/revert', json={
+            'target_version_id': skill['current_version_id'], 'base_version': revised['current_version_id'],
+        })
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(restored.json()['content'], MARKDOWN)
+        self.assertEqual(restored.json()['display_name'], 'My review skill')
+
+    def test_explicit_import_label_survives_source_name_change(self):
+        imported = self.import_package(display_name='Publisher label')
+        self.assertEqual(imported['display_name'], 'Publisher label')
+        self.assertEqual(self.app.state.knowledge.store.get_entry(imported['id']).display_name, 'Publisher label')
+        revised_source = MARKDOWN.replace('name: example-skill', 'name: imported-review')
+        revised = self.client.post(f'/v1/knowledge/entries/{imported["id"]}/edit', json={
+            'base_version': imported['current_version_id'], 'content': revised_source,
+        })
+        self.assertEqual(revised.status_code, 200, revised.text)
+        self.assertEqual(revised.json()['display_name'], 'Publisher label')
+        self.assertEqual(revised.json()['content'], revised_source)
+
+    def test_guided_preview_preserves_unknown_yaml_comments_and_multiline_fields(self):
+        source = '---\n# publisher comment\nname: example-skill # keep this\ndescription: >-\n  Read several\n  references.\nlicense: MIT\nmetadata:\n  owner: publisher\n---\n\nOriginal instructions.\n'
+        initial = self.client.post('/v1/knowledge/skills/preview', json={'content': source}).json()
+        self.assertTrue(initial['guided_available'])
+        self.assertTrue(initial['valid'])
+        self.assertEqual(initial['content'], source)
+        self.assertEqual(initial['description'], 'Read several references.')
+        changed = self.client.post('/v1/knowledge/skills/preview', json={'content': source, 'fields': {'name': 'renamed-skill', 'description': 'New purpose', 'instructions': '\nRevised instructions.\n'}}).json()
+        self.assertEqual(changed['issues'], [])
+        self.assertIn('name: "renamed-skill" # keep this', changed['content'])
+        self.assertIn('# publisher comment', changed['content'])
+        self.assertIn('license: MIT\nmetadata:\n  owner: publisher', changed['content'])
+        self.assertIn('description: "New purpose"\nlicense:', changed['content'])
+        invalid = self.client.post('/v1/knowledge/skills/preview', json={'content': 'invalid source'}).json()
+        self.assertFalse(invalid['guided_available'])
+        self.assertFalse(invalid['valid'])
+        self.assertEqual(invalid['content'], 'invalid source')
+        self.assertTrue(invalid['issues'])
+        duplicate_keys = source.replace('license: MIT', 'name: second-name\nlicense: MIT')
+        advanced = self.client.post('/v1/knowledge/skills/preview', json={'content': duplicate_keys}).json()
+        self.assertFalse(advanced['guided_available'])
+        self.assertTrue(advanced['valid'], 'valid native Source remains savable when guided fields cannot represent it')
+
+    def test_resource_changes_are_one_version_and_old_resources_remain_immutable(self):
+        skill = self.import_package()
+        encode = lambda text: base64.b64encode(text.encode()).decode()
+        changed = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={'base_version': skill['current_version_id'], 'content': MARKDOWN, 'resource_changes': [{'path': 'references/checklist.txt', 'content_base64': encode('NEW')}, {'path': 'scripts/optional.py', 'remove': True}, {'path': 'references/new.txt', 'content_base64': encode('ADDED')} ]})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        new = changed.json()
+        self.assertEqual(len(self.client.get(f'/v1/knowledge/entries/{skill["id"]}/versions').json()), 2)
+        self.assertEqual({r['path'] for r in new['resources']}, {'references/checklist.txt', 'references/new.txt'})
+        original = self.client.get(f'/v1/knowledge/versions/{skill["current_version_id"]}/resource', params={'path': 'references/checklist.txt'}).json()
+        self.assertEqual(original['content'], 'RESOURCE-ONE')
+        self.assertFalse((self.root / 'executed.txt').exists())
+        for changes in [[{'path': '../escape', 'content_base64': encode('X')}], [{'path': 'SKILL.md', 'content_base64': encode('X')}], [{'path': 'SKILL.md/child.txt', 'content_base64': encode('X')}], [{'path': 'skill.MD/child.txt', 'content_base64': encode('X')}], [{'path': 'references/NEW.txt', 'content_base64': encode('X')}], [{'path': 'references/new.txt/child', 'content_base64': encode('X')}], [{'path': 'broken', 'content_base64': '?'}]]:
+            rejected = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={'base_version': new['current_version_id'], 'content': MARKDOWN, 'resource_changes': changes})
+            self.assertEqual(rejected.status_code, 400, rejected.text)
+        self.assertEqual(len(self.client.get(f'/v1/knowledge/entries/{skill["id"]}/versions').json()), 2)
+
+    def test_same_scope_slug_uniqueness_and_latest_record_resolution(self):
+        skill = self.import_package()
+        duplicate = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'skill', 'content': MARKDOWN})
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        new = self.client.post(f'/v1/knowledge/entries/{skill["id"]}/edit', json={'base_version': skill['current_version_id'], 'content': MARKDOWN + 'Saved edit.\n'}).json()
+        refs = self.app.state.knowledge.resolve_entry_refs(skill_entry_ids=[skill['id']])
+        self.assertEqual(refs.skill_version_refs, [new['current_version_id']])
+        self.client.patch(f'/v1/knowledge/entries/{skill["id"]}', json={'enabled': False})
+        from workbench_backend.errors import KnowledgeError
+        with self.assertRaises(KnowledgeError):
+            self.app.state.knowledge.resolve_entry_refs(skill_entry_ids=[skill['id']])
+        frozen = self.app.state.knowledge.resolve_refs(skill_version_refs=[skill['current_version_id']], frozen=True)
+        self.assertEqual(frozen.skill_version_refs, [skill['current_version_id']])
 
     def test_unsafe_archives_and_missing_frontmatter_are_rejected_before_retention(self):
         for index, names in enumerate([['../escape.txt'], ['/absolute.txt'], ['C:/escape.txt'], ['references/a.txt', 'references/A.txt'], ['references/a.txt.'], ['NUL.txt'], ['references', 'references/a.txt']]):

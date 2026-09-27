@@ -787,6 +787,7 @@ async function renderChat(vite, harness, props = {}) {
     workbench: { backendUrl: `http://127.0.0.1:${port}` },
     setInterval: (callback, delay) => { const id = setInterval(callback, delay); harness.state.testIntervals.set(id, callback); return id; },
     clearInterval: id => { clearInterval(id); harness.state.testIntervals.delete(id); },
+    setTimeout, clearTimeout, requestAnimationFrame: callback => setTimeout(callback, 0), cancelAnimationFrame: clearTimeout,
   });
   const { ChatPanel } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
   const { WorkbenchSidebar } = await vite.ssrLoadModule("/src/renderer/WorkbenchSidebar.tsx");
@@ -849,7 +850,7 @@ function activeConversationTitle(renderer) {
 
 function assertFreshConversation(renderer, message) {
   assert.equal(renderer.root.findAll(node => node.type === "button" && node.props.className === "nav-item active").length, 0, message);
-  assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false, message);
+  assert.equal(Boolean(pickerFor(renderer).props.conversationId), false, message);
   assert.equal(selectedRunId(renderer), null, message);
 }
 
@@ -888,13 +889,13 @@ function approvalModeButton(renderer, label) {
   return found[0];
 }
 
-function thinkingEffortSlider(renderer) {
-  return renderer.root.findAll(node => node.type === "input" && node.props.type === "range" && node.props["aria-label"] === "Thinking level")[0];
+function thinkingEffortControl(renderer) {
+  return renderer.root.findAll(node => node.type === "select" && node.props["aria-label"] === "Thinking level")[0];
 }
 
 async function openModelPicker(renderer) {
-  const trigger = renderer.root.findAll(node => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("Chat model:"))[0];
-  assert.ok(trigger, "Chat model picker is available");
+  const trigger = buttonByAriaLabel(renderer, "Tune model");
+  assert.ok(trigger, "Chat model tuning is available");
   await act(async () => trigger.props.onClick());
 }
 
@@ -1383,28 +1384,27 @@ async function testLateMemorySelectionBelongsToConversation(vite) {
     harness.state.conversations.conv_a.memory_version_refs = ["memory-old", "memory-other"];
     const renderer = await renderChat(vite, harness);
     const dock = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0];
-    const setup = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ConversationSetup")[0];
+    const additions = () => pickerFor(renderer).props.configuration.memory_entry_ids;
     let selection;
     try {
       await waitFor(() => button(renderer, "Conversation A"), "memory chats listed");
       await act(async () => button(renderer, "Conversation A").props.onClick());
-      await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, ["memory-old", "memory-other"]), "original memory selection restored");
+      await waitFor(() => assert.deepEqual(additions(), []), "original memory selection restored");
       await act(async () => { selection = dock().props.onUseMemoryVersion("memory-new"); });
       await waitFor(() => assert.equal(versionRequested, true), "selected-version lookup held after the first owner check");
       if (destination !== "same") {
         await act(async () => button(renderer, "Conversation B").props.onClick());
         await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_b"), "other chat selected during memory lookup");
-        await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, []), "other chat keeps its memory selection");
+        await waitFor(() => assert.deepEqual(additions(), []), "other chat keeps its memory selection");
         if (destination === "revisited") {
           await act(async () => button(renderer, "Conversation A").props.onClick());
           await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_a"), "original chat selected in a new generation");
-          await waitFor(() => assert.deepEqual(setup()?.props.selectedKnowledgeIds, ["memory-old", "memory-other"]), "revisited selection restored");
+          await waitFor(() => assert.deepEqual(additions(), []), "revisited selection restored");
         }
       }
       await act(async () => { heldVersion.resolve(); await selection; });
-      const expected = destination === "same" ? ["memory-other", "memory-new"]
-        : destination === "revisited" ? ["memory-old", "memory-other"] : [];
-      assert.deepEqual(setup().props.selectedKnowledgeIds, expected,
+      const expected = destination === "same" ? ["entry-a"] : [];
+      assert.deepEqual(additions(), expected,
         "delayed memory selection may update only its original chat selection generation");
       assert.deepEqual(harness.state.conversations.conv_a.memory_version_refs, ["memory-old", "memory-other"],
         "next-turn selection does not change the previously submitted memory binding");
@@ -1553,7 +1553,7 @@ async function testPendingSubmitDoesNotReusePreviousCancelledStatus(vite) {
     assert.match(textOf(waiting), /Starting/, "pending submit shows its own preparation status");
     assert.equal(renderer.root.findAllByProps({className:"chat-waiting"}).length, 0, "there is no duplicate transcript progress");
     assert.doesNotMatch(textOf(waiting), /Cancelled|Stopped/, "pending submit must not reuse previous terminal run status");
-    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true,
+    assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false,
       "a pending submission without an accepted run cannot queue another message");
     assert.equal(textarea(renderer).props.disabled, false, "the next draft remains editable while admission is pending");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Second draft while starting" } }));
@@ -1667,7 +1667,7 @@ async function testProjectAttachmentScope(vite) {
       resolveSetup: payload => ({ configuration: payload.project_id ? project.defaults : {}, instruction_layers: [] }) });
     const renderer = await renderChat(vite, harness, { workspaceLaunch: { id: `project-${mode}`, projectId: project.id } });
     try {
-      await waitFor(() => { const select = renderer.root.findByProps({ "aria-label": "Chat project" }); assert.equal(select.props.value, project.id); assert.equal(select.props.disabled, false); assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false); }, "project launch setup ready");
+      await waitFor(() => { assert.equal(pickerFor(renderer).props.projectId, project.id); assert.equal(pickerFor(renderer).props.conversationId, undefined); assert.equal(buttonByAriaLabel(renderer, "Attach files").props.disabled, false); }, "project launch setup ready");
       if (mode === "picker") {
         await act(async () => buttonByAriaLabel(renderer, "Attach files").props.onClick());
         await waitFor(() => assert.equal(inputByType(renderer, "file").props.disabled, false), "new project attachment picker ready");
@@ -1689,7 +1689,7 @@ async function testProjectAttachmentScope(vite) {
       await waitFor(() => assert.match(allText(renderer), /Model startup failed before a run was accepted/), "failed project submission remains actionable");
       assert.equal(textarea(renderer).props.value, "Use the attached review table.", "failed submission preserves project draft text");
       assert.match(allText(renderer), /review\.csv/, "failed submission preserves the staged source");
-      assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, project.id);
+      assert.equal((pickerFor(renderer).props.projectId ?? ""), project.id);
     } finally { await closeHarness(renderer, harness); }
   }
 }
@@ -1819,9 +1819,9 @@ async function testAttachmentOnlySdkSubmitKeepsMetadata(vite) {
       approvalModeButton(renderer, "Full access").props.onClick();
     });
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props.disabled, false), "thinking preview ready after access change");
+    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.disabled, false), "thinking preview ready after access change");
     await act(async () => {
-      thinkingEffortSlider(renderer).props.onChange({ target: { value: "2" } });
+      thinkingEffortControl(renderer).props.onChange({ target: { value: "high" } });
       await Promise.resolve();
     });
     await applyModelChanges(renderer);
@@ -1906,7 +1906,7 @@ async function testAcceptedDraftNextSaveUsesIncrementedRevision(vite) {
     content: "send saved draft",
     content_blocks: null,
     attachment_ids: [],
-    intended_config: { work_mode: "work", helper_agent_ids: [], review: { enabled: false, criteria: "", max_revisions: 2 }, deployment_id: "dep_1", model_configuration_id: null, startup_overrides: {}, project_path: null, workspace_id: null, embedding_deployment_id: null, presented_tools: null, per_request_overrides: {}, knowledge_version_refs: [], memory_version_refs: [], skill_version_refs: [], protected_instruction_version_refs: [] },
+    intended_config: { work_mode: "work", helper_agent_ids: [], review: { enabled: false, criteria: "", max_revisions: 2 }, deployment_id: "dep_1", model_configuration_id: null, startup_overrides: {}, project_path: null, workspace_id: null, embedding_deployment_id: null, per_request_overrides: {}, model_overrides: {}, inherited_model_configuration: null, memory_entry_ids: [], protected_instruction_entry_ids: [], skill_entry_ids: [], shortcut_ids: [], project_file_refs: [], agent_setup_id: null },
     revision: 4,
     updated_at: now(),
   };
@@ -1952,7 +1952,7 @@ async function testQueuedDraftClearDoesNotEraseLaterDraft(vite) {
     content: "queue saved draft",
     content_blocks: null,
     attachment_ids: [],
-    intended_config: { work_mode: "work", helper_agent_ids: [], review: { enabled: false, criteria: "", max_revisions: 2 }, deployment_id: "dep_1", model_configuration_id: null, startup_overrides: {}, project_path: null, workspace_id: null, embedding_deployment_id: null, presented_tools: null, per_request_overrides: {}, knowledge_version_refs: [], memory_version_refs: [], skill_version_refs: [], protected_instruction_version_refs: [] },
+    intended_config: { work_mode: "work", helper_agent_ids: [], review: { enabled: false, criteria: "", max_revisions: 2 }, deployment_id: "dep_1", model_configuration_id: null, startup_overrides: {}, project_path: null, workspace_id: null, embedding_deployment_id: null, per_request_overrides: {}, model_overrides: {}, inherited_model_configuration: null, memory_entry_ids: [], protected_instruction_entry_ids: [], skill_entry_ids: [], shortcut_ids: [], project_file_refs: [], agent_setup_id: null },
     revision: 3,
     updated_at: now(),
   };
@@ -2014,9 +2014,9 @@ async function testQueuedSubmitKeepsAttachmentsToolsAndOverrides(vite) {
       approvalModeButton(renderer, "Full access").props.onClick();
     });
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props.disabled, false), "queued thinking preview ready");
+    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.disabled, false), "queued thinking preview ready");
     await act(async () => {
-      thinkingEffortSlider(renderer).props.onChange({ target: { value: "1" } });
+      thinkingEffortControl(renderer).props.onChange({ target: { value: "medium" } });
       await Promise.resolve();
     });
     await applyModelChanges(renderer);
@@ -2099,7 +2099,7 @@ async function testPersistedDraftRestoresAttachmentsAndIntendedConfig(vite) {
     assert.equal(harness.state.requests.assetLists.at(-1)?.sessionId, "conv_a", "draft restore lists assets for the selected conversation");
     assert.equal(approvalModeButton(renderer, "Full access").props["aria-checked"], true, "draft intended config restores the approval mode");
     await openModelPicker(renderer);
-    await waitFor(() => assert.equal(thinkingEffortSlider(renderer)?.props["aria-valuetext"], "High"), "draft intended config restores per-message reasoning choice");
+    await waitFor(() => assert.equal(thinkingEffortControl(renderer)?.props.value, "high"), "draft intended config restores per-message reasoning choice");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "restored draft text plus edit" } });
       await Promise.resolve();
@@ -2196,7 +2196,8 @@ async function testStoppedManagedDeploymentShowsLoadOnSendNotice(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.doesNotMatch(allText(renderer), /Loading conversation/), "stopped managed conversation bound");
-    await waitFor(() => assert.match(allText(renderer), /Loads when sent/), "stopped managed selector shows load-on-send state");
+    await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Chat model: test")), /Idle/), "stopped managed selector truthfully shows idle");
+    assert.equal(harness.state.outgoingRequests.some(item => /\/start$/.test(item.path) && item.method === "POST"), false, "opening the saved Chat remains cold");
     assert.doesNotMatch(allText(renderer), /This saved model setup will load when you send a message\./, "startup warming does not add a load-on-send sentence");
     assert.doesNotMatch(allText(renderer), /Continuity\/thread linkage is not proof of live completion/, "stopped managed chat should not show technical unhealthy diagnostic before send");
   } finally {
@@ -2383,10 +2384,10 @@ async function testSavingProjectStateDisablesStop(vite) {
       stream.write(`data: ${JSON.stringify(streamFrame(finalizing))}\n\n`);
       await Promise.resolve();
     });
-    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Saving project state").props.disabled, true), "Stop disabled during finalization");
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Finishing").props.disabled, true), "Stop disabled during finalization");
     assert.match(allText(renderer), /Saving project state/);
     const cancelCount = harness.state.requests.cancels.length;
-    await act(async () => buttonByAriaLabel(renderer, "Saving project state").props.onClick());
+    await act(async () => buttonByAriaLabel(renderer, "Finishing").props.onClick());
     assert.equal(harness.state.requests.cancels.length, cancelCount, "saving phase does not send a cancel request");
   } finally {
     await closeHarness(renderer, harness);
@@ -2592,6 +2593,7 @@ async function testArchiveImmediatelyLeavesHistoryAndSearch(vite) {
       await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
       if (searching) {
         await act(async () => {
+          buttonByAriaLabel(renderer, "Search chats").props.onClick();
           inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Conversation" } });
         });
         await waitFor(() => assert.equal(harness.state.requests.searches.at(-1), "conversation"), "search requested");
@@ -2657,7 +2659,7 @@ async function testFirstTurnWindowsGrantPreservesDraft(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => buttonByAriaLabel(renderer, "Add to message"), "tool menu available");
-    await waitFor(() => assert.equal(renderer.root.findAll(node => node.props["aria-label"] === "Chat project")[0].props.disabled, false), "fresh chat ready");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId), false), "fresh chat ready");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Inspect this window" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "first send creates a chat for the live grant");
@@ -2681,55 +2683,57 @@ async function testSingleToolMenuBeforeModelAndRuntimeCleanup(vite) {
   const harness = makeHarness({ deployments: [], aRun: null, threadARun: null, browserInstalled: false });
   const renderer = await renderChat(vite, harness);
   try {
-    const trigger = () => buttonByAriaLabel(renderer, "Add to message");
-    await waitFor(() => assert.equal(trigger().props.disabled, false), "tool menu usable before choosing a model");
-    assert.equal(visualControls(renderer).length, 0, "runtime controls do not mount while the menu is closed");
-    assert.equal(renderer.root.findAll(node => node.type === "button" && node.props["aria-label"] === "Helpers").length, 0, "there is no second top-right helper button");
-    await act(async () => trigger().props.onClick());
-    await waitFor(() => assert.equal(visualControls(renderer).length, 1), "Browser and Windows have one control location in the + menu");
-    await waitFor(() => assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure").length, 2), "both capability rows present");
-    const browserRow = visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0];
-    await act(async () => browserRow.props.onClick());
-    await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "Browser worker installation reachable before model choice");
-    await act(async () => button(renderer, "Install browser worker").props.onClick());
-    await waitFor(() => assert.equal(harness.state.browserInstalled, true), "pre-model worker installation completed");
-    const browserRequests = () => harness.state.outgoingRequests.filter(item => item.path === "/v1/browser/runtime").length;
-    await act(async () => trigger().props.onClick());
-    await waitFor(() => assert.equal(visualControls(renderer).length, 0), "closing + unmounts its runtime controls");
-    const closedCount = browserRequests();
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Add to message").props.disabled, false), "message additions work before model choice");
+    assert.equal(visualControls(renderer).length, 0, "runtime controls mount only on explicit access opening");
+    await act(async () => buttonByAriaLabel(renderer, "Add to message").props.onClick());
+    assert.equal(visualControls(renderer).length, 0, "+ contains message additions without runtime controls");
+    assert.equal(buttons(renderer, "Shell tools").length + buttons(renderer, "Browser tools").length, 0, "saved tool capabilities belong to Agents");
+    await act(async () => buttonByAriaLabel(renderer, "Add to message").props.onClick());
+    await act(async () => buttonByAriaLabel(renderer, "Approval mode").props.onClick());
+    await waitFor(() => assert.equal(visualControls(renderer).length, 1), "Access opens live Windows controls");
+    assert.equal(visualControls(renderer)[0].props.windowsOnly, true);
+    assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure").length, 1, "live Access only exposes Windows");
+    const runtimeRequests = () => harness.state.outgoingRequests.filter(item => /\/v1\/(browser|windows)\/runtime/.test(item.path)).length;
+    await act(async () => buttonByAriaLabel(renderer, "Approval mode").props.onClick());
+    await waitFor(() => assert.equal(visualControls(renderer).length, 0), "closing Access unmounts live controls");
+    const closedCount = runtimeRequests();
     await act(async () => { for (const poll of harness.state.testIntervals.values()) poll(); await Promise.resolve(); });
-    assert.equal(browserRequests(), closedCount, "no hidden Browser status polling remains after + closes");
+    assert.equal(runtimeRequests(), closedCount, "closed Access has no hidden runtime polling");
   } finally { await closeHarness(renderer, harness); }
 }
 
 async function testToolReadinessActionsOpenRecovery(vite) {
   let issueCode = "browser_worker_missing";
+  const navigations = [];
   const harness = makeHarness({ aRun: null, threadARun: null, browserInstalled: false, browserSessionState: "lost", readiness: () => ({ status: "needs_action", can_send: false, issues: [{ code: issueCode, message: issueCode === "browser_worker_missing" ? "Browser worker needs installation" : "Browser session was lost", action: issueCode === "browser_worker_missing" ? "Install browser worker" : "Reset browser" }], selection: null }) });
   harness.state.conversations.conv_a.thread_id = "native_thread_a";
-  const renderer = await renderChat(vite, harness);
+  const renderer = await renderChat(vite, harness, { onNavigate: next => navigations.push(next) });
+  const browser = () => renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "BrowserRail")[0];
   try {
     await waitFor(() => button(renderer, "Conversation A"), "chat list ready");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "worker readiness action visible in chat");
-    assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0].props.threadId, "native_thread_a", "preview uses the saved native thread, not the registered interaction ID");
-    await waitFor(() => assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/previews/native_thread_a")), "preview status targets the real process owner");
-    await waitFor(() => assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")[0]?.props.threadId, "thread_a"), "message streaming continues to use its separate logical interaction ID");
+    await waitFor(() => assert.ok(buttons(renderer, "Install browser worker").length), "worker readiness correction visible");
+    assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatDock")[0].props.threadId, "native_thread_a", "Files preview uses the saved native owner");
+    await waitFor(() => assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/previews/native_thread_a")), "preview targets the real process owner");
+    await waitFor(() => assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatInteractionStream")[0]?.props.threadId, "thread_a"), "stream keeps its logical interaction identity");
     await act(async () => button(renderer, "Install browser worker").props.onClick());
-    await waitFor(() => assert.equal(visualControls(renderer).length, 1), "readiness opens + menu");
-    assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "recovery focuses Browser row");
-    assert.equal(visualControls(renderer)[0].props.threadId, "native_thread_a", "browser recovery shares the model tool's native session identity");
-    assert.equal(visualControls(renderer)[0].findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0].props["aria-expanded"], true, "Browser recovery detail expands");
+    await waitFor(() => assert.equal(navigations.at(-1), "settings"), "worker installation routes to Settings");
+    assert.equal(visualControls(renderer).length, 0, "worker repair does not mount saved tools in the composer");
     issueCode = "browser_session_lost";
-    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Install browser worker")[0].props.onClick());
-    await waitFor(() => assert.ok(buttons(renderer, "Reset browser").length), "lost-session readiness follows installation");
+    harness.state.browserInstalled = true;
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.equal(pickerFor(renderer).props.conversationId, "conv_b"), "switch finishes");
+    await act(async () => button(renderer, "Conversation A").props.onClick());
+    await waitFor(() => assert.ok(buttons(renderer, "Reset browser").length), "lost session repair visible");
     await act(async () => button(renderer, "Reset browser").props.onClick());
-    assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "lost-session recovery keeps Browser focused");
-    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Reset")[0].props.onClick());
-    assert.equal(harness.state.browserSessionState, "lost", "opening Reset leaves the chat sign-ins intact until confirmed");
-    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Clear sign-ins and reset")[0].props.onClick());
-    await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "Reset recovery reaches the Browser session action");
-    assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_a/reset"), "Reset addresses the actual lost browser session");
-    assert.ok(!harness.state.outgoingRequests.some(item => item.path.startsWith("/v1/browser/sessions/thread_a")), "logical stream identity never reaches browser process endpoints");
+    await waitFor(() => assert.equal(browser()?.props.threadId, "native_thread_a"), "lost-session repair opens Browser with native identity");
+    await waitFor(() => assert.ok(browser().findAll(node => node.type === "button" && textOf(node) === "Reset").length), "Browser reset action ready");
+    await act(async () => browser().findAll(node => node.type === "button" && textOf(node) === "Reset")[0].props.onClick());
+    assert.equal(harness.state.browserSessionState, "lost", "Reset preserves sign-ins until reviewed");
+    await act(async () => browser().findAll(node => node.type === "button" && textOf(node) === "Clear sign-ins and reset")[0].props.onClick());
+    await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "confirmed recovery resets its session");
+    assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_a/reset"));
+    assert.ok(!harness.state.outgoingRequests.some(item => item.path.startsWith("/v1/browser/sessions/thread_a")), "stream identity cannot control browser processes");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -2739,7 +2743,7 @@ async function testArchivePreservesDraftBeforeLeaving(vite) {
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "A selected");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId) && !textarea(renderer).props.disabled, true), "A selected");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep this newly typed draft" } }));
     await act(async () => button(renderer, "Archive").props.onClick());
     await waitFor(() => assert.equal(harness.state.requests.archives.length, 1), "archive saved");
@@ -2774,7 +2778,7 @@ async function testDeleteWhileSelectionLoadsCannotRestoreDeletedConversation(vit
     assert.equal(buttons(renderer, "Conversation A").length, 0);
     assert.equal(harness.state.requests.registers.some(item => item.conversation_id === "conv_a"), false,
       "late selection must not register a deleted conversation");
-    assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false,
+    assert.equal(Boolean(pickerFor(renderer).props.conversationId), false,
       "deleting the loading selection returns to a fresh chat");
   } finally {
     held.resolve();
@@ -2790,7 +2794,7 @@ async function testLateDraftSaveCannotRestoreDeletedChat(vite) {
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
     await act(async () => button(renderer, "Conversation A").props.onClick());
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "A selected");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId) && !textarea(renderer).props.disabled, true), "A selected");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Draft response arrives after delete" } }));
     await act(async () => button(renderer, "New chat").props.onClick());
     await waitFor(() => assert.equal(harness.state.requests.draftUpdates.length, 1), "save accepted and response held");
@@ -2821,8 +2825,9 @@ async function testEarlyShellActions(vite) {
   const renderer = await renderChat(vite, harness);
   try {
     await waitFor(() => button(renderer, "Conversation A"), "initial chat list");
-    assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false, "new conversation project field starts editable");
+    assert.equal(Boolean(pickerFor(renderer).props.conversationId), false, "new conversation project field starts editable");
     await act(async () => {
+      buttonByAriaLabel(renderer, "Search chats").props.onClick();
       inputByPlaceholder(renderer, "Search chats").props.onChange({ target: { value: "Conversation B" } });
       await Promise.resolve();
     });
@@ -2833,7 +2838,7 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.ok(harness.state.requests.states.includes("thread_b")), "B bound for shell actions");
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "saved conversation project field is read-only");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId) && !textarea(renderer).props.disabled, true), "saved conversation project field is read-only");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "remember this draft" } });
       await Promise.resolve();
@@ -2880,7 +2885,7 @@ async function testEarlyShellActions(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.match(activeConversationTitle(renderer), /Renamed B/), "renamed conversation selected");
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled && !textarea(renderer).props.disabled, true), "reopened saved conversation project field remains read-only");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId) && !textarea(renderer).props.disabled, true), "reopened saved conversation project field remains read-only");
     await act(async () => {
       textarea(renderer).props.onChange({ target: { value: "queue this follow-up" } });
       await Promise.resolve();
@@ -2896,7 +2901,7 @@ async function testEarlyShellActions(vite) {
       button(renderer, "New").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.disabled, false), "new conversation project field is editable");
+    await waitFor(() => assert.equal(Boolean(pickerFor(renderer).props.conversationId), false), "new conversation project field is editable");
   } finally {
     await closeHarness(renderer, harness);
   }
@@ -2981,8 +2986,8 @@ async function testMainAgentKeepsChatAccessAndTools(vite) {
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "agent-switched Chat sends");
     const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
     assert.equal(submitted.approval_mode, "full_access", "submitted access matches displayed Chat access");
-    assert.deepEqual(submitted.presented_tools, ["execute"], "Chat tool choice survives main agent selection");
-    assert.equal(submitted.agent_setup_version_id, "two-version");
+    assert.equal(Object.hasOwn(submitted, "presented_tools"), false, "changing agent inherits its saved tool capabilities");
+    assert.equal(submitted.agent_setup_id, "agent_two");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -3063,26 +3068,26 @@ async function testAgentSetupInheritanceAndFutureTurn(vite) {
     await act(async () => button(renderer, "Agent one").props.onClick());
     await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent one/), "agent applied");
     assert.equal(approvalModeButton(renderer, "Ask").props["aria-checked"], true, "a saved agent without a mode stays on Ask");
-    assert.ok(allText(renderer).includes("Keep these instructions intact"));
+    assert.equal(renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ConversationSetup").length, 0, "saved agent internals remain owned by Agents");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "First task" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "setup-backed submission");
     const submitted = harness.state.requests.commands[0].payload.params.metadata.workbench;
-    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Queue message").props.disabled, true), "first accepted run is live before queuing a later draft");
-    assert.equal(submitted.agent_setup_version_id, "one-version");
-    assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "one-version");
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false), "first accepted run is live before queuing a later draft");
+    assert.equal(submitted.agent_setup_id, "one");
+    assert.equal(harness.state.requests.creates[0].agent_setup_id, "one");
     assert.equal(submitted.deployment_id, "dep_1", "the visible main model remains bound after changing agent");
-    for (const key of ["profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs", "per_request_overrides"]) {
+    for (const key of ["profile_id", "presented_tools", "memory_version_refs", "skill_version_refs", "protected_instruction_version_refs"]) {
       assert.equal(Object.hasOwn(submitted, key), false, `untouched ${key} must inherit instead of overwriting the saved setup`);
     }
     await act(async () => button(renderer, "Agent two").props.onClick());
     await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent two/), "next-turn agent selected");
-    assert.equal(harness.state.requests.commands[0].payload.params.metadata.workbench.agent_setup_version_id, "one-version", "changing next-turn setup cannot mutate the in-flight request");
+    assert.equal(harness.state.requests.commands[0].payload.params.metadata.workbench.agent_setup_id, "one", "changing next-turn setup cannot mutate the in-flight request");
     await act(async () => { approvalModeButton(renderer, "Full access").props.onClick(); textarea(renderer).props.onChange({ target: { value: "Queue the next task" } }); });
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "next task queued");
     const queued = harness.state.requests.queues[0].payload;
-    assert.equal(queued.agent_setup_version_id, "two-version");
+    assert.equal(queued.agent_setup_id, "two");
     assert.equal(queued.queue_after_run_id, "run_projected_1", "the later task queues behind the accepted live run");
     assert.equal(queued.approval_mode, "full_access", "an approval-mode choice is sent with the queued turn");
     assert.equal(Object.hasOwn(queued, "presented_tools"), false, "the chat shield does not replace the agent's tool list");
@@ -3118,10 +3123,10 @@ async function testAcceptedSubmissionRecoversWithoutStreamProjection(vite) {
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Accepted without a stream event" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "command sent");
-    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true, "second admission waits for confirmed run");
+    assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false, "second admission waits for confirmed run");
     await waitFor(() => assert.equal(selectedRunId(renderer), "run_projected_1"), "saved chat confirms accepted run without stream projection");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Queue behind recovered run" } }));
-    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Queue message").props.disabled, false), "Queue becomes available after durable run confirmation");
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false), "Queue becomes available after durable run confirmation");
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.queues.length, 1), "later turn queued");
     assert.equal(harness.state.requests.queues[0].payload.queue_after_run_id, "run_projected_1");
@@ -3170,7 +3175,7 @@ async function testPendingAdmissionFailureKeepsEditedNextDraft(vite) {
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "first command held before response");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Next draft survives failure" } }));
-    assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true);
+    assert.equal(buttonByAriaLabel(renderer, "Stop").props.disabled, false);
     heldCommand.resolve();
     await waitFor(() => assert.match(allText(renderer), /Model startup failed before a run was accepted/), "failed first request reported");
     assert.equal(textarea(renderer).props.value, "Next draft survives failure", "later draft remains editable after failed admission");
@@ -3192,18 +3197,18 @@ async function testSelectedModelSurvivesAgentAndNewChat(vite) {
     await waitFor(() => assert.match(textOf(buttonByAriaLabel(renderer, "Main agent")), /Agent one/), "agent applied after model");
     assert.equal(picker().props.selectedDeploymentId, "dep_1", "agent selection retains the visible model");
     assert.equal(picker().props.configuration.deployment_id, "dep_1", "agent selection retains the submitted model");
-    await act(async () => renderer.root.findByProps({ "aria-label": "Chat project" }).props.onChange({ target: { value: project.id } }));
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, project.id), "project applied after model");
+    await act(async () => buttonByAriaLabel(renderer, "New chat in Project one").props.onClick());
+    await waitFor(() => assert.equal((pickerFor(renderer).props.projectId ?? ""), project.id), "project applied after model");
     assert.equal(picker().props.configuration.deployment_id, "dep_1", "project selection retains the submitted model");
     await act(async () => button(renderer, "New").props.onClick());
-    await waitFor(() => assert.equal(renderer.root.findByProps({ "aria-label": "Chat project" }).props.value, ""), "main New chat clears the project");
+    await waitFor(() => assert.equal((pickerFor(renderer).props.projectId ?? ""), ""), "main New chat clears the project");
     await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "no-project setup resolved");
     await waitFor(() => assert.equal(picker().props.selectedDeploymentId, "dep_1"), "new chat retains the selected model");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep the selected model" } }));
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "new chat created");
     assert.equal(harness.state.requests.creates[0].deployment_id, "dep_1", "creation submits the selected model");
-    assert.equal(harness.state.requests.creates[0].agent_setup_version_id, "agent-one-version");
+    assert.equal(harness.state.requests.creates[0].agent_setup_id, null, "project + starts with the default agent");
     assert.equal(harness.state.requests.creates[0].project_id, undefined);
     assert.equal(harness.state.requests.creates[0].project_path, null);
   } finally { await closeHarness(renderer, harness); }
@@ -3213,16 +3218,16 @@ async function testSidebarNewChatScopesAndPreservesProjectDraft(vite) {
   const project = { id: "project_empty", name: "Empty project", path: "D:\\Projects\\Empty", canonical_path: "d:\\projects\\empty", defaults: {}, active: true };
   const harness = makeHarness({ aRun: null, threadARun: null, projects: [project] });
   const renderer = await renderChat(vite, harness);
-  const projectField = () => renderer.root.findByProps({ "aria-label": "Chat project" });
+  const selectedProject = () => pickerFor(renderer).props.projectId ?? "";
   try {
     await waitFor(() => buttonByAriaLabel(renderer, "New chat in Empty project"), "empty project exposes its new-chat action");
     await selectFixtureModel(renderer);
     await act(async () => buttonByAriaLabel(renderer, "New chat in Empty project").props.onClick());
-    await waitFor(() => { assert.equal(projectField().props.value, project.id); assert.equal(textarea(renderer).props.disabled, false); }, "empty project's composer ready");
+    await waitFor(() => { assert.equal(selectedProject(), project.id); assert.equal(textarea(renderer).props.disabled, false); }, "empty project's composer ready");
     assert.equal(harness.state.requests.creates.length, 0, "opening a blank composer does not create an empty record");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Keep this project draft" } }));
     await act(async () => buttonByAriaLabel(renderer, "New chat").props.onClick());
-    await waitFor(() => { assert.equal(projectField().props.value, ""); assert.equal(textarea(renderer).props.value, ""); assert.equal(textarea(renderer).props.disabled, false); }, "main New chat opens outside projects");
+    await waitFor(() => { assert.equal(selectedProject(), ""); assert.equal(textarea(renderer).props.value, ""); assert.equal(textarea(renderer).props.disabled, false); }, "main New chat opens outside projects");
     assert.equal(harness.state.requests.creates[0].project_id, project.id, "previous draft creates the project's first conversation");
     const saved = harness.state.requests.draftUpdates.at(-1);
     assert.equal(saved.payload.content, "Keep this project draft");
@@ -3344,7 +3349,7 @@ async function testColdSendAndLiveTurnQueueSkipBlockingPreview(vite) {
     await waitFor(() => assert.ok(queue.state.openStreams.has("thread_a")), "live run observed");
     assert.equal(queue.state.requests.readiness.filter(item => item.id === "conv_a").length, 0, "active run does not trigger a blocking readiness preview");
     await act(async () => textarea(queueRenderer).props.onChange({ target: { value: "Queue while running" } }));
-    assert.equal(buttonByAriaLabel(queueRenderer, "Queue message").props.disabled, false);
+    assert.equal(buttonByAriaLabel(queueRenderer, "Stop").props.disabled, false);
     await act(async () => composeForm(queueRenderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(queue.state.requests.queues.length, 1), "live turn reaches queue admission");
     assert.equal(queue.state.requests.queues[0].payload.queue_after_run_id, "run_live", "queue admission identifies the run being followed");
@@ -3367,7 +3372,7 @@ async function testColdSendAndLiveTurnQueueSkipBlockingPreview(vite) {
     await act(async () => button(backendActiveRenderer, "Conversation A").props.onClick());
     await waitFor(() => assert.ok(backendActive.state.requests.readiness.some(item => item.id === "conv_a")), "backend activity preview returned");
     await act(async () => textarea(backendActiveRenderer).props.onChange({ target: { value: "Queue against backend activity" } }));
-    await waitFor(() => assert.equal(buttonByAriaLabel(backendActiveRenderer, "Queue message").props.disabled, false), "backend activity offers Queue");
+    await waitFor(() => assert.equal(buttonByAriaLabel(backendActiveRenderer, "Send").props.disabled, false), "backend activity offers Queue");
     await act(async () => composeForm(backendActiveRenderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(backendActive.state.requests.queues.length, 1), "backend activity routes to durable Queue");
     assert.equal(backendActive.state.requests.queues[0].payload.queue_after_run_id, undefined, "an unobserved run is not guessed from stale local state");
@@ -3438,44 +3443,84 @@ async function testRestoredDraftFindsRunningNamedConfiguration(vite) {
   } finally { await closeHarness(renderer, harness); }
 }
 
+async function testReopenedMatchingModelReusesObservedDeployment(vite) {
+  for (const stagedContext of [4096, 8192]) {
+    const sameStartup = stagedContext === 4096;
+    const live = { ...baseDeployment, id: "dep_loaded_4k", profile_id: "config_4k", bundle_id: "bundle_4k", scope: "managed", status: "running", health: { healthy: true } };
+    const nextLive = { ...live, id: "dep_rebound_4k" };
+    const model = { id: "config_4k", display_name: "Native preview · 4B", bundle_id: "bundle_4k", bags: { startup: { applied: {}, requested: {}, unsupported: [], overridden: [], retired: [] }, per_request: { applied: {}, requested: {}, unsupported: [], overridden: [], retired: [] }, agent: { applied: {}, requested: {}, unsupported: [], overridden: [], retired: [] } } };
+    const harness = makeHarness({ aRun: null, threadARun: null, deployments: [live, nextLive], profiles: [model],
+      resolveSetup: payload => ({ configuration: { ...payload.overrides, model_configuration_id: "config_4k", deployment_id: null }, instruction_layers: [] }),
+      readiness: ({ payload }) => [live.id, nextLive.id].includes(payload.overrides.deployment_id)
+        ? { status: "ready", can_send: true, issues: [], selection: null }
+        : { status: "unverified", can_send: true, issues: [{ code: "model_load_required", message: "This configuration will load when the message starts." }], selection: null } });
+    harness.state.conversations.conv_a = conversation("conv_a", "Conversation A", null, {
+      deployment_id: live.id, model_configuration_id: "config_4k", startup_overrides: { ctx_size: 4096 },
+      deploy_health: { deployment_id: live.id, deployment_status: "running", healthy: true, code: null, message: null, detail: null },
+      draft: { content: "Continue the task", attachment_ids: [], intended_config: {
+        deployment_id: "", model_configuration_id: "config_4k", startup_overrides: { ctx_size: stagedContext },
+      }, revision: 5, updated_at: now() },
+      queue: sameStartup ? [{ id: "queued_other", task: "Previously captured", revision: 1, status: "queued", attachment_ids: [], intended_config: {}, frozen_config: { deployment_id: live.id } }] : [],
+    });
+    const renderer = await renderChat(vite, harness);
+    try {
+      await waitFor(() => button(renderer, "Conversation A"), "named-model chat loaded");
+      await act(async () => button(renderer, "Conversation A").props.onClick());
+      await waitFor(() => assert.equal(pickerFor(renderer).props.selectedConfigurationId, "config_4k"), "draft model restored");
+      await waitFor(() => assert.equal(pickerFor(renderer).props.selectedDeploymentId, sameStartup ? live.id : ""), "binding follows accepted exact startup only");
+      await waitFor(() => assert.ok(harness.state.requests.readiness.some(item => item.id === "conv_a" && item.payload.overrides.startup_overrides?.ctx_size === stagedContext)), "exact draft preview requested");
+      const latest = harness.state.requests.readiness.filter(item => item.id === "conv_a").at(-1).payload.overrides;
+      assert.equal(latest.deployment_id, sameStartup ? live.id : "", "readiness targets healthy bound deployment only for the matching startup");
+      assert.doesNotMatch(allText(renderer), /bound to a deployment that is no longer available/, "healthy bound model cannot show a stale missing-deployment warning");
+      assert.equal(textarea(renderer).props.value, "Continue the task");
+      if (sameStartup) {
+        const queuePanel = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatQueuePanel")[0];
+        const authoritative = { ...harness.state.conversations.conv_a, deployment_id: nextLive.id,
+          deploy_health: { deployment_id: nextLive.id, deployment_status: "running", healthy: true, code: null, message: null, detail: null } };
+        await act(async () => queuePanel.props.onUpdated(authoritative));
+        await waitFor(() => assert.equal(pickerFor(renderer).props.selectedDeploymentId, nextLive.id), "mounted Chat adopts a completed queued turn's exact observed rebind");
+      }
+    } finally { await closeHarness(renderer, harness); }
+  }
+}
+
 async function testExecutionPreferencesSurviveDraftAndFreezeAtSubmission(vite) {
   for (const queued of [false, true]) {
     const busy = queued ? run("run_existing", "running") : null;
-    const harness = makeHarness({ aRun: busy, threadARun: busy, agentSetups: [{ id: "helper_one", name: "Research helper", configuration: { deployment_id: "dep_1" }, current_version_id: "helper_v1", missing_dependencies: [] }] });
+    const preferences = { helper_agent_ids: ["helper_one"], review: { enabled: true, criteria: "Cite the relevant files", max_revisions: 2 } };
+    const harness = makeHarness({ aRun: busy, threadARun: busy });
+    harness.state.conversations.conv_a.draft = { content: "", attachment_ids: [], revision: 1, intended_config: preferences };
     const renderer = await renderChat(vite, harness);
-    const planButton = () => renderer.root.findAll(node => node.type === "button" && textOf(node).startsWith("Plan mode"))[0];
-    const helper = () => renderer.root.findAll(node => node.type === "label" && node.props.className === "helper-choice")[0].findByType("input");
     try {
       await waitFor(() => button(renderer, "Conversation A"), "history ready");
       await act(async () => button(renderer, "Conversation A").props.onClick());
       await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "conversation ready");
+      await act(async () => buttonByAriaLabel(renderer, "Add to message").props.onClick());
+      await act(async () => button(renderer, "Plan").props.onClick());
       await act(async () => {
         textarea(renderer).props.onChange({ target: { value: "Investigate this carefully" } });
-        planButton().props.onClick();
-        helper().props.onChange({ target: { checked: true } });
-        buttonByAriaLabel(renderer, "Review before finishing").props.onClick();
         approvalModeButton(renderer, "Full access").props.onClick();
       });
-      await act(async () => renderer.root.findByProps({ placeholder: "What should a good result satisfy?" }).props.onChange({ target: { value: "Cite the relevant files" } }));
-      assert.equal(textarea(renderer).props.value, "Investigate this carefully", "control changes preserve the typed draft");
-      assert.ok(buttonByAriaLabel(renderer, "Turn off Plan mode"), "Full access does not switch Plan into Work");
+      assert.equal(textarea(renderer).props.value, "Investigate this carefully", "control changes preserve typed text");
+      assert.ok(buttonByAriaLabel(renderer, "Turn off Plan mode"), "Full access leaves Plan read-only");
+      assert.equal(renderer.root.findAll(node => node.props.className === "helper-choice").length, 0, "saved helpers belong to Agents");
       await act(async () => button(renderer, "Conversation B").props.onClick());
       await waitFor(() => assert.match(activeConversationTitle(renderer), /Conversation B/), "other chat selected");
       await act(async () => button(renderer, "Conversation A").props.onClick());
       await waitFor(() => assert.equal(textarea(renderer).props.value, "Investigate this carefully"), "draft restored");
       await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "restored conversation bound");
       assert.ok(buttonByAriaLabel(renderer, "Turn off Plan mode"));
-      assert.equal(helper().props.checked, true);
-      assert.equal(renderer.root.findByProps({ placeholder: "What should a good result satisfy?" }).props.value, "Cite the relevant files");
+      assert.deepEqual(harness.state.conversations.conv_a.draft.intended_config.helper_agent_ids, preferences.helper_agent_ids);
+      assert.deepEqual(harness.state.conversations.conv_a.draft.intended_config.review, preferences.review);
       await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
       await waitFor(() => assert.equal(queued ? harness.state.requests.queues.length : harness.state.requests.commands.length, 1), "submission reaches its owner");
       const submitted = queued ? harness.state.requests.queues[0].payload : harness.state.requests.commands[0].payload.params.metadata.workbench;
       assert.equal(submitted.work_mode, "plan");
-      assert.deepEqual(submitted.helper_agent_ids, ["helper_one"]);
-      assert.deepEqual(submitted.review, { enabled: true, criteria: "Cite the relevant files", max_revisions: 2 });
+      assert.deepEqual(submitted.helper_agent_ids, preferences.helper_agent_ids);
+      assert.deepEqual(submitted.review, preferences.review);
       assert.equal(submitted.approval_mode, "full_access");
       await act(async () => buttonByAriaLabel(renderer, "Turn off Plan mode").props.onClick());
-      assert.equal(submitted.work_mode, "plan", "later UI choices do not alter submitted work");
+      assert.equal(submitted.work_mode, "plan", "later choices cannot mutate accepted work");
     } finally { await closeHarness(renderer, harness); }
   }
 }
@@ -3532,6 +3577,7 @@ try {
     ["late readiness cannot block another chat", testLateReadinessCannotBlockAnotherChat],
     ["restored draft clears saved configuration", testRestoredDraftCanClearSavedConfiguration],
     ["restored draft finds running named configuration", testRestoredDraftFindsRunningNamedConfiguration],
+    ["reopened matching model uses observed binding without erasing staged startup", testReopenedMatchingModelReusesObservedDeployment],
     ["attention selection consumed", testAttentionActivationDoesNotPinConversation],
     ["attention navigation saves current draft", testExternalAttentionNavigationPreservesDraft],
     ["whole-chat file drop", testWholeChatDropStagesFiles],

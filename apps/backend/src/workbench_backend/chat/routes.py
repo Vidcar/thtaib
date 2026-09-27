@@ -25,6 +25,12 @@ from workbench_backend.errors import HarnessError
 router = APIRouter(prefix="/v1/chat")
 
 
+@router.get("/shortcuts")
+def task_shortcuts() -> list[dict[str, str]]:
+    from workbench_backend.chat.shortcuts import SHORTCUTS
+    return [dict(item) for item in SHORTCUTS]
+
+
 def get_chat(request: Request) -> ChatService:
     return request.app.state.chat
 

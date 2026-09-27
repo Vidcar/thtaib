@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import threading
+import base64
+import binascii
+import unicodedata
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -29,10 +33,11 @@ from workbench_backend.knowledge.schemas import (
     KnowledgeLifecycleRequest,
     KnowledgeProposal,
     KnowledgeScopeOption,
-    SkillPackageImportRequest, SkillResource, SkillResourceView,
+    SkillPackageImportRequest, SkillResource, SkillResourceView, SkillResourceChange,
+    SkillPreviewRequest, SkillPreview,
 )
 from workbench_backend.knowledge.store import KnowledgeStore
-from workbench_backend.knowledge.packages import parse_skill_markdown, read_skill_package, safe_resource_path
+from workbench_backend.knowledge.packages import parse_skill_markdown, read_skill_package, safe_resource_path, guided_skill_source, MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES
 from workbench_backend.paths import WorkbenchPaths
 
 PROTECTED_KIND = "protected_instruction"
@@ -45,6 +50,87 @@ class KnowledgeService:
         self.store = KnowledgeStore(self.paths)
         self._lock = threading.RLock()
         self.app_store = app_store
+
+    @contextmanager
+    def admission_lock(self):
+        """Acquire before ApplicationStore's lock; saves use the same ordering."""
+        with self._lock:
+            yield
+
+    def preview_skill(self, request: SkillPreviewRequest) -> SkillPreview:
+        content = request.content
+        fields = {}
+        issues = []
+        guided = False
+        valid = False
+        try:
+            content, fields = guided_skill_source(content, request.fields.model_dump() if request.fields else None)
+            guided = True
+        except KnowledgeError as exc:
+            issues.append(str(exc))
+        try:
+            parse_skill_markdown(content)
+            if request.scope is not None:
+                with self._lock:
+                    self._require_unique_skill(content, request.scope, request.scope_id, exclude_id=request.entry_id)
+            valid = request.fields is None or guided
+        except KnowledgeError as exc:
+            if str(exc) not in issues:
+                issues.append(str(exc))
+        return SkillPreview(content=content, **fields, guided_available=guided, valid=valid, issues=issues)
+
+    def _require_unique_skill(self, content: str, scope: KnowledgeScope, scope_id: str | None, *, exclude_id: str | None = None) -> None:
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            raise KnowledgeError("SKILL.md exceeds 16 MB.", code="skill_package_too_large", status_code=413)
+        name, _ = parse_skill_markdown(content)
+        for entry in self.store.list_entries():
+            if entry.id == exclude_id or not entry.active or entry.kind != "skill" or (entry.scope, entry.scope_id) != (scope, scope_id):
+                continue
+            version = self.get_version(entry.current_version_id)
+            if parse_skill_markdown(version.content)[0] == name:
+                raise KnowledgeError("A skill with this name already exists in this destination. Choose another name.", code="skill_name_conflict", status_code=409, details={"name": name, "entry_id": entry.id})
+
+    def _changed_resources(self, kind: KnowledgeKind, changes: list[SkillResourceChange], prior: list[SkillResource], *, source_bytes: int = 0) -> list[SkillResource]:
+        if changes and kind != "skill":
+            raise KnowledgeError("Supporting files belong to skills.", code="skill_resources_kind", status_code=400)
+        pending = {resource.path: resource for resource in prior}
+        uploads: dict[str, bytes] = {}
+        seen = set()
+        for change in changes:
+            path = safe_resource_path(change.path)
+            key = unicodedata.normalize("NFC", path).casefold()
+            if key == "skill.md" or key in seen:
+                raise KnowledgeError("Supporting files cannot replace SKILL.md or repeat a path.", code="skill_path_collision", status_code=400)
+            seen.add(key)
+            if change.remove:
+                if change.content_base64 is not None:
+                    raise KnowledgeError("A removed file cannot include content.", code="skill_resource_invalid", status_code=400)
+                if path not in pending:
+                    raise KnowledgeError("The supporting file no longer exists in this version.", code="skill_resource_missing", status_code=409)
+                pending.pop(path)
+            else:
+                if change.content_base64 is None or len(change.content_base64) > ((MAX_FILE_BYTES + 2) // 3) * 4:
+                    raise KnowledgeError("Choose supporting content within the file size limit.", code="skill_package_too_large", status_code=413)
+                try:
+                    data = base64.b64decode(change.content_base64, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    raise KnowledgeError("Supporting content must be valid base64.", code="skill_resource_invalid", status_code=400) from exc
+                if len(data) > MAX_FILE_BYTES:
+                    raise KnowledgeError("The supporting file exceeds 16 MB.", code="skill_package_too_large", status_code=413)
+                uploads[path] = data
+                pending[path] = SkillResource(path=path, sha256="", size_bytes=len(data))
+        keys = [unicodedata.normalize("NFC", path).casefold() for path in pending]
+        if len(set(keys)) != len(keys):
+            raise KnowledgeError("Supporting filenames collide on Windows.", code="skill_path_collision", status_code=400)
+        from pathlib import PurePosixPath
+        source_and_resources = {"skill.md", *keys}
+        if any(str(parent) in source_and_resources for path in keys for parent in PurePosixPath(path).parents if str(parent) != "."):
+            raise KnowledgeError("Supporting files and directories collide.", code="skill_path_collision", status_code=400)
+        if len(pending) + 1 > MAX_PACKAGE_FILES or source_bytes + sum(resource.size_bytes for resource in pending.values()) > MAX_PACKAGE_BYTES:
+            raise KnowledgeError("The skill package exceeds its file or size limit.", code="skill_package_too_large", status_code=413)
+        for path, data in uploads.items():
+            pending[path] = self.store.retain_resource(path, data)
+        return [pending[path] for path in sorted(pending)]
 
     def get_config(self) -> KnowledgeConfig:
         return self.store.read_config()
@@ -81,7 +167,8 @@ class KnowledgeService:
 
     def _create_locked(self, request: KnowledgeCreateRequest, *, resources: list[SkillResource] | None = None, package_source: str | None = None) -> KnowledgeEntryView:
         if request.kind == "skill":
-            parse_skill_markdown(request.content)
+            self._require_unique_skill(request.content, request.scope, request.scope_id)
+        resources = self._changed_resources(request.kind, request.resource_changes, list(resources or []), source_bytes=len(request.content.encode("utf-8")) if request.kind == "skill" else 0)
         now = utc_now()
         entry_id = new_id("kn")
         version_id = new_id("knv")
@@ -147,6 +234,7 @@ class KnowledgeService:
                 content=request.content,
                 provenance=provenance,
                 previous_version_id=entry.current_version_id,
+                resource_changes=request.resource_changes,
             )
 
     def revert(self, entry_id: str, request: KnowledgeRevertRequest, *, actor: str = "human", run_id: str | None = None) -> KnowledgeEntryView:
@@ -222,6 +310,7 @@ class KnowledgeService:
         skill_version_refs: Iterable[str] | None = None,
         protected_instruction_version_refs: Iterable[str] | None = None,
         knowledge_version_refs: Iterable[str] | None = None,
+        frozen: bool = False,
     ) -> KnowledgeRefs:
         refs = KnowledgeRefs(
             memory_version_refs=list(memory_version_refs or []),
@@ -241,14 +330,34 @@ class KnowledgeService:
                 refs.protected_instruction_version_refs.append(version.id)
         for version_id in refs.all_ids():
             version = self.get_version(version_id)
-            entry = self._require_entry(version.entry_id)
-            if not entry.active or not entry.enabled:
-                raise KnowledgeError("Selected knowledge is disabled or removed. Update the selection.", code="knowledge_inactive", status_code=409)
-            self._require_scope(entry.scope, entry.scope_id)
+            if not frozen:
+                entry = self._require_entry(version.entry_id)
+                if not entry.active or not entry.enabled:
+                    raise KnowledgeError("Selected knowledge is disabled or removed. Update the selection.", code="knowledge_inactive", status_code=409)
+            self._require_scope(version.scope, version.scope_id)
         for field, kind in [(refs.memory_version_refs, "memory"), (refs.skill_version_refs, "skill"), (refs.protected_instruction_version_refs, "protected_instruction")]:
             if any(self.get_version(ref).kind != kind for ref in field):
                 raise KnowledgeError("A selected knowledge version has the wrong kind.", code="knowledge_kind_mismatch", status_code=400)
         return refs
+
+    def resolve_entry_refs(self, *, memory_entry_ids: Iterable[str] | None = None, skill_entry_ids: Iterable[str] | None = None, protected_instruction_entry_ids: Iterable[str] | None = None) -> KnowledgeRefs:
+        with self._lock:
+            selected = {}
+            for ids, kind, field in [(memory_entry_ids, "memory", "memory_version_refs"), (skill_entry_ids, "skill", "skill_version_refs"), (protected_instruction_entry_ids, PROTECTED_KIND, "protected_instruction_version_refs")]:
+                refs = []
+                for ident in dict.fromkeys(ids or []):
+                    entry = self._require_entry(ident)
+                    if entry.kind != kind:
+                        raise KnowledgeError("A selected knowledge record has the wrong kind.", code="knowledge_kind_mismatch", status_code=400)
+                    if not entry.active or not entry.enabled:
+                        raise KnowledgeError("Selected knowledge is disabled or removed. Update the selection.", code="knowledge_inactive", status_code=409)
+                    self._require_scope(entry.scope, entry.scope_id)
+                    version = self.get_version(entry.current_version_id)
+                    if version.entry_id != entry.id or version.kind != kind:
+                        raise KnowledgeError("The saved knowledge version does not match its record.", code="knowledge_version_mismatch", status_code=409)
+                    refs.append(version.id)
+                selected[field] = refs
+            return KnowledgeRefs(**selected)
 
     def _append_version(
         self,
@@ -260,11 +369,13 @@ class KnowledgeService:
         reverted_from_version_id: str | None = None,
         resources: list[SkillResource] | None = None,
         package_source: str | None = None,
+        resource_changes: list[SkillResourceChange] | None = None,
     ) -> KnowledgeEntryView:
         if entry.kind == "skill":
-            parse_skill_markdown(content)
+            self._require_unique_skill(content, entry.scope, entry.scope_id, exclude_id=entry.id)
         now = utc_now()
         prior = self.get_version(previous_version_id)
+        resources = self._changed_resources(entry.kind, resource_changes or [], list(resources if resources is not None else prior.resources), source_bytes=len(content.encode("utf-8")) if entry.kind == "skill" else 0)
         version = KnowledgeVersion(
             id=new_id("knv"),
             entry_id=entry.id,
@@ -343,8 +454,15 @@ class KnowledgeService:
 
     def _view(self, entry: KnowledgeEntry, version: KnowledgeVersion) -> KnowledgeEntryView:
         option = next((item for item in self.scope_options(include_inactive=True) if item.scope == entry.scope and item.scope_id == entry.scope_id), None)
+        entry_fields = entry.model_dump()
+        if entry.kind == "skill" and not (entry.display_name or "").strip():
+            try:
+                entry_fields["display_name"] = parse_skill_markdown(version.content)[0]
+            except KnowledgeError:
+                # An older malformed source remains inspectable and repairable.
+                pass
         return KnowledgeEntryView(
-            **entry.model_dump(),
+            **entry_fields,
             content=version.content,
             provenance=version.provenance,
             previous_version_id=version.previous_version_id,
@@ -358,7 +476,7 @@ class KnowledgeService:
 
     def import_skill(self, request: SkillPackageImportRequest) -> KnowledgeEntryView:
         content, files = read_skill_package(Path(request.source_path))
-        skill_name, _ = parse_skill_markdown(content)
+        parse_skill_markdown(content)
         with self._lock:
             self._require_scope(request.scope, request.scope_id)
             entry = self._require_entry(request.entry_id) if request.entry_id else None
@@ -373,7 +491,7 @@ class KnowledgeService:
             provenance = KnowledgeProvenance(actor="human", note="Imported inert skill package; no scripts or dependencies executed.")
             if entry is not None:
                 return self._append_version(entry, content=content, provenance=provenance, previous_version_id=entry.current_version_id, resources=resources, package_source=source)
-            return self._create_locked(KnowledgeCreateRequest(scope=request.scope, scope_id=request.scope_id, kind="skill", content=content, display_name=request.display_name or skill_name, provenance=provenance), resources=resources, package_source=source)
+            return self._create_locked(KnowledgeCreateRequest(scope=request.scope, scope_id=request.scope_id, kind="skill", content=content, display_name=request.display_name, provenance=provenance), resources=resources, package_source=source)
 
     def resource_bytes(self, version: KnowledgeVersion, relative_path: str) -> bytes:
         path = safe_resource_path(relative_path)

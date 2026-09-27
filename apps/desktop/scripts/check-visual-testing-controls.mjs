@@ -50,7 +50,7 @@ try {
   assert.deepEqual(defaultNextTurnTools(["echo", "read_file", "ls", "execute", "read_attachment", "browser_navigate"], false, false, false), ["echo"], "projectless default summary omits file, shell, attachment, and optional visual tools");
   assert.deepEqual(defaultNextTurnTools(["echo", "read_file", "ls", "execute", "read_attachment"], false, true, true), ["echo", "read_file", "ls", "read_attachment"], "next-turn default includes read routes and attachments only when available");
   assert.ok(browserToolNames.every(name => withDesktopTools(desktop, false, true, false).includes(name)), "revoking Windows keeps browser tools");
-  assert.deepEqual(scopedSetupConfiguration({ instructions: "Research", presented_tools: desktop, desktop_access: "selected", approval_mode: "full_access" }, "agent"), { instructions: "Research" }, "saved agent setup cannot retain Chat capability or access grants");
+  assert.deepEqual(scopedSetupConfiguration({ instructions: "Research", presented_tools: desktop, desktop_access: "selected", approval_mode: "full_access" }, "agent"), { instructions: "Research", presented_tools: desktop }, "agent retains tools while Chat alone supplies live access grants");
   const windowChoices = [];
   let renderer;
   await act(async () => { renderer = create(React.createElement(VisualTestingControls, { conversationId: "chat_1", threadId: "thread_1", browserEnabled: false, onBrowserEnabled: () => {}, desktopAccess: "selected", onDesktopAccess: value => windowChoices.push(value), focusSection: "windows" })); });

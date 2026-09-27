@@ -55,15 +55,16 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
       </p>
       <div className="appearance-stage-frame" ref={frameRef}>
         <div className="appearance-stage-scene" aria-hidden="true">
+          <Hit active={aimed} tokens={["palette-bg-nav", "icon-md", "icon-stroke", "space-tight"]} className="appearance-stage-rail"><Icon name="search" size={16} /><Icon name="attention" size={16} /><Icon name="chat" size={16} /><Icon name="models" size={16} /><Icon name="sparkles" size={16} /><Icon name="knowledge" size={16} /><div className="appearance-rail-bottom"><Icon name="settings" size={16} /></div></Hit>
           <Hit active={aimed} guide tokens={["palette-bg-nav", "layout-side", "space-section", "pad-compact", "palette-border", "line-hairline", "font-ui"]} className="appearance-stage-side">
-            <Hit active={aimed} tokens={["text-body", "weight-semibold"]} className="appearance-stage-brand">Workbench</Hit>
+            <Hit active={aimed} tokens={["text-body", "weight-semibold"]} className="appearance-stage-brand">Chats <Icon name="panel" size={16} /></Hit>
             <Hit active={aimed} tokens={["space-compact"]} className="appearance-stage-nav">
               <Hit active={aimed} guide tokens={["text-body", "weight-regular", "radius-control", "pad-tight", "control-height", "palette-text", "icon-md", "icon-stroke"]} className="appearance-stage-item">
-                <Icon name="chat" size={16} /> Chat
+                <Icon name="edit" size={16} /> New chat
               </Hit>
-              <Hit active={aimed} tokens={["palette-hover", "radius-control"]} className="appearance-stage-item is-hover">Models</Hit>
-              <Hit active={aimed} tokens={["text-small", "palette-muted", "tracking-wide", "weight-medium"]} className="appearance-stage-kicker">Today</Hit>
-              <Hit active={aimed} tokens={["palette-bg-raised", "tint-quiet", "tint-strong", "focus-ring", "focus-offset", "palette-accent"]} className="appearance-stage-item is-current">Appearance</Hit>
+              <Hit active={aimed} tokens={["palette-hover", "radius-control"]} className="appearance-stage-item is-hover"><Icon name="folder" size={16} /> Projects</Hit>
+              <Hit active={aimed} tokens={["text-small", "palette-muted", "tracking-wide", "weight-medium"]} className="appearance-stage-kicker">No project</Hit>
+              <Hit active={aimed} tokens={["palette-bg-raised", "tint-quiet", "tint-strong", "focus-ring", "focus-offset", "palette-accent"]} className="appearance-stage-item is-current">Project notes</Hit>
             </Hit>
             <Hit active={aimed} tokens={["space-tight"]} className="appearance-stage-icons">
               <Hit active={aimed} tokens={["icon-lg", "icon-stroke"]}><Icon name="info" size={20} /></Hit>
@@ -79,10 +80,10 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
                 Answer text stays readable on its own. <Hit active={aimed} tokens={["tint-soft"]} className="appearance-stage-selection">Selected</Hit> words use the soft tint.
               </Hit>
               <Hit active={aimed} tokens={["text-small", "palette-muted", "line-strong", "palette-border"]} className="appearance-stage-reasoning"><Icon name="files" size={14} /> Read notes.md</Hit>
-              <Hit active={aimed} tokens={["text-small", "fade-quiet", "palette-muted"]} className="appearance-stage-hint">Hint</Hit>
+              <Hit active={aimed} tokens={["text-small", "fade-quiet", "palette-muted"]} className="appearance-stage-hint">notes.md</Hit>
               <Hit active={aimed} tokens={["font-mono", "font-code", "text-small"]} className="appearance-stage-code">const notes = true</Hit>
               <Hit active={aimed} tokens={["font-editor", "font-mono", "palette-bg-input"]} className="appearance-stage-editor">editor.ts</Hit>
-              <Hit active={aimed} tokens={["space-compact"]} className="appearance-stage-cards">
+              <div hidden={!active} className="appearance-extra-samples"><Hit active={aimed} tokens={["space-compact"]} className="appearance-stage-cards">
                 <Hit active={aimed} guide tokens={["palette-bg-panel", "radius-card", "pad-card", "line-hairline", "layout-panel", "shadow-soft", "weight-medium", "text-body"]} className="appearance-stage-card">Card</Hit>
                 <Hit active={aimed} guide tokens={["pad-section", "radius-card", "palette-bg-panel", "line-hairline"]} className="appearance-stage-card">Section</Hit>
               </Hit>
@@ -95,17 +96,18 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
                 <Hit active={aimed} tokens={["palette-ok", "radius-pill", "text-small"]} className="appearance-stage-badge is-ok">Saved</Hit>
               </Hit>
               <Hit active={aimed} tokens={["palette-bg-input", "radius-control", "pad-compact", "text-ui", "layout-column"]} className="appearance-stage-field">Field</Hit>
+              </div>
               <Hit active={aimed} guide tokens={["layout-form", "pad-card", "radius-card", "palette-bg-panel"]} className="appearance-stage-setting">
-                <span>Setting row</span>
+                <span>Appearance · Density</span>
                 <Hit active={aimed} tokens={["layout-control", "control-height", "radius-control"]} className="appearance-stage-setting-control"><i /><i /><i /></Hit>
               </Hit>
               <Hit active={aimed} guide tokens={["palette-bg-raised", "radius-composer", "pad-card", "shadow-soft", "space-tight"]} className="appearance-stage-composer">
-                <span>Composer</span>
-                <Hit active={aimed} tokens={["palette-accent", "radius-circle", "control-height-lg", "weight-bold"]} className="appearance-stage-send">Send</Hit>
+                <div className="appearance-composer-input">Message your model…</div><div className="appearance-composer-controls"><Icon name="plus" size={16} /><Icon name="shield" size={16} /><span>Model</span><Icon name="tune" size={16} /><Icon name="sparkles" size={16} /><small>12% · 32 t/s</small><Hit active={aimed} tokens={["palette-accent", "radius-circle", "control-height-lg", "weight-bold"]} className="appearance-stage-send"><Icon name="send" size={16} /></Hit></div>
               </Hit>
-              <Hit active={aimed} tokens={["layout-narrow", "layout-menu", "text-small"]} className="appearance-stage-menu">
+              <div hidden={!active} className="appearance-extra-samples"><Hit active={aimed} tokens={["layout-narrow", "layout-menu", "text-small"]} className="appearance-stage-menu">
                 <span>One</span><span>Two</span><span>Three</span><span>Four</span><span>Five</span>
               </Hit>
+              </div>
               <Hit active={aimed} tokens={["layout-dialog"]} className="appearance-stage-pop">
                 <span className="appearance-stage-behind">Notes behind the dialog</span>
                 <Hit active={aimed} tokens={["palette-scrim"]} className="appearance-stage-scrim" />

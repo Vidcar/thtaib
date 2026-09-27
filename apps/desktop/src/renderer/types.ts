@@ -566,6 +566,10 @@ export type ChatQueueItem = SchemaChatQueueItem;
 export type ChatSearchResult = SchemaChatSearchResult;
 
 export interface ChatConversation {
+  agent_setup_id?: string | null;
+  memory_entry_ids?: string[] | null;
+  skill_entry_ids?: string[] | null;
+  protected_instruction_entry_ids?: string[] | null;
   document_asset_ids?: string[];
   project_id?: string | null;
   agent_setup_version_id?: string | null;
@@ -581,6 +585,8 @@ export interface ChatConversation {
   area_project_path?: string | null;
   area_workspace_id?: string | null;
   deployment_id: string;
+  model_configuration_id?: string | null;
+  startup_overrides?: Record<string, unknown> | null;
   profile_id: string | null;
   inherit_deployment_settings?: boolean;
   project_path: string | null;

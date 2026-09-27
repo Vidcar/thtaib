@@ -5,8 +5,15 @@ html.appearance-preview-window, html.appearance-preview-window body, html.appear
 .appearance-stage-guides { margin-left: auto; display: flex; align-items: center; gap: var(--space-compact); font-size: var(--text-small); color: var(--muted); }
 .appearance-stage-caption { margin: 0; min-height: 2.6em; color: var(--muted); font-size: var(--text-small); }
 .appearance-stage-frame { min-height: 0; overflow: auto; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg); }
-.appearance-stage-scene { display: grid; grid-template-columns: minmax(0, min(42%, var(--layout-side))) minmax(0, 1fr); min-width: 100%; max-width: var(--layout-page); background: var(--bg); color: var(--text); font-family: var(--font-ui); }
-.appearance-stage[data-active="layout-side"] .appearance-stage-scene { grid-template-columns: var(--layout-side) minmax(var(--layout-narrow), 1fr); }
+.appearance-stage-scene { display: grid; grid-template-columns: 44px minmax(0, min(28%, var(--layout-side))) minmax(0, 1fr); min-width: 100%; max-width: var(--layout-page); background: var(--bg); color: var(--text); font-family: var(--font-ui); }
+.appearance-stage[data-active="layout-side"] .appearance-stage-scene { grid-template-columns: 44px var(--layout-side) minmax(var(--layout-narrow), 1fr); }
+.appearance-stage-rail {display: flex; flex-direction: column; align-items: center; gap: 20px; padding-top: var(--pad-card); background: var(--bg-nav); border-right: var(--line-hairline) solid var(--border);}
+.appearance-rail-bottom {margin-top: auto; padding-block: var(--pad-card);}
+.appearance-stage-brand {display: flex; align-items: center; justify-content: space-between;}
+.appearance-extra-samples[hidden] {display: none;}
+.appearance-stage-composer {flex-direction: column; align-items: stretch;}
+.appearance-composer-controls {display: flex; align-items: center; gap: var(--space-compact);}
+.appearance-composer-controls small {margin-left: auto; color: var(--muted);}
 .appearance-stage[data-active="layout-page"] .appearance-stage-scene { width: var(--layout-page); max-width: none; }
 .appearance-stage-side { display: flex; flex-direction: column; gap: var(--space-section); min-width: 0; padding: var(--pad-compact); background: var(--bg-nav); border-right: var(--line-hairline) solid var(--border); }
 .appearance-stage-brand { font-size: var(--text-body); font-weight: var(--weight-semibold); }

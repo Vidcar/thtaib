@@ -6,13 +6,12 @@ import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
 import { ImagePreview, safeImageDataUrl } from "./ImagePreview";
 import { ChatRetainedFiles } from "./ChatRetainedFiles";
-import { LibraryPanel } from "./LibraryPanel";
 import { RunMemoryProposals } from "./RunMemoryProposals";
 import { ProjectPreview } from "./ProjectPreview";
 import { editorFontSize, editorTheme, ensureMonaco } from "./monacoSetup";
 import "./ChatDock.css";
 
-export type DockPage = "files" | "library";
+export type DockPage = "files";
 
 interface FileNode {
   id: string;
@@ -43,11 +42,10 @@ export function ChatDock(props: {
 }) {
   return <div className="chat-dock">
     {props.showPages === false ? null : <div className="chat-dock-pages" role="tablist" aria-label="Dock pages">
-      {(["files", "library"] as const).map(page => <button key={page} type="button" role="tab" aria-selected={props.page === page} aria-pressed={props.page === page} onClick={() => props.onPage(page)}>{page === "files" ? "Files" : "Library"}</button>)}
+      <button type="button" role="tab" aria-selected aria-pressed onClick={() => props.onPage("files")}>Files</button>
     </div>}
     <div className="chat-dock-body">
       {props.page === "files" ? <FilesPage key={props.projectId ?? "no-project"} {...props} /> : null}
-      {props.page === "library" ? <LibraryPanel sessionId={props.conversationId} projectPath={props.projectPath} onReuseAssets={(_result, assets) => props.onReuseAssets?.(assets)} /> : null}
     </div>
   </div>;
 }
@@ -65,6 +63,7 @@ function FilesPage(props: {
   currentRunStatus?: string;
   onOpenKnowledge?: () => void;
   onUseMemoryVersion?: (versionId: string) => Promise<void> | void;
+  onReuseAssets?: (assets: { id: string }[]) => void;
 }) {
   const [nodes, setNodes] = useState<FileNode[]>([]);
   const [filter, setFilter] = useState("");
@@ -167,7 +166,7 @@ function FilesPage(props: {
     </>}
     {file?.text != null ? <div className="chat-dock-editor" aria-label="Project file"><MonacoFile text={file.text} /></div> : file?.text_unavailable_reason ? <p className="hint">{file.text_unavailable_reason}</p> : null}
     {image && file ? <ImagePreview src={image} name={file.path} /> : null}
-    {props.conversationId ? <section aria-label="Retained copies"><h3>Retained copies</h3><ChatRetainedFiles compact conversationId={props.conversationId} runIds={props.runIds} currentRunId={props.currentRunId} currentRunStatus={props.currentRunStatus} onReuse={() => undefined} /></section> : null}
+    {props.conversationId ? <section aria-label="Chat files and retained copies"><h3>Chat files</h3><ChatRetainedFiles compact conversationId={props.conversationId} runIds={props.runIds} currentRunId={props.currentRunId} currentRunStatus={props.currentRunStatus} onReuse={ids => props.onReuseAssets?.(ids.map(id => ({ id })))} /></section> : null}
     {props.currentRunId && props.currentRunStatus && props.onOpenKnowledge ? <RunMemoryProposals runId={props.currentRunId} status={props.currentRunStatus} onOpenKnowledge={props.onOpenKnowledge} onUseMemoryVersion={props.onUseMemoryVersion} /> : null}
   </>;
 }

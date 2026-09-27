@@ -67,7 +67,7 @@ app.whenReady().then(async () => {
       const picture = await win.webContents.capturePage(); fs.writeFileSync(path.join(scratch, `usage-${label}.png`), picture.toPNG());
       await dismissUsage();
       win.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
-      await js("document.querySelector('.compose button[aria-label=\"Named helpers\"]').focus();window.fixture.frame()");
+      await js("document.querySelector('.compose button[aria-label=\"Main agent\"]').focus();window.fixture.frame()");
       key("Tab");
       await wait("window.fixture.usage().focused && window.fixture.usage().tooltip", `${label} keyboard Tab did not open panel`);
       checkUsageLayout({ ...(await usage()), viewportWidth: larger ? 420 : 1040 }, `${label} keyboard focus`);
@@ -108,6 +108,24 @@ app.whenReady().then(async () => {
   try {
     await win.loadURL(process.argv[2]);
     await wait("window.fixture?.labels().join('|')==='TURN ONE'", "initial conversation did not hydrate");
+    // The production shell reserves its 54px rail at 760px, leaving a 706px
+    // Chat pane. This fixture mounts ChatPanel alone, so use that pane width.
+    win.setContentSize(706, 850);
+    await wait("innerWidth===706 && document.querySelector('.chat-main')?.getBoundingClientRect().width<720", "half-width Chat did not settle");
+    await js("document.querySelector('.chat-header .chat-rail-toggle').click()");
+    await wait("!document.querySelector('.chat-rail').hidden && document.querySelector('.chat-rail-tabs')", "explicit half-width dock opening stayed hidden");
+    const dock = await js(`(()=>{const chat=document.querySelector('.chat-conversation').getBoundingClientRect(),composer=document.querySelector('.compose').getBoundingClientRect(),dock=document.querySelector('.chat-rail').getBoundingClientRect();return {chat:{left:chat.left,right:chat.right,width:chat.width},composer:{left:composer.left,right:composer.right},dock:{left:dock.left,right:dock.right,width:dock.width},pages:[...document.querySelectorAll('.chat-rail-tabs [role="tab"]')].map(node=>node.textContent)}})()`);
+    assert.deepEqual(dock.pages,["Files","Browser","Helpers"],"half-width dock keeps the three explicit pages");
+    assert.ok(dock.chat.width>=398 && dock.dock.width>=230,`half-width transcript and dock remain usable: ${JSON.stringify(dock)}`);
+    assert.ok(dock.chat.right<=dock.dock.left+1 && dock.composer.right<=dock.dock.left+1,`dock does not cover transcript or composer: ${JSON.stringify(dock)}`);
+    await js("document.querySelector('.chat-header .chat-rail-toggle').click()");
+    await wait("document.querySelector('.chat-rail').hidden", "closing the dock returns the width");
+    win.setContentSize(600,850);
+    await wait("innerWidth===600 && document.querySelector('.chat-main')?.getBoundingClientRect().width<640 && document.querySelector('.chat-header .chat-rail-toggle')?.title.startsWith('Widen window')", "narrow Chat did not settle");
+    await js("document.querySelector('.chat-header .chat-rail-toggle').click()");
+    await wait("document.querySelector('.chat-rail').hidden && document.querySelector('.chat-header .chat-rail-toggle').getAttribute('aria-pressed')==='false' && document.body.textContent.includes('Widen this window to open Files')", "unusable narrow dock must stay closed with a correction");
+    win.setContentSize(1040,850);
+    await wait("innerWidth===1040", "wide Chat restored after dock check");
     for (let number = 1; number <= 3; number++) {
       if (number === 2) {
         const lookupsBefore = (await js("window.fixture.serverState()")).chatGets;

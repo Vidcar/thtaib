@@ -14,6 +14,7 @@
 
 .composer-queue-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--space-tight);
   min-height: var(--control-height);
@@ -21,6 +22,9 @@
   border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--bg) var(--tint-half), transparent);
 }
+.composer-queue-error { flex: 1 0 100%; min-width: 0; }
+.composer-queue-error .notice { margin: 0; padding: var(--pad-tight) var(--pad-compact); }
+.composer-queue-editor-actions { display: flex; flex-wrap: wrap; gap: var(--space-tight); }
 
 .composer-queue-row.is-locked {
   opacity: var(--fade-quiet);

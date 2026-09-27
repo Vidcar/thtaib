@@ -25,14 +25,17 @@ if TYPE_CHECKING:
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 # A project supplies context, never execution authority or a model choice. A
-# main agent supplies its behaviour; its optional model choice is reserved for
-# use when that agent is invoked as a named helper.
-PROJECT_CONTEXT_FIELDS = frozenset({"memory_version_refs", "skill_version_refs", "embedding_deployment_id"})
+# main agent owns behaviour and capabilities, and may assign a fixed model.
+# Chat retains its own inherited model when that assignment is selected.
+PROJECT_CONTEXT_FIELDS = frozenset({"memory_version_refs", "skill_version_refs", "memory_entry_ids", "skill_entry_ids", "embedding_deployment_id"})
 APPLICATION_DEFAULT_FIELDS = frozenset({"approval_mode"})
 MAIN_AGENT_FIELDS = frozenset({
     "instructions", "memory_version_refs", "skill_version_refs",
     "protected_instruction_version_refs", "requires_project", "requires_host_shell",
     "helper_agent_ids", "review",
+    "deployment_id", "bundle_id", "model_configuration_id", "profile_id", "inherit_deployment_settings",
+    "presented_tools", "connection_ids", "startup_overrides", "per_request_overrides", "embedding_deployment_id",
+    "memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids",
 })
 
 
@@ -209,7 +212,7 @@ class SetupService:
         source = self.get_setup(setup_id)
         return self.create_setup(AgentSetupCreateRequest(name=name or f"{source.name} copy", role=source.role, configuration=source.configuration))
 
-    def dependencies(self, configuration: SetupConfiguration) -> list[SetupDependencyIssue]:
+    def dependencies(self, configuration: SetupConfiguration, *, frozen: bool = False) -> list[SetupDependencyIssue]:
         issues = []
         if configuration.bundle_id and not configuration.deployment_id and not configuration.model_configuration_id:
             issues.append(SetupDependencyIssue(kind="deployment_id", id=configuration.bundle_id, reason="choose a saved deployment for this model"))
@@ -228,8 +231,11 @@ class SetupService:
                     if version is None or version.kind != kind:
                         issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="missing" if version is None else "wrong kind"))
                     elif self.knowledge is not None:
+                        if frozen:
+                            self.knowledge._require_scope(version.scope, version.scope_id)
+                            continue
                         entry = self.knowledge.get_entry(version.entry_id)
-                        if not entry.active or not entry.enabled:
+                        if not frozen and (not entry.active or not entry.enabled):
                             issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="disabled or removed"))
                         elif not any(s.scope == entry.scope and s.scope_id == entry.scope_id for s in self.knowledge.scope_options()):
                             issues.append(SetupDependencyIssue(kind=kind, id=ref, reason="scope is missing or inactive"))
@@ -265,8 +271,13 @@ class SetupService:
             raise HarnessError("App preferences can seed new chats' Access choice only.",
                 code="application_setup_scope", status_code=400, details={"fields": other})
 
-    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False, helper_role: bool = False, read_only: bool = False) -> ResolvedSetupSelection:
+    def resolve(self, *, project_id: str | None = None, agent_setup_version_id: str | None = None, agent_setup_id: str | None = None, overrides: SetupConfiguration | None = None, override_cleared_fields: list[str] | None = None, validate: bool = True, editing_layer: str = "conversation", prepare_model: bool = False, helper_role: bool = False, read_only: bool = False, latest_knowledge: bool = False) -> ResolvedSetupSelection:
         project = self.get_project(project_id, require_active=True) if project_id else None
+        if agent_setup_id:
+            record = self.store.get_agent_setup(agent_setup_id)
+            if record is None or not record.active:
+                raise HarnessError("This agent was removed. Choose another agent.", code="agent_setup_inactive", status_code=409)
+            agent_setup_version_id = record.current_version_id
         version = self.get_version(agent_setup_version_id, require_active=True) if agent_setup_version_id else None
         layers = [("Application defaults", None, overrides or SetupConfiguration(), "application")] if editing_layer == "application" else [("Application defaults", None, self.store.get_setup_defaults(), "application")]
         if project and editing_layer != "application":
@@ -286,12 +297,23 @@ class SetupService:
         protected = []
         for name, source_id, configuration, scope in layers:
             explicit = configuration.model_dump(exclude_none=True)
+            if latest_knowledge and self.knowledge is not None:
+                for entry_field, version_field in (("memory_entry_ids", "memory_version_refs"), ("skill_entry_ids", "skill_version_refs"), ("protected_instruction_entry_ids", "protected_instruction_version_refs")):
+                    if entry_field not in explicit and version_field in explicit:
+                        explicit[entry_field] = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in explicit[version_field]))
             if scope == "application":
                 explicit = {key: value for key, value in explicit.items() if key in APPLICATION_DEFAULT_FIELDS}
             elif scope == "project":
                 explicit = {key: value for key, value in explicit.items() if key in PROJECT_CONTEXT_FIELDS}
             elif scope == "agent" and not helper_role:
                 explicit = {key: value for key, value in explicit.items() if key in MAIN_AGENT_FIELDS}
+            elif scope == "conversation" and version and not helper_role:
+                # A Chat draft cannot replace the saved agent's capabilities.
+                for key in ("presented_tools", "connection_ids", "helper_agent_ids", "review", "requires_project", "requires_host_shell"):
+                    explicit.pop(key, None)
+                if any(getattr(version.configuration, key) for key in ("deployment_id", "bundle_id", "model_configuration_id")):
+                    for key in ("deployment_id", "bundle_id", "model_configuration_id", "profile_id", "inherit_deployment_settings"):
+                        explicit.pop(key, None)
             self._resolve_model_selector_layer(values, effective, explicit)
             if explicit.get("inherit_deployment_settings") is False and "profile_id" not in explicit:
                 values.pop("profile_id", None)
@@ -311,6 +333,8 @@ class SetupService:
                     # Requirements are restrictions, not optional scalar preferences.
                     values[key] = bool(values.get(key) or value)
                     effective[key].value = values[key]
+                elif key in {"memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"}:
+                    values[key] = list(dict.fromkeys([*values.get(key, []), *value]))
                 elif key in {"per_request_overrides", "startup_overrides"}:
                     values[key] = {**values.get(key, {}), **value}
                     prefix = "per_request" if key == "per_request_overrides" else "startup"
@@ -378,6 +402,16 @@ class SetupService:
                     effective[key] = ResolvedSetting(value=values[key], source=source.source if source else "Model configuration", source_id=profile.id,
                         inherited=source.inherited if source else True)
         configuration = SetupConfiguration.model_validate(values)
+        if self.knowledge is not None:
+            for entry_field, version_field in (("memory_entry_ids", "memory_version_refs"), ("skill_entry_ids", "skill_version_refs"), ("protected_instruction_entry_ids", "protected_instruction_version_refs")):
+                ids = getattr(configuration, entry_field)
+                if ids is None and latest_knowledge and getattr(configuration, version_field):
+                    ids = list(dict.fromkeys(self.knowledge.get_version(ref).entry_id for ref in getattr(configuration, version_field)))
+                if ids is not None:
+                    refs = self.knowledge.resolve_entry_refs(**{entry_field: ids})
+                    configuration = configuration.model_copy(update={entry_field: ids, version_field: list(getattr(refs, version_field))})
+                    if version_field in effective:
+                        effective[version_field].value = list(getattr(refs, version_field))
         for key, value in builtin_values.items():
             if getattr(configuration, key) is None:
                 effective[key] = ResolvedSetting(value=value, source="Application default", inherited=True)

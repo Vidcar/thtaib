@@ -20,7 +20,7 @@ assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, min\(var
 assert.doesNotMatch(css, /files-expanded[\s\S]*display:\s*none/, "widening the dock does not hide the conversation");
 assert.match(css, /grid-area: 1 \/ 2 \/ 3 \/ 3/, "the rail stays a full-height column beside the transcript and composer");
 assert.doesNotMatch(css, /max-width: 1120px/, "a narrower window does not move the rail above the composer");
-assert.match(css, /\.chat-rail \.chat-history-actions \{[^}]*position: static/, "conversation actions sit in the rail instead of covering the answer");
+assert.match(readFileSync(path.join(desktopRoot, "src/renderer/ChatPanel.tsx"), "utf8"), /MenuPopover label="Chat actions"[\s\S]*ChatHistoryActions exportsOnly/, "conversation export and deletion live in the Chat header");
 assert.match(dockSource, /Project files/, "the dock retains the project file browser");
 assert.doesNotMatch(dockSource, /file-changes|reverse|DiffEditor/, "the retired file-change and undo path is absent");
 assert.match(monacoSource, /loader\.config\(\{ monaco \}\)/, "Monaco is loaded from the desktop package");

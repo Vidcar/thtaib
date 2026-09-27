@@ -159,7 +159,7 @@ async function projectKnowledgeOwnership(Editor) {
     assert.doesNotMatch(text(renderer.root), /Access|Tools|Helper model|Protected instructions/, "project editor cannot save Chat access, model selection, or agent instructions");
     const memoryChoice = renderer.root.findAll(node => node.props.role === "radiogroup")[0];
     await act(async () => memoryChoice.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "choose")[0].props.onChange());
-    assert.deepEqual(edits.at(-1), { memory_version_refs: [] }, "editing knowledge drops stale access, tools, and model fields");
+    assert.deepEqual(edits.at(-1), { memory_entry_ids: [] }, "project knowledge keeps record identities and drops execution fields");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
@@ -274,7 +274,7 @@ async function sameBundleVariantsLoadSeparately(Panel) {
 
 async function agentOwnedSettings(Editor) {
   const edits = [];
-  const catalogue = { bundles: [], profiles: [], deployments: [], connections: [], tools: [], knowledge: [{ kind: "protected_instruction", id: "instruction", current_version_id: "instruction_v1", display_name: "Editorial rules", enabled: true }] };
+  const catalogue = { bundles: [{ id: "model", display_name: "Local model" }], profiles: [{ id: "fixed-config", bundle_id: "model", display_name: "Precise" }], deployments: [], connections: [], tools: [{ id: "execute", name: "Run shell" }, { id: "browser_navigate", name: "Navigate" }], knowledge: [{ kind: "protected_instruction", id: "instruction", current_version_id: "instruction_v1", display_name: "Editorial rules", enabled: true }] };
   globalThis.fetch = async (url, init) => {
     assert.ok(String(url).endsWith("/v1/setup-resolution"));
     assert.equal(JSON.parse(init.body).editing_layer, "agent");
@@ -282,18 +282,23 @@ async function agentOwnedSettings(Editor) {
   };
   let renderer;
   try {
-    const helper = { id: "helper", name: "Research helper", missing_dependencies: [{ kind: "main", id: "main", reason: "Main role unavailable" }], helper_missing_dependencies: [] };
+    const helper = { id: "helper", name: "Research helper", configuration: {}, missing_dependencies: [{ kind: "main", id: "main", reason: "Main role unavailable" }], helper_missing_dependencies: [] };
     await act(async () => { renderer = create(React.createElement(Editor, { value: { approval_mode: "full_access", presented_tools: ["execute"] }, scope: "agent", catalogue, agentOptions: [helper], onChange: value => edits.push(value) })); await tick(); });
     assert.doesNotMatch(text(renderer.root), /Default access for new chats/, "agent editor cannot assign main Chat access");
     assert.equal(renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.disabled, false, "helper eligibility uses helper dependencies, not main role dependencies");
     await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.onClick());
     assert.deepEqual(edits.at(-1).helper_agent_ids, ["helper"], "agent can select named helpers");
     assert.equal(edits.at(-1).approval_mode, undefined, "agent edit drops stale access");
-    assert.equal(edits.at(-1).presented_tools, undefined, "agent edit drops stale tools");
+    assert.deepEqual(edits.at(-1).presented_tools, ["execute"], "agent edit retains agent-owned tools");
     await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Review before finishing" }).props.onClick());
     assert.deepEqual(edits.at(-1).review, { enabled: true, criteria: "", max_revisions: 2 }, "agent review has a bounded revision count");
     const protectedChoice = renderer.root.findAll(node => node.props.role === "radiogroup")[2];
     await act(async () => protectedChoice.findAll(node => node.type === "input" && node.props.type === "radio" && node.props.value === "choose")[0].props.onChange());
-    assert.deepEqual(edits.at(-1).protected_instruction_version_refs, [], "agent owns protected instructions");
+    assert.deepEqual(edits.at(-1).protected_instruction_entry_ids, [], "agent owns protected-instruction record selection");
+    await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Browser" }).props.onClick());
+    assert.deepEqual(edits.at(-1).presented_tools, ["execute", "browser_navigate"], "group selection updates canonical individual tools");
+    assert.equal(edits.at(-1).desktop_access, undefined);
+    await act(async () => renderer.root.findByType("select").props.onChange({ target: { value: "configuration:fixed-config" } }));
+    assert.equal(edits.at(-1).model_configuration_id, "fixed-config", "assigned model is agent-owned");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }

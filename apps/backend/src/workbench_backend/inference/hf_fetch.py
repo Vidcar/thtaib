@@ -58,6 +58,12 @@ def repository_file_hint(value: str) -> str | None:
     if url.scheme != "https" or url.hostname != "huggingface.co":
         return None
     hints = parse_qs(url.query, keep_blank_values=True).get("show_file_info", [])
+    parts = url.path.strip("/").split("/")
+    if len(parts) >= 5 and parts[2] in {"blob", "resolve"}:
+        linked = unquote("/".join(parts[4:]))
+        if hints and hints != [linked]:
+            raise ManagerError("This link contains conflicting file selections.", code="hf_file_hint", status_code=400)
+        hints = [linked]
     if not hints:
         return None
     if len(hints) != 1 or not hints[0] or len(hints[0]) > 1024:
@@ -68,6 +74,18 @@ def repository_file_hint(value: str) -> str | None:
             or any(mark in hint for mark in ("*", "?", "[", "]")) or not hint.lower().endswith(".gguf")):
         raise ManagerError("This model link has an unsafe or unsupported file selection.", code="hf_file_hint", status_code=400)
     return hint
+
+
+def repository_revision_hint(value: str) -> str | None:
+    """An exact file link may name a branch, tag or immutable commit."""
+    url = urlparse(value.strip())
+    parts = url.path.strip("/").split("/")
+    if url.scheme == "https" and url.hostname == "huggingface.co" and len(parts) >= 5 and parts[2] in {"blob", "resolve"}:
+        revision = unquote(parts[3])
+        if not revision or len(revision) > 256 or "\\" in revision or revision.startswith("/") or ".." in revision.split("/"):
+            raise ManagerError("This link has an invalid revision.", code="hf_revision", status_code=400)
+        return revision
+    return None
 
 
 def describe_repository(repo_id: str, info: object) -> HubRepository:
@@ -177,6 +195,7 @@ class HuggingFaceFetcher:
 
     def inspect(self, *, repo_id: str, revision: str = "main", include_recipes: bool = False) -> HubRepository:
         file_hint = repository_file_hint(repo_id)
+        revision = repository_revision_hint(repo_id) or revision
         repo_id = repository_id(repo_id)
         try:
             info = HfApi().model_info(repo_id=repo_id, revision=revision or "main", files_metadata=True)

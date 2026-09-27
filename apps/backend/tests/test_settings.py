@@ -155,6 +155,10 @@ class SettingsBagTests(unittest.TestCase):
                 self.assertEqual(startup_cli_args({key: True}), ["--reasoning-preserve"])
                 self.assertEqual(startup_cli_args({key: False}), ["--no-reasoning-preserve"])
                 continue
+            if key == "kv_offload":
+                self.assertEqual(startup_cli_args({key: True}), ["--kv-offload"])
+                self.assertEqual(startup_cli_args({key: False}), ["--no-kv-offload"])
+                continue
             args = startup_cli_args({key: "sample"})
             self.assertEqual(args, [STARTUP_KEYS[key], "sample"])
         invalid = resolve_bags(startup={"flash_attn": "maybe"})

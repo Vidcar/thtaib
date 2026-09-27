@@ -303,7 +303,7 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
             self.chat_service().update_queue_item(
                 'chat_target',
                 'queue-edit',
-                ChatQueueItemUpdateRequest(attachment_ids=[asset.id]),
+                ChatQueueItemUpdateRequest(expected_revision=0, attachment_ids=[asset.id]),
             )
 
         self.assertEqual(raised.exception.status_code, 410)
@@ -330,7 +330,7 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
             self.chat_service().update_queue_item(
                 'chat_target',
                 'queue-edit',
-                ChatQueueItemUpdateRequest(attachment_ids=[asset.id]),
+                ChatQueueItemUpdateRequest(expected_revision=0, attachment_ids=[asset.id]),
             )
 
         self.assertEqual(raised.exception.status_code, 403)

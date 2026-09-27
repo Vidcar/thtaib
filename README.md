@@ -6,10 +6,10 @@ The Windows-first desktop for **thtaib**, a local-first AI workspace for using a
 
 On this prepared Windows checkout, double-click **Launch Workbench.vbs**. It starts the backend if needed and opens the built desktop. Closing and reopening the desktop retains conversations and project files; the backend and any running model remain available in the background.
 
-1. Open **Models**, choose an installed model and its configuration, then load it. **Save changes** updates that configuration; **Save as variant** creates another. Loading changes use **Apply & reload**. An already running model can be used directly.
-2. Open **Chat**. New unpinned chats use the loaded model. The model menu shows effective thinking and context settings. **Apply** keeps changes in the conversation; **Save to model** explicitly updates future defaults.
-3. Add an existing project from the left rail for file tasks. **Ask** pauses before edits, shell commands, and other effects unless a saved permission applies; **Full access** permits enabled tools. **Plan** remains read-only at either access level. Named helpers and review are optional.
-4. Select Knowledge in the chat setup. Memory versions are fixed once that conversation's first turn starts; start a new chat to use edited memory. Skills use native `SKILL.md` content and a skill edit or selection change takes effect on the next new message.
+1. Open **Models**, choose an installed model and its configuration, then load it. **Save changes** updates that configuration; **Save as configuration** creates another. Loading changes use **Apply & reload**. An already running model can be used directly.
+2. Open **Chat**. Select a model and use its adjacent tuning control for thinking and context. **Apply** keeps an override for this model in this chat. During work, changes prepare the next message; its model loads at the safe handoff. Response limits and saved model defaults belong in **Models**.
+3. Add an existing project from the Chat list for file tasks. **Ask** pauses before edits, shell commands, and other effects unless a saved permission applies; **Full access** permits enabled tools. **Plan** remains read-only at either access level. Save tools, helpers and review criteria in **Agents**.
+4. Use **+**, **@** or **/** for context, saved skills and task prompts. Each accepted message freezes the latest saved instructions and knowledge; later edits cannot change work already accepted. **Knowledge** provides guided skill fields, native Source editing and supporting files saved together as one version.
 5. Use **Stop** to cancel active work. Queued messages follow a successful turn, and pause after cancellation or failure. Choose a saved conversation from the left to continue; visiting another destination retains its draft and reading position. Unload the model from **Models** when you want to release its memory.
 
 ## Install and run

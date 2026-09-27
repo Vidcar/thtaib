@@ -19,6 +19,7 @@ export interface ChatHistoryActionsProps {
   onDeleted: (id: string) => void;
   onError: (message: string) => void;
   disabled?: boolean;
+  exportsOnly?: boolean;
 }
 
 type BusyAction = "branch" | "retry" | "regenerate" | "export" | "preview-delete" | "delete" | null;
@@ -36,6 +37,7 @@ export function ChatHistoryActions({
   onDeleted,
   onError,
   disabled = false,
+  exportsOnly = false,
 }: ChatHistoryActionsProps) {
   const options = useMemo(() => actionOptions(conversation), [conversation]);
   const [selectedRunId, setSelectedRunId] = useState<string>(() => options.at(-1)?.runId ?? "");
@@ -167,7 +169,7 @@ export function ChatHistoryActions({
 
   return (
     <section className="chat-history-actions" aria-label="Conversation history actions">
-      <div className="chat-history-actions-head">
+      {!exportsOnly ? <><div className="chat-history-actions-head">
         <div>
           <h3>Chat actions</h3>
         </div>
@@ -196,7 +198,9 @@ export function ChatHistoryActions({
         />
       </label>
 
+      </> : null}
       <div className="chat-history-action-grid">
+        {!exportsOnly ? <>
         <HistoryActionButton
           icon="activity"
           title="Retry task"
@@ -215,6 +219,7 @@ export function ChatHistoryActions({
           busy={busy === "retry"}
           onClick={() => void runAction("edit")}
         />
+        </> : null}
         <HistoryActionButton
           icon="files"
           title="Readable export"

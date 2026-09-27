@@ -3160,6 +3160,24 @@
       },
       "ChatConversation": {
         "properties": {
+          "accepted_inputs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FrozenExecutionSelection"
+            },
+            "title": "Accepted Inputs",
+            "type": "object"
+          },
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -3359,6 +3377,20 @@
             "title": "Inherit Deployment Settings",
             "type": "boolean"
           },
+          "memory_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Entry Ids"
+          },
           "memory_version_refs": {
             "items": {
               "type": "string"
@@ -3436,6 +3468,20 @@
             ],
             "title": "Project Path"
           },
+          "protected_instruction_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Entry Ids"
+          },
           "protected_instruction_version_refs": {
             "items": {
               "type": "string"
@@ -3482,6 +3528,20 @@
           },
           "setup_overrides": {
             "$ref": "#/components/schemas/SetupConfiguration"
+          },
+          "skill_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Entry Ids"
           },
           "skill_version_refs": {
             "items": {
@@ -3617,6 +3677,17 @@
       },
       "ChatConversationCreateRequest": {
         "properties": {
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -3732,6 +3803,20 @@
             "title": "Knowledge Version Refs",
             "type": "array"
           },
+          "memory_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Entry Ids"
+          },
           "memory_version_refs": {
             "items": {
               "type": "string"
@@ -3809,6 +3894,20 @@
             ],
             "title": "Project Path"
           },
+          "protected_instruction_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Entry Ids"
+          },
           "protected_instruction_version_refs": {
             "items": {
               "type": "string"
@@ -3832,6 +3931,20 @@
                 "type": "null"
               }
             ]
+          },
+          "skill_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Entry Ids"
           },
           "skill_version_refs": {
             "items": {
@@ -3912,6 +4025,24 @@
       },
       "ChatConversationView": {
         "properties": {
+          "accepted_inputs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FrozenExecutionSelection"
+            },
+            "title": "Accepted Inputs",
+            "type": "object"
+          },
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -4167,6 +4298,20 @@
             "title": "Inherit Deployment Settings",
             "type": "boolean"
           },
+          "memory_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Entry Ids"
+          },
           "memory_version_refs": {
             "items": {
               "type": "string"
@@ -4256,6 +4401,20 @@
             ],
             "title": "Project Path"
           },
+          "protected_instruction_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Entry Ids"
+          },
           "protected_instruction_version_refs": {
             "items": {
               "type": "string"
@@ -4307,6 +4466,20 @@
             "default": false,
             "title": "Shell Tools Available",
             "type": "boolean"
+          },
+          "skill_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Entry Ids"
           },
           "skill_version_refs": {
             "items": {
@@ -4840,6 +5013,11 @@
             ],
             "title": "Queue Position"
           },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -4960,6 +5138,11 @@
             ],
             "title": "Content Blocks"
           },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
           "input_message_id": {
             "anyOf": [
               {
@@ -4995,6 +5178,11 @@
             ],
             "title": "Output Schema"
           },
+          "replace_setup": {
+            "default": false,
+            "title": "Replace Setup",
+            "type": "boolean"
+          },
           "task": {
             "anyOf": [
               {
@@ -5007,6 +5195,9 @@
             "title": "Task"
           }
         },
+        "required": [
+          "expected_revision"
+        ],
         "title": "ChatQueueItemUpdateRequest",
         "type": "object"
       },
@@ -5100,6 +5291,17 @@
         "additionalProperties": false,
         "description": "Preview a saved conversation or one candidate choice without changing it.",
         "properties": {
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -5140,6 +5342,17 @@
       "ChatStartRequest": {
         "additionalProperties": false,
         "properties": {
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -5339,6 +5552,20 @@
             ],
             "title": "Knowledge Version Refs"
           },
+          "memory_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Entry Ids"
+          },
           "memory_version_refs": {
             "anyOf": [
               {
@@ -5411,6 +5638,14 @@
             ],
             "title": "Profile Id"
           },
+          "project_file_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Project File Refs",
+            "type": "array"
+          },
           "project_id": {
             "anyOf": [
               {
@@ -5432,6 +5667,20 @@
               }
             ],
             "title": "Project Path"
+          },
+          "protected_instruction_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Entry Ids"
           },
           "protected_instruction_version_refs": {
             "anyOf": [
@@ -5483,6 +5732,28 @@
                 "type": "null"
               }
             ]
+          },
+          "shortcut_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Shortcut Ids",
+            "type": "array"
+          },
+          "skill_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Entry Ids"
           },
           "skill_version_refs": {
             "anyOf": [
@@ -7160,6 +7431,46 @@
       "FrozenExecutionSelection": {
         "description": "Trusted app-owned queue snapshot; never accepted as start-request input.",
         "properties": {
+          "cleared_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cleared Fields",
+            "type": "array"
+          },
+          "conversation_overrides": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SetupConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "helper_snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenHelperSelection"
+            },
+            "title": "Helper Snapshots",
+            "type": "array"
+          },
+          "intended_config": {
+            "additionalProperties": true,
+            "title": "Intended Config",
+            "type": "object"
+          },
+          "request_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Fingerprint"
+          },
           "selection": {
             "$ref": "#/components/schemas/ResolvedSetupSelection"
           },
@@ -7167,6 +7478,16 @@
             "additionalProperties": true,
             "title": "Settings",
             "type": "object"
+          },
+          "shortcuts": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Shortcuts",
+            "type": "array"
           },
           "system_prompt": {
             "anyOf": [
@@ -7437,6 +7758,105 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HardwareDeviceMemory": {
+        "properties": {
+          "available_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Bytes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Bytes"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "HardwareDeviceMemory",
+        "type": "object"
+      },
+      "HardwareMemoryObservation": {
+        "properties": {
+          "gpu_devices": {
+            "items": {
+              "$ref": "#/components/schemas/HardwareDeviceMemory"
+            },
+            "title": "Gpu Devices",
+            "type": "array"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "ram_available_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Available Bytes"
+          },
+          "ram_total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Total Bytes"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "stale": {
+            "default": false,
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "observed_at",
+          "source"
+        ],
+        "title": "HardwareMemoryObservation",
         "type": "object"
       },
       "HealthReport": {
@@ -7923,6 +8343,11 @@
             ],
             "title": "Display Name"
           },
+          "initial_startup": {
+            "additionalProperties": true,
+            "title": "Initial Startup",
+            "type": "object"
+          },
           "recipe_ids": {
             "items": {
               "type": "string"
@@ -8141,6 +8566,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "initial_startup": {
+            "additionalProperties": true,
+            "title": "Initial Startup",
+            "type": "object"
           },
           "install_root": {
             "anyOf": [
@@ -8953,6 +9383,14 @@
               }
             ]
           },
+          "resource_changes": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResourceChange"
+            },
+            "maxItems": 1024,
+            "title": "Resource Changes",
+            "type": "array"
+          },
           "scope": {
             "enum": [
               "user",
@@ -9002,6 +9440,14 @@
                 "type": "null"
               }
             ]
+          },
+          "resource_changes": {
+            "items": {
+              "$ref": "#/components/schemas/SkillResourceChange"
+            },
+            "maxItems": 1024,
+            "title": "Resource Changes",
+            "type": "array"
           }
         },
         "required": [
@@ -10197,6 +10643,65 @@
         "title": "ModelConfigurationWriteRequest",
         "type": "object"
       },
+      "ModelEstimateRequest": {
+        "properties": {
+          "bundle_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bundle Id"
+          },
+          "primary_files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Primary Files",
+            "type": "array"
+          },
+          "projector_files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "title": "Projector Files",
+            "type": "array"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Id"
+          },
+          "revision": {
+            "default": "main",
+            "title": "Revision",
+            "type": "string"
+          },
+          "startup": {
+            "additionalProperties": true,
+            "title": "Startup",
+            "type": "object"
+          }
+        },
+        "title": "ModelEstimateRequest",
+        "type": "object"
+      },
       "ModelJudgement": {
         "properties": {
           "model_review": {
@@ -10227,6 +10732,206 @@
           }
         },
         "title": "ModelJudgement",
+        "type": "object"
+      },
+      "ModelMemoryEstimate": {
+        "properties": {
+          "architecture": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Architecture"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "context_marker": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Marker"
+          },
+          "context_marker_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "upper_bound",
+                  "native_prediction"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Marker Kind"
+          },
+          "context_maximum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Maximum"
+          },
+          "devices": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "estimated_at": {
+            "title": "Estimated At",
+            "type": "string"
+          },
+          "evaluated_startup": {
+            "additionalProperties": true,
+            "title": "Evaluated Startup",
+            "type": "object"
+          },
+          "gpu_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Bytes"
+          },
+          "hardware": {
+            "$ref": "#/components/schemas/HardwareMemoryObservation"
+          },
+          "kv_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kv Bytes"
+          },
+          "model_disk_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Disk Bytes"
+          },
+          "observed_runtime": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Runtime"
+          },
+          "projector_disk_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projector Disk Bytes"
+          },
+          "ram_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Bytes"
+          },
+          "runtime_overhead_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Overhead Bytes"
+          },
+          "selected_startup": {
+            "additionalProperties": true,
+            "title": "Selected Startup",
+            "type": "object"
+          },
+          "source": {
+            "default": "metadata",
+            "enum": [
+              "metadata",
+              "native_prediction"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "source_identity": {
+            "title": "Source Identity",
+            "type": "string"
+          },
+          "unknown_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unknown Reasons",
+            "type": "array"
+          },
+          "weights_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weights Bytes"
+          }
+        },
+        "required": [
+          "source_identity",
+          "estimated_at",
+          "hardware"
+        ],
+        "title": "ModelMemoryEstimate",
         "type": "object"
       },
       "ModelRequestCapture": {
@@ -13230,6 +13935,20 @@
             ],
             "title": "Instructions"
           },
+          "memory_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Entry Ids"
+          },
           "memory_version_refs": {
             "anyOf": [
               {
@@ -13292,6 +14011,20 @@
             ],
             "title": "Profile Id"
           },
+          "protected_instruction_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected Instruction Entry Ids"
+          },
           "protected_instruction_version_refs": {
             "anyOf": [
               {
@@ -13337,6 +14070,20 @@
                 "type": "null"
               }
             ]
+          },
+          "skill_entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Entry Ids"
           },
           "skill_version_refs": {
             "anyOf": [
@@ -13409,6 +14156,17 @@
       "SetupResolutionRequest": {
         "additionalProperties": false,
         "properties": {
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
           "agent_setup_version_id": {
             "anyOf": [
               {
@@ -13466,6 +14224,30 @@
           "type"
         ],
         "title": "SimpleAction",
+        "type": "object"
+      },
+      "SkillGuidedFields": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "instructions": {
+            "title": "Instructions",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "instructions"
+        ],
+        "title": "SkillGuidedFields",
         "type": "object"
       },
       "SkillPackageImportRequest": {
@@ -13536,6 +14318,131 @@
         "title": "SkillPackageImportRequest",
         "type": "object"
       },
+      "SkillPreview": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "guided_available": {
+            "default": false,
+            "title": "Guided Available",
+            "type": "boolean"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "issues": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "valid": {
+            "default": false,
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "SkillPreview",
+        "type": "object"
+      },
+      "SkillPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Id"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillGuidedFields"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "user",
+                  "agent",
+                  "project"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "SkillPreviewRequest",
+        "type": "object"
+      },
       "SkillResource": {
         "properties": {
           "path": {
@@ -13557,6 +14464,36 @@
           "size_bytes"
         ],
         "title": "SkillResource",
+        "type": "object"
+      },
+      "SkillResourceChange": {
+        "additionalProperties": false,
+        "properties": {
+          "content_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Base64"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "remove": {
+            "default": false,
+            "title": "Remove",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "SkillResourceChange",
         "type": "object"
       },
       "SkillResourceView": {
@@ -17736,6 +18673,31 @@
         "summary": "Replace Transcript"
       }
     },
+    "/v1/chat/shortcuts": {
+      "get": {
+        "operationId": "task_shortcuts_v1_chat_shortcuts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "title": "Response Task Shortcuts V1 Chat Shortcuts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Task Shortcuts"
+      }
+    },
     "/v1/compatibility/assess": {
       "post": {
         "operationId": "assess_v1_compatibility_assess_post",
@@ -19831,6 +20793,44 @@
         "summary": "Import Skill"
       }
     },
+    "/v1/knowledge/skills/preview": {
+      "post": {
+        "operationId": "preview_skill_v1_knowledge_skills_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Skill"
+      }
+    },
     "/v1/knowledge/versions/{version_id}": {
       "get": {
         "operationId": "get_version_v1_knowledge_versions__version_id__get",
@@ -19916,6 +20916,44 @@
           }
         },
         "summary": "Skill Resource"
+      }
+    },
+    "/v1/models/estimate": {
+      "post": {
+        "operationId": "estimate_model_v1_models_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelEstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelMemoryEstimate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Estimate Model"
       }
     },
     "/v1/models/huggingface/inspect": {
