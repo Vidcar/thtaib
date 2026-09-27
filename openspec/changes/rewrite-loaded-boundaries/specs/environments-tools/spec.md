@@ -25,3 +25,9 @@ Ordinary Chat SHALL offer Deep Agents built-in `ls`, `read_file`, `write_file`, 
 - **WHEN** native tools concurrently write distinct files under a new shared directory
 - **THEN** equivalent Windows path representations SHALL not cause false escape errors, and each call SHALL retain its own success or error result
 - **AND** genuine traversal, junction escape and same-file conflicts SHALL remain rejected.
+
+#### Scenario: Native Unicode search on Windows
+
+- **WHEN** Chat searches valid UTF-8 text containing Unicode characters or Unicode filenames through a project or framework file route on Windows
+- **THEN** results SHALL preserve the exact matching text, paths, match limits and truncation status without a locale decoding failure
+- **AND** the supported backend entrypoints and desktop shortcut SHALL provide the same behavior without changing host-command encoding or replacing the native tools.

@@ -13,4 +13,4 @@
 ## 3. Validation and delivery
 
 - [x] 3.1 Pass backend default/integration suites, OpenSpec and whitespace checks; reproduce the original search and complete a real-model isolated agent Chat without changing model settings.
-- [ ] 3.2 Sync contracts, prepare validated Git/PR delivery, refresh the established backend without replaying failed work, and update the handover with verified results; archive the completed change before merging.
+- [x] 3.2 Sync contracts, prepare validated Git/PR delivery, refresh the established backend without replaying failed work, and update the handover with verified results.
