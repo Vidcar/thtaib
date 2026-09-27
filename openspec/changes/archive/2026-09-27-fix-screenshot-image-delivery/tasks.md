@@ -9,4 +9,4 @@
 
 - [x] 2.1 Run backend default/integration suites, shared-contract freshness, OpenSpec validation and diff checks; repair any relevant failures.
 - [x] 2.2 Run an isolated live screenshot round trip on the existing vision model and inspect transmitted screenshot bytes plus the Chat stream for actual image delivery and absent test output.
-- [ ] 2.3 Archive the completed change, update the concise handover, commit/push/merge the validated PR, and safely update the established local backend; verify usable screenshot delivery after refresh.
+- [x] 2.3 Archive the completed change, update the concise handover, commit/push/merge the validated PR, and safely update the established local backend; verify usable screenshot delivery after refresh.
