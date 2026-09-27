@@ -41,4 +41,10 @@ Final gates: backend default 1,021 passed / one existing Windows symlink-privile
 
 ## Migration Plan
 
-Additive response projection and optional fingerprint fields require no new database. Regenerate contracts, run all local gates and real-model acceptance, merge/archive and rebuild the established local application. Existing captures without fingerprints are processed on diagnostic access. Do not sweep all history during startup.
+Application schema 3 transactionally moves legacy capture arrays into indexed rows in the existing database; an older runtime rejects schema 3. Stop the old backend before opening that store with the new runtime. Existing captures without fingerprints are processed on diagnostic access. Do not sweep all history during startup.
+
+## Delivery verification
+
+Implementation merged in [PR179](https://github.com/Vidcar/thtaib/pull/179), retaining validated source revision `0fb32ab`. The established desktop was refreshed through its existing backend-recovery entry point. Backend PID21932 replaced PID23816; desktop main PID2704 and loaded router/Qwen process identities were preserved. Saved run, capture, Chat and linkage semantics matched exactly across migration; settings, residency and unrelated primary-checkout files remained unchanged. Downloaded weights were retained.
+
+Installed operational observation checked all 12 run-list responses and ten details, then exercised the actual Browser event route through a valid live JPEG frame, disconnect and clean close. All 166 saved captures / 20,966,815 bytes remained byte-identical. Sixty installed Browser/attention/work reads had p95 3.40 ms. Thirteen isolated validation-owned processes and all three fixture service ports were stopped without affecting the installed backend, desktop or loaded models. Evidence remains in ignored `.scratch/responsive-live` and `.scratch/responsive-refresh` directories in the managed checkout.
