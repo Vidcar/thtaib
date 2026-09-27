@@ -23,4 +23,4 @@
 
 ## 5. Delivery
 
-- [ ] 5.1 Create/review/merge PR, archive/sync the completed specification, update concise handover and established local deployment; verify usable application on Dave's machine.
+- [x] 5.1 Create/review/merge PR, archive/sync the completed specification, update concise handover and established local deployment; verify usable application on Dave's machine.
