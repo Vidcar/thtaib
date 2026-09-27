@@ -254,14 +254,14 @@ Work-mode Chat SHALL offer optional Windows window tools with Off, Selected wind
 
 ### Requirement: ENV-029 - Preflight conversation capability groups
 
-Chat SHALL expose project files, host shell, browser and Windows control as understandable capability groups in the composer `+` menu. Project files SHALL follow the bound project folder without an additional tool list choice. Host shell, browser and Windows control SHALL require explicit enablement for that conversation; enabling a group MUST NOT itself grant a broader window, file, network or approval scope. The menu SHALL show the effective next-turn selection separately from browser worker/session availability and live Windows grant. Disabling Browser or Windows control MUST NOT leave a tool selected solely to read its captures. The backend SHALL validate the same effective group and live authority at setup preview, turn dispatch and restored or helper tool execution. A missing or stale selected window, absent All windows grant, unavailable or lost browser worker/session, or unsupported mode SHALL yield a specific unavailable reason and a corrective action before affected tools are presented. A saved intention without a current grant MUST NOT be described as ready.
+Agents setup SHALL expose project files, host shell, browser and Windows control as understandable tool groups with individual choices, together with configured connection/tool dependencies. These choices SHALL be saved with the agent and resolved for new submissions; the composer `+` and Chat agent dropdown SHALL NOT duplicate them. Project file availability SHALL require the bound authorized project; selecting a group MUST NOT grant a broader window, file, network or approval scope. Chat SHALL own access/mode and live Windows target/grants, Browser its session controls and Settings installation/connections. The effective selected tools SHALL remain distinct from browser worker/session availability and live authority. Disabling Browser or Windows control in a saved agent MUST NOT leave a tool selected solely to read its captures. The backend SHALL validate the same effective selection and current authority at setup preview, admission, dispatch and restored/helper execution. A stale/missing window, absent broad grant, unavailable browser worker/session or unsupported mode SHALL yield a specific corrective action before affected tools are presented. Saved intention without a current grant MUST NOT be described as ready. Running/queued/paused setups retain their snapshots; future submissions use the latest saved agent.
 
 #### Scenario: Stale selected window
 - **WHEN** a conversation remembers Windows control but its selected window is gone
 - **THEN** the interface asks for a current window and the backend does not present Windows tools as usable.
 
 #### Scenario: Capability does not widen approval
-- **WHEN** a person enables browser or host shell under Ask access
+- **WHEN** a person saves browser or host shell selection in an agent used by an Ask-access chat
 - **THEN** applicable tool actions still use the existing approval path and helpers cannot exceed the parent's scope.
 
 #### Scenario: Missing or lost browser worker
@@ -271,8 +271,13 @@ Chat SHALL expose project files, host shell, browser and Windows control as unde
 
 #### Scenario: Turn Browser off
 
-- **WHEN** Browser is turned off in a projectless chat without an independent file-reading selection
+- **WHEN** Browser is turned off in the selected agent and a new submission is made in a projectless chat without an independent file-reading selection
 - **THEN** the next-turn tool selection excludes browser tools and incidental capture reading.
+
+#### Scenario: Cleaner Chat with missing dependencies
+
+- **WHEN** an agent selects a tool whose connection or worker is unavailable
+- **THEN** Chat shows a concise corrective route to the owning setup/connection screen without introducing tool toggles or granting access.
 
 ### Requirement: ENV-030 - Use one owned Chrome context for agents and browser viewing
 
