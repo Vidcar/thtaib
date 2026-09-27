@@ -241,6 +241,32 @@ class ContextBudgetHarnessTests(unittest.TestCase):
         self.assertEqual(checkpoint_after.get("messages", [])[:len(messages_before)], messages_before,
                          "native failure must preserve retained messages even when the new turn is checkpointed")
 
+    def test_smaller_context_continues_retained_history_through_native_compaction(self) -> None:
+        thread_id = "thread-reducible-smaller-context"
+        self._set_context(n_ctx=32768, vision=True)
+        first = self._start(thread_id=thread_id, task="Preserve the important details. " + "older detail " * 1000,
+            presented_tools=[])
+        self.assertEqual(first.status_code, 200, first.text)
+        completed = self._complete(first.json())
+        self.assertEqual(completed["status"], "completed", completed.get("error"))
+        before = conversation_state(self.manager.paths.checkpoints_db, thread_id)
+        retained_ids = [message.id for message in before["messages"]]
+        self._set_context(n_ctx=8192, vision=True)
+        second = self._start(thread_id=thread_id, task="Continue and retain the important facts. " + "recent detail " * 900,
+            presented_tools=[])
+        self.assertEqual(second.status_code, 200, second.text)
+        reduced = self._complete(second.json())
+        self.assertEqual(reduced["status"], "completed", reduced.get("error"))
+        self.assertEqual(reduced["context_observation"]["capacity_tokens"], 8192)
+        self.assertTrue(reduced["context_observation"]["fits"])
+        self.assertTrue(any(event["kind"] == "context_compacted" for event in reduced["events"]))
+        after = conversation_state(self.manager.paths.checkpoints_db, thread_id)
+        self.assertEqual([message.id for message in after["messages"]][:len(retained_ids)], retained_ids,
+            "Native summaries must retain canonical checkpoint history")
+        outbound = json.dumps(self.chat_payloads[-1])
+        self.assertIn("<summary>", outbound)
+        self.assertNotIn("older detail", outbound, "Only native active-prompt reduction excludes covered history")
+
     def test_retained_tool_result_pair_is_preserved_and_incomplete_pairs_are_rejected(self) -> None:
         deployment = self.manager.get_deployment(self.deployment_id)
         pair = [

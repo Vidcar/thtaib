@@ -68,6 +68,15 @@ class RouterRuntimeTests(unittest.TestCase):
         })
         start.assert_not_called()
 
+    def test_canonical_kv_boolean_flags_keep_preset_values_aligned(self) -> None:
+        for placement, flag in ((True, "kv-offload"), (False, "no-kv-offload")):
+            deployment = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id,
+                startup={"ctx_size": 4096, "kv_offload": placement, "cache_type_k": "q8_0"}, auto_start=False))
+            section = self.router._sections(self.router._presets())[deployment.id]
+            self.assertIn(f"{flag} = true", section)
+            self.assertIn("cache-type-k = q8_0", section)
+            self.assertIn("ctx-size = 4096", section)
+
     def test_broken_unrelated_bundle_does_not_block_valid_preset(self) -> None:
         valid = self._deployment()
         incoming = write_tiny_gguf(Path(self.tmp.name) / "incoming" / "broken.gguf")
@@ -133,6 +142,44 @@ class RouterRuntimeTests(unittest.TestCase):
             self.router.set_max_loaded_models(2)
         self.assertEqual(caught.exception.code, "deployment_active")
         self.assertEqual(self.router.max_loaded_models(), 1)
+
+    def test_queued_configuration_addition_does_not_change_or_guard_prior_presets(self) -> None:
+        from workbench_backend.state.migrate import open_application_store
+        from workbench_backend.chat.schemas import ChatConversation, ChatQueueItem
+        first = self._deployment(ctx_size=8192)
+        final = self._deployment(ctx_size=4096)
+        original = self.router._presets()
+        self.router._write_presets(original)
+        queued = self._deployment(ctx_size=2048)
+        with open_application_store(self.manager.paths) as store:
+            store.put_conversation(ChatConversation(id="handoff", deployment_id=first.id,
+                created_at="now", updated_at="now", queue=[ChatQueueItem(id="next", task="later",
+                    status="dispatching", created_at="now", updated_at="now",
+                    frozen_config={"deployment_id": first.id})]))
+        record = {"endpoint": "http://127.0.0.1:18080/v1", "identity": None}
+        # Adding a section used to append its blank separator to the previous
+        # section and falsely trigger that section's destructive-change guard.
+        with patch.object(self.router, "_owned_record", return_value=record), \
+             patch.object(self.router, "_inventory", return_value={}) as inventory, \
+             patch.object(self.router, "require_idle", wraps=self.router.require_idle) as guard:
+            self.assertEqual(self.router._ensure_router(), record)
+        guard.assert_not_called()
+        inventory.assert_called_once_with(record["endpoint"], reload=True)
+        updated = self.router._preset_path.read_text(encoding="utf-8")
+        self.assertIn(f"[{queued.id}]", updated)
+        self.assertEqual(self.router._sections(original)[final.id], self.router._sections(updated)[final.id])
+
+        # An actual edit of an existing preset remains blocked by its queued
+        # dependency before the native router receives any reload request.
+        self.manager.store.put_deployment(final.model_copy(update={
+            "applied_startup": {**final.applied_startup, "ctx_size": 1024}}))
+        with patch.object(self.router, "_owned_record", return_value=record), \
+             patch.object(self.router, "_inventory") as inventory:
+            with self.assertRaises(ManagerError) as caught:
+                self.router._ensure_router()
+        self.assertEqual(caught.exception.code, "deployment_active")
+        inventory.assert_not_called()
+        self.assertEqual(self.router._preset_path.read_text(encoding="utf-8"), updated)
 
     def test_legacy_cutover_refuses_shared_router_identity(self) -> None:
         deployment = self._deployment()

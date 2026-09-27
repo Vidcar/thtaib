@@ -38,7 +38,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(self.manager.store.get_bundle(self.bundle_id).default_configuration_id, profiles[0].id)
         self.assertEqual(self.manager.get_deployment(first.id).settings, first.settings)
 
-    def test_fresh_balanced_uses_supported_template_effort_over_publisher_default(self):
+    def test_fresh_default_preserves_publisher_and_template_defaults(self):
         import numpy as np
         from gguf import GGUFWriter
         from workbench_backend.inference.schemas import HuggingFaceConfiguration
@@ -55,13 +55,13 @@ class ModelConfigurationTests(unittest.TestCase):
         self.manager.store.put_bundle(bundle.model_copy(update={"huggingface_configuration":
             HuggingFaceConfiguration(generation_defaults={"reasoning_effort": "xhigh", "reasoning": "off", "temperature": 0.6})}))
         profile = self.manager.list_model_configurations(bundle_id)[0]
-        self.assertEqual(profile.display_name, "Balanced")
-        self.assertEqual(profile.bags.per_request.requested,
-            {"reasoning": "on", "reasoning_effort": "medium", "reasoning_budget_tokens": 2048, "max_tokens": 8192})
-        self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "medium")
+        self.assertEqual(profile.display_name, "Default")
+        self.assertEqual(profile.bags.per_request.requested, {})
+        self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "xhigh")
         self.assertEqual(profile.bags.per_request.applied["temperature"], 0.6)
         options = self.manager.get_bundle_configuration_options(bundle_id)
-        self.assertEqual(profile.bags.per_request.requested, options.response_presets[0].per_request)
+        self.assertEqual(options.response_presets[0].id, "balanced")
+        self.assertEqual(options.response_presets[0].per_request["reasoning_effort"], "medium")
         self.assertEqual(options.per_request_defaults["reasoning_effort"].default_value, "xhigh")
         self.assertIn("medium", [item.value for item in options.per_request_defaults["reasoning_effort"].options])
         # A previously authored configuration remains the user's choice.
@@ -69,9 +69,9 @@ class ModelConfigurationTests(unittest.TestCase):
             configuration_id=profile.id, display_name="Deep choice", per_request={"reasoning_effort": "xhigh"}))
         self.assertEqual(self.manager.list_model_configurations(bundle_id)[0].bags.per_request.requested, saved.bags.per_request.requested)
 
-    def test_fresh_balanced_does_not_invent_unsupported_thinking_controls(self):
+    def test_fresh_default_does_not_invent_thinking_or_response_limits(self):
         profile = self.manager.list_model_configurations(self.bundle_id)[0]
-        self.assertEqual(profile.bags.per_request.requested, {"reasoning_budget_tokens": 2048, "max_tokens": 8192})
+        self.assertEqual(profile.bags.per_request.requested, {})
 
     def test_configuration_save_revision_and_default_are_explicit(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
@@ -216,15 +216,28 @@ class ModelConfigurationTests(unittest.TestCase):
             self.assertIsNotNone(prepared.configuration.deployment_id)
             self.assertEqual(self.manager.get_deployment(prepared.configuration.deployment_id).status.value, "stopped")
 
-    def test_historical_context_shrink_is_rejected_before_stop(self):
+    def test_historical_context_shrink_needs_compatibility_owner_before_stop(self):
         deployment = self.deployment(ctx_size=8192)
         with open_application_store(self.paths) as store:
             store.put_conversation(ChatConversation(id="chat", deployment_id=deployment.id, created_at="now", updated_at="now", run_ids=["retained-run"]))
         with patch.object(self.manager.runtime, "require_executable", return_value=Path("llama-server")), patch.object(self.manager.deployments, "stop") as stop:
             with self.assertRaises(ManagerError) as caught:
                 self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":4096}, conversation_id="chat"))
-        self.assertEqual(caught.exception.code, "context_history_requires_new_chat")
-        self.assertEqual(caught.exception.details["applied_context"], 8192)
+        self.assertEqual(caught.exception.code, "context_compatibility_unavailable")
+        stop.assert_not_called()
+
+    def test_context_shrink_consults_existing_compatibility_owner(self):
+        deployment = self.deployment(ctx_size=8192)
+        with open_application_store(self.paths) as store:
+            store.put_conversation(ChatConversation(id="chat", deployment_id=deployment.id, created_at="now", updated_at="now", run_ids=["retained-run"]))
+        from unittest.mock import Mock
+        validator = Mock(side_effect=ManagerError("Retained images are incompatible", code="retained_incompatible", status_code=409))
+        self.manager.validate_chat_reconfiguration = validator
+        with patch.object(self.manager.runtime, "require_executable", return_value=Path("llama-server")), patch.object(self.manager.deployments, "stop") as stop:
+            with self.assertRaises(ManagerError) as caught:
+                self.manager.reconfigure_deployment(deployment.id, ReconfigureDeploymentRequest(startup={"ctx_size":4096}, conversation_id="chat"))
+        validator.assert_called_once_with("chat", deployment.id, {"ctx_size":4096}, deployment.profile_id)
+        self.assertEqual(caught.exception.code, "retained_incompatible")
         stop.assert_not_called()
 
     def test_explicit_null_response_override_really_omits_profile_value(self):

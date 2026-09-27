@@ -14,13 +14,16 @@ def freeze_settings(manager, configuration):
     # Saved model settings can change while work is queued. Capture the inputs,
     # then compare this selected startup with the actual loaded runtime at dispatch.
     frozen = bags.model_copy(deep=True)
+    if deployment is not None and configuration.inherit_deployment_settings is False:
+        # Opting out of response/agent defaults does not reset the actual launch.
+        frozen.startup = deployment.settings.startup.model_copy(deep=True)
     if configuration.startup_overrides:
         selected = {**bags.startup.requested, **configuration.startup_overrides}
         frozen.startup = resolve_bags(startup={key: value for key, value in selected.items() if value is not None}).startup
     return frozen.model_dump(mode="json")
 
 
-def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=None):
+def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=None, latest_knowledge=False):
     snapshots = []
     for ident in dict.fromkeys(agent_ids or []):
         view = service.get_setup(ident)
@@ -37,7 +40,7 @@ def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=
         inherited.update(helper_agent_ids=[], review={"enabled": False})
         selected = service.resolve(project_id=project_id, agent_setup_version_id=version.id,
             overrides=SetupConfiguration.model_validate(inherited), helper_role=True,
-            prepare_model=True)
+            prepare_model=False, read_only=True, latest_knowledge=latest_knowledge)
         snapshots.append(FrozenHelperSelection(agent_id=ident, version_id=version.id, name=version.name,
             role=version.role, configuration=selected.configuration, instruction_layers=selected.instruction_layers,
             settings_snapshot=freeze_settings(service.manager, selected.configuration)))

@@ -274,7 +274,6 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
     def test_queued_documents_and_memory_keep_submitted_selection(self):
         memory = self.client.post('/v1/knowledge/entries', json={"scope": "user", "kind": "memory", "content": "Version one"}).json()
         original = memory["current_version_id"]
-        changed = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={"base_version": original, "content": "Version two"}).json()["current_version_id"]
         chat = self._create(memory_version_refs=[original])
         asset = RetainedAssetService(self.app.state.app_store).retain_upload(RetainedUploadRequest(session_id=chat["id"], filename="frozen.md", content_type="text/markdown", content_base64=base64.b64encode(b"Frozen receipt").decode()))
         hold = threading.Event()
@@ -286,6 +285,7 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
             wait_for_generate_hold()
             first = self.client.post(f'/v1/chat/conversations/{chat["id"]}/queue', json={"task": "Use original selection", "memory_version_refs": [original], "document_asset_ids": [asset.id], "presented_tools": ["read_attachment"]})
             self.assertEqual(first.status_code, 200, first.text)
+            changed = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={"base_version": original, "content": "Version two"}).json()["current_version_id"]
             second = self.client.post(f'/v1/chat/conversations/{chat["id"]}/queue', json={"task": "Use changed selection", "memory_version_refs": [changed], "document_asset_ids": [], "presented_tools": []})
             self.assertEqual(second.status_code, 200, second.text)
             view = second.json()

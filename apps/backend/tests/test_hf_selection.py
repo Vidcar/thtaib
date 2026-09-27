@@ -18,6 +18,14 @@ def info(*names):
 
 
 class HubSelectionTests(unittest.TestCase):
+    def test_exact_blob_and_resolve_links_preserve_file_and_revision(self):
+        for route in ("blob", "resolve"):
+            with self.subTest(route=route), patch("workbench_backend.inference.hf_fetch.HfApi") as api:
+                api.return_value.model_info.return_value = info("Q4/model.gguf")
+                result = HuggingFaceFetcher().inspect(repo_id=f"https://huggingface.co/org/model/{route}/release-v1/Q4/model.gguf")
+            self.assertEqual(result.file_hint, "Q4/model.gguf")
+            self.assertEqual(api.return_value.model_info.call_args.kwargs["revision"], "release-v1")
+
     def test_link_and_repository(self):
         self.assertEqual(repository_id("https://huggingface.co/org/model/tree/main"), "org/model")
         self.assertEqual(repository_id(" org/model "), "org/model")

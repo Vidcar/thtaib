@@ -89,16 +89,16 @@ class ChatSetupReadinessTests(unittest.TestCase):
         self.assertEqual(rejected.json()["fields"], ["bundle_id", "requires_project"])
         self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
 
-    def test_project_cannot_save_execution_setup_and_agent_does_not_switch_main_model(self):
+    def test_project_context_only_and_inherited_or_fixed_main_agent_preview_stays_cold(self):
         rejected = self.client.post("/v1/projects", json={"path": str(self.folder),
             "defaults": {"deployment_id": self.second.id, "approval_mode": "full_access"}})
         self.assertEqual(rejected.status_code, 400, rejected.text)
         project = self.client.post("/v1/projects", json={"path": str(self.folder)}).json()
         agent = self.client.post("/v1/agent-setups", json={"name": "Coder",
-            "configuration": {"deployment_id": self.second.id, "instructions": "Write clear code."}}).json()
+            "configuration": {"instructions": "Write clear code."}}).json()
         chat_response = self.client.post("/v1/chat/conversations", json={
             "project_id": project["id"], "deployment_id": self.first.id,
-            "agent_setup_version_id": agent["current_version_id"]})
+            "agent_setup_id": agent["id"]})
         self.assertEqual(chat_response.status_code, 200, chat_response.text)
         chat = chat_response.json()
         self.assertEqual(chat["deployment_id"], self.first.id)
@@ -116,10 +116,28 @@ class ChatSetupReadinessTests(unittest.TestCase):
         alternate = self.client.post("/v1/agent-setups", json={"name": "Other",
             "configuration": {"deployment_id": self.second.id}}).json()
         candidate = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={
-            "agent_setup_version_id": alternate["current_version_id"]})
+            "agent_setup_id": alternate["id"]})
         self.assertEqual(candidate.status_code, 200, candidate.text)
-        self.assertEqual(candidate.json()["selection"]["configuration"]["deployment_id"], self.first.id)
+        self.assertEqual(candidate.json()["selection"]["configuration"]["deployment_id"], self.second.id)
         self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["deployment_id"], self.first.id)
+        fixed = self.client.post('/v1/chat/conversations', json={'deployment_id': self.first.id, 'agent_setup_id': alternate['id']})
+        self.assertEqual(fixed.status_code, 200, fixed.text)
+        self.assertEqual(fixed.json()['deployment_id'], self.second.id)
+        self.assertEqual(fixed.json()['transcript'], [])
+
+    def test_readiness_resolves_latest_saved_agent_and_knowledge_by_record_identity(self):
+        memory = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'memory', 'content': 'Original memory'}).json()
+        agent = self.client.post('/v1/agent-setups', json={'name': 'Selected', 'configuration': {'memory_entry_ids': [memory['id']], 'presented_tools': []}}).json()
+        chat = self.client.post('/v1/chat/conversations', json={'deployment_id': self.first.id, 'agent_setup_id': agent['id']}).json()
+        updated = self.client.patch(f'/v1/agent-setups/{agent["id"]}', json={'name': 'Latest', 'base_version': agent['current_version_id'], 'configuration': {'instructions': 'Saved instructions', 'memory_entry_ids': [memory['id']], 'presented_tools': []}}).json()
+        changed_memory = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={'content': 'Latest memory', 'base_version': memory['current_version_id']}).json()
+        preview = self.client.post(f'/v1/chat/conversations/{chat["id"]}/readiness', json={})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        selection = preview.json()['selection']
+        self.assertEqual(selection['agent_setup_version_id'], updated['current_version_id'])
+        self.assertEqual(selection['configuration']['memory_version_refs'], [changed_memory['current_version_id']])
+        self.assertEqual(selection['configuration']['presented_tools'], [])
+        self.assertEqual(self.client.get(f'/v1/chat/conversations/{chat["id"]}').json()['transcript'], [])
 
     def test_window_grant_is_reported_before_dispatch_and_shell_defaults_off(self):
         presented, *_ = resolve_presented_tools(None, project_bound=True)

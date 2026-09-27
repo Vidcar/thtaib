@@ -64,6 +64,39 @@ class SkillResourceView(SkillResource):
     execution_available: Literal[False] = False
 
 
+class SkillResourceChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    content_base64: str | None = None
+    remove: bool = False
+
+
+class SkillGuidedFields(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    description: str
+    instructions: str
+
+
+class SkillPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str
+    fields: SkillGuidedFields | None = None
+    scope: KnowledgeScope | None = None
+    scope_id: str | None = None
+    entry_id: str | None = None
+
+
+class SkillPreview(BaseModel):
+    content: str
+    name: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    guided_available: bool = False
+    valid: bool = False
+    issues: list[str] = Field(default_factory=list)
+
+
 class ContextCaptureSettings(BaseModel):
     retention_seconds: int | None = None
     redaction_mode: RedactionMode = "redact_secrets"
@@ -158,6 +191,7 @@ class KnowledgeCreateRequest(BaseModel):
     provenance: KnowledgeProvenance | None = None
     scope_id: str | None = None
     display_name: str | None = None
+    resource_changes: list[SkillResourceChange] = Field(default_factory=list, max_length=1024)
 
 
 class KnowledgeEditRequest(BaseModel):
@@ -165,6 +199,7 @@ class KnowledgeEditRequest(BaseModel):
     content: str
     base_version: str
     provenance: KnowledgeProvenance | None = None
+    resource_changes: list[SkillResourceChange] = Field(default_factory=list, max_length=1024)
 
 
 class KnowledgeRevertRequest(BaseModel):

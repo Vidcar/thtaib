@@ -39,7 +39,7 @@ from workbench_backend.inference.schemas import (
     ProcessIdentity,
     ResourceUsage,
 )
-from workbench_backend.inference.settings import resolve_bags
+from workbench_backend.inference.settings import STARTUP_BOOL_FLAGS, resolve_bags
 from workbench_backend.inference.store import RecordStore
 
 _STATE_KEY = "managed-router-state"
@@ -447,7 +447,7 @@ class ManagedRouter:
             if line.startswith("[") and line.endswith("]"):
                 current = line[1:-1]
                 sections[current] = []
-            elif current is not None:
+            elif current is not None and line.strip():
                 sections[current].append(line)
         return {key: "\n".join(value) for key, value in sections.items()}
 
@@ -499,7 +499,7 @@ class ManagedRouter:
             while index < len(argv):
                 flag = argv[index]
                 key = flag.lstrip("-")
-                if flag in {"--jinja", "--embedding", "--reasoning-preserve", "--no-reasoning-preserve"}:
+                if flag in {"--jinja", "--embedding"} or any(flag in pair for pair in STARTUP_BOOL_FLAGS.values()):
                     value = "true"
                     index += 1
                 else:

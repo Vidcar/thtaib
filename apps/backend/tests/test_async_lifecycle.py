@@ -97,7 +97,9 @@ class AsyncLifecycleTests(unittest.TestCase):
 
         with patch.object(harness, '_compiled_agent_context', session):
             run = self._start(presented_tools=['ask_user'])
-            pending = self._wait_for_pending_interrupt(run['id'])['pending_interrupt']
+            paused = self._wait_for_pending_interrupt(run['id'])
+            pending = paused['pending_interrupt']
+            self.assertEqual(paused['tool_outcomes']['async-question']['outcome'], 'not_dispatched')
             self.assertTrue(entered.is_set())
             self.assertFalse(exited.is_set())
             harness.resume_interrupt(run['id'], InterruptDecisionRequest(
@@ -105,6 +107,9 @@ class AsyncLifecycleTests(unittest.TestCase):
                 decisions=[{'type': 'respond', 'message': 'approved value'}]), require_interrupt_identity=True)
             final = wait_for_run(self.client, run['id'])
             self.assertEqual(final['status'], 'completed', final.get('error'))
+            question = final['tool_outcomes']['async-question']
+            self.assertEqual(question['outcome'], 'succeeded')
+            self.assertEqual(question['result'], 'approved value')
             self.assertTrue(exited.wait(5))
         saver = open_sqlite_checkpointer(self.manager.paths.checkpoints_db)
         self.assertIsInstance(saver, AsyncSqliteSaver)
@@ -117,6 +122,65 @@ class AsyncLifecycleTests(unittest.TestCase):
         moved = path.with_suffix('.moved')
         path.rename(moved)
         moved.rename(path)
+
+    def test_rejected_native_question_has_confirmed_failed_outcome(self):
+        self.scripted = ScriptedChatModel([
+            AIMessage(content='', tool_calls=[{'name': 'ask_user',
+                'args': {'prompt': 'Choose a value', 'answer_type': 'text'}, 'id': 'rejected-question'}]),
+            AIMessage(content='Question cancelled.'),
+        ])
+        started = self._start(presented_tools=['ask_user'])
+        paused = self._wait_for_pending_interrupt(started['id'])
+        self.assertEqual(paused['tool_outcomes']['rejected-question']['outcome'], 'not_dispatched')
+        pending = paused['pending_interrupt']
+        self.app.state.harness.resume_interrupt(started['id'], InterruptDecisionRequest(
+            interrupt_id=pending['interrupt_id'], namespace=pending['namespace'],
+            decisions=[{'type': 'reject', 'message': 'The user cancelled this question.'}]),
+            require_interrupt_identity=True)
+        final = wait_for_run(self.client, started['id'])
+        self.assertEqual(final['status'], 'completed', final.get('error'))
+        question = final['tool_outcomes']['rejected-question']
+        self.assertEqual(question['outcome'], 'failed')
+        self.assertEqual(question['failure_category'], 'cancelled')
+        self.assertIn('cancelled this question', question['result'])
+
+    def test_checkpoint_link_settles_question_when_stream_values_are_missing(self):
+        self.scripted = ScriptedChatModel([
+            AIMessage(content='', tool_calls=[{'name': 'ask_user',
+                'args': {'prompt': 'Choose a value', 'answer_type': 'text'}, 'id': 'checkpoint-question'}]),
+            AIMessage(content='The answer was recorded.'),
+        ])
+        harness = self.app.state.harness
+        with patch.object(harness, '_ingest_native_values'):
+            started = self._start(presented_tools=['ask_user'])
+            paused = self._wait_for_pending_interrupt(started['id'])
+            self.assertEqual(paused['tool_outcomes']['checkpoint-question']['outcome'], 'not_dispatched')
+            pending = paused['pending_interrupt']
+            harness.resume_interrupt(started['id'], InterruptDecisionRequest(
+                interrupt_id=pending['interrupt_id'], namespace=pending['namespace'],
+                decisions=[{'type': 'respond', 'message': 'checkpoint answer'}]),
+                require_interrupt_identity=True)
+            final = wait_for_run(self.client, started['id'])
+        self.assertEqual(final['status'], 'completed', final.get('error'))
+        self.assertEqual(final['tool_outcomes']['checkpoint-question']['outcome'], 'succeeded')
+        self.assertEqual(final['tool_outcomes']['checkpoint-question']['result'], 'checkpoint answer')
+
+    def test_cancelling_pending_native_question_retains_confirmed_rejection(self):
+        self.scripted = ScriptedChatModel([
+            AIMessage(content='', tool_calls=[{'name': 'ask_user',
+                'args': {'prompt': 'Choose a value', 'answer_type': 'text'}, 'id': 'cancelled-question'}]),
+            AIMessage(content='Question cancelled.'),
+        ])
+        started = self._start(presented_tools=['ask_user'])
+        paused = self._wait_for_pending_interrupt(started['id'])
+        self.assertEqual(paused['tool_outcomes']['cancelled-question']['outcome'], 'not_dispatched')
+        self.app.state.harness.cancel(started['id'])
+        final = wait_for_run(self.client, started['id'])
+        self.assertEqual(final['status'], 'cancelled', final.get('error'))
+        question = final['tool_outcomes']['cancelled-question']
+        self.assertEqual(question['outcome'], 'failed')
+        self.assertEqual(question['failure_category'], 'cancelled')
+        self.assertIn('cancelled this question', question['result'])
 
     def test_cancel_aborts_inflight_async_model_before_terminal_publication(self):
         entered, settled = threading.Event(), threading.Event()

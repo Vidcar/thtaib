@@ -191,6 +191,31 @@ class RecipeWorkflowTests(unittest.TestCase):
         self.assertEqual([item.id for item in self.manager.list_model_configurations(changed.id)], [self.base.id])
         self.assertEqual(self.manager.store.get_bundle(changed.id).default_configuration_id, self.base.id)
 
+    def test_import_recipe_owns_initial_startup_and_retry_preserves_its_edits(self) -> None:
+        recipe_id = self.recipes[0]["id"]
+        prior = self.manager.create_response_recipe_configurations(self.bundle.id, [recipe_id]).configurations[0]
+        job = ImportJob(id="job_initial", kind=BundleSourceKind.huggingface,
+            status=ImportStatus.running, created_at=utc_now(), updated_at=utc_now(),
+            initial_startup={"ctx_size": 4096, "kv_offload": False}, recipe_ids=[recipe_id],
+            default_recipe_id=recipe_id)
+        self.assertIsNone(self.manager.imports._create_job_recipes(job, self.bundle))
+        current = self.manager.store.get_bundle(self.bundle.id)
+        imported = self.manager.store.get_profile(current.default_configuration_id)
+        self.assertNotEqual(imported.id, prior.id)
+        self.assertEqual(imported.bags.startup.requested, job.initial_startup)
+        edited = imported.model_copy(update={"bags": resolve_bags(
+            startup={"ctx_size": 2048, "kv_offload": False}, per_request={"temperature": 0.42})})
+        self.manager.store.put_profile(edited)
+        retry = job.model_copy(update={"id": "job_retry", "retry_of": job.id})
+        self.manager.store.put_job(job)
+        self.manager.store.put_job(retry)
+        self.assertIsNone(self.manager.imports._create_job_recipes(retry, current))
+        retry_again = retry.model_copy(update={"id": "job_retry_again", "retry_of": retry.id})
+        self.assertIsNone(self.manager.imports._create_job_recipes(retry_again, current))
+        self.assertEqual(self.manager.store.get_bundle(self.bundle.id).default_configuration_id, imported.id)
+        self.assertEqual(self.manager.store.get_profile(imported.id).bags, edited.bags)
+        self.assertEqual(self.manager.store.get_profile(prior.id).bags.startup.requested, self.base.bags.startup.requested)
+
     def test_thinking_token_only_in_template_comment_is_not_a_toggle(self) -> None:
         commented = _weight(Path(self.tmp.name) / "commented.gguf",
             template="{# enable_thinking #}{{ messages }}")

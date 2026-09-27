@@ -270,24 +270,20 @@ class MemorySkillsHarnessTests(unittest.TestCase):
 
     def test_skill_name_collision_fails_closed_before_run(self) -> None:
         first = self._knowledge("skill", SKILL_BODY)
-        second = self._knowledge("skill", SKILL_BODY)
-        # Two independently stored skills with the same native name cannot be selected together.
+        duplicate = self.client.post("/v1/knowledge/entries", json={
+            "scope": "user", "kind": "skill", "content": SKILL_BODY})
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        self.assertEqual(duplicate.json()["code"], "skill_name_conflict")
+        agent = self.client.post("/v1/agent-setups", json={"name": "Skill scope", "configuration": {}})
+        self.assertEqual(agent.status_code, 200, agent.text)
+        scoped = self.client.post("/v1/knowledge/entries", json={
+            "scope": "agent", "scope_id": agent.json()["id"], "kind": "skill", "content": SKILL_BODY})
+        self.assertEqual(scoped.status_code, 200, scoped.text)
+        second = scoped.json()
+        # Valid equal names in separate scopes still cannot collide in a run's native paths.
         with self.assertRaises(HarnessError) as raised:
             plan_knowledge_materialization(
-                [
-                    _version(
-                        kind="skill",
-                        content=SKILL_BODY,
-                        entry_id=first["id"],
-                        version_id=first["current_version_id"],
-                    ),
-                    _version(
-                        kind="skill",
-                        content=SKILL_BODY,
-                        entry_id=second["id"],
-                        version_id=second["current_version_id"],
-                    ),
-                ]
+                [self.app.state.knowledge.get_version(item["current_version_id"]) for item in [first, second]]
             )
         self.assertEqual(raised.exception.code, SKILL_NAME_COLLISION)
 

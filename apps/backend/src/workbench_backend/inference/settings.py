@@ -38,6 +38,7 @@ STARTUP_KEYS: dict[str, str] = {
     "fit": "--fit",
     "cache_type_k": "--cache-type-k",
     "cache_type_v": "--cache-type-v",
+    "kv_offload": "--kv-offload",
     "load_mode": "--load-mode",
     "alias": "--alias",
     "embedding": "--embedding",
@@ -82,6 +83,7 @@ STARTUP_ENUMS: dict[str, frozenset[str]] = {
 }
 
 STARTUP_BOOL_FLAGS: dict[str, tuple[str, str]] = {
+    "kv_offload": ("--kv-offload", "--no-kv-offload"),
     "reasoning_preserve": ("--reasoning-preserve", "--no-reasoning-preserve"),
 }
 

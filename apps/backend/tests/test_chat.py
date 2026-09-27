@@ -1537,7 +1537,7 @@ class ChatHarnessTests(unittest.TestCase):
         queue_id = body["queue"][0]["id"]
         edited = self.client.patch(
             f"/v1/chat/conversations/{conversation['id']}/queue/{queue_id}",
-            json={"task": "Edited but still paused."},
+            json={"expected_revision": body["queue"][0]["revision"], "task": "Edited but still paused."},
         )
         self.assertEqual(edited.status_code, 200, edited.text)
         self.assertEqual(edited.json()["queue"][0]["task"], "Edited but still paused.")
@@ -2195,7 +2195,7 @@ class ChatHarnessTests(unittest.TestCase):
         queue_id = queued.json()["queue"][0]["id"]
         edited = self.client.patch(
             f"/v1/chat/conversations/{conversation['id']}/queue/{queue_id}",
-            json={"intended_config": {"per_request_overrides": {"reasoning_effort": "medium"}}},
+            json={"expected_revision": queued.json()["queue"][0]["revision"], "intended_config": {"per_request_overrides": {"reasoning_effort": "medium"}}},
         )
         self.assertEqual(edited.status_code, 200, edited.text)
         self.assertEqual(edited.json()["queue"][0]["intended_config"]["deployment_id"], self.deployment_id)
@@ -2295,8 +2295,8 @@ class ChatHarnessTests(unittest.TestCase):
         original_start = self.app.state.harness.start
         accepted: list[str] = []
 
-        def accept_then_raise(request: AgentStartRequest) -> AgentRun:
-            run = original_start(request)
+        def accept_then_raise(request: AgentStartRequest, **snapshots) -> AgentRun:
+            run = original_start(request, **snapshots)
             accepted.append(run.id)
             raise HarnessError("synthetic post-accept crash", code="synthetic_gap", status_code=503)
 
@@ -2334,9 +2334,9 @@ class ChatHarnessTests(unittest.TestCase):
                 raise ManagerError("synthetic load failure", code="deployment_not_ready", status_code=409)
             return original_ready(deployment_id)
 
-        def count_start(request: AgentStartRequest) -> AgentRun:
+        def count_start(request: AgentStartRequest, **snapshots) -> AgentRun:
             nonlocal starts
-            run = original_start(request)
+            run = original_start(request, **snapshots)
             starts += 1
             return run
 
@@ -2424,7 +2424,7 @@ class ChatHarnessTests(unittest.TestCase):
 
         edited = self.client.patch(
             f"/v1/chat/conversations/{conversation['id']}/queue/{queue_id}",
-            json={"task": "Edited after failure."},
+            json={"expected_revision": body["queue"][0]["revision"], "task": "Edited after failure."},
         )
         self.assertEqual(edited.status_code, 200, edited.text)
         self.assertEqual(edited.json()["queue"][0]["task"], "Edited after failure.")

@@ -241,6 +241,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         knowledge_provider=lambda: application.state.knowledge,
         assets_provider=lambda: application.state.assets,
     )
+    application.state.manager.validate_chat_reconfiguration = application.state.chat.validate_reconfiguration
     def _active_work():
         active = [run.id for run in application.state.harness.list_run_lifecycle(
             statuses={"queued", "running", "cancel_requested"}, details=False)]

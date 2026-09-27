@@ -185,6 +185,7 @@ class ImportJob(BaseModel):
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
     configuration_error: str | None = None
+    initial_startup: dict[str, Any] = Field(default_factory=dict)
 
 
 class StorageLocation(BaseModel):
@@ -215,6 +216,7 @@ class HuggingFaceImportRequest(BaseModel):
     display_name: str | None = None
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
+    initial_startup: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatTemplateSelectionRequest(BaseModel):
@@ -224,6 +226,57 @@ class ChatTemplateSelectionRequest(BaseModel):
 class HuggingFaceInspectRequest(BaseModel):
     repo_id: str
     revision: str = "main"
+
+
+class HardwareDeviceMemory(BaseModel):
+    id: str
+    name: str
+    total_bytes: int | None = None
+    available_bytes: int | None = None
+
+
+class HardwareMemoryObservation(BaseModel):
+    observed_at: str
+    source: str
+    gpu_devices: list[HardwareDeviceMemory] = Field(default_factory=list)
+    ram_total_bytes: int | None = None
+    ram_available_bytes: int | None = None
+    reasons: list[str] = Field(default_factory=list)
+    stale: bool = False
+
+
+class ModelEstimateRequest(BaseModel):
+    bundle_id: str | None = None
+    repo_id: str | None = None
+    revision: str = "main"
+    primary_files: list[str] = Field(default_factory=list, max_length=256)
+    projector_files: list[str] = Field(default_factory=list, max_length=16)
+    startup: dict[str, Any] = Field(default_factory=dict)
+    refresh: bool = False
+
+
+class ModelMemoryEstimate(BaseModel):
+    source: Literal["metadata", "native_prediction"] = "metadata"
+    source_identity: str
+    estimated_at: str
+    hardware: HardwareMemoryObservation
+    selected_startup: dict[str, Any] = Field(default_factory=dict)
+    evaluated_startup: dict[str, Any] = Field(default_factory=dict)
+    architecture: str | None = None
+    model_disk_bytes: int | None = None
+    projector_disk_bytes: int | None = None
+    weights_bytes: int | None = None
+    kv_bytes: int | None = None
+    runtime_overhead_bytes: int | None = None
+    gpu_bytes: int | None = None
+    ram_bytes: int | None = None
+    devices: list[dict[str, Any]] = Field(default_factory=list)
+    context_maximum: int | None = None
+    context_marker: int | None = None
+    context_marker_kind: Literal["upper_bound", "native_prediction"] | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    unknown_reasons: list[str] = Field(default_factory=list)
+    observed_runtime: dict[str, Any] | None = None
 
 
 class HubVariant(BaseModel):

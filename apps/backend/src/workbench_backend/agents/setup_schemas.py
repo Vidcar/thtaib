@@ -32,6 +32,9 @@ class SetupConfiguration(BaseModel):
     memory_version_refs: list[str] | None = None
     skill_version_refs: list[str] | None = None
     protected_instruction_version_refs: list[str] | None = None
+    memory_entry_ids: list[str] | None = None
+    skill_entry_ids: list[str] | None = None
+    protected_instruction_entry_ids: list[str] | None = None
     embedding_deployment_id: str | None = None
     per_request_overrides: dict[str, Any] | None = None
     requires_project: bool | None = None
@@ -186,6 +189,12 @@ class FrozenExecutionSelection(BaseModel):
     selection: ResolvedSetupSelection
     settings: dict[str, Any]
     system_prompt: str | None = None
+    shortcuts: list[dict[str, str]] = Field(default_factory=list)
+    intended_config: dict[str, Any] = Field(default_factory=dict)
+    helper_snapshots: list[FrozenHelperSelection] = Field(default_factory=list)
+    request_fingerprint: str | None = None
+    conversation_overrides: SetupConfiguration | None = None
+    cleared_fields: list[str] = Field(default_factory=list)
 
 
 class SetupResolutionRequest(BaseModel):
@@ -193,4 +202,5 @@ class SetupResolutionRequest(BaseModel):
     editing_layer: Literal["application", "project", "agent", "conversation"] = "conversation"
     project_id: str | None = None
     agent_setup_version_id: str | None = None
+    agent_setup_id: str | None = None
     overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)

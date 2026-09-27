@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 import stat
 import unicodedata
 import zipfile
@@ -38,6 +39,48 @@ def parse_skill_markdown(markdown: str) -> tuple[str, str]:
     if not markdown[match.end():].strip():
         raise KnowledgeError("SKILL.md needs instructions after its frontmatter.", code="skill_body_missing", status_code=400)
     return name, description
+
+
+def guided_skill_source(markdown: str, fields: dict[str, str] | None = None) -> tuple[str, dict[str, str]]:
+    """Patch native scalar spans; leave other YAML, comments and resources alone."""
+    match = SKILL_FRONTMATTER.match(markdown)
+    if match is None:
+        raise KnowledgeError("Open Source and add SKILL.md frontmatter.", code="skill_frontmatter_invalid", status_code=400)
+    try:
+        document = yaml.compose(match.group(1), Loader=yaml.SafeLoader)
+    except yaml.YAMLError as exc:
+        raise KnowledgeError("Open Source and correct the YAML frontmatter.", code="skill_frontmatter_invalid", status_code=400) from exc
+    if not isinstance(document, yaml.MappingNode):
+        raise KnowledgeError("Open Source and use a YAML mapping for frontmatter.", code="skill_frontmatter_invalid", status_code=400)
+    pairs: dict[str, yaml.ScalarNode] = {}
+    keys: set[str] = set()
+    for key, value in document.value:
+        if not isinstance(key, yaml.ScalarNode) or key.value in keys:
+            raise KnowledgeError("Duplicate or complex YAML keys require Source editing.", code="skill_guided_unavailable", status_code=400)
+        keys.add(key.value)
+        if key.value in {"name", "description"}:
+            raw = match.group(1)[value.start_mark.index:value.end_mark.index]
+            if not isinstance(value, yaml.ScalarNode) or value.tag != "tag:yaml.org,2002:str" or value.start_mark.index < key.end_mark.index or raw.startswith(("&", "*")):
+                raise KnowledgeError("Name and description must be plain text fields; edit this source directly.", code="skill_guided_unavailable", status_code=400)
+            pairs[key.value] = value
+    if set(pairs) != {"name", "description"}:
+        raise KnowledgeError("Open Source and add name and description fields.", code="skill_guided_unavailable", status_code=400)
+    current = {"name": pairs["name"].value, "description": pairs["description"].value, "instructions": markdown[match.end():]}
+    if fields is None:
+        return markdown, current
+    patches = []
+    offset = match.start(1)
+    for key in ("name", "description"):
+        if fields[key] != current[key]:
+            node = pairs[key]
+            original = markdown[offset + node.start_mark.index:offset + node.end_mark.index]
+            suffix = "\r\n" if original.endswith("\r\n") else "\n" if original.endswith("\n") else ""
+            patches.append((offset + node.start_mark.index, offset + node.end_mark.index, json.dumps(fields[key], ensure_ascii=False) + suffix))
+    if fields["instructions"] != current["instructions"]:
+        patches.append((match.end(), len(markdown), fields["instructions"]))
+    for start, end, replacement in sorted(patches, reverse=True):
+        markdown = markdown[:start] + replacement + markdown[end:]
+    return markdown, fields
 
 
 def safe_resource_path(value: str) -> str:

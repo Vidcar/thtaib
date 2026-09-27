@@ -99,11 +99,11 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertNotEqual(copied["id"], setup["id"])
         self.app.state.manager.store.delete_deployment(self.deployment.id)
         view = self.client.get(f'/v1/agent-setups/{setup["id"]}').json()
-        self.assertEqual(view["missing_dependencies"], [])
+        self.assertEqual(view["missing_dependencies"][0]["id"], self.deployment.id)
         self.assertEqual(view["helper_missing_dependencies"][0]["id"], self.deployment.id)
         failed = self.client.post('/v1/setup-resolution', json={"agent_setup_version_id": setup["current_version_id"]})
-        self.assertEqual(failed.status_code, 200, failed.text)
-        self.assertIsNone(failed.json()["configuration"]["deployment_id"])
+        self.assertEqual(failed.status_code, 409, failed.text)
+        self.assertEqual(failed.json()["code"], "setup_dependencies_missing")
         self.client.delete(f'/v1/agent-setups/{setup["id"]}')
         self.assertEqual(len(self.client.get(f'/v1/agent-setups/{setup["id"]}/versions').json()), 2)
 
@@ -126,24 +126,26 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         self.assertEqual(created.json()['configuration']['presented_tools'], selected)
         self.assertEqual(created.json()['configuration']['desktop_access'], 'selected')
+        resolved = self.post('/v1/setup-resolution', {'agent_setup_id': created.json()['id']})
+        self.assertIsNone(resolved['configuration']['desktop_access'], 'saved intention cannot grant Windows access')
 
     def test_named_layers_and_empty_selection_do_not_erase_protected_restrictions(self):
         self.app.state.app_store.put_setup_defaults(SetupConfiguration(approval_mode="full_access"))
         project = self.project()
         setup = self.setup(instructions="AGENT", presented_tools=[], requires_project=True)
         resolved = self.post('/v1/setup-resolution', {"project_id": project["id"], "agent_setup_version_id": setup["current_version_id"], "overrides": {"instructions": "TURN", "requires_project": False}})
-        self.assertIsNone(resolved["configuration"]["presented_tools"])
+        self.assertEqual(resolved["configuration"]["presented_tools"], [])
         self.assertTrue(resolved["configuration"]["requires_project"])
         self.assertEqual([i["content"] for i in resolved["instruction_layers"]], ["AGENT", "TURN"])
 
     def test_dependency_preview_matches_inherited_application_selection(self):
         self.app.state.app_store.put_setup_defaults(SetupConfiguration(approval_mode="full_access"))
         setup = self.setup(profile_id='removed-preset', presented_tools=[])
-        self.assertEqual(setup['missing_dependencies'], [])
+        self.assertEqual([(issue['kind'], issue['id']) for issue in setup['missing_dependencies']], [('profile_id', 'removed-preset')])
         self.assertEqual([(issue['kind'], issue['id']) for issue in setup['helper_missing_dependencies']], [('profile_id', 'removed-preset')])
-        resolved = self.post('/v1/setup-resolution', {'agent_setup_version_id': setup['current_version_id']})
-        self.assertEqual(resolved['configuration']['approval_mode'], 'full_access')
-        self.assertIsNone(resolved['configuration']['profile_id'])
+        rejected = self.client.post('/v1/setup-resolution', json={'agent_setup_id': setup['id']})
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertEqual(rejected.json()['code'], 'setup_dependencies_missing')
 
     def test_edit_cannot_reactivate_setup_removed_before_version_commit(self):
         setup = self.setup(presented_tools=[])
@@ -167,21 +169,22 @@ class ProjectSetupTests(unittest.TestCase):
         setup = self.setup(presented_tools=[], connection_ids=['removed-connection'])
         self.assertEqual(setup['missing_dependencies'], [])
         resolved = self.post('/v1/setup-resolution', {'agent_setup_version_id': setup['current_version_id']})
-        self.assertIsNone(resolved['configuration']['presented_tools'])
+        self.assertEqual(resolved['configuration']['presented_tools'], [])
         enabled = self.client.post('/v1/setup-resolution', json={
             'agent_setup_version_id': setup['current_version_id'], 'overrides': {'presented_tools': ['echo']}})
         self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.assertEqual(enabled.json()['configuration']['presented_tools'], [], 'Chat cannot turn tools on for an agent')
 
     def test_dependency_preview_reports_different_model_and_deployment(self):
         from workbench_backend.inference.schemas import ModelBundle, BundleSource
         self.app.state.manager.store.put_bundle(ModelBundle(id='other-model', display_name='Other model',
             source=BundleSource(kind='local'), files=[], created_at=self.deployment.created_at))
         setup = self.setup(bundle_id='other-model', presented_tools=[])
-        self.assertEqual(setup['missing_dependencies'], [])
+        self.assertTrue(any(issue['kind'] == 'bundle_id' and 'different model' in issue['reason'] for issue in setup['missing_dependencies']), setup)
         self.assertTrue(any(issue['kind'] == 'bundle_id' and 'different model' in issue['reason'] for issue in setup['helper_missing_dependencies']), setup)
         response = self.client.post('/v1/setup-resolution', json={'agent_setup_version_id': setup['current_version_id']})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertIsNone(response.json()['configuration']['deployment_id'])
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()['code'], 'setup_dependencies_missing')
 
     def test_same_bundle_variant_never_inherits_another_variant_deployment(self):
         store = self.app.state.manager.store
@@ -208,15 +211,15 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertEqual(resolved['configuration']['deployment_id'], b.id)
         self.assertEqual(resolved['configuration']['profile_id'], second.id)
 
-    def test_agent_model_missing_blocks_helper_but_not_main_role(self):
+    def test_assigned_agent_model_missing_blocks_main_and_helper_roles(self):
         setup = self.post('/v1/agent-setups', {'name': 'Writer',
             'configuration': {'instructions': 'Write carefully.', 'deployment_id': 'missing-helper-model'}})
-        self.assertEqual(setup['missing_dependencies'], [])
+        self.assertEqual([(issue['kind'], issue['id']) for issue in setup['missing_dependencies']], [('deployment_id', 'missing-helper-model')])
         self.assertEqual([(issue['kind'], issue['id']) for issue in setup['helper_missing_dependencies']],
             [('deployment_id', 'missing-helper-model')])
-        resolved = self.post('/v1/setup-resolution', {'agent_setup_version_id': setup['current_version_id']})
-        self.assertIsNone(resolved['configuration']['deployment_id'])
-        self.assertIn('Write carefully.', [layer['content'] for layer in resolved['instruction_layers']])
+        rejected = self.client.post('/v1/setup-resolution', json={'agent_setup_id': setup['id']})
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+        self.assertEqual(rejected.json()['code'], 'setup_dependencies_missing')
 
     def test_explicit_null_clears_inherited_embedding_on_subsequent_turns(self):
         project = self.project(defaults={'embedding_deployment_id': self.deployment.id})
@@ -231,23 +234,31 @@ class ProjectSetupTests(unittest.TestCase):
         self.app.state.chat._apply_start_configuration(reloaded, ChatStartRequest(task='continue'))
         self.assertIsNone(reloaded.embedding_deployment_id)
 
-    def test_chat_uses_selected_version_and_next_turn_explicit_empty(self):
+    def test_chat_uses_latest_agent_record_and_saved_empty_tool_choice(self):
         setup = self.setup(instructions="AGENT ORIGINAL", presented_tools=["read_file"], per_request_overrides={"temperature": 0.2})
         project = self.project()
         self.app.state.harness = HarnessService(lambda: self.app.state.manager, app_store=self.app.state.app_store,
             knowledge_provider=lambda: self.app.state.knowledge, model_factory=lambda *_: ScriptedChatModel([AIMessage(content="done")]))
-        chat = self.post('/v1/chat/conversations', {"project_id": project["id"], "deployment_id": self.deployment.id, "agent_setup_version_id": setup["current_version_id"]})
+        chat = self.post('/v1/chat/conversations', {"project_id": project["id"], "deployment_id": self.deployment.id, "agent_setup_id": setup["id"]})
         with patch.object(self.app.state.manager, 'ensure_deployment_ready', return_value=self.deployment):
             self.post(f'/v1/chat/conversations/{chat["id"]}/start', {"task": "hello"})
             first = wait_for_chat(self.client, chat["id"])
             run = first["current_run"]
             self.assertEqual(run["agent_setup_version_id"], setup["current_version_id"])
             self.assertIn("AGENT ORIGINAL", run["effective_setup"]["system_prompt"])
-            self.assertNotIn("temperature", run["effective_setup"]["bags"]["per_request"]["requested"])
+            self.assertEqual(run["effective_setup"]["bags"]["per_request"]["requested"]["temperature"], 0.2)
             self.post(f'/v1/chat/conversations/{chat["id"]}/start', {"task": "again", "presented_tools": []})
             second = wait_for_chat(self.client, chat["id"])
             self.assertEqual(second["thread_id"], first["thread_id"])
-            self.assertEqual(second["current_run"]["presented_tools"], [])
+            self.assertEqual(second["current_run"]["presented_tools"], ["read_file"], 'Chat cannot replace agent-owned tools')
+            updated = self.client.patch(f'/v1/agent-setups/{setup["id"]}', json={'base_version': setup['current_version_id'], 'name': 'Edited agent', 'configuration': {'deployment_id': self.deployment.id, 'instructions': 'SAVED LATEST INSTRUCTIONS', 'presented_tools': []}})
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.post(f'/v1/chat/conversations/{chat["id"]}/start', {'task': 'use saved changes'})
+            third = wait_for_chat(self.client, chat['id'])
+            self.assertEqual(third['current_run']['agent_setup_version_id'], updated.json()['current_version_id'])
+            self.assertEqual(third['current_run']['presented_tools'], [])
+            self.assertIn('SAVED LATEST INSTRUCTIONS', third['current_run']['effective_setup']['system_prompt'])
+            self.assertEqual(third['thread_id'], first['thread_id'])
 
     def test_general_chat_applies_explicit_turn_instructions(self):
         self.app.state.harness = HarnessService(lambda: self.app.state.manager, app_store=self.app.state.app_store,

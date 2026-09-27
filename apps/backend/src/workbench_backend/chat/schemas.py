@@ -29,6 +29,10 @@ class ChatMessage(BaseModel):
 
 
 class ChatConversationCreateRequest(BaseModel):
+    agent_setup_id: str | None = None
+    memory_entry_ids: list[str] | None = None
+    skill_entry_ids: list[str] | None = None
+    protected_instruction_entry_ids: list[str] | None = None
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] | None = None
@@ -58,6 +62,12 @@ class ChatConversationCreateRequest(BaseModel):
 
 class ChatStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    agent_setup_id: str | None = None
+    memory_entry_ids: list[str] | None = None
+    skill_entry_ids: list[str] | None = None
+    protected_instruction_entry_ids: list[str] | None = None
+    shortcut_ids: list[str] = Field(default_factory=list, max_length=8)
+    project_file_refs: list[str] = Field(default_factory=list, max_length=32)
     model_configuration_id: str | None = None
     startup_overrides: dict[str, Any] | None = None
     work_mode: Literal["work", "plan"] | None = None
@@ -100,6 +110,7 @@ class ChatReadinessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
     agent_setup_version_id: str | None = None
+    agent_setup_id: str | None = None
 
 
 class ChatReadinessIssue(BaseModel):
@@ -146,6 +157,7 @@ class ChatDraftUpdateRequest(BaseModel):
 
 
 class ChatQueueItem(BaseModel):
+    revision: int = 0
     execution_snapshot: FrozenExecutionSelection | None = None
     helper_snapshots: list[FrozenHelperSelection] | None = None
     instruction_layers: list[InstructionLayer] | None = None
@@ -173,12 +185,14 @@ class ChatQueueItem(BaseModel):
 
 
 class ChatQueueItemUpdateRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
     task: str | None = None
     input_message_id: str | None = None
     content_blocks: list[dict[str, Any]] | None = None
     attachment_ids: list[str] | None = Field(default=None, max_length=32)
     output_schema: dict[str, Any] | None = None
     intended_config: dict[str, Any] | None = None
+    replace_setup: bool = False
 
 
 class ChatQueueResumeRequest(BaseModel):
@@ -235,6 +249,11 @@ class ChatContinuity(BaseModel):
 
 
 class ChatConversation(BaseModel):
+    agent_setup_id: str | None = None
+    memory_entry_ids: list[str] | None = None
+    skill_entry_ids: list[str] | None = None
+    protected_instruction_entry_ids: list[str] | None = None
+    accepted_inputs: dict[str, FrozenExecutionSelection] = Field(default_factory=dict)
     id: str
     title: str | None = None
     archived: bool = False

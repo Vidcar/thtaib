@@ -27,6 +27,9 @@ def create_recipe_configurations(
     bundle_id: str,
     recipe_ids: list[str],
     default_recipe_id: str | None = None,
+    *,
+    base_configuration_id: str | None = None,
+    configuration_namespace: str | None = None,
 ) -> ResponseRecipeConfigurationResult:
     """Validate the full choice first, then save each configuration once.
 
@@ -55,7 +58,8 @@ def create_recipe_configurations(
         ensure_model_configurations(store)
         bundle = store.get_bundle(bundle_id)
         assert bundle is not None
-        base = store.get_profile(bundle.default_configuration_id) if bundle.default_configuration_id else None
+        base_id = base_configuration_id or bundle.default_configuration_id
+        base = store.get_profile(base_id) if base_id else None
         if base is None:
             raise ManagerError("This model has no saved default configuration.", code="configuration_missing", status_code=409)
         profiles = [item for item in store.list_profiles() if item.bundle_id == bundle_id]
@@ -64,14 +68,18 @@ def create_recipe_configurations(
         results: list[RunProfile] = []
         for recipe in selected:
             origin_key = _recipe_key(recipe)
-            profile = by_recipe.get(origin_key)
+            # A normal repeated card action preserves the user's edited recipe.
+            # An import owns its distinct initial startup and stable retry ids.
+            identity = ("profile_import_" + hashlib.sha256(
+                repr((configuration_namespace, origin_key)).encode()).hexdigest()[:24]) if configuration_namespace else None
+            profile = store.get_profile(identity) if identity else by_recipe.get(origin_key)
             if profile is None:
                 requested = {**base.bags.per_request.requested, **recipe.per_request}
                 if recipe.reasoning != "preserve":
                     requested["reasoning"] = recipe.reasoning
                 now = utc_now()
                 profile = RunProfile(
-                    id=new_id("profile"),
+                    id=identity or new_id("profile"),
                     display_name=_unique_name(recipe.name, names),
                     bundle_id=bundle_id,
                     recipe_origin=ResponseRecipeOrigin(
@@ -87,7 +95,7 @@ def create_recipe_configurations(
                     updated_at=now,
                 )
                 store.put_profile(profile)
-                by_recipe[origin_key] = profile
+            by_recipe[origin_key] = profile
             results.append(profile)
         if default_recipe_id:
             chosen = by_recipe[_recipe_key(available[default_recipe_id])]

@@ -12,13 +12,18 @@ from workbench_backend.knowledge.schemas import (
     KnowledgeRevertRequest,
     KnowledgeConfig, KnowledgeEntryView, KnowledgeVersion, KnowledgeLifecycleRequest,
     KnowledgeAutomaticPolicy, KnowledgeScopeOption, KnowledgeProposal, KnowledgeProposalReview,
-    SkillPackageImportRequest, SkillResourceView,
+    SkillPackageImportRequest, SkillResourceView, SkillPreviewRequest, SkillPreview,
 )
 from workbench_backend.knowledge.service import KnowledgeService
 from workbench_backend.inference.schemas import DeletePreview
 from workbench_backend.state.dependencies import dependency_preview_for_app
 
 router = APIRouter(prefix="/v1/knowledge")
+
+
+@router.post("/skills/preview", response_model=SkillPreview)
+def preview_skill(request: Request, body: SkillPreviewRequest):
+    return get_knowledge(request).preview_skill(body)
 
 
 @router.post("/skills/import", response_model=KnowledgeEntryView)

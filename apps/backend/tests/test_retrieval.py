@@ -289,7 +289,7 @@ class RetrievalHarnessTests(unittest.TestCase):
         self.assertEqual({source.split(':/retrieved/', 1)[0] for source in first['retrieved_material']},
                          {'project:allowed.txt'})
         self.assertNotIn('RETRIEVAL-ORIGINAL-PRIVATE-417', '\n'.join(path.read_text(encoding='utf-8') for path in first_files))
-        self.assertEqual(first['memory_version_refs'], [original])
+        self.assertEqual(first['memory_version_refs'], [updated])
         second, second_files = search(chat, [updated])
         self.assertEqual({source.split(':/retrieved/', 1)[0] for source in second['retrieved_material']},
                          {'project:allowed.txt'})

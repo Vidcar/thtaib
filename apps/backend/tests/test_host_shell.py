@@ -806,6 +806,9 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(accepted.status_code, 200, accepted.text)
         finished = wait_for_run(self.client, started["id"])
         self.assertEqual(finished["status"], "completed", finished.get("error"))
+        self.assertEqual(finished["tool_outcomes"]["call_question"]["outcome"], "succeeded")
+        self.assertEqual(finished["tool_outcomes"]["call_question"]["result"], "B")
+        self.assertEqual(finished["tool_outcomes"]["call_shell"]["outcome"], "succeeded")
         self.assertTrue(marker.exists())
         self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("tool_call_id") == "call_question"
             and "B" in str(event["detail"].get("content")) for event in finished["events"]))
@@ -845,6 +848,9 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertEqual(accepted.status_code, 200, accepted.text)
         final = wait_for_run(self.client, started["id"])
         self.assertEqual(final["status"], "completed", final.get("error"))
+        self.assertEqual(final["tool_outcomes"]["restart_question"]["outcome"], "succeeded")
+        self.assertEqual(final["tool_outcomes"]["restart_question"]["result"], "B")
+        self.assertEqual(final["tool_outcomes"]["restart_shell"]["outcome"], "succeeded")
         self.assertEqual(self._marker_lines(marker), ["hit"])
         self.assertTrue(any(event["kind"] == "tool_result" and event["detail"].get("tool_call_id") == "restart_question"
             and "B" in str(event["detail"].get("content")) for event in final["events"]))
