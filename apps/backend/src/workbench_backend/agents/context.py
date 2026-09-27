@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import nullcontext
 from typing import Any, Literal
 
 from langchain_core.exceptions import ContextOverflowError
@@ -36,11 +37,14 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
         return "SummarizationMiddleware"
 
     def __init__(self, *args: Any, allowed_tools: set[str] | None = None,
-                 on_context_failure: Any = None, request_preparer: Any = None, **kwargs: Any) -> None:
+                 on_context_failure: Any = None, request_preparer: Any = None,
+                 execution_control: Any = None, run: Any = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.allowed_tools = allowed_tools
         self.on_context_failure = on_context_failure
         self.request_preparer = request_preparer
+        self.execution_control = execution_control
+        self.run = run
 
     def _selected_request(self, request: Any) -> Any:
         if self.allowed_tools is not None:
@@ -72,11 +76,13 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
             raise ContextCapacityExceeded(str(exc), code="context_capacity_exceeded", status_code=409) from exc
 
     def _create_summary(self, messages_to_summarize: list[Any]) -> str:
-        with request_purpose("summary"):
+        dispatch = self.execution_control.model_dispatch(self.run, purpose="summary") if self.execution_control is not None else nullcontext()
+        with dispatch, request_purpose("summary"):
             return super()._create_summary(messages_to_summarize)
 
     async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
-        with request_purpose("summary"):
+        dispatch = self.execution_control.model_dispatch(self.run, purpose="summary") if self.execution_control is not None else nullcontext()
+        with dispatch, request_purpose("summary"):
             return await super()._acreate_summary(messages_to_summarize)
 
     def _check_reduction(self, original: Any, reduced: Any, error: Exception | None) -> None:

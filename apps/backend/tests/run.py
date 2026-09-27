@@ -22,6 +22,7 @@ INTEGRATION_TEST_IDS = {
 # Cross-service harness/replay flows, subprocesses and actual HTTP servers.
 # Default keeps Models/Chat regressions and pure permission/integrity rules.
 INTEGRATION_PREFIXES = (
+    "tests.test_chrome_worker.ChromeIntegrationTests.",
     "tests.test_desktop_lifecycle.",
     "tests.test_windows_text_decoding.WindowsUtf8EntrypointTests.",
     "tests.test_deployments.",

@@ -45,11 +45,12 @@ function interruptValue(interrupt: Interrupt<WorkbenchInterrupt> | undefined): P
   if (!interrupt?.value || typeof interrupt.value !== "object") {
     return null;
   }
+  if ("kind" in interrupt.value && interrupt.value.kind === "browser_control") return null;
   if ("kind" in interrupt.value && interrupt.value.kind === "deepagents_interrupt_on") {
     return interrupt.value as PendingInterrupt;
   }
   if ("pending_interrupt" in interrupt.value && interrupt.value.pending_interrupt) {
-    return interrupt.value.pending_interrupt;
+    return interrupt.value.pending_interrupt.kind === "browser_control" ? null : interrupt.value.pending_interrupt;
   }
   const actionRequests =
     ("action_requests" in interrupt.value && interrupt.value.action_requests) ||
@@ -99,7 +100,7 @@ export function visibleApprovalInterrupt(stream: WorkbenchStream, authoritativeR
   if (!authoritativeRun) {
     return sdk;
   }
-  if (!runIsLive(authoritativeRun) || !authoritativeRun.pending_interrupt) {
+  if (!runIsLive(authoritativeRun) || !authoritativeRun.pending_interrupt || authoritativeRun.pending_interrupt.kind === "browser_control") {
     return null;
   }
   const interruptRunId = stream.values.workbench?.interrupt_run_id;

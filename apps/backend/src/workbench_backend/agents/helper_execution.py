@@ -204,7 +204,9 @@ def compiled_helpers(owner, parent, control, *, inspection_only=False):
                 activity.status = "completed"
                 return result
             except GraphInterrupt:
-                activity.status = "waiting for approval or answer"
+                activity.status = ("paused for browser control" if child is not None
+                    and child.pending_interrupt is not None and child.pending_interrupt.kind == "browser_control"
+                    else "waiting for approval or answer")
                 raise
             except asyncio.CancelledError:
                 if child is not None:

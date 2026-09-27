@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from workbench_backend.contracts.lifecycle import is_run_lifecycle_live
 from workbench_backend.errors import WorkbenchError
 from workbench_backend.state.backup import BackupError
+from workbench_backend.state.checkpointer import submit_checkpoint_task
 
 router = APIRouter(prefix="/v1/desktop")
 
@@ -114,6 +115,9 @@ def stop_owned_work(request: Request, background_tasks: BackgroundTasks) -> dict
         for deployment in state.manager.list_deployments():
             if deployment.scope == "managed" and deployment.status == "running":
                 state.manager.stop_deployment(deployment.id)
+        browser = getattr(state, "browser", None)
+        if browser is not None:
+            submit_checkpoint_task(state.manager.paths.checkpoints_db, browser.shutdown()).result(timeout=30)
     except Exception:
         state.maintenance_gate.end()
         raise

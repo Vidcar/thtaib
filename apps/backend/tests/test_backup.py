@@ -60,6 +60,28 @@ class BackupServiceTests(unittest.TestCase):
             )
         )
 
+    def test_browser_profile_backup_requires_sensitive_opt_in_and_restores_without_live_session(self):
+        profile = self.paths.state / "browser-profiles" / "thread_fixture"
+        profile.mkdir(parents=True)
+        (profile / "Cookies").write_bytes(b"sensitive-cookie-fixture")
+        marker = self.paths.state / "browser-sessions"
+        marker.mkdir()
+        (marker / "thread_fixture.json").write_text('{"session_id":"old"}', encoding="utf-8")
+        normal = self.root.parent / "normal.zip"
+        created = self.service.create_backup(BackupCreateRequest(destination=str(normal)))
+        self.assertFalse(created.manifest.browser_profiles_included)
+        self.assertTrue(any(ref.path == str(profile.parent) for ref in created.manifest.external_references))
+        with zipfile.ZipFile(normal) as archive:
+            self.assertFalse(any("browser-profiles" in name for name in archive.namelist()))
+        sensitive = self.root.parent / "sensitive.zip"
+        created = self.service.create_backup(BackupCreateRequest(destination=str(sensitive), include_browser_profiles=True))
+        self.assertTrue(created.manifest.browser_profiles_included)
+        self.assertFalse(any(ref.path == str(profile.parent) for ref in created.manifest.external_references))
+        target = self.root.parent / "restored-browser"
+        self.service.restore_backup(BackupRestoreRequest(archive_path=str(sensitive), destination_root=str(target)))
+        self.assertEqual((target / "state/browser-profiles/thread_fixture/Cookies").read_bytes(), b"sensitive-cookie-fixture")
+        self.assertFalse((target / "state/browser-sessions").exists())
+
     def test_connection_versions_restore_without_credential_values(self) -> None:
         from workbench_backend.connections.service import ConnectionService
         from workbench_backend.connections.schemas import ConnectionWrite

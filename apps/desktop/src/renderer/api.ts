@@ -34,6 +34,8 @@ import type {
   ChatSearchResult,
   BrowserRuntimeStatus,
   BrowserSessionStatus,
+  BrowserActionRequest,
+  BrowserLiveEvent,
   WindowRuntimeStatus,
   TestWindow,
   WindowAccessStatus,
@@ -96,6 +98,38 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(failure.message ?? `${response.status} ${path}`, response.status, failure.code);
   }
   return body;
+}
+
+/** The trusted main frame adds authentication to this fetch, as to normal requests. */
+export async function streamBrowserEvents(threadId: string, onEvent: (event: BrowserLiveEvent) => void, signal: AbortSignal): Promise<void> {
+  const path = `/v1/browser/sessions/${encodeURIComponent(threadId)}/events`;
+  const response = await fetch(`${backendUrl()}${path}`, { signal, cache: "no-store", headers: { Accept: "text/event-stream" } });
+  if (!response.ok) {
+    const failure = readApiFailure(await response.json().catch(() => ({})));
+    throw new ApiError(failure.message ?? `Browser connection failed (${response.status}).`, response.status, failure.code);
+  }
+  if (!response.body) throw new Error("The browser live connection is unavailable.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    while (!signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered = (buffered + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+      if (buffered.length > 8_000_000) throw new Error("The browser live message exceeded its size limit.");
+      let end: number;
+      while ((end = buffered.indexOf("\n\n")) >= 0) {
+        const block = buffered.slice(0, end);
+        buffered = buffered.slice(end + 2);
+        const lines = block.split("\n");
+        const type = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
+        if (type !== "state" && type !== "frame") continue;
+        const data = JSON.parse(lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n"));
+        onEvent({ type, data } as BrowserLiveEvent);
+      }
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
 // Settings and Chat share one ordered writer. Reads which straddle a write
@@ -227,7 +261,10 @@ export const api = {
   browserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime"),
   installBrowserRuntime: () => request<BrowserRuntimeStatus>("/v1/browser/runtime/install", { method: "POST", body: "{}" }),
   browserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}`),
-  resetBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/reset`, { method: "POST", body: "{}" }),
+  startBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/start`, { method: "POST", body: "{}" }),
+  controlBrowserSession: (threadId: string, action: "take" | "return") => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/control`, { method: "POST", body: JSON.stringify({ action }) }),
+  browserAction: (threadId: string, action: BrowserActionRequest) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/actions`, { method: "POST", body: JSON.stringify(action) }),
+  resetBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}/reset`, { method: "POST", body: JSON.stringify({ confirmed: true }) }),
   closeBrowserSession: (threadId: string) => request<BrowserSessionStatus>(`/v1/browser/sessions/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   windowRuntime: () => request<WindowRuntimeStatus>("/v1/window-testing/runtime"),
   installWindowRuntime: () => request<WindowRuntimeStatus>("/v1/window-testing/runtime/install", { method: "POST", body: "{}" }),

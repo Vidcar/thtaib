@@ -16,13 +16,14 @@ import { ComposerAttachments } from "./ComposerAttachments";
 import { ChatDock, type DockPage } from "./ChatDock";
 import { ConversationSetup } from "./ConversationSetup";
 import { VisualTestingControls } from "./VisualTestingControls";
+import { BrowserRail, useBrowserRailAutoOpen } from "./BrowserRail";
 
-type RailPage = "setup" | DockPage | "actions" | "helpers";
+type RailPage = "setup" | DockPage | "actions" | "helpers" | "browser";
 
 function readRailPage(): RailPage {
   try {
     const saved = sessionStorage.getItem("workbench.chat.rail.page");
-    if (saved === "setup" || saved === "files" || saved === "library" || saved === "actions" || saved === "helpers") return saved;
+    if (saved === "setup" || saved === "files" || saved === "library" || saved === "actions" || saved === "helpers" || saved === "browser") return saved;
   } catch { /* Keep the default page. */ }
   return "files";
 }
@@ -651,6 +652,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     presentation = fallbackPresentation,
   } = props;
   const [filesWidth, setFilesWidth] = usePanelWidth("workbench.inspector.width", 320, 280, 720);
+  const [browserWidth, setBrowserWidth] = usePanelWidth("workbench.browser.rail.width", 640, 320, 1100);
   const [railPage, setRailPage] = useState<RailPage>(() => readRailPage());
   const [railOpen, setRailOpen] = useState(() => {
     try { return sessionStorage.getItem("workbench.chat.rail") === "open"; } catch { return false; }
@@ -1149,6 +1151,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   function fail(error: unknown): void {
     setMessage(errorMessage(error));
+    if (error instanceof ApiError && error.code === "browser_control_active") openRail("browser");
   }
 
   function startFresh(): void {
@@ -1212,6 +1215,8 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const missingDeployment = Boolean(deploymentId && !selectedDeployment);
   const selectedDocumentIds = documentAssetIds ?? conversation?.document_asset_ids ?? [];
   const tools = selectedTools ?? applicationDefaults.current?.configuration.presented_tools ?? defaultNextTurnTools(enabledTools, Boolean(projectId || projectPath), Boolean(selectedKnowledgeIds.length), Boolean(attachmentIds.length || selectedDocumentIds.length));
+  const browserEnabled = workMode === "work" && tools.some(name => browserToolNames.some(browserName => browserName === name));
+  useBrowserRailAutoOpen(conversation?.thread_id ?? null, browserEnabled && (!props.activeTab || props.activeTab === "chat"), () => openRail("browser"));
   const deployHealthNotice = chatDeployHealthNotice(conversation, selectedDeployment);
   const canObserveInteraction = Boolean(interactionThreadId && conversation);
   const currentArea = selectionLoading ? areaLabel(selectionLoading) : areaLabel(conversation);
@@ -1454,6 +1459,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
     if (conversation && !runBusy && readinessBlocksSend(readiness)) {
       setMessage(readiness?.issues[0]?.message ?? "This chat needs a setup change before sending.");
       if (readiness?.issues.some(issue => /window|desktop|grant/.test(issue.code))) openToolMenu("windows");
+      else if (readiness?.issues.some(issue => issue.code === "browser_control_active")) openRail("browser");
       else if (readiness?.issues.some(issue => /browser/.test(issue.code))) openToolMenu("browser");
       return;
     }
@@ -1802,7 +1808,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
   return (
     <ChatDockContext.Provider value={{ openFile }}>
-    <section className="chat-layout" style={{ "--inspector-width": `${filesWidth}px` } as CSSProperties}>
+    <section className="chat-layout" style={{ "--inspector-width": `${railPage === "browser" ? browserWidth : filesWidth}px` } as CSSProperties}>
       <div className="chat-main"
         onDragEnter={event => {
           if (!Array.from(event.dataTransfer.types).includes("Files")) return;
@@ -1844,7 +1850,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             try { sessionStorage.setItem("workbench.chat.rail", next ? "open" : "closed"); } catch { /* The toggle still applies. */ }
           }}><Icon name="panelRight" />{helperActivity.conversationId === conversation?.id && helperActivity.total ? <span className={`chat-rail-count${helperActivity.active ? " is-live" : ""}`} aria-label={`${helperActivity.active} active helpers`}>{helperActivity.active || helperActivity.total}</span> : null}</button></div>
         </header>
-        <div className={`chat-workspace${railOpen ? " files-open" : ""}`}>
+        <div className={`chat-workspace${railOpen ? " files-open" : ""}${railOpen && railPage === "browser" ? " browser-open" : ""}`}>
         <div className="chat-conversation">
         {loadError ? <Notice tone="error" action={<button type="button" onClick={() => void refresh().catch((error: unknown) => setLoadError(errorMessage(error)))}>Retry</button>}>{loadError}</Notice> : null}
         <div className="transcript">
@@ -1927,12 +1933,13 @@ export function ChatPanel(props: ChatPanelProps = {}) {
         ) : null}
         {conversation && readinessBlocked && !runBusy ? <Notice tone={readiness?.status === "incompatible" ? "error" : "warn"} action={<button type="button" onClick={() => {
           const code = readiness?.issues[0]?.code ?? "";
-          if (/browser/.test(code)) openToolMenu("browser");
+          if (code === "browser_control_active") openRail("browser");
+          else if (/browser/.test(code)) openToolMenu("browser");
           else if (/window|desktop|grant/.test(code)) openToolMenu("windows");
           else openRail("setup");
-        }}>{readiness?.issues[0]?.code === "browser_worker_missing" ? "Install browser worker" : readiness?.issues[0]?.code === "browser_session_lost" ? "Reset browser" : /window|desktop|grant/.test(readiness?.issues[0]?.code ?? "") ? "Review Windows access" : "Review setup"}</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
+        }}>{readiness?.issues[0]?.code === "browser_control_active" ? "Return to agent in Browser" : readiness?.issues[0]?.code === "browser_worker_missing" ? "Install browser worker" : readiness?.issues[0]?.code === "browser_session_lost" ? "Reset browser" : /window|desktop|grant/.test(readiness?.issues[0]?.code ?? "") ? "Review Windows access" : "Review setup"}</button>}>{readiness?.issues[0]?.message ?? "This chat needs a setup change before sending."}</Notice> : null}
         {message && message !== conversation?.deploy_health?.message ? (
-          <Notice tone="error">{message}</Notice>
+          <Notice tone="error" action={/^Return (browser control|to agent in the Browser)/.test(message) ? <button type="button" onClick={() => openRail("browser")}>Return to agent in Browser</button> : undefined}>{message}</Notice>
         ) : null}
         {selectionFailure && selectionLoading?.id === selectionFailure.id ? (
           <Notice tone="error" action={<button type="button" onClick={() => selectConversation(selectionLoading)}>Retry opening chat</button>}>
@@ -1943,14 +1950,15 @@ export function ChatPanel(props: ChatPanelProps = {}) {
 
         </div>
         <aside className="chat-files-panel chat-rail" aria-label="Conversation rail" hidden={!railOpen}>
-          <PanelResize label="Resize conversation rail" width={filesWidth} onResize={setFilesWidth} min={280} max={720} reset={320} reverse />
+          <PanelResize label="Resize conversation rail" width={railPage === "browser" ? browserWidth : filesWidth} onResize={railPage === "browser" ? setBrowserWidth : setFilesWidth} min={railPage === "browser" ? 320 : 280} max={railPage === "browser" ? 1100 : 720} reset={railPage === "browser" ? 640 : 320} reverse />
           <div className="chat-rail-tabs" role="tablist" aria-label="Conversation rail pages">
-            {(["helpers", "setup", "files", "library", "actions"] as const).map(page => (
-              <button key={page} type="button" role="tab" aria-selected={railPage === page} onClick={() => openRail(page)}>{page === "helpers" ? "Helpers" : page === "setup" ? "Setup" : page === "files" ? "Files" : page === "library" ? "Library" : "Actions"}</button>
+            {(["helpers", "browser", "setup", "files", "library", "actions"] as const).map(page => (
+              <button key={page} type="button" role="tab" aria-selected={railPage === page} onClick={() => openRail(page)}>{page === "helpers" ? "Helpers" : page === "browser" ? "Browser" : page === "setup" ? "Setup" : page === "files" ? "Files" : page === "library" ? "Library" : "Actions"}</button>
             ))}
             <button type="button" className="icon-button chat-rail-close" aria-label="Close conversation rail" title="Close" onClick={() => { setRailOpen(false); try { sessionStorage.setItem("workbench.chat.rail", "closed"); } catch { /* Closed for this view. */ } }}><Icon name="close" size={14} /></button>
           </div>
           <div className="chat-rail-body">
+            {railPage === "browser" ? <BrowserRail key={conversation?.thread_id ?? "new"} threadId={conversation?.thread_id ?? null} visible={railOpen && (!props.activeTab || props.activeTab === "chat")} enabled={browserEnabled} projectBound={Boolean(fileProjectId || conversation?.project_path)} attachments={retainedAssets.records.filter(asset => !asset.deleted_at && (attachmentIds.includes(asset.id) || selectedDocumentIds.includes(asset.id)))} onConfigure={() => openToolMenu("browser")} onOpenLibrary={() => openRail("library")} onDownloadsChanged={() => retainedAssets.refresh()} onReadinessChange={() => setReadinessEpoch(current => current + 1)} /> : null}
             {railPage === "helpers" ? <HelperRail key={conversation?.id ?? "new"} runs={[...historicalRuns, ...(conversation?.current_run ? [conversation.current_run] : [])]} currentRunId={conversation?.current_run?.id} threadId={interactionThreadId} conversationId={conversation?.id ?? ""} selectedHelperKey={selectedHelperKey} detailedStreams={presentation.detailed_streams} /> : null}
             <div hidden={railPage !== "setup"}><ConversationSetup
               projectId={projectId}

@@ -5,6 +5,11 @@ import type {
   SchemaChatDraft,
   SchemaChatQueueItem,
   SchemaChatSearchResult,
+  SchemaBrowserActionRequest,
+  SchemaBrowserRuntimeStatus,
+  SchemaBrowserSessionStatus,
+  SchemaBrowserTab,
+  SchemaBrowserViewport,
 } from "../generated/shared-contracts/openapi";
 
 export type WorkbenchSurface = "managed-inference";
@@ -461,6 +466,7 @@ export interface AgentRun {
   starting_snapshot_id?: string | null;
   host_shell?: HostShellFacts;
   pending_interrupt?: PendingInterrupt | null;
+  browser_control?: "agent" | "taking_control" | "user";
   context_observation?: ContextObservation | null;
   generation_observation?: import("../generated/shared-contracts/openapi").SchemaGenerationObservation | null;
   structured_output?: StructuredOutputResult | null;
@@ -493,8 +499,8 @@ export interface PendingInterrupt {
   interrupt_id?: string | null;
   namespace?: string[];
   identity?: string | null;
-  kind: "deepagents_interrupt_on";
-  environment: "windows_host_shell";
+  kind: "deepagents_interrupt_on" | "browser_control";
+  environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control";
   isolation: "none";
   note: string;
   action_requests: PendingInterruptAction[];
@@ -505,7 +511,7 @@ export function visiblePendingInterrupt(run: AgentRun | null | undefined): Pendi
     return null;
   }
   if (run.pending_interrupt) {
-    return run.pending_interrupt;
+    return run.pending_interrupt.kind === "browser_control" ? null : run.pending_interrupt;
   }
   for (let index = run.events.length - 1; index >= 0; index -= 1) {
     const event = run.events[index];
@@ -513,7 +519,8 @@ export function visiblePendingInterrupt(run: AgentRun | null | undefined): Pendi
       return null;
     }
     if (event.kind === "interrupt") {
-      return event.detail as unknown as PendingInterrupt;
+      const pending = event.detail as unknown as PendingInterrupt;
+      return pending.kind === "browser_control" ? null : pending;
     }
   }
   return null;
@@ -607,19 +614,29 @@ export interface ChatConversation {
 
 export type DesktopAccess = "off" | "selected" | "all";
 
-export interface BrowserRuntimeStatus {
-  supported: boolean;
-  installed: boolean;
-  node_version: string;
-  playwright_mcp_version: string;
-  reason: string | null;
-}
+export type BrowserRuntimeStatus = SchemaBrowserRuntimeStatus;
+export type BrowserViewport = SchemaBrowserViewport;
+export type BrowserTab = SchemaBrowserTab;
+// Response models emit these defaults; OpenAPI also describes request defaults
+// as optional. Keep the response view explicit while deriving fields upstream.
+export type BrowserSessionStatus = SchemaBrowserSessionStatus & {
+  session_id: string | null;
+  tabs: BrowserTab[];
+  active_page_id: string | null;
+  viewport: BrowserViewport;
+};
 
-export interface BrowserSessionStatus {
-  thread_id: string;
-  state: "active" | "lost" | "closed";
-  worker: BrowserRuntimeStatus;
+export interface BrowserFrame {
+  session_id: string;
+  page_id: string;
+  revision: number;
+  data: string;
+  viewport: BrowserViewport;
+  timestamp: number;
 }
+export type BrowserAction = SchemaBrowserActionRequest["action"];
+export type BrowserActionRequest = SchemaBrowserActionRequest;
+export type BrowserLiveEvent = { type: "state"; data: BrowserSessionStatus } | { type: "frame"; data: BrowserFrame };
 
 export interface WindowRuntimeStatus {
   available?: boolean;

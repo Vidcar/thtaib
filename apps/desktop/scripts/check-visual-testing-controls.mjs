@@ -61,6 +61,8 @@ try {
   assert.ok(calls.some(call => call.method === "PUT" && call.body?.scope === "selected" && call.body?.hwnd === 42));
   await act(async () => renderer.root.findAll(node => node.type === "button" && node.props.className === "visual-testing-disclosure")[0].props.onClick());
   await act(async () => button(renderer, "Reset").props.onClick());
+  assert.equal(calls.some(call => call.path === "/v1/browser/sessions/thread_1/reset"), false, "Reset requires explicit sign-in clearance confirmation");
+  await act(async () => button(renderer, "Clear sign-ins and reset").props.onClick());
   assert.ok(calls.some(call => call.path === "/v1/browser/sessions/thread_1/reset"), "Browser recovery is available in the same capability menu");
   await act(async () => renderer.unmount());
   scope = { scope: "all", selected_window: null, stale: false };

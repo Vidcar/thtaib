@@ -110,6 +110,50 @@
           "title": "Approval Mode",
           "type": "string"
         },
+        "browser_control": {
+          "default": "agent",
+          "enum": [
+            "agent",
+            "taking_control",
+            "user"
+          ],
+          "title": "Browser Control",
+          "type": "string"
+        },
+        "browser_observation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Browser Observation"
+        },
+        "browser_pause_dispatches": {
+          "additionalProperties": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "title": "Browser Pause Dispatches",
+          "type": "object"
+        },
+        "browser_revision": {
+          "default": 0,
+          "title": "Browser Revision",
+          "type": "integer"
+        },
+        "browser_tool_proposals": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Browser Tool Proposals",
+          "type": "object"
+        },
         "budgets": {
           "anyOf": [
             {
@@ -2300,7 +2344,8 @@
           "enum": [
             "windows_host_shell",
             "tool_actions",
-            "user_input"
+            "user_input",
+            "browser_control"
           ],
           "title": "Environment",
           "type": "string"
@@ -2324,8 +2369,11 @@
           "type": "string"
         },
         "kind": {
-          "const": "deepagents_interrupt_on",
           "default": "deepagents_interrupt_on",
+          "enum": [
+            "deepagents_interrupt_on",
+            "browser_control"
+          ],
           "title": "Kind",
           "type": "string"
         },

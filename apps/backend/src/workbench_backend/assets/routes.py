@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
+from urllib.parse import quote
 
 from workbench_backend.assets.schemas import (
     RetainedAsset,
@@ -87,6 +89,13 @@ def asset_content(
 @router.post("/reuse", response_model=list[UserContentBlock])
 def reuse_assets(request: Request, body: RetainedAssetReuseRequest) -> list[UserContentBlock]:
     return get_assets(request).current_user_content(body)
+
+@router.get("/{asset_id}/download")
+def download_asset(request: Request, asset_id: str, session_id: str | None = None, project_path: str | None = None):
+    asset, content = get_assets(request)._load_content(asset_id, session_id=session_id, project_path=project_path)
+    return Response(content, media_type="application/octet-stream", headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(asset.filename, safe='')}",
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/{asset_id}/source", response_model=SourceRange)

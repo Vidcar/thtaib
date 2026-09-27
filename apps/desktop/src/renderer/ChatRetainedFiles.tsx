@@ -27,6 +27,7 @@ export interface ChatRetainedFilesProps {
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
 function originLabel(asset: RetainedAsset): string {
+  if ((asset.origin as string) === "browser_download") return "Browser download";
   if ((asset.origin as string) === "capture") {
     if (asset.source_tool_name === "desktop_screenshot") return "Windows screenshot";
     if (asset.source_tool_name === "read_file") return "Project image";
@@ -250,7 +251,7 @@ export function ChatRetainedFiles({
                 <li key={asset.id} className="chat-retained-file-card">
                   {asset.content_kind === "image" ? <RetainedImage asset={asset} sessionId={conversationId} /> : null}
                   {compact ? <button className="retained-file-name" type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)} title={`Preview ${asset.filename}`}><Icon name="files" /><span>{asset.filename}</span><small>{formatBytes(asset.size_bytes)}</small></button> : <label className="check-row">
-                    <input type="checkbox" checked={selectedIds.includes(asset.id)} onChange={(event) => toggle(asset.id, event.target.checked)} />
+                    <input type="checkbox" disabled={(asset.content_kind as string) === "binary"} checked={selectedIds.includes(asset.id)} onChange={(event) => toggle(asset.id, event.target.checked)} />
                     <strong>{asset.filename}</strong>
                   </label>}
                   {!compact ? <div className="chat-retained-file-meta">
@@ -261,8 +262,8 @@ export function ChatRetainedFiles({
                   </div> : null}
                   {asset.observation ? <p className="hint">{asset.observation}</p> : null}
                   <div className="chat-retained-files-actions">
-                    {compact ? <button type="button" onClick={() => onReuse([asset.id])}>Use again</button> : <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)}>Preview</button>}
-                    {asset.content_kind !== "image" ? <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset, true)}>Open text</button> : null}
+                    {compact ? (asset.content_kind as string) !== "binary" ? <button type="button" onClick={() => onReuse([asset.id])}>Use again</button> : null : <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)}>Preview</button>}
+                    {asset.content_kind !== "image" && (asset.content_kind as string) !== "binary" ? <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset, true)}>Open text</button> : null}
                     {window.workbench?.saveAsset ? (
                       <button type="button" disabled={busy === asset.id} onClick={() => void saveCopy(asset)}>Save copy</button>
                     ) : null}

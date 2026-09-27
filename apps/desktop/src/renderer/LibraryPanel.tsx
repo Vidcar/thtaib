@@ -27,6 +27,8 @@ interface LibraryPanelProps {
 }
 
 function assetOriginLabel(origin: RetainedAssetOrigin): string {
+  if ((origin as string) === "browser_download") return "Browser download";
+  if ((origin as string) === "capture") return "Screenshot";
   return origin === "verified_output" ? "Verified output" : "Upload";
 }
 
@@ -175,7 +177,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
   }
 
   async function reuseSelected(): Promise<void> {
-    if (selectedIds.length === 0) return;
+    if (selectedIds.length === 0 || selectedAssets.some(asset => (asset.content_kind as string) === "binary")) return;
     if (onReuseSelectedAssets && (!sessionId || !onReuseAssets)) {
       if (selectedAssets.length === 0) return;
       onReuseSelectedAssets(selectedAssets);
@@ -260,7 +262,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
           {sessionId || projectPath ? <option value="all">All files</option> : null}
         </select>
         <select aria-label="File type" value={origin} onChange={event => setOrigin(event.target.value as RetainedAssetOrigin | "all")}>
-          <option value="all">All types</option><option value="upload">Uploads</option><option value="verified_output">Outputs</option>
+          <option value="all">All types</option><option value="upload">Uploads</option><option value="verified_output">Outputs</option><option value="browser_download">Browser downloads</option><option value="capture">Screenshots</option>
         </select>
         <select aria-label="Sort files" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Newest first</option><option value="name">Name</option><option value="size">Largest first</option></select>
         <button type="button" className="chip file-deleted-toggle" aria-pressed={includeDeleted} onClick={() => setIncludeDeleted(current => !current)}>Deleted</button>
@@ -268,7 +270,7 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
 
       <div className="file-selection-bar" aria-label="File actions">
         <span>{selectedIds.length ? `${selectedIds.length} selected` : "Select files to use in Chat or delete"}</span>
-        <button type="button" disabled={busy || !selectedIds.length || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))} onClick={() => void reuseSelected()}><Icon name="plus" size={14} /> Use in Chat</button>
+        <button type="button" disabled={busy || !selectedIds.length || selectedAssets.some(asset => (asset.content_kind as string) === "binary") || (!onReuseSelectedAssets && (!sessionId || !onReuseAssets))} onClick={() => void reuseSelected()}><Icon name="plus" size={14} /> Use in Chat</button>
         <button type="button" disabled={busy || !selectedIds.length} onClick={() => void previewDeletion()}><Icon name="trash" size={14} /> Delete</button>
       </div>
       {message ? <Notice role="status">{message}</Notice> : null}
@@ -296,11 +298,11 @@ export function LibraryPanel({ sessionId = null, projectPath = null, onReuseSele
         {preview ? <aside className="file-preview-pane" aria-label="Library detail">
           <header><div><strong>{preview.filename}</strong><span>{formatBytes(preview.size_bytes)} · {sourceStatusLabel(preview.source_status)}</span></div><button type="button" className="icon-button" aria-label="Close file preview" onClick={() => { detailGeneration.current += 1; setPreview(null); setFullContent(null); }}><Icon name="close" size={15} /></button></header>
           <div className="file-preview-actions">
-            {activeAsset && activeAsset.content_kind !== "image" && fullContent?.id !== preview.id ? <button type="button" disabled={busy} onClick={() => void showFullContent(activeAsset)}><Icon name="expand" size={14} /> Open full text</button> : null}
+            {activeAsset && activeAsset.content_kind !== "image" && (activeAsset.content_kind as string) !== "binary" && fullContent?.id !== preview.id ? <button type="button" disabled={busy} onClick={() => void showFullContent(activeAsset)}><Icon name="expand" size={14} /> Open full text</button> : null}
             {activeAsset && window.workbench?.saveAsset ? <button type="button" disabled={busy} onClick={() => void saveRetainedCopy(activeAsset.id, assetAccessScope(activeAsset, { sessionId, projectPath })).then(saved => setMessage(saved ? `Saved ${activeAsset.filename}.` : "Save cancelled.")).catch(error => setMessage(error instanceof Error ? error.message : String(error)))}><Icon name="download" size={14} /> Save copy</button> : null}
           </div>
           {preview.truncated ? <p className="hint">Preview shortened. Open full text to read the entire saved file.</p> : null}
-          {activeAsset?.content_kind === "image" ? <RetainedImage asset={activeAsset} sessionId={sessionId ?? undefined} /> : <pre className="file-preview-content">{preview.preview}</pre>}
+          {(activeAsset?.content_kind as string) === "binary" ? <p className="hint">Saved browser download. Save a copy to open this file in its application.</p> : activeAsset?.content_kind === "image" ? <RetainedImage asset={activeAsset} sessionId={sessionId ?? undefined} /> : <pre className="file-preview-content">{preview.preview}</pre>}
           {preview.extraction ? <p className="hint">{preview.extraction.status === "no_text" ? "No text found" : "Text extracted locally"} <HoverHelp title="Extraction details">{preview.extraction.note ?? preview.extraction.parser}</HoverHelp></p> : null}
         </aside> : null}
       </div>

@@ -58,6 +58,14 @@ def delete_conversation(
             lookup = getattr(chat.store, "get", None)
             conversation = lookup(conversation_id) if callable(lookup) else None
             thread_id = conversation.thread_id if conversation is not None else None
+            preview = get_lifecycle(request).preview_conversation_delete(conversation_id)
+            if preview.blockers:
+                raise HTTPException(status_code=409, detail={"code": "conversation_delete_active_runs", "preview": preview.model_dump(mode="json")})
+            browser = getattr(request.app.state, "browser", None)
+            if thread_id and browser is not None:
+                # A failed stop cannot leave a deleted chat's authenticated
+                # browser running without its owner. Confirm before deletion.
+                submit_checkpoint_task(manager.paths.checkpoints_db, browser.delete_chat(thread_id)).result(timeout=30)
             result = get_lifecycle(request).delete_conversation(
                 conversation_id,
                 include_diagnostics=body.include_diagnostics,
@@ -74,11 +82,4 @@ def delete_conversation(
         preview = getattr(request.app.state, "preview", None)
         if preview is not None and not preview.stop(thread_id):
             log.warning("Conversation %s was deleted with an unconfirmed preview state", conversation_id)
-        browser = getattr(request.app.state, "browser", None)
-        if browser is not None:
-            try:
-                submit_checkpoint_task(manager.paths.checkpoints_db,
-                    browser.close_session(thread_id)).result(timeout=20)
-            except Exception:
-                log.exception("Deleted conversation %s browser session could not be closed", conversation_id)
     return result
