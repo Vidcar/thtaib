@@ -1261,15 +1261,25 @@ class HarnessService:
                         pass
                 raise
 
-    def prepare_screenshot_reading(self, run: AgentRun) -> bool:
+    def prepare_screenshot_reading(self, run: AgentRun, *, model: BaseChatModel | None = None) -> bool:
         """Prove screenshot delivery once for this loaded setup, then remember it."""
 
+        from workbench_backend.inference.adapter import image_model_profile
         from workbench_backend.inference.probes import ensure_tool_image_support
 
         per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
         try:
-            return ensure_tool_image_support(self.manager, run.deployment_id, per_request)
+            ready = ensure_tool_image_support(self.manager, run.deployment_id, per_request)
+            if model is not None:
+                # The compiled agent predates this evidence. Refresh its actual
+                # model before upstream filtering, preserving the context budget.
+                model.profile = {**(model.profile or {}), **image_model_profile(
+                    self.manager.get_deployment(run.deployment_id), per_request,
+                )}
+            return ready
         except Exception:
+            if model is not None:
+                model.profile = {**(model.profile or {}), "image_inputs": False, "image_tool_message": False}
             return False
 
     def _create_compiled_agent(
@@ -1293,13 +1303,11 @@ class HarnessService:
             session = self.assets.session_for_run(run)
             if session is not None:
                 def images_allowed() -> bool:
-                    from workbench_backend.inference.capabilities import capability_support
+                    from workbench_backend.inference.adapter import image_model_profile
                     deployment = self.manager.get_deployment(run.deployment_id)
                     per_request = run.effective_setup.bags.per_request if run.effective_setup is not None else None
-                    return (
-                        capability_support(deployment, "image", per_request) == "passed"
-                        and capability_support(deployment, "tool_image", per_request) == "passed"
-                    )
+                    profile = image_model_profile(deployment, per_request)
+                    return profile["image_inputs"] and profile["image_tool_message"]
                 image_inputs_allowed = images_allowed
                 capture_backend = CaptureBackend(self.assets, session.id,
                     image_inputs_allowed=images_allowed)
@@ -1462,7 +1470,7 @@ class HarnessService:
                     execution_control=execution_control,
                     asset_service=self.assets,
                     capture_backend=capture_backend,
-                    tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run),
+                    tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run, model=model),
                 )
             ],
             name="workbench-embedded-harness",

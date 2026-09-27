@@ -18,6 +18,7 @@ from workbench_backend.inference.adapter import (
     RecordingTransport,
     adapter_target,
     chat_model_for_deployment,
+    image_model_profile,
 )
 from workbench_backend.inference.capabilities import setup_fingerprint
 from workbench_backend.inference.probes import _image_fixture
@@ -572,6 +573,50 @@ class AdapterTests(unittest.TestCase):
             model.close()
 
         self.assertEqual(_RecordingHandler.requests[0]["body"]["model"], "observed-qwen")
+
+    def test_image_profile_uses_current_setup_and_preserves_other_profile_fields(self) -> None:
+        props = ServerProperties(fetched=utc_now(), source_url=f"{self.endpoint}/props",
+            modalities={"vision": True}, n_ctx=1000)
+        deployment = self._deployment(server_props=props)
+        bag = resolve_bags(per_request={"max_tokens": 100, "temperature": 0.2}).per_request
+        model = chat_model_for_deployment(deployment, per_request=bag)
+        try:
+            model.profile = {**model.profile, "max_input_tokens": 700, "tool_calling": True}
+            profile_before = dict(model.profile)
+            settings_before = model.model_dump()
+            fingerprint = setup_fingerprint(deployment, bag)
+            for status in ("passed", "failed", "inconclusive"):
+                with self.subTest(status=status):
+                    deployment.capability_evidence = [
+                        {"capability": name, "status": status, "fingerprint": fingerprint}
+                        for name in ("image", "tool_image")
+                    ]
+                    media = image_model_profile(deployment, bag)
+                    self.assertEqual(media, {"image_inputs": status == "passed", "image_tool_message": status == "passed"})
+                    model.profile = {**model.profile, **media}
+                    self.assertEqual(model.profile["max_input_tokens"], profile_before["max_input_tokens"])
+                    self.assertTrue(model.profile["tool_calling"])
+                    current_settings = model.model_dump()
+                    self.assertEqual({key: value for key, value in current_settings.items() if key != "profile"},
+                        {key: value for key, value in settings_before.items() if key != "profile"})
+            deployment.capability_evidence = [
+                {"capability": name, "status": "passed", "fingerprint": fingerprint}
+                for name in ("image", "tool_image")
+            ]
+            different_bag = resolve_bags(per_request={"max_tokens": 100, "temperature": 0.3}).per_request
+            self.assertEqual(image_model_profile(deployment, different_bag),
+                {"image_inputs": False, "image_tool_message": False})
+            deployment.server_props = props.model_copy(update={"modalities": {"vision": False}})
+            # Even matching positive historical evidence cannot override a
+            # runtime that explicitly rejects vision.
+            deployment.capability_evidence = [
+                {"capability": name, "status": "passed", "fingerprint": setup_fingerprint(deployment, bag)}
+                for name in ("image", "tool_image")
+            ]
+            self.assertEqual(image_model_profile(deployment, bag),
+                {"image_inputs": False, "image_tool_message": False})
+        finally:
+            model.close()
 
     def test_tool_image_is_sent_after_all_tool_results_and_keeps_call_ids(self) -> None:
         deployment = self._deployment(server_props=ServerProperties(fetched=utc_now(),
