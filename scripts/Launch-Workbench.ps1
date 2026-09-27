@@ -153,7 +153,7 @@ function Start-BackendIfNeeded {
     Write-LaunchLog "Starting backend with uv at $backendUrl"
     Start-Process `
       -FilePath $uv `
-      -ArgumentList @("--directory", "`"$backendDir`"", "run", "workbench-backend", "--host", "127.0.0.1", "--port", "8000") `
+      -ArgumentList @("--directory", "`"$backendDir`"", "run", "python", "-X", "utf8", "-m", "workbench_backend", "--host", "127.0.0.1", "--port", "8000") `
       -WorkingDirectory $repoRoot `
       -WindowStyle Hidden `
       -RedirectStandardOutput $backendOutLog `

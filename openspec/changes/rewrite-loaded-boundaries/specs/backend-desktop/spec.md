@@ -296,3 +296,10 @@ The original durable parent-turn error SHALL remain visible after reopening, wit
 - **WHEN** two file writes succeed and four fail
 - **THEN** the two confirmed results SHALL remain successful and the four failures SHALL show their original causes
 - **AND** the chat SHALL stay usable without relabelling all six calls as unfinished input.
+
+#### Scenario: Read-only decoding failure remains correctable
+
+- **WHEN** a native file read or search cannot decode text while another tool in the same batch succeeds
+- **THEN** the failed call SHALL retain its original identity and an explanatory error, and the successful sibling SHALL retain its confirmed result
+- **AND** the error SHALL be returned to the agent so it can finish or correct its task without automatically replaying the failed call or reporting incomplete search results as successful
+- **AND** both outcomes SHALL remain inspectable after reopening, while cancellation, persistence failures and uncertain write or shell effects retain their existing recovery guarantees.

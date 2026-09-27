@@ -23,6 +23,7 @@ INTEGRATION_TEST_IDS = {
 # Default keeps Models/Chat regressions and pure permission/integrity rules.
 INTEGRATION_PREFIXES = (
     "tests.test_desktop_lifecycle.",
+    "tests.test_windows_text_decoding.WindowsUtf8EntrypointTests.",
     "tests.test_deployments.",
     "tests.test_adapter.",
     "tests.test_process_ownership.ProcessOwnershipTests.",

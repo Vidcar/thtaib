@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -96,6 +97,50 @@ class ToolOutcomeRecoveryTests(unittest.TestCase):
         self.assertEqual(run.tool_outcomes["browser"].outcome, "failed")
         self.assertEqual((self.project / "kept.txt").read_text(), "kept")
         self.assertEqual(state["messages"][-1].content, "The page was unavailable; the file was written.")
+
+    def test_read_decode_errors_keep_sibling_results_and_reopened_identity(self):
+        for name, method, args in [("grep", "grep", {"pattern": "paint", "path": "/broken.txt"}),
+                                  ("read_file", "read", {"file_path": "/broken.txt"})]:
+            with self.subTest(tool=name):
+                self.fixture.scripted = ScriptedChatModel([
+                    AIMessage(content="", tool_calls=[
+                        {"id": "bad-read", "name": name, "args": args},
+                        {"id": "kept-write", "name": "write_file", "args": {"file_path": f"/{name}-kept.txt", "content": "kept"}},
+                    ]),
+                    AIMessage(content="The read failed; the other result is retained."),
+                ])
+                error = UnicodeDecodeError("cp1252", b"\x9d", 0, 1, "character maps to <undefined>")
+                with patch.object(FilesystemBackend, method, side_effect=error) as failed_read:
+                    started = self.fixture._start(project_path=str(self.project),
+                        presented_tools=[name, "write_file"], approval_mode="full_access")
+                    finished = wait_for_run(self.fixture.client, started["id"])
+                self.assertEqual(finished["status"], "completed", finished.get("error"))
+                failed_read.assert_called_once()
+                self.assertEqual((self.project / f"{name}-kept.txt").read_text(), "kept")
+                reopened = self.fixture._restart_harness().get_run(finished["id"])
+                self.assertEqual(reopened.tool_outcomes["bad-read"].outcome, "failed")
+                self.assertEqual(reopened.tool_outcomes["bad-read"].recovery_action, "continue")
+                self.assertEqual(reopened.tool_outcomes["kept-write"].outcome, "succeeded")
+                state = conversation_state(self.fixture.manager.paths.checkpoints_db, finished["thread_id"])
+                results = {message.tool_call_id: message for message in state["messages"] if isinstance(message, ToolMessage)}
+                self.assertEqual((results["bad-read"].name, results["bad-read"].status), (name, "error"))
+                self.assertIn("No complete result", results["bad-read"].content)
+                self.assertEqual(results["kept-write"].status, "success")
+                self.assertEqual(state["messages"][-1].content, "The read failed; the other result is retained.")
+
+    def test_sync_decode_failure_returns_native_identity_and_can_continue(self):
+        from workbench_backend.agents.middleware import WorkbenchHarnessMiddleware
+        run = self.run_record(["grep", "echo"])
+        middleware = WorkbenchHarnessMiddleware(run)
+        request = SimpleNamespace(tool_call={"name": "grep", "id": "decode", "args": {"pattern": "paint"}})
+        def failed(_request):
+            raise UnicodeDecodeError("cp1252", b"\x9d", 0, 1, "undefined")
+        result = middleware.wrap_tool_call(request, failed)
+        self.assertEqual((result.tool_call_id, result.status), ("decode", "error"))
+        request.tool_call = {"name": "echo", "id": "following", "args": {"text": "kept"}}
+        middleware.wrap_tool_call(request, lambda _: ToolMessage(content="kept", name="echo", tool_call_id="following"))
+        self.assertEqual(run.tool_outcomes["decode"].outcome, "failed")
+        self.assertEqual(run.tool_outcomes["following"].outcome, "succeeded")
 
     def test_native_shell_failure_uses_exit_evidence_and_can_continue(self):
         self.fixture.scripted = ScriptedChatModel([

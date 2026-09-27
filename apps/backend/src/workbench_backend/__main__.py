@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 
 import uvicorn
@@ -25,6 +26,14 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(2) from exc
+    if sys.platform == "win32" and not sys.flags.utf8_mode:
+        # UTF-8 mode must be selected before interpreter startup. Keep native
+        # Deep Agents text protocols independent of the Windows ANSI locale.
+        # Windows exec releases the original process handle; waiting preserves
+        # the console entrypoint's exit status and inherited output streams.
+        command = [sys.executable, "-X", "utf8", "-m", "workbench_backend",
+                   *(sys.argv[1:] if argv is None else argv)]
+        raise SystemExit(subprocess.call(command))
     from workbench_backend.app import app, create_app
     application = app
     while True:
