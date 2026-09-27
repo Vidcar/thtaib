@@ -23,12 +23,71 @@ from workbench_backend.state.backup import (
     BackupService,
     _verify_application_schema_compatible,
 )
-from workbench_backend.state.store import ApplicationStore
+from workbench_backend.state.store import ApplicationStore, SCHEMA_VERSION
 
 from tests.support import close_workbench_sqlite
+from tests.large_run_history import synthetic_large_run
 
 
 class BackupSchemaCompatibilityTests(unittest.TestCase):
+    def _assert_capture_corruption_refuses_restore(self, mutate: Callable[[sqlite3.Connection], object], *, code: str = "application_linkage_invalid") -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = WorkbenchPaths(root / "source").ensure()
+            store = ApplicationStore(paths)
+            try:
+                run = store.put_run(synthetic_large_run(status="completed"))
+                archive = BackupService(paths, store).create_backup(BackupCreateRequest(destination=str(root / "backup.zip")))
+            finally:
+                close_workbench_sqlite(store)
+            corrupted = root / "invalid-captures.zip"
+            _rewrite_archive_application_db(Path(archive.archive_path), corrupted, root / "corrupt-work", mutate)
+            archive_hash = sha256_file(corrupted)
+            destination = root / "restore-invalid-captures"
+            reopened = ApplicationStore(paths)
+            try:
+                with self.assertRaises(BackupError) as error:
+                    BackupService(paths, reopened).restore_backup(
+                        BackupRestoreRequest(archive_path=str(corrupted), destination_root=str(destination))
+                    )
+                self.assertEqual(error.exception.code, code)
+                self.assertEqual(len(reopened.get_run(run.id).model_requests), 50)
+            finally:
+                close_workbench_sqlite(reopened)
+            self.assertFalse(destination.exists())
+            self.assertEqual(sha256_file(corrupted), archive_hash)
+
+    def test_restore_rejects_orphan_diagnostic_capture_rows(self) -> None:
+        self._assert_capture_corruption_refuses_restore(lambda conn: conn.execute(
+            "INSERT INTO run_diagnostic_captures(run_id, position, payload) VALUES ('missing_run', 0, '{}')"
+        ))
+
+    def test_restore_rejects_capture_position_gap_that_would_drop_future_appends(self) -> None:
+        self._assert_capture_corruption_refuses_restore(lambda conn: conn.execute(
+            "DELETE FROM run_diagnostic_captures WHERE run_id = 'run_large' AND position = 7"
+        ))
+
+    def test_restore_rejects_invalid_json_in_separate_capture_row(self) -> None:
+        self._assert_capture_corruption_refuses_restore(lambda conn: conn.execute(
+            "UPDATE run_diagnostic_captures SET payload = '{' WHERE run_id = 'run_large' AND position = 7"
+        ), code="application_db_invalid")
+
+    def test_restore_rejects_current_schema_with_missing_capture_table(self) -> None:
+        self._assert_capture_corruption_refuses_restore(lambda conn: conn.execute(
+            "DROP TABLE run_diagnostic_captures"
+        ), code="application_db_invalid")
+
+    def test_restore_rejects_current_schema_with_embedded_capture_history(self) -> None:
+        def embed_captures(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """UPDATE runs SET payload = json_set(payload, '$.model_requests', json((
+                       SELECT json_group_array(json(payload)) FROM run_diagnostic_captures
+                       WHERE run_id = 'run_large'
+                   ))) WHERE id = 'run_large'"""
+            )
+            conn.execute("DELETE FROM run_diagnostic_captures WHERE run_id = 'run_large'")
+        self._assert_capture_corruption_refuses_restore(embed_captures, code="application_db_invalid")
+
     def test_schema_validation_preserves_live_wal_sidecars_and_committed_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -88,7 +147,7 @@ class BackupSchemaCompatibilityTests(unittest.TestCase):
             self.assertEqual(error.exception.code, "application_schema_incompatible")
             self.assertFalse(destination.exists())
             self.assertEqual(sha256_file(incompatible), archive_hash_before)
-            self.assertEqual(_schema_version(paths.application_db), "2")
+            self.assertEqual(_schema_version(paths.application_db), SCHEMA_VERSION)
 
     def test_restore_migrates_supported_v1_application_schema_before_activation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -133,7 +192,7 @@ class BackupSchemaCompatibilityTests(unittest.TestCase):
             finally:
                 close_workbench_sqlite(reopened)
 
-            self.assertEqual(_schema_version(destination / "application.sqlite"), "2")
+            self.assertEqual(_schema_version(destination / "application.sqlite"), SCHEMA_VERSION)
             restored = ApplicationStore(WorkbenchPaths(destination))
             try:
                 conversation = restored.get_conversation("chat_v1_restore")

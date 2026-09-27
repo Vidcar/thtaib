@@ -57,7 +57,8 @@
       "title": "AgentEvent",
       "type": "object"
     },
-    "AgentRun": {
+    "AgentRunOperational": {
+      "additionalProperties": false,
       "properties": {
         "activity_phase": {
           "anyOf": [
@@ -510,13 +511,6 @@
           "title": "Memory Version Refs",
           "type": "array"
         },
-        "model_requests": {
-          "items": {
-            "$ref": "#/$defs/ModelRequestCapture"
-          },
-          "title": "Model Requests",
-          "type": "array"
-        },
         "outer_graph": {
           "const": "deepagents-compiled-state-graph",
           "default": "deepagents-compiled-state-graph",
@@ -888,7 +882,7 @@
         "created_at",
         "updated_at"
       ],
-      "title": "AgentRun",
+      "title": "AgentRunOperational",
       "type": "object"
     },
     "ChildRunActivity": {
@@ -2024,260 +2018,6 @@
       "title": "ModelJudgement",
       "type": "object"
     },
-    "ModelRequestCapture": {
-      "properties": {
-        "applied_per_request": {
-          "additionalProperties": true,
-          "title": "Applied Per Request",
-          "type": "object"
-        },
-        "at": {
-          "title": "At",
-          "type": "string"
-        },
-        "available_tools": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Available Tools",
-          "type": "array"
-        },
-        "capture_gaps": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Capture Gaps",
-          "type": "array"
-        },
-        "context_observation": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ContextObservation"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "discarded": {
-          "default": false,
-          "title": "Discarded",
-          "type": "boolean"
-        },
-        "expired": {
-          "default": false,
-          "title": "Expired",
-          "type": "boolean"
-        },
-        "expires_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Expires At"
-        },
-        "failure": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Failure"
-        },
-        "generation_settings": {
-          "additionalProperties": true,
-          "title": "Generation Settings",
-          "type": "object"
-        },
-        "handler_returned": {
-          "default": false,
-          "title": "Handler Returned",
-          "type": "boolean"
-        },
-        "http_payload": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Http Payload"
-        },
-        "http_payloads": {
-          "items": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "title": "Http Payloads",
-          "type": "array"
-        },
-        "instructions": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Instructions"
-        },
-        "loaded_knowledge": {
-          "items": {
-            "$ref": "#/$defs/LoadedKnowledgeFact"
-          },
-          "title": "Loaded Knowledge",
-          "type": "array"
-        },
-        "memory_versions": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Memory Versions",
-          "type": "array"
-        },
-        "messages": {
-          "items": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "title": "Messages",
-          "type": "array"
-        },
-        "presented_tools": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Presented Tools",
-          "type": "array"
-        },
-        "purpose": {
-          "default": "work",
-          "enum": [
-            "work",
-            "summary",
-            "review",
-            "probe"
-          ],
-          "title": "Purpose",
-          "type": "string"
-        },
-        "redacted": {
-          "default": false,
-          "title": "Redacted",
-          "type": "boolean"
-        },
-        "redacted_fields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Redacted Fields",
-          "type": "array"
-        },
-        "redaction_mode": {
-          "default": "redact_secrets",
-          "enum": [
-            "retain",
-            "redact_secrets",
-            "discard"
-          ],
-          "title": "Redaction Mode",
-          "type": "string"
-        },
-        "request_prepared": {
-          "default": true,
-          "title": "Request Prepared",
-          "type": "boolean"
-        },
-        "response_observed": {
-          "default": false,
-          "title": "Response Observed",
-          "type": "boolean"
-        },
-        "retained": {
-          "default": true,
-          "title": "Retained",
-          "type": "boolean"
-        },
-        "retention_seconds": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Retention Seconds"
-        },
-        "retrieved_material": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Retrieved Material",
-          "type": "array"
-        },
-        "selected_profile_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Selected Profile Id"
-        },
-        "skill_versions": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Skill Versions",
-          "type": "array"
-        },
-        "startup_mismatches": {
-          "items": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "title": "Startup Mismatches",
-          "type": "array"
-        },
-        "transport_attempt_count": {
-          "default": 0,
-          "title": "Transport Attempt Count",
-          "type": "integer"
-        },
-        "transport_attempted": {
-          "default": false,
-          "title": "Transport Attempted",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "at"
-      ],
-      "title": "ModelRequestCapture",
-      "type": "object"
-    },
     "OutputSchemaRequest": {
       "additionalProperties": false,
       "description": "Caller-supplied JSON schema for one run.\n\nThe schema is passed to Deep Agents' existing ``response_format`` seam.\nIt is not parsed out of assistant prose.",
@@ -3304,7 +3044,7 @@
     "run": {
       "anyOf": [
         {
-          "$ref": "#/$defs/AgentRun"
+          "$ref": "#/$defs/AgentRunOperational"
         },
         {
           "type": "null"

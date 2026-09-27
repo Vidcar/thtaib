@@ -378,7 +378,7 @@ export interface AgentRun {
   enabled_tools: string[];
   presented_tools: string[];
   events: Array<{ at: string; kind: string; detail: Record<string, unknown> }>;
-  model_requests: Array<{
+  model_requests?: Array<{
     at: string;
     request_prepared?: boolean;
     transport_attempted?: boolean;
@@ -471,6 +471,9 @@ export interface AgentRun {
   generation_observation?: import("../generated/shared-contracts/openapi").SchemaGenerationObservation | null;
   structured_output?: StructuredOutputResult | null;
 }
+
+export type AgentRunOperational = Omit<AgentRun, "model_requests">;
+export type DiagnosticAgentRun = SchemaAgentRun;
 
 export interface HostShellFacts {
   available: boolean;

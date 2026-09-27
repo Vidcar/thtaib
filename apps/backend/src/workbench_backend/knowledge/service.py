@@ -457,7 +457,7 @@ class KnowledgeService:
     def propose_memory(self, *, run_id: str, content: str, scope: KnowledgeScope = "user", scope_id: str | None = None, display_name: str | None = None, entry_id: str | None = None, base_version: str | None = None) -> KnowledgeProposal:
         """Internal tool entry point: run identity is bound by the backend wrapper."""
         with self._lock:
-            run = self.app_store.get_run(run_id) if self.app_store else None
+            run = self.app_store.get_run_operational(run_id) if self.app_store else None
             if run is None:
                 raise KnowledgeError("Memory proposals require a real originating run.", code="knowledge_run_missing", status_code=409)
             self._require_scope(scope, scope_id)

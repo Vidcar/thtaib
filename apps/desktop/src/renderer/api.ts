@@ -1,6 +1,7 @@
 import type { SchemaBundleProjectors, SchemaCapabilityEvidence, SchemaCapabilityProbeReport, SchemaHubRepository, SchemaChatConversationCreateRequest, SchemaChatStartRequest } from "../generated/shared-contracts/openapi";
 import type {
   AgentRun,
+  AgentRunOperational,
   BundleConfigurationOptions,
   ChatConversation,
   ChatMessage,
@@ -292,7 +293,7 @@ export const api = {
         embedding_deployment_id,
       }),
     }),
-  agentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}`),
+  agentRun: (id: string) => request<AgentRunOperational>(`/v1/agent-runs/${id}?view=operational`),
   cancelAgentRun: (id: string) => request<AgentRun>(`/v1/agent-runs/${id}/cancel`, { method: "POST" }),
   decideAgentRunInterrupt: (id: string, type: "approve" | "reject") =>
     request<AgentRun>(`/v1/agent-runs/${id}/interrupt-decision`, {

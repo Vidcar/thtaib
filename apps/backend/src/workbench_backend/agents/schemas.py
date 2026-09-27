@@ -118,6 +118,7 @@ class ModelRequestCapture(BaseModel):
     discarded: bool = False
     expired: bool = False
     redacted_fields: list[str] = Field(default_factory=list)
+    privacy_fingerprint: str | None = Field(default=None, max_length=64)
     context_observation: ContextObservation | None = None
 
 

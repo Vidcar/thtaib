@@ -29,6 +29,7 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.image_validation import CANNOT_READ_IMAGE
 from workbench_backend.paths import WorkbenchPaths
+from workbench_backend.state.run_views import BrowserRunProjection
 
 BROWSER_TOOL_NAMES = (
     "browser_navigate", "browser_navigate_back", "browser_tabs", "browser_snapshot",
@@ -169,11 +170,22 @@ class _Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     control: str = "agent"
     viewers: int = 0
+    view_subscriptions: set[str] = field(default_factory=set)
     last_run: Any = None
     downloads: list[dict[str, str]] = field(default_factory=list)
     error: str | None = None
     download_ids: set[str] = field(default_factory=set)
     observer_task: asyncio.Task | None = None
+    loss_task: asyncio.Task | None = None
+
+
+@dataclass(frozen=True)
+class BrowserOwner:
+    """One capture-free ownership read, shared by a single viewing operation."""
+
+    conversation: Any
+    run: BrowserRunProjection | None
+    generation: int = 0
 
 
 class BrowserSessionService:
@@ -200,50 +212,102 @@ class BrowserSessionService:
         self.idle_seconds = idle_seconds
         self._sessions: dict[str, _Session] = {}
         self._controls: dict[str, str] = {}
+        self._control_run_ids: dict[str, str | None] = {}
+        self._observed_controls: dict[str, str] = {}
+        self._control_owner_versions: dict[str, str] = {}
+        self._owner_generation = 0
+        self._applied_owner_generations: dict[str, int] = {}
         self._handoff_locks: dict[str, asyncio.Lock] = {}
         self._terminating: dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
         self._status_lock = threading.RLock()
+        self._marker_lock = threading.RLock()
         self._state_root = paths.state / "browser-sessions"
         self._output_root = paths.state / "browser-captures"
         self._profile_root = paths.state / "browser-profiles"
 
-    def status(self, thread_id: str) -> dict[str, Any]:
+    def resolve_owner(self, thread_id: str) -> BrowserOwner:
+        """Blocking store access belongs in a worker, never either async loop."""
         key = _safe_thread(thread_id)
-        if key not in self._controls and self.assets is not None:
-            owner = self.assets.session_for_thread(key)
-            run = self.app_store.get_run(owner.current_run_id) if self.app_store and owner and owner.current_run_id else None
-            if run and getattr(run, "browser_control", "agent") != "agent":
-                self._controls[key] = run.browser_control
+        with self._status_lock:
+            self._owner_generation += 1
+            generation = self._owner_generation
+        conversation = self.assets.session_for_thread(key) if self.assets else None
+        run_id = getattr(conversation, "current_run_id", None)
+        run = self.app_store.get_run_browser(run_id) if self.app_store and run_id else None
+        return BrowserOwner(conversation, run, generation)
+
+    def _remember_owner(self, key: str, owner: BrowserOwner) -> bool:
+        if self.assets is None or self.app_store is None:
+            return True
+        run_id = getattr(owner.conversation, "current_run_id", None)
+        version = getattr(owner.conversation, "updated_at", "")
+        control = owner.run.browser_control if owner.run else "agent"
+        with self._status_lock:
+            if (owner.generation < self._applied_owner_generations.get(key, 0)
+                or version < self._control_owner_versions.get(key, "")):
+                return False
+            self._applied_owner_generations[key] = owner.generation
+            self._control_owner_versions[key] = version
+            changed_run = self._control_run_ids.get(key) != run_id
+            transition = self._handoff_locks.get(key)
+            changed_control = (self._observed_controls.get(key) != control
+                and not (transition and transition.locked()))
+            if key not in self._controls or changed_run or changed_control:
+                self._control_run_ids[key] = run_id
+                self._observed_controls[key] = control
+                self._controls[key] = control
+                if session := self._sessions.get(key):
+                    session.control = control
+        return True
+
+    def _advance_owner_generation(self, key: str) -> None:
+        """Invalidate reads begun before a completed handoff, even in one second."""
+        with self._status_lock:
+            self._owner_generation += 1
+            self._applied_owner_generations[key] = self._owner_generation
+
+    def status(self, thread_id: str, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
+        key = _safe_thread(thread_id)
+        self._remember_owner(key, owner or self.resolve_owner(key))
         with self._status_lock:
             session = self._sessions.get(key)
-            active = bool(session and (session.worker is None or session.metadata.get("session_id")))
+            metadata = dict(session.metadata) if session else {}
+            active = bool(session and (session.worker is None or metadata.get("session_id")))
+            control = session.control if session else self._controls.get(key, "agent")
+            downloads = list(session.downloads) if session else []
+            error = session.error if session else None
         marker = self._marker(key)
         return {
             "thread_id": key,
             "state": "active" if active else ("lost" if marker.exists() else "closed"),
             "worker": self.runtime.status(),
-            "session_id": session.metadata.get("session_id") if session else None,
-            "tabs": session.metadata.get("tabs", []) if session else [],
-            "active_page_id": session.metadata.get("active_page_id") if session else None,
-            "revision": session.metadata.get("revision", 0) if session else 0,
-            "viewport": session.metadata.get("viewport", {"width": 1440, "height": 900}) if session else {"width": 1440, "height": 900},
-            "control": session.control if session else self._controls.get(key, "agent"),
-            "dialog": session.metadata.get("dialog") if session else None,
-            "file_chooser": session.metadata.get("file_chooser") if session else None,
-            "downloads": session.downloads if session else [],
-            "error": session.error if session else None,
+            "session_id": metadata.get("session_id"),
+            "tabs": metadata.get("tabs", []),
+            "active_page_id": metadata.get("active_page_id"),
+            "revision": metadata.get("revision", 0),
+            "viewport": metadata.get("viewport", {"width": 1440, "height": 900}),
+            "control": control,
+            "dialog": metadata.get("dialog"),
+            "file_chooser": metadata.get("file_chooser"),
+            "downloads": downloads,
+            "error": error,
         }
 
     def _marker(self, key: str) -> Path:
         return self._state_root / f"{key}.json"
 
     def _write_marker(self, key: str) -> None:
-        self._state_root.mkdir(parents=True, exist_ok=True)
-        marker = self._marker(key)
-        staging = marker.with_suffix(".tmp")
-        staging.write_text(json.dumps({"thread_id": key, "started_at": utc_now()}), encoding="utf-8")
-        staging.replace(marker)
+        with self._marker_lock:
+            self._state_root.mkdir(parents=True, exist_ok=True)
+            marker = self._marker(key)
+            staging = marker.with_suffix(".tmp")
+            staging.write_text(json.dumps({"thread_id": key, "started_at": utc_now()}), encoding="utf-8")
+            staging.replace(marker)
+
+    def _remove_marker(self, key: str) -> None:
+        with self._marker_lock:
+            self._marker(key).unlink(missing_ok=True)
 
     @asynccontextmanager
     async def open_tools(self, run) -> AsyncIterator[list[BaseTool]]:
@@ -257,7 +321,7 @@ class BrowserSessionService:
             # initialization. Use its installation-time catalogue for tool
             # presentation, and acquire the real adapter only on first action.
             # This is metadata from the pinned server, not another tool adapter.
-            schemas = {definition["name"]: definition for definition in self.runtime.read_tool_schemas()}
+            schemas = {definition["name"]: definition for definition in await asyncio.to_thread(self.runtime.read_tool_schemas)}
             def lazy_tool(name: str) -> BaseTool:
                 definition = schemas[name]
                 args = copy.deepcopy(definition["inputSchema"])
@@ -277,30 +341,39 @@ class BrowserSessionService:
         self._refresh_idle(session)
         yield [self._bind_tool(run, session, session.tools[name]) for name in BROWSER_TOOL_NAMES if name in selected]
 
-    async def _get_or_create(self, key: str) -> _Session:
+    async def _get_or_create(self, key: str, *, owner: BrowserOwner | None = None) -> _Session:
+        owner = owner or await asyncio.to_thread(self.resolve_owner, key)
+        self._remember_owner(key, owner)
         async with self._lock:
             existing = self._sessions.get(key)
             if existing:
                 return existing
-            if self._marker(key).exists():
+            terminating = self._terminating.get(key)
+            if terminating:
+                await asyncio.shield(terminating)
+            if await asyncio.to_thread(self._marker(key).exists):
                 raise HarnessError("The previous browser session was lost. Reset it to start a fresh isolated browser.", code="browser_session_lost", status_code=409)
-            node, cli = self.runtime.require_installed()
+            node, cli = await asyncio.to_thread(self.runtime.require_installed)
             output = self._output_root / key
-            output.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(output.mkdir, parents=True, exist_ok=True)
             ready: asyncio.Future[_Session] = asyncio.get_running_loop().create_future()
             close_event = asyncio.Event()
             owner = asyncio.create_task(self._own_worker(key, node, cli, output, close_event, ready))
+            session = None
             try:
                 session = await ready
-                session.control = self._controls.get(key, "agent")
-                if session.worker is None or session.metadata.get("session_id"):
-                    self._write_marker(key)
                 with self._status_lock:
+                    session.control = self._controls.get(key, "agent")
                     self._sessions[key] = session
+                if session.worker is None or session.metadata.get("session_id"):
+                    await asyncio.to_thread(self._ensure_marker, session)
                 if session.worker:
                     session.observer_task = asyncio.create_task(self._monitor(session))
                 return session
             except BaseException:
+                with self._status_lock:
+                    if self._sessions.get(key) is session:
+                        self._sessions.pop(key, None)
                 close_event.set()
                 await asyncio.shield(owner)
                 raise
@@ -326,7 +399,7 @@ class BrowserSessionService:
                     async def decline(*_args, **_kwargs):
                         return ElicitResult(action="decline")
 
-                    worker = BrowserWorkerClient(node, cli, self._profile_root / key, output)
+                    worker = await asyncio.to_thread(BrowserWorkerClient, node, cli, self._profile_root / key, output)
                     # Register cleanup before entering the transport so Chrome
                     # closes while its authenticated management channel is live.
                     stack.push_async_callback(worker.close)
@@ -412,7 +485,7 @@ class BrowserSessionService:
                         run_id=run.id, adapter_id=f"browser:{session.thread_id}", operation=name,
                         payload={"tool": name, "thread_id": session.thread_id, "tool_call_id": CURRENT_TOOL_CALL.get() or None},
                     ))
-                before = set(session.output_dir.iterdir()) if name == "browser_take_screenshot" else set()
+                before = await asyncio.to_thread(lambda: set(session.output_dir.iterdir())) if name == "browser_take_screenshot" else set()
                 try:
                     result = await original.coroutine(**arguments)
                     if session.worker and name in {"browser_file_upload", "browser_handle_dialog"}:
@@ -424,7 +497,7 @@ class BrowserSessionService:
                     raise
                 except BaseException as exc:
                     if effect:
-                        effects.recover(effect.id)
+                        await asyncio.to_thread(effects.recover, effect.id)
                     await self._mark_lost(session)
                     if isinstance(exc, asyncio.CancelledError):
                         raise
@@ -434,10 +507,10 @@ class BrowserSessionService:
                 if name == "browser_navigate":
                     session.last_url = self._observed_url(result)
                 if name in {"browser_navigate", "browser_snapshot"}:
-                    return text_result(present_page(result, session.output_dir))
+                    return text_result(await asyncio.to_thread(present_page, result, session.output_dir))
                 if name != "browser_take_screenshot":
                     return result
-                created = [path for path in session.output_dir.iterdir() if path not in before and path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES]
+                created = await asyncio.to_thread(lambda: [path for path in session.output_dir.iterdir() if path not in before and path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES])
                 if len(created) != 1:
                     raise ToolException("The browser did not produce exactly one controlled screenshot.")
                 path = created[0]
@@ -451,11 +524,11 @@ class BrowserSessionService:
                 observed_url = self._observed_url(result) or self._observed_url(page_source)
                 target = observed_url or "browser page (URL unavailable)"
                 session.last_url = observed_url
-                page = present_page(page_source, session.output_dir)
+                page = await asyncio.to_thread(present_page, page_source, session.output_dir)
                 if self.capture_publisher is None:
                     return text_result(f"Screenshot saved to {path}.\n{page}")
                 try:
-                    published = self.capture_publisher(
+                    published = await asyncio.to_thread(self.capture_publisher,
                         run, path, source_tool_name=name, source_tool_call_id=CURRENT_TOOL_CALL.get() or None,
                         target=target, controlled_root=session.output_dir,
                     )
@@ -466,7 +539,7 @@ class BrowserSessionService:
                 finally:
                     # The retained asset service has its own copy. This output
                     # directory is only a transient handoff from MCP.
-                    path.unlink(missing_ok=True)
+                    await asyncio.to_thread(path.unlink, missing_ok=True)
                 virtual_path = published[1] if isinstance(published, tuple) else published
                 readable = None
                 if self.screenshot_reader is not None:
@@ -503,21 +576,29 @@ class BrowserSessionService:
 
     async def delete_chat(self, thread_id: str) -> None:
         await self.reset(thread_id)
-        self._controls.pop(_safe_thread(thread_id), None)
+        key = _safe_thread(thread_id)
+        with self._status_lock:
+            self._controls.pop(key, None)
+            self._control_run_ids.pop(key, None)
+            self._observed_controls.pop(key, None)
+            self._control_owner_versions.pop(key, None)
+            self._applied_owner_generations.pop(key, None)
 
-    async def start(self, thread_id: str) -> dict[str, Any]:
+    async def start(self, thread_id: str, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
         key = _safe_thread(thread_id)
         async with self._handoff_locks.setdefault(key, asyncio.Lock()):
-            return await self._start(key)
+            return await self._start(key, owner=owner)
 
-    async def _start(self, thread_id: str) -> dict[str, Any]:
-        session = await self._get_or_create(_safe_thread(thread_id))
+    async def _start(self, thread_id: str, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
+        owner = owner or await asyncio.to_thread(self.resolve_owner, thread_id)
+        self._remember_owner(_safe_thread(thread_id), owner)
+        session = await self._get_or_create(_safe_thread(thread_id), owner=owner)
         async with session.io_lock:
             if session.worker:
                 await session.worker.start()
             await self._observe_session(session)
             self._refresh_idle(session)
-        return self.status(thread_id)
+        return await asyncio.to_thread(self.status, thread_id, owner=owner)
 
     async def _observe_session(self, session: _Session, *, reconcile: bool = False) -> None:
         if not session.worker:
@@ -535,9 +616,16 @@ class BrowserSessionService:
         with self._status_lock:
             session.metadata = state
         if state.get("session_id"):
+            await asyncio.to_thread(self._ensure_marker, session)
+        await self._retain_downloads(session, await session.worker.drain_downloads())
+
+    def _ensure_marker(self, session: _Session) -> None:
+        with self._marker_lock:
+            with self._status_lock:
+                if self._sessions.get(session.thread_id) is not session:
+                    return
             if not self._marker(session.thread_id).exists():
                 self._write_marker(session.thread_id)
-        await self._retain_downloads(session, await session.worker.drain_downloads())
 
     async def _monitor(self, session: _Session) -> None:
         """Observe downloads and worker loss even while the rail is hidden."""
@@ -622,17 +710,20 @@ class BrowserSessionService:
             if key in arguments and not 0 <= float(arguments[key]) < viewport["height"]:
                 raise ToolException("The vertical coordinate is outside the actual browser viewport.")
 
-    async def control(self, thread_id: str, action: str, harness: Any) -> dict[str, Any]:
+    async def control(self, thread_id: str, action: str, harness: Any, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
         key = _safe_thread(thread_id)
         async with self._handoff_locks.setdefault(key, asyncio.Lock()):
-            return await self._change_control(key, action, harness)
+            owner = owner or await asyncio.to_thread(self.resolve_owner, key)
+            self._remember_owner(key, owner)
+            return await self._change_control(key, action, harness, owner=owner)
 
-    async def _change_control(self, key: str, action: str, harness: Any) -> dict[str, Any]:
-        session = self._sessions.get(key)
-        previous = self._controls.get(key, "agent")
-        self._controls[key] = "taking_control"
-        if session:
-            session.control = "taking_control"
+    async def _change_control(self, key: str, action: str, harness: Any, *, owner: BrowserOwner) -> dict[str, Any]:
+        with self._status_lock:
+            session = self._sessions.get(key)
+            previous = self._controls.get(key, "agent")
+            self._controls[key] = "taking_control"
+            if session:
+                session.control = "taking_control"
         drained = False
         try:
             if action == "take":
@@ -645,9 +736,12 @@ class BrowserSessionService:
                         await self._observe_session(session)
                         if session.worker:
                             await session.worker.reset_input()
-                self._controls[key] = "user"
-                if session:
-                    session.control = "user"
+                with self._status_lock:
+                    self._controls[key] = "user"
+                    self._observed_controls[key] = "user"
+                    if session:
+                        session.control = "user"
+                    self._advance_owner_generation(key)
             else:
                 observation = "The browser is closed. Sign-ins were retained; the next browser action opens fresh pages."
                 if session and session.metadata.get("session_id"):
@@ -655,8 +749,8 @@ class BrowserSessionService:
                         if session.worker:
                             await session.worker.reset_input()
                         await self._observe_session(session, reconcile=True)
-                        observation = present_page(await session.tools["browser_snapshot"].coroutine(), session.output_dir)
-                    run = self._current_root(key) or (session.last_run if self.assets is None else None)
+                        observation = await asyncio.to_thread(present_page, await session.tools["browser_snapshot"].coroutine(), session.output_dir)
+                    run = owner.run or (session.last_run if self.assets is None else None)
                     if run and self.screenshot_reader and await asyncio.to_thread(self.screenshot_reader, run):
                         try:
                             tool = self._bind_tool(run, session, session.tools["browser_take_screenshot"], observation=True)
@@ -665,10 +759,14 @@ class BrowserSessionService:
                             observation += "\nA fresh screenshot is unavailable; use the current page structure."
                 # Input has remained disabled throughout refresh. Release service
                 # and graph authority together, before any resumed tool can run.
-                self._controls[key] = "agent"
-                if session:
-                    session.control = "agent"
+                with self._status_lock:
+                    self._controls[key] = "agent"
+                    if session:
+                        session.control = "agent"
                 await harness.release_browser_takeover(key, observation)
+                with self._status_lock:
+                    self._observed_controls[key] = "agent"
+                    self._advance_owner_generation(key)
         except BaseException as exc:
             if action == "return":
                 recovery = previous
@@ -677,20 +775,29 @@ class BrowserSessionService:
             elif drained:
                 recovery = "user"
             else:
-                recovery = getattr(self._current_root(key), "browser_control", "agent")
-            self._controls[key] = recovery
-            session = self._sessions.get(key)
-            if session:
-                session.control = recovery
+                recovery = getattr(await asyncio.to_thread(self._current_root, key), "browser_control", "agent")
+            with self._status_lock:
+                self._controls[key] = recovery
+                session = self._sessions.get(key)
+                if session:
+                    session.control = recovery
+                self._advance_owner_generation(key)
             raise
-        return self.status(key)
+        # The execution owner persisted a new control value during handoff.
+        return await asyncio.to_thread(self.status, key)
 
     def _current_root(self, key: str):
-        owner = self.assets.session_for_thread(key) if self.assets else None
-        return self.app_store.get_run(owner.current_run_id) if self.app_store and owner and getattr(owner, "current_run_id", None) else None
+        return self.resolve_owner(key).run
 
-    async def manual_action(self, thread_id: str, body: Any) -> dict[str, Any]:
+    async def manual_action(self, thread_id: str, body: Any, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
         key = _safe_thread(thread_id)
+        owner = owner or await asyncio.to_thread(self.resolve_owner, key)
+        if not self._remember_owner(key, owner):
+            with self._status_lock:
+                same_authority = (self._control_run_ids.get(key) == getattr(owner.conversation, "current_run_id", None)
+                    and self._controls.get(key) == "user" and owner.run is not None and owner.run.browser_control == "user")
+            if not same_authority:
+                raise HarnessError("Browser ownership changed. Observe its current state before trying again.", code="browser_state_changed", status_code=409)
         session = self._sessions.get(key)
         if not session or not session.worker:
             raise HarnessError("Start this chat's browser first.", code="browser_not_started", status_code=409)
@@ -705,7 +812,7 @@ class BrowserSessionService:
             if action["type"] == "upload":
                 references = ["asset:" + value for value in action.pop("asset_ids", [])] + action.pop("project_paths", [])
                 action["paths"] = await asyncio.to_thread(self._resolve_uploads, session, None, references, manual=True)
-            await session.worker.set_attribution({"run_id": getattr(self._current_root(key), "id", None), "tool_name": "browser_manual"})
+            await session.worker.set_attribution({"run_id": getattr(owner.run, "id", None), "tool_name": "browser_manual"})
             if action["type"] == "upload":
                 await session.worker.validate_action(payload)
                 await session.tools["browser_file_upload"].coroutine(paths=action["paths"])
@@ -725,11 +832,20 @@ class BrowserSessionService:
                 await session.tools["browser_tabs"].coroutine(action="select", index=index)
             await self._observe_session(session)
             self._refresh_idle(session)
-        return self.status(key)
+        return await asyncio.to_thread(self.status, key, owner=owner)
 
-    async def view_subscription(self, thread_id: str, visible: bool) -> None:
+    async def view_subscription(self, thread_id: str, visible: bool, *, subscription_id: str | None = None) -> None:
         session = self._sessions.get(_safe_thread(thread_id))
         if session and session.worker:
+            if subscription_id is not None:
+                if visible:
+                    if subscription_id in session.view_subscriptions:
+                        return
+                    session.view_subscriptions.add(subscription_id)
+                else:
+                    if subscription_id not in session.view_subscriptions:
+                        return
+                    session.view_subscriptions.remove(subscription_id)
             session.viewers = max(0, session.viewers + (1 if visible else -1))
             await session.worker.set_streaming(session.viewers > 0)
             if not visible and session.viewers == 0 and session.control == "user":
@@ -737,33 +853,55 @@ class BrowserSessionService:
                     await session.worker.reset_input()
             self._refresh_idle(session)
 
-    async def poll_view(self, thread_id: str, last_frame_seq: int = 0) -> dict[str, Any]:
+    async def poll_view(self, thread_id: str, last_frame_seq: int = 0, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
+        owner = owner or await asyncio.to_thread(self.resolve_owner, thread_id)
+        self._remember_owner(_safe_thread(thread_id), owner)
         session = self._sessions.get(_safe_thread(thread_id))
         if not session or not session.worker:
-            return {"state": self.status(thread_id)}
+            return {"state": await asyncio.to_thread(self.status, thread_id, owner=owner)}
         try:
             result = await session.worker.poll(last_frame_seq)
             if result["state"].get("lost"):
                 raise HarnessError("Chrome stopped unexpectedly.", code="browser_session_lost", status_code=409)
-            session.metadata = result["state"]
+            with self._status_lock:
+                session.metadata = result["state"]
             await self._retain_downloads(session, result.get("downloads", []))
-            return {"state": self.status(thread_id), "frame": result.get("frame")}
+            return {"state": await asyncio.to_thread(self.status, thread_id, owner=owner), "frame": result.get("frame")}
         except Exception:
             await self._mark_lost(session)
-            return {"state": self.status(thread_id)}
+            return {"state": await asyncio.to_thread(self.status, thread_id, owner=owner)}
 
     async def _mark_lost(self, session: _Session) -> None:
-        self._write_marker(session.thread_id)
-        self._terminating[session.thread_id] = session.owner_task
         with self._status_lock:
-            self._sessions.pop(session.thread_id, None)
-        if session.idle_task:
-            session.idle_task.cancel()
-        if session.observer_task and session.observer_task is not asyncio.current_task():
-            session.observer_task.cancel()
-            await asyncio.gather(session.observer_task, return_exceptions=True)
-        session.close_event.set()
-        await asyncio.shield(session.owner_task)
+            if self._sessions.get(session.thread_id) is session:
+                # Claim this exact worker before awaiting any file work. Old
+                # polls cannot later remove a replacement or repeat cleanup.
+                session.loss_task = asyncio.create_task(self._finish_lost(session))
+                self._terminating[session.thread_id] = session.loss_task
+                self._sessions.pop(session.thread_id)
+            loss_task = session.loss_task
+        if loss_task:
+            await asyncio.shield(loss_task)
+
+    def _write_lost_marker(self, session: _Session) -> None:
+        with self._marker_lock:
+            with self._status_lock:
+                if (session.thread_id in self._sessions
+                    or self._terminating.get(session.thread_id) is not session.loss_task):
+                    return
+            self._write_marker(session.thread_id)
+
+    async def _finish_lost(self, session: _Session) -> None:
+        try:
+            await asyncio.to_thread(self._write_lost_marker, session)
+        finally:
+            if session.idle_task:
+                session.idle_task.cancel()
+            if session.observer_task:
+                session.observer_task.cancel()
+                await asyncio.gather(session.observer_task, return_exceptions=True)
+            session.close_event.set()
+            await asyncio.shield(session.owner_task)
         # Keep the marker: restart/reset must not imply a live tab survived.
 
     async def close_session(self, thread_id: str, *, lost: bool = False) -> None:
@@ -793,8 +931,8 @@ class BrowserSessionService:
                 await asyncio.shield(terminating)
                 self._terminating.pop(key, None)
             if not lost:
-                self._marker(key).unlink(missing_ok=True)
-                self._remove_output(key)
+                await asyncio.to_thread(self._remove_marker, key)
+                await asyncio.to_thread(self._remove_output, key)
                 if self.state_invalidator:
                     await self.state_invalidator(key, "The Chrome browser was closed. Sign-ins were retained; the next browser action opens fresh pages. Reconsider older page references and coordinates.")
 
@@ -806,14 +944,14 @@ class BrowserSessionService:
         if target.is_dir():
             shutil.rmtree(target)
 
-    async def reset(self, thread_id: str) -> dict[str, Any]:
+    async def reset(self, thread_id: str, *, owner: BrowserOwner | None = None) -> dict[str, Any]:
         key = _safe_thread(thread_id)
         async with self._handoff_locks.setdefault(key, asyncio.Lock()):
             await self._close_session(key)
-            self._remove_profile(key)
+            await asyncio.to_thread(self._remove_profile, key)
             if self.state_invalidator:
                 await self.state_invalidator(key, "The browser was Reset. This chat's Chrome profile and sign-ins were cleared. Older browser interactions were not repeated.")
-        return self.status(thread_id)
+        return await asyncio.to_thread(self.status, thread_id, owner=owner)
 
     async def shutdown(self) -> None:
         for key in set(self._sessions) | set(self._terminating):

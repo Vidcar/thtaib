@@ -263,7 +263,7 @@ class ChatService:
         conversation = self._require(conversation_id).model_copy(deep=True)
         if conversation.current_run_id:
             try:
-                current = self.harness.get_run(conversation.current_run_id)
+                current = self.harness.get_run_operational(conversation.current_run_id)
             except HarnessError:
                 current = None
             if current is not None and is_run_lifecycle_live(current.status):
@@ -354,7 +354,7 @@ class ChatService:
             conversation, _terminal = self._reconcile_terminal_assistant(conversation)
             if conversation.current_run_id:
                 try:
-                    current = self.harness.get_run(conversation.current_run_id)
+                    current = self.harness.get_run_operational(conversation.current_run_id)
                 except HarnessError:
                     current = None
                 if current is not None and is_run_lifecycle_live(current.status):
@@ -405,7 +405,7 @@ class ChatService:
                             code="queue_predecessor_changed", status_code=409)
                 else:
                     try:
-                        self.harness.get_run(request.queue_after_run_id)
+                        self.harness.get_run_operational(request.queue_after_run_id)
                     except HarnessError as exc:
                         raise ChatError("The turn selected for Queue is unavailable. Refresh and try again.",
                             code="queue_predecessor_missing", status_code=409) from exc
@@ -570,7 +570,7 @@ class ChatService:
                 conversation = self._resolve_orphan_pending_cancellations(conversation)
                 if conversation.current_run_id:
                     try:
-                        current = self.harness.get_run(conversation.current_run_id)
+                        current = self.harness.get_run_operational(conversation.current_run_id)
                     except HarnessError:
                         current = None
                     if current is not None and current.status.value in {"completed", "failed", "cancelled"}:
@@ -1011,7 +1011,7 @@ class ChatService:
             return conversation
         if conversation.current_run_id:
             try:
-                current = self.harness.get_run(conversation.current_run_id)
+                current = self.harness.get_run_operational(conversation.current_run_id)
             except HarnessError:
                 current = None
             if current is not None and is_run_lifecycle_live(current.status):
@@ -1057,7 +1057,7 @@ class ChatService:
             return conversation
         if dispatching.run_id:
             try:
-                run = self.harness.get_run(dispatching.run_id)
+                run = self.harness.get_run_operational(dispatching.run_id)
             except HarnessError:
                 run = None
             if run is not None:
@@ -1361,7 +1361,7 @@ class ChatService:
     ) -> AgentRun | None:
         if not input_message_id or not conversation.thread_id:
             return None
-        for run in self.harness.list_runs():
+        for run in self.harness.list_runs_operational():
             if (
                 run.source_surface == "chat"
                 and run.thread_id == conversation.thread_id
@@ -1820,7 +1820,7 @@ class ChatService:
         current_run_id = conversation.current_run_id
         if current_run_id:
             try:
-                current = self.harness.get_run(current_run_id)
+                current = self.harness.get_run_operational(current_run_id)
             except HarnessError:
                 current = None
             if current is not None:
@@ -1832,7 +1832,7 @@ class ChatService:
                         events = []
                         if conversation.current_run_id:
                             try:
-                                current = self.harness.get_run(conversation.current_run_id)
+                                current = self.harness.get_run_operational(conversation.current_run_id)
                             except HarnessError:
                                 current = None
                             if current is not None:
@@ -1904,7 +1904,7 @@ class ChatService:
             return conversation, None
         if run is None:
             try:
-                run = self.harness.get_run(conversation.current_run_id)
+                run = self.harness.get_run_operational(conversation.current_run_id)
             except HarnessError:
                 return conversation, None
         if run.status.value not in {"completed", "failed", "cancelled"}:

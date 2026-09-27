@@ -854,6 +854,799 @@
         "title": "AgentRun",
         "type": "object"
       },
+      "AgentRunOperational": {
+        "additionalProperties": false,
+        "properties": {
+          "activity_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "thinking",
+                  "using_tools",
+                  "summarizing",
+                  "checking_images"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Phase"
+          },
+          "agent_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Id"
+          },
+          "agent_setup_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Setup Version Id"
+          },
+          "approval_mode": {
+            "default": "ask",
+            "enum": [
+              "ask",
+              "full_access"
+            ],
+            "title": "Approval Mode",
+            "type": "string"
+          },
+          "browser_control": {
+            "default": "agent",
+            "enum": [
+              "agent",
+              "taking_control",
+              "user"
+            ],
+            "title": "Browser Control",
+            "type": "string"
+          },
+          "browser_observation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Observation"
+          },
+          "browser_pause_dispatches": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Browser Pause Dispatches",
+            "type": "object"
+          },
+          "browser_revision": {
+            "default": 0,
+            "title": "Browser Revision",
+            "type": "integer"
+          },
+          "browser_tool_proposals": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Browser Tool Proposals",
+            "type": "object"
+          },
+          "budgets": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentBudgets"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capture_routes_enabled": {
+            "default": false,
+            "title": "Capture Routes Enabled",
+            "type": "boolean"
+          },
+          "checkpoint_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checkpoint Ids",
+            "type": "array"
+          },
+          "child_runs": {
+            "items": {
+              "$ref": "#/components/schemas/ChildRunActivity"
+            },
+            "title": "Child Runs",
+            "type": "array"
+          },
+          "completed_tool_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Completed Tool Ids",
+            "type": "array"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connection_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Connection Ids",
+            "type": "array"
+          },
+          "connection_snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionSnapshot"
+            },
+            "title": "Connection Snapshots",
+            "type": "array"
+          },
+          "content_blocks": {
+            "anyOf": [
+              {
+                "items": {
+                  "discriminator": {
+                    "mapping": {
+                      "image_url": "#/components/schemas/ImageContentBlock",
+                      "text": "#/components/schemas/TextContentBlock"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TextContentBlock"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ImageContentBlock"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
+          "context_observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "criteria": {
+            "$ref": "#/components/schemas/TaskCriteria"
+          },
+          "denied_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Denied Tools",
+            "type": "array"
+          },
+          "deployment_id": {
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "desktop_access": {
+            "default": "off",
+            "enum": [
+              "off",
+              "selected",
+              "all"
+            ],
+            "title": "Desktop Access",
+            "type": "string"
+          },
+          "desktop_window": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desktop Window"
+          },
+          "dispatched_tool_calls": {
+            "default": 0,
+            "title": "Dispatched Tool Calls",
+            "type": "integer"
+          },
+          "dispatched_tool_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dispatched Tool Ids",
+            "type": "array"
+          },
+          "effective_setup": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EffectiveSetup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "embedding_deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Deployment Id"
+          },
+          "enabled_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Tools",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AgentEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "final_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Snapshot Id"
+          },
+          "finalization_phase": {
+            "anyOf": [
+              {
+                "const": "saving_changes",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalization Phase"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "framework_read_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Framework Read Paths",
+            "type": "array"
+          },
+          "generation_history": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationObservation"
+            },
+            "maxItems": 64,
+            "title": "Generation History",
+            "type": "array"
+          },
+          "generation_observation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationObservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "const": "deepagents",
+            "default": "deepagents",
+            "title": "Harness",
+            "type": "string"
+          },
+          "helper_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Helper Agent Ids",
+            "type": "array"
+          },
+          "helper_snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/FrozenHelperSelection"
+            },
+            "title": "Helper Snapshots",
+            "type": "array"
+          },
+          "host_shell": {
+            "$ref": "#/components/schemas/HostShellFacts"
+          },
+          "housekeeping_context": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextObservation"
+            },
+            "title": "Housekeeping Context",
+            "type": "object"
+          },
+          "housekeeping_generation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/GenerationObservation"
+            },
+            "title": "Housekeeping Generation",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Message Id"
+          },
+          "knowledge": {
+            "default": "none",
+            "enum": [
+              "none",
+              "application_owned"
+            ],
+            "title": "Knowledge",
+            "type": "string"
+          },
+          "memory_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Memory Version Refs",
+            "type": "array"
+          },
+          "outer_graph": {
+            "const": "deepagents-compiled-state-graph",
+            "default": "deepagents-compiled-state-graph",
+            "title": "Outer Graph",
+            "type": "string"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputSchemaRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "pending_interrupt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingInterrupt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pre_run_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pre Run Checkpoint Id"
+          },
+          "presented_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presented Tools",
+            "type": "array"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "project_outline": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Outline"
+          },
+          "project_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Path"
+          },
+          "protected_instruction_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Instruction Version Refs",
+            "type": "array"
+          },
+          "recorded_fixtures": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Recorded Fixtures",
+            "type": "array"
+          },
+          "recorded_is_not_live_proof": {
+            "default": false,
+            "title": "Recorded Is Not Live Proof",
+            "type": "boolean"
+          },
+          "related_files": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedFile"
+            },
+            "title": "Related Files",
+            "type": "array"
+          },
+          "requires_host_shell": {
+            "default": false,
+            "title": "Requires Host Shell",
+            "type": "boolean"
+          },
+          "requires_project": {
+            "default": false,
+            "title": "Requires Project",
+            "type": "boolean"
+          },
+          "resume_checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Checkpoint Id"
+          },
+          "retained_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Retained Asset Ids",
+            "type": "array"
+          },
+          "retrieval_project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieval Project Paths",
+            "type": "array"
+          },
+          "retrieved_material": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Retrieved Material",
+            "type": "array"
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewConfiguration"
+          },
+          "review_observation": {
+            "$ref": "#/components/schemas/ReviewObservation"
+          },
+          "settled_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "completed",
+                  "failed",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled Status"
+          },
+          "settled_stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled Stop Reason"
+          },
+          "skill_version_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Version Refs",
+            "type": "array"
+          },
+          "source_surface": {
+            "default": "agent-run",
+            "enum": [
+              "agent-run",
+              "chat",
+              "lab"
+            ],
+            "title": "Source Surface",
+            "type": "string"
+          },
+          "starting_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Snapshot Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunLifecycleStatus",
+            "default": "queued"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Reason"
+          },
+          "structured_output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StructuredOutputResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
+          },
+          "tool_authorization_grants": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MatchedPermissionGrant"
+            },
+            "title": "Tool Authorization Grants",
+            "type": "object"
+          },
+          "tool_authorizations": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Tool Authorizations",
+            "type": "object"
+          },
+          "tool_invocations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tool Invocations",
+            "type": "array"
+          },
+          "tool_mode": {
+            "$ref": "#/components/schemas/ToolMode",
+            "default": "live-tool"
+          },
+          "tool_mode_label": {
+            "default": "live-tool",
+            "title": "Tool Mode Label",
+            "type": "string"
+          },
+          "tool_outcomes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ToolOutcome"
+            },
+            "title": "Tool Outcomes",
+            "type": "object"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "work_mode": {
+            "default": "work",
+            "enum": [
+              "work",
+              "plan"
+            ],
+            "title": "Work Mode",
+            "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "deployment_id",
+          "task",
+          "enabled_tools",
+          "presented_tools",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentRunOperational",
+        "type": "object"
+      },
       "AgentSetupCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3250,7 +4043,7 @@
           "current_run": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AgentRun"
+                "$ref": "#/components/schemas/AgentRunOperational"
               },
               {
                 "type": "null"
@@ -9574,6 +10367,18 @@
             "title": "Presented Tools",
             "type": "array"
           },
+          "privacy_fingerprint": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Privacy Fingerprint"
+          },
           "purpose": {
             "default": "work",
             "enum": [
@@ -13591,7 +14396,7 @@
           "run": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/AgentRun"
+                "$ref": "#/components/schemas/AgentRunOperational"
               },
               {
                 "type": "null"
@@ -13863,16 +14668,56 @@
     "/v1/agent-runs": {
       "get": {
         "operationId": "list_agent_runs_v1_agent_runs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "diagnostic",
+              "enum": [
+                "diagnostic",
+                "operational"
+              ],
+              "title": "View",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/components/schemas/AgentRun"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "items": {
+                        "$ref": "#/components/schemas/AgentRunOperational"
+                      },
+                      "type": "array"
+                    }
+                  ],
                   "title": "Response List Agent Runs V1 Agent Runs Get"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List Agent Runs"
@@ -13926,6 +14771,20 @@
               "title": "Run Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "diagnostic",
+              "enum": [
+                "diagnostic",
+                "operational"
+              ],
+              "title": "View",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -13933,6 +14792,14 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentRun"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AgentRunOperational"
+                    }
+                  ],
                   "title": "Response Get Agent Run V1 Agent Runs  Run Id  Get"
                 }
               }

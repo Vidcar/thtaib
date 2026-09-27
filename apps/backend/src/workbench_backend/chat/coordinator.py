@@ -34,7 +34,7 @@ class ChatCoordinator:
             try:
                 with state.maintenance_gate.mutation():
                     if run_id is not None:
-                        run = state.harness.get_run(run_id)
+                        run = state.harness.get_run_operational(run_id)
                         for conversation in state.chat.store.list_conversations(include_archived=True):
                             if run.id in conversation.run_ids and conversation.current_run_id == run.id:
                                 state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)

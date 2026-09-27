@@ -98,7 +98,7 @@ class EffectService:
             found = self._run_lookup(run_id)
             if found is not None:
                 return found
-        return self.store.get_run(run_id)
+        return self.store.get_run_lifecycle(run_id)
 
     def _recovery_note_for_linked_run(self, run: AgentRun) -> str:
         status = RunLifecycleStatus(run.status)

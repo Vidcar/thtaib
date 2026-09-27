@@ -87,7 +87,7 @@ class DependencyPreviewService:
                 if kind == "agent_setup" and setup.id == target_id:
                     add("agent_setup_version", version.id, version.name, effect="Retained saved version; removal prevents new starts from this agent.")
 
-        for run in self.store.list_runs():
+        for run in self.store.list_runs_operational():
             if not uses(run):
                 continue
             live = is_run_lifecycle_live(run.status)
@@ -111,7 +111,7 @@ class DependencyPreviewService:
             if configured or retained_selection:
                 future = not conversation.archived and configured and (kind not in {"connection", "credential"} or effective.presented_tools != [])
                 add("chat", conversation.id, conversation.title or conversation.area_label or "Conversation", future=future,
-                    live=bool(conversation.current_run_id and (run := self.store.get_run(conversation.current_run_id)) and is_run_lifecycle_live(run.status)),
+                    live=bool(conversation.current_run_id and (run := self.store.get_run_lifecycle(conversation.current_run_id, details=False)) and is_run_lifecycle_live(run.status)),
                     effect="Future turns need an updated selection; conversation history is retained." if future else "Earlier or inactive conversation selection is retained.")
             for item in conversation.queue:
                 config = {**effective.model_dump(), **(item.frozen_config or item.intended_config)}

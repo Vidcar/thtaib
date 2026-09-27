@@ -14,7 +14,7 @@ from langchain_core.tools import ToolException
 from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.assets.service import RetainedAssetService
 from workbench_backend.browser.routes import router
-from workbench_backend.browser.service import BrowserSessionService
+from workbench_backend.browser.service import BrowserOwner, BrowserSessionService
 from workbench_backend.chat.schemas import ChatConversation, ChatDraft
 from workbench_backend.errors import WorkbenchError, workbench_error_handler
 from workbench_backend.inference.ids import utc_now
@@ -86,7 +86,8 @@ class BrowserHttpBoundaries(unittest.TestCase):
             setup_overrides=SimpleNamespace(model_dump=lambda **_: {}), work_mode="work", presented_tools=[])
         app.state.assets = SimpleNamespace(session_for_thread=lambda ident: self.conversation if ident == "thread_browser" else None)
         app.state.setups = SimpleNamespace(resolve=lambda **_: SimpleNamespace(configuration=SimpleNamespace(presented_tools=[], work_mode="work")))
-        app.state.browser = SimpleNamespace(status=lambda _: {"thread_id": "thread_browser", "state": "closed",
+        app.state.browser = SimpleNamespace(resolve_owner=lambda ident: BrowserOwner(self.conversation if ident == "thread_browser" else None, None),
+            status=lambda _, **__: {"thread_id": "thread_browser", "state": "closed",
             "worker": {"supported": True, "installed": True, "chrome_available": True}})
         app.include_router(router)
         self.client = TestClient(app)

@@ -10,6 +10,7 @@ from workbench_backend.agents.structured import OutputSchemaRequest
 from workbench_backend.agents.setup_schemas import SetupConfiguration, InstructionLayer, FrozenHelperSelection, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
 
 from workbench_backend.agents.schemas import AgentRun, InterruptDecisionRequest
+from workbench_backend.state.run_views import AgentRunOperational
 
 # Re-export so Chat routes can accept the same HITL payload as agent-runs.
 ChatInterruptDecisionRequest = InterruptDecisionRequest
@@ -291,7 +292,7 @@ class ChatConversationView(ChatConversation):
         default="New conversation",
         description="Shared presentation title derived from the saved name or first nonempty user message; does not change the authored title.",
     )
-    current_run: AgentRun | None = None
+    current_run: AgentRunOperational | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     pending_cancel_input_ids: list[str] = Field(default_factory=list)
     continuity: ChatContinuity | None = None

@@ -76,7 +76,7 @@ class BrowserWorkerClient:
         manifest: dict[str, Any] | None = None
         while asyncio.get_running_loop().time() < deadline:
             try:
-                manifest = json.loads(self._manifest.read_text(encoding="utf-8"))
+                manifest = json.loads(await asyncio.to_thread(self._manifest.read_text, encoding="utf-8"))
                 break
             except (OSError, ValueError):
                 await asyncio.sleep(.025)
@@ -175,6 +175,6 @@ class BrowserWorkerClient:
             finally:
                 stopped = await asyncio.to_thread(self._job.stop) if self._job is not None else True
                 self._job = None
-                self._manifest.unlink(missing_ok=True)
+                await asyncio.to_thread(self._manifest.unlink, missing_ok=True)
                 if not stopped:
                     raise HarnessError("Chrome's complete process tree could not be confirmed stopped.", code="browser_stop_unconfirmed", status_code=409)

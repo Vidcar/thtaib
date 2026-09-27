@@ -135,7 +135,10 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(start.status_code, 200, start.text)
             finished = wait_for_chat(self.client, chat['id'])
             self.assertEqual(finished['current_run']['status'], 'completed', finished['current_run'].get('error'))
-            self.assertIn(expected, str(finished['current_run']['model_requests'][-1]['messages']))
+            self.assertNotIn('model_requests', finished['current_run'])
+            diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={'view': 'diagnostic'})
+            self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
+            self.assertIn(expected, str(diagnostic.json()['model_requests'][-1]['messages']))
             self.assertEqual(finished['thread_id'], chat['thread_id'])
         scratch = harness_scratch_root(self.app.state.manager.paths, chat['thread_id'])
         (scratch / 'conversation_history' / 'keep.txt').write_text('framework history')
@@ -148,7 +151,10 @@ class SkillPackageTests(unittest.TestCase):
         self.assertFalse((scratch / 'skills' / slug).exists())
         self.assertTrue((scratch / 'conversation_history' / 'keep.txt').is_file())
         self.assertTrue((scratch / 'large_tool_results' / 'keep.txt').is_file())
-        self.assertNotIn(slug, finished['current_run']['model_requests'][-1]['instructions'])
+        self.assertNotIn('model_requests', finished['current_run'])
+        diagnostic = self.client.get(f'/v1/agent-runs/{finished["current_run_id"]}', params={'view': 'diagnostic'})
+        self.assertEqual(diagnostic.status_code, 200, diagnostic.text)
+        self.assertNotIn(slug, diagnostic.json()['model_requests'][-1]['instructions'])
 
     def test_memory_version_changes_explicitly_on_next_turn_and_can_be_deselected(self):
         reset_received_prompts()

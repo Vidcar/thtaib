@@ -34,6 +34,19 @@ def fields(value: Any, allowed: set[str], label: str) -> dict[str, Any]:
     return value
 
 
+def _copy_public_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Exclude legacy diagnostic fields before copying a public observation."""
+    source = dict(snapshot)
+    if isinstance(snapshot.get("workbench"), dict):
+        workbench = dict(snapshot["workbench"])
+        run = workbench.get("run")
+        if isinstance(run, dict):
+            workbench["run"] = {key: value for key, value in run.items()
+                                if key != "model_requests"}
+        source["workbench"] = workbench
+    return copy.deepcopy(source)
+
+
 class InteractionService:
     def __init__(self, store: Any, harness: Any, chat: Any) -> None:
         self.store = store
@@ -57,14 +70,13 @@ class InteractionService:
 
     @staticmethod
     def _stored_run(run: AgentRun) -> dict[str, Any]:
-        data = run.model_dump(mode="json")
+        data = run.model_dump(mode="json", exclude={"model_requests"})
         # Captured model context keeps its existing redaction/expiry owner.
         # Never create non-expiring copies in the protocol replay log.
-        data["model_requests"] = []
         return data
 
     def display_values(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        result = copy.deepcopy(snapshot)
+        result = _copy_public_snapshot(snapshot)
         workbench = result.get("workbench", {})
         # A values frame and its cursor are one observation. Substituting the
         # latest run here can mark an earlier, incomplete transcript completed
@@ -108,7 +120,7 @@ class InteractionService:
                 self.observe(view.current_run, None)
         elif surface == "agent" and not body.get("conversation_id"):
             if body.get("run_id"):
-                run = self.harness.get_run(body["run_id"])
+                run = self.harness.get_run_operational(body["run_id"])
                 graph_id = run.thread_id or run.id
                 prior = self.store.interaction_for_graph(graph_id)
                 if prior:
@@ -175,7 +187,7 @@ class InteractionService:
             binding = self.store.get_interaction(binding["id"]) or binding
             if binding.get("surface") != "chat" or view.history_replaced:
                 return
-            snapshot = copy.deepcopy(binding["snapshot"])
+            snapshot = _copy_public_snapshot(binding["snapshot"])
             workbench = snapshot.get("workbench", {})
             if (workbench.get("archive_seed_version") == 2 or
                     workbench.get("display_cutover_seq") or workbench.get("display_hidden_run_id") or
@@ -184,7 +196,7 @@ class InteractionService:
             messages = self._repaired_archive(view, snapshot.get("messages", []))
             if messages is None:
                 return
-            repaired = copy.deepcopy(snapshot)
+            repaired = _copy_public_snapshot(snapshot)
             repaired["messages"] = messages
             repaired.setdefault("workbench", {})["archive_seed_version"] = 2
             self.store.append_interaction(binding["id"], [event("values", repaired)], snapshot=repaired,
@@ -310,7 +322,7 @@ class InteractionService:
             binding = self.store.get_interaction(view.id)
             if binding is None:
                 return
-            snapshot = copy.deepcopy(binding["snapshot"])
+            snapshot = _copy_public_snapshot(binding["snapshot"])
             seeded = self._seed_chat(view)
             workbench = snapshot.setdefault("workbench", {})
             excluded = set(workbench.get("display_excluded_message_ids", []))
@@ -356,7 +368,7 @@ class InteractionService:
             if telemetry and is_run_lifecycle_live(run.status) and self._speed_only(binding["snapshot"], run):
                 self._observe_measurement(binding, run)
                 return
-            snapshot = copy.deepcopy(binding["snapshot"])
+            snapshot = _copy_public_snapshot(binding["snapshot"])
             outgoing = []
             previous = snapshot.get("workbench", {}).get("run") or {}
             snapshot.setdefault("workbench", {}).update({"run": self._stored_run(run), "conversation_id": binding["conversation_id"]})
@@ -430,7 +442,7 @@ class InteractionService:
         def editable() -> dict[str, Any]:
             nonlocal snapshot
             if snapshot is None:
-                snapshot = copy.deepcopy(stored)
+                snapshot = _copy_public_snapshot(stored)
             return snapshot
 
         if raw.get("method") == "tools":
@@ -554,7 +566,8 @@ class InteractionService:
         """Publish counts and speed without copying the transcript or replaying tokens."""
         stored = binding["snapshot"]
         workbench = dict(stored.get("workbench") or {})
-        patched = dict(workbench.get("run") or {})
+        patched = {key: value for key, value in (workbench.get("run") or {}).items()
+                   if key != "model_requests"}
         observation = run.generation_observation.model_dump(mode="json") if run.generation_observation else None
         patched["generation_observation"] = observation
         # The harness refreshes this bounded list only at model boundaries.
@@ -600,7 +613,7 @@ class InteractionService:
         self.state(thread_id)
         with self._projection_lock:
             binding = self.binding(thread_id)
-            snapshot = copy.deepcopy(binding["snapshot"])
+            snapshot = _copy_public_snapshot(binding["snapshot"])
             unavailable = historical or self.store.interaction_history_unavailable(thread_id)
             snapshot.setdefault("workbench", {})["recovery"] = (
                 {"kind": "history_unavailable",
@@ -618,7 +631,8 @@ class InteractionService:
 
     @staticmethod
     def _lifecycle(run: AgentRun) -> str:
-        return InteractionService._lifecycle_dict(run.model_dump(mode="json"))
+        return InteractionService._lifecycle_dict(
+            run.model_dump(mode="json", include={"status", "pending_interrupt"}))
 
     @staticmethod
     def _lifecycle_dict(run: dict[str, Any]) -> str:
@@ -648,7 +662,7 @@ class InteractionService:
             # Retain the run owner's lock until reconciliation publishes, so
             # a delayed read cannot overwrite a newer completed worker state.
             with self.harness.run_read_lock(binding["run_id"]):
-                current = self.harness.get_run(binding["run_id"])
+                current = self.harness.get_run_operational(binding["run_id"])
                 with self._projection_lock:
                     binding = self.binding(thread_id)
                     saved_interrupts = self._saved_interrupts(current)
@@ -664,7 +678,7 @@ class InteractionService:
             # Completion is allowed to compact the log as soon as we release
             # this lock; assembling the retained copy needs no execution lock.
             binding = self.binding(thread_id)
-            snapshot = copy.deepcopy(binding["snapshot"])
+            snapshot = _copy_public_snapshot(binding["snapshot"])
             seq = binding["seq"]
             started = snapshot.get("workbench", {}).get("run_started_seq", 0)
             if not isinstance(started, int):
@@ -813,7 +827,7 @@ class InteractionService:
             raise invalid("Invalid user message identity.")
         if any(m.get("id") == ident for m in binding["snapshot"].get("messages", [])):
             raise invalid("This input was already submitted.", "duplicate_input", 409)
-        if binding["run_id"] and is_run_lifecycle_live(self.harness.get_run(binding["run_id"]).status):
+        if binding["run_id"] and is_run_lifecycle_live(self.harness.get_run_operational(binding["run_id"]).status):
             raise invalid("Wait for the current run to finish or cancel it.", "run_active", 409)
         content = message.get("content")
         if not isinstance(content, (str, list)):

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from workbench_backend.agents.schemas import AgentRun
+from workbench_backend.state.run_views import AgentRunOperational
 
 
 class InteractionRecovery(BaseModel):
@@ -31,7 +31,7 @@ class WorkbenchInteractionMetadata(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    run: AgentRun | None = None
+    run: AgentRunOperational | None = None
     conversation_id: str | None = None
     incomplete_message_ids: list[str] = Field(default_factory=list)
     tool_origins: list[InteractionToolOrigin] = Field(default_factory=list)

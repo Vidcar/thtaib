@@ -81,7 +81,7 @@ class ChatBranches:
                 if request.mode == "regenerate"
                 else self._checkpoint(conversation, run, request.mode)
             )
-            source_run = run if request.mode in {"continue", "regenerate"} or index == 0 else chat.harness.get_run(conversation.run_ids[index - 1])
+            source_run = run if request.mode in {"continue", "regenerate"} or index == 0 else chat.harness.get_run_operational(conversation.run_ids[index - 1])
             branch = conversation.model_copy(deep=True)
             branch.id = new_id("chat")
             branch.thread_id = new_id("thread")
@@ -194,7 +194,7 @@ class ChatBranches:
             return chat._view(saved)
 
     def _find_existing_regeneration_run(self, source_run_id: str, branch_thread_id: str):
-        for candidate in self.chat.harness.list_runs():
+        for candidate in self.chat.harness.list_runs_operational():
             if (
                 candidate.source_surface == "chat"
                 and candidate.parent_run_id == source_run_id
@@ -209,7 +209,7 @@ class ChatBranches:
         if run_id not in conversation.run_ids:
             raise ChatError("This reply does not belong to the conversation.", code="branch_source_missing", status_code=404)
 
-        return conversation, self.chat.harness.get_run(run_id)
+        return conversation, self.chat.harness.get_run_operational(run_id)
 
     def _checkpoint(self, conversation, run, mode):
         selected = run
@@ -217,7 +217,7 @@ class ChatBranches:
             index = conversation.run_ids.index(run.id)
             if index == 0:
                 return None
-            selected = self.chat.harness.get_run(conversation.run_ids[index - 1])
+            selected = self.chat.harness.get_run_operational(conversation.run_ids[index - 1])
         retained = set(selected.checkpoint_ids)
         # Application linkage is an unordered set. Saver history is newest-first.
         for saved in checkpoint_history(self.chat.manager.paths.checkpoints_db, {"configurable": {"thread_id": selected.thread_id, "checkpoint_ns": ""}}):
@@ -229,7 +229,7 @@ class ChatBranches:
 
     def _reason(self, conversation, run, mode):
         if conversation.current_run_id:
-            current = self.chat.harness.get_run(conversation.current_run_id)
+            current = self.chat.harness.get_run_operational(conversation.current_run_id)
             if is_run_lifecycle_live(current.status):
                 return "Wait for the active turn to stop before branching."
 
@@ -246,7 +246,7 @@ class ChatBranches:
             return "This reply's retained checkpoint is unavailable."
 
         if mode != "continue" and conversation.run_ids.index(run.id) > 0:
-            previous = self.chat.harness.get_run(conversation.run_ids[conversation.run_ids.index(run.id) - 1])
+            previous = self.chat.harness.get_run_operational(conversation.run_ids[conversation.run_ids.index(run.id) - 1])
             if previous.status != "completed":
                 return "The preceding turn has no completed boundary safe to retry from."
 

@@ -983,7 +983,7 @@ class HarnessApiTests(unittest.TestCase):
         with harness._lock:
             harness._runs[run.id] = run
             harness.store.put_run(run)
-        original_put = harness.store.put_run
+        original_put = harness.store.put_execution_run
         failed = False
 
         def fail_terminal_once(record):
@@ -993,7 +993,7 @@ class HarnessApiTests(unittest.TestCase):
                 raise OSError("temporary terminal persistence failure")
             return original_put(record)
 
-        with patch.object(harness.store, "put_run", side_effect=fail_terminal_once):
+        with patch.object(harness.store, "put_execution_run", side_effect=fail_terminal_once):
             with self.assertRaisesRegex(OSError, "temporary terminal persistence failure"):
                 harness._finish(run, AgentRunStatus.completed, "completed")
         saved = harness.store.get_run(run.id)
@@ -1030,7 +1030,7 @@ class HarnessApiTests(unittest.TestCase):
         b = self._start(task="hold B", project_path=str(project), presented_tools=[])
         try:
             self.assertTrue(entered.wait(timeout=10), "B never entered generation")
-            original_put = harness.store.put_run
+            original_put = harness.store.put_execution_run
             failed_tasks: set[str] = set()
             failure_seen = threading.Event()
 
@@ -1041,7 +1041,7 @@ class HarnessApiTests(unittest.TestCase):
                     raise OSError("injected terminal write failure")
                 return original_put(record)
 
-            with patch.object(harness.store, "put_run", side_effect=fail_once):
+            with patch.object(harness.store, "put_execution_run", side_effect=fail_once):
                 for task, path in (("settle A with project", str(other_project)), ("settle A without project", None)):
                     failure_seen.clear()
                     a = self._start(task=task, project_path=path, presented_tools=[])
@@ -1072,10 +1072,11 @@ class HarnessApiTests(unittest.TestCase):
             raise OSError("injected display failure")
 
         harness._interaction_observer = fail_observer
-        with patch.object(harness.store, "get_run", side_effect=OSError("injected follow-up read failure")):
+        with patch.object(harness.store, "get_execution_run", side_effect=OSError("injected follow-up read failure")) as followup:
             with self.assertRaisesRegex(OSError, "injected display failure"):
                 with harness._lock:
                     harness._commit_terminal_run(run, AgentRunStatus.completed, "completed")
+            followup.assert_called_once_with(run.id)
         harness._interaction_observer = None
         recovered = harness.get_run(run.id)
         self.assertEqual(recovered.status, AgentRunStatus.completed)

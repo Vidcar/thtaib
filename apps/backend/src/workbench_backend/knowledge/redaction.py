@@ -13,6 +13,9 @@ from typing import Any
 
 from workbench_backend.knowledge.schemas import RedactionMode
 
+# Increment when detector behavior changes beyond the patterns below.
+DETECTOR_VERSION = 1
+
 SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("api_key", re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)([^\s\"']+)")),
     ("secret", re.compile(r"(?i)((?<!redact_)secret(?:_value)?\s*[=:]\s*)([^\s\"']+)")),
