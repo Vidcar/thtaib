@@ -12,4 +12,4 @@
 ## 3. Validate and deliver
 
 - [x] 3.1 Run the complete desktop build, OpenSpec validation and diff checks; verify live reasoning/tool/answer transitions in an isolated chat without altering everyday work.
-- [ ] 3.2 Archive the implemented change, refresh HANDOVER.md, commit/push/merge the validated PR and update the established desktop; verify delivered Git state and rebuilt renderer.
+- [x] 3.2 Archive the implemented change, refresh HANDOVER.md, commit/push/merge the validated PR and update the established desktop; verify delivered Git state and rebuilt renderer.
