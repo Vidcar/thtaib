@@ -1,6 +1,6 @@
 # Current handover
 
-Updated 2026-09-27. Dave's documentation review is complete: all nine main OpenSpec capabilities and five formerly active changes were checked against current source, tests and delivered changes. This is a documentation-only delivery; no application, deployment or product data was changed.
+Updated 2026-09-27. Dave's documentation review is complete in [PR181](https://github.com/Vidcar/thtaib/pull/181): all nine main OpenSpec capabilities and five formerly active changes were checked against current source, tests and delivered changes. This is a documentation-only delivery; no application, deployment or product data was changed.
 
 Completed: archived the already-synced `rewrite-loaded-boundaries` and `chat-stream-follow`; restored two missing archived Models delta files; retired obsolete warming and duplicate Lab/consolidation deltas; corrected the duplicate Models requirement ID and stale packet/connection/prerequisite wording. Main specs now distinguish accepted targets from delivered features. Skill import, document reading and current Connections/public web are marked delivered. Lab planning is tracked rather than left uncommitted.
 
