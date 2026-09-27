@@ -204,7 +204,9 @@ def run_windows_command(command: str, *, cwd: Path, env: dict[str, str], timeout
                     code="shell_stop_unconfirmed", status_code=409)
             stdout_file.seek(0)
             stderr_file.seek(0)
-            encoding = locale.getpreferredencoding(False)
+            # Host commands retain their Windows locale even when the backend
+            # enables UTF-8 for native JSON/text protocols.
+            encoding = locale.getencoding()
             stdout = stdout_file.read().decode(encoding, errors="replace")
             stderr = stderr_file.read().decode(encoding, errors="replace")
             if code == 124:
