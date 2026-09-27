@@ -1,6 +1,6 @@
 # Tasks
 
-The completed work was reconciled with the later [Deep Agents simplification](../archive/2026-09-24-upgrade-deepagents-simplify-workbench/tasks.md). Custom rename/delete, the Changes page, and per-edit counts were subsequently retired; the checked tasks below describe the behavior that remains.
+The completed work was reconciled with the later [Deep Agents simplification](../2026-09-24-upgrade-deepagents-simplify-workbench/tasks.md). Custom rename/delete, the Changes page, and per-edit counts were subsequently retired; the checked tasks below describe the behavior that remains.
 
 ## 1. Harness catalogue
 

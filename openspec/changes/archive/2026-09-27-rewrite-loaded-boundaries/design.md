@@ -2,7 +2,7 @@
 
 ## Context
 
-This change originally established a loaded editor and tree, a docked Chat rail, native file tools, and projected planning and tool activity. It was drafted against Deep Agents 0.7.15. The later [Deep Agents simplification](../archive/2026-09-24-upgrade-deepagents-simplify-workbench/design.md) upgraded the integration to 0.7.18 and retired the Changes page, per-edit capture/reverse, custom rename/delete, and activity counts derived from file differences. The deltas in this active change now reflect that current contract.
+This change originally established a loaded editor and tree, a docked Chat rail, native file tools, and projected planning and tool activity. It was drafted against Deep Agents 0.7.15. The later [Deep Agents simplification](../2026-09-24-upgrade-deepagents-simplify-workbench/design.md) upgraded the integration to 0.7.18 and retired the Changes page, per-edit capture/reverse, custom rename/delete, and activity counts derived from file differences. The deltas in this active change now reflect that current contract.
 
 ## Goals and boundaries
 

@@ -1,6 +1,6 @@
 # Local AI Workbench
 
-The Windows-first desktop for **thtaib**, a local-first AI workspace for using and understanding models, Chat, Lab and Workflows. **Agent run / Builder** are existing UI terms for Workflows; the desktop name remains Local AI Workbench. Current product contracts and future changes use [OpenSpec](openspec/).
+The Windows-first desktop for **thtaib**, a local-first AI workspace for using and understanding models, Chat, Lab and Workflows. **Agent run / Builder** are existing UI terms for Workflows; the desktop name remains Local AI Workbench. Current product contracts and future changes use [OpenSpec](openspec/). Contracts include intended capabilities; the presence of a requirement does not prove a feature is built. Remaining implementation is recorded in active change tasks: [Lab](openspec/changes/lab-workbench/tasks.md), [Workflows and media](openspec/changes/consolidate-product-contract/tasks.md), and [catalogue failure recovery](openspec/changes/startup-catalogue/tasks.md).
 
 ## Use the local product
 

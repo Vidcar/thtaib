@@ -1,30 +1,28 @@
+# Design
+
 ## Context
 
-Health is ready in seconds. The window then asks for every chat together with every project, and each chat list loads full runs. Finished chats also keep every token in `interaction_events` (about 743 MB across the current scratch chats). Opening one of those chats can read that log. The lower-left dot turns green when the service answers, which is before the lists or the model are ready.
+Project and chat catalogue reads are already small and independent. Finished chats use saved transcripts and snapshots, while live turns retain their raw events until terminal display publication. Startup token maintenance waits for a catalogue request. The remaining gap is in `WorkbenchSidebar`: after thirty failed reads it marks a list loaded, so empty-list copy and ready status can appear without a successful request.
 
-## Goals
+## Goals / Non-Goals
 
-- Projects and chats appear from small reads, without an empty-state lie.
-- One dot, one hover phrase.
-- Warm one managed model after the lists are requested.
-- A saved answer does not keep its token log. Live turns still do.
-
-## Non-goals
-
-- Deleting chats or projects as part of the product change. Validation may use the scratch data.
-- Changing archive or remove-project into deletion.
-- Warming more than one model, or starting a connected endpoint.
-- A new status panel.
+Finish truthful initial-list recovery while retaining the delivered fast catalogue and token-compaction paths. This change does not warm models, delete chats, or introduce another catalogue or status authority.
 
 ## Decisions
 
-- The chat list used by the sidebar omits transcripts, run bodies, and request logs. Opening one chat still reads that chat. A finished chat does not load its run body.
-- Attention reads run status. It loads a run body only for a live or failed run.
-- Startup catch-up, token collapse, and the database shrink start after the first catalogue request, not before health.
-- Token rows stay until the answer is saved, because a live subscriber follows their sequence. When the answer is saved, those rows and older snapshots are deleted. The latest snapshot and the checkpoint remain. Deleting a snapshot while the reply is still running would leave a gap in that sequence.
-- The desktop warms a model only in the real app, through the existing deployment start.
+- Each list owns its first-success state. Failure keeps it unresolved, retries with bounded backoff, and remains visible through the existing status/error treatment. A success for the other list must not erase the unresolved list's failure.
+- A successful empty response is the only initial condition that permits empty-list copy. Unmount or a new list selection disposes the old retry owner; late results cannot mark the replacement ready.
+- Saved turn compaction retains ordered final messages, tools, lifecycle, namespace and partial outcomes. It starts only after terminal projection is durable and preserves active subscribers and prepared reconnect seeds. Archive and remove-project remain non-destructive.
+- The previous warming proposal was explicitly removed by the delivered model-residency change. Explicit selection, an authorized submitted turn or recovery of previously accepted queued work may load a model under their existing admission rules; passive launch cannot.
 
-## Risks
+## Risks / Trade-offs
 
-- Collapsing the existing log locks the database once after the lists have loaded. The lists themselves do not scan that log.
-- A test that expected every token to remain after a short finished turn is updated to the saved snapshot.
+A retry loop must be cancellable and use bounded backoff without blocking rendering. A fake-clock regression should cover failure beyond the former thirty attempts, later success, independent lists and disposal; it must not wait thirty real seconds.
+
+## Migration Plan
+
+No stored-data migration. Deliver the recovery regression and fix, verify the current desktop, then archive this change. Catalogue and token requirements have been reconciled with the current main specs; do not restore the retired `MODEL-WARM` delta.
+
+## Open Questions
+
+None.

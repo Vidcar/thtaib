@@ -4,6 +4,8 @@
 
 Specify how Chat, Agent-run, and Workflows use the embedded Deep Agents harness and LangGraph runtime while keeping active context, displayed history, configuration links, workflow sequencing, and durable knowledge distinct.
 
+Chat and named helpers are implemented. The visual workflow editor and its full registry-backed LangGraph execution remain outstanding in [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md); the existing Agent run panel is a task runner, not that workflow editor.
+
 ## Requirements
 
 ### Requirement: AGT-001 - Use the embedded harness

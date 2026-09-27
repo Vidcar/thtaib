@@ -4,6 +4,8 @@
 
 Specify how the one FastAPI backend coordinates APIs, records, jobs, approvals, events, and artifacts while the one Electron desktop presents them without becoming execution authority.
 
+The built desktop does not yet offer the planned Lab views or a visual workflow editor. Their delivery is tracked by [lab-workbench](../../changes/lab-workbench/tasks.md) and [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). Initial catalogue failure recovery remains open in [startup-catalogue](../../changes/startup-catalogue/tasks.md).
+
 ## Requirements
 
 ### Requirement: API-001 - Coordinate without replacing execution owners
@@ -92,13 +94,24 @@ Chat and current live-run consumers SHALL share a versioned upstream-compatible 
 
 ### Requirement: API-007 - Launch locally and keep desktop state honest
 
-The Windows launcher SHALL reuse a healthy product backend or start it hidden, then open the built Electron desktop. Chat SHALL keep the composer visible while transcript and history scroll independently. Recent conversations SHALL appear first. New Chat SHALL retain an explicit current Chat model choice. When no choice exists, it SHALL select the sole healthy running chat deployment; with several healthy running choices it SHALL request an explicit choice. It MUST NOT apply unrelated saved profiles. Stopped deployments MUST NOT gain healthy labels from stale probes.
+The Windows launcher SHALL reuse a healthy product backend or start it hidden, then open the built Electron desktop. The first screen SHALL request projects and chats independently. Each list SHALL be readable before either request finishes. A list that has not finished SHALL NOT be presented as empty. Failure to reach the service SHALL retry until the first success. Chat SHALL keep the composer visible while transcript and history scroll independently. Recent conversations SHALL appear first. New Chat SHALL retain an explicit current Chat model choice. When no choice exists, it SHALL select the sole healthy running chat deployment; with several healthy running choices it SHALL request an explicit choice. It MUST NOT apply unrelated saved profiles. Stopped deployments MUST NOT gain healthy labels from stale probes.
+
+The lower-left status dot is the only startup status. Its hover is one short phrase for reading the catalogue, starting the model, ready, or the service being unavailable. The visible word stays "Local" while the service is up, including while the rail is collapsed down to the dot.
+
+Opening a finished chat SHALL show its saved transcript and latest display snapshot. It MUST NOT scan that chat's token log. The chat list MUST NOT include transcripts, run bodies, or model-request logs.
 
 #### Scenario: Desktop launch and model state
 
 - WHEN the launcher opens the application and a stopped deployment has an old probe
 - THEN the desktop MUST present current backend state
-- AND catalogue loading MUST be explicit rather than shown as an empty catalogue.
+- AND catalogue loading MUST be explicit rather than shown as an empty catalogue
+- AND projects MAY appear before chats
+
+#### Scenario: Finished chat opens from the saved transcript
+
+- WHEN a person opens a chat whose answer is already saved
+- THEN the saved answer is shown
+- AND the token log is not read to paint it
 
 #### Scenario: New Chat with a running model
 
@@ -211,7 +224,7 @@ Adding a project SHALL ask for a name and one existing folder. It SHALL NOT choo
 
 Compact destinations SHALL stay in that same sidebar, including Settings, as their owning packets deliver functionality. Existing Agent run and its history SHALL remain accessible through the transition to Workflows. The conversation SHALL remain central with a visible composer. Files and previews open in the dock through API-023 and API-025. The conversation column stays visible while the dock is open, including when the dock is widened. Full and half-screen windows SHALL be normal supported layouts. On a narrow conversation column the dock stays a side column or closes before compromising ordinary conversation or composer use. A panel MUST NOT be painted over the transcript or the composer. Primary journeys MUST NOT require interpreting raw JSON, internal identifiers or backend terminology; technical details SHALL remain available on expansion.
 
-Light and dark themes SHALL follow Windows by default with a user override. Settings appearance SHALL expose one shared control for each visual role, including the settings surface itself. Roles cover the colour palette, the type scale, corner styles, inset, the space between items, line thickness, and layout sizes such as page width, reading width, message width, dialog width, side columns, and control height. Near-identical values SHALL share a control. Inset, the padding inside a surface, stays separate from the space between items. Those scales keep only the steps a person can tell apart: tight, row, card, section, and page insets, and tight, item, block, and section gaps. Reading text stays separate from interface text. The file editor text size and chat code size stay separate from both. Each numeric control SHALL offer a slider and a typeable value. The typeable value SHALL accept any valid measurement and SHALL NOT impose an upper bound chosen for an assumed screen size. Colour controls SHALL include transparency. Font weight, opacity, and colour-mix strength stay inside their valid ranges. Applying SHALL store overrides in appearance.json in the product data root. A draft SHALL be visible in the open window, including Settings, before it is applied. A separate preview window SHALL show a representative window of that draft, and the person SHALL be able to move and resize that window beside Settings. While a control is pointed at or changed, that preview SHALL mark the parts the control changes. Cancelling SHALL restore the last applied values. Resetting one row SHALL restore its shipped value. Media and container breakpoints, viewport-tied layout, and one-off positions stay fixed. Compact controls SHALL retain readable labels, accessible names, visible keyboard focus and usable click targets. Reduced motion SHALL be respected. Settings SHALL expose appearance, notifications, saved grants and manual backup/restore; connection management is added by Packet 04 using the same surface.
+Light and dark themes SHALL follow Windows by default with a user override. Settings appearance SHALL expose one shared control for each visual role, including the settings surface itself. Roles cover the colour palette, the type scale, corner styles, inset, the space between items, line thickness, and layout sizes such as page width, reading width, message width, dialog width, side columns, and control height. Near-identical values SHALL share a control. Inset, the padding inside a surface, stays separate from the space between items. Those scales keep only the steps a person can tell apart: tight, row, card, section, and page insets, and tight, item, block, and section gaps. Reading text stays separate from interface text. The file editor text size and chat code size stay separate from both. Each numeric control SHALL offer a slider and a typeable value. The typeable value SHALL accept any valid measurement and SHALL NOT impose an upper bound chosen for an assumed screen size. Colour controls SHALL include transparency. Font weight, opacity, and colour-mix strength stay inside their valid ranges. Applying SHALL store overrides in appearance.json in the product data root. A draft SHALL be visible in the open window, including Settings, before it is applied. A separate preview window SHALL show a representative window of that draft, and the person SHALL be able to move and resize that window beside Settings. While a control is pointed at or changed, that preview SHALL mark the parts the control changes. Cancelling SHALL restore the last applied values. Resetting one row SHALL restore its shipped value. Media and container breakpoints, viewport-tied layout, and one-off positions stay fixed. Compact controls SHALL retain readable labels, accessible names, visible keyboard focus and usable click targets. Reduced motion SHALL be respected. Settings SHALL expose appearance, notifications, saved grants and manual backup/restore; connection management is available in Settings through Connections using the same surface.
 
 #### Scenario: Appearance draft is visible before it is saved
 
@@ -395,9 +408,9 @@ Project waiting SHALL be distinct from a follow-up behind the same conversation.
 
 ### Requirement: API-020 - Separate technical verification from human UX acceptance
 
-Each affected packet SHALL demonstrate its end-to-end user journey in the built Windows application and record technical verification separately from Dave's UX acceptance in its existing design/PR. Reviews SHALL cover full and half-screen windows, actual Windows display scaling, keyboard navigation, long conversation/result content and at least one failure/recovery state. Screenshots alone MUST NOT count as interaction verification. Required technical/live checks SHALL remain required; UX acceptance SHALL remain pending until Dave accepts the built experience or explicitly defers review, with deferral recorded as deferred rather than accepted.
+Each affected change SHALL demonstrate its end-to-end user journey in the built Windows application and record technical verification separately from Dave's UX acceptance in its existing design/PR. Reviews SHALL cover full and half-screen windows, actual Windows display scaling, keyboard navigation, long conversation/result content and at least one failure/recovery state. Screenshots alone MUST NOT count as interaction verification. Required technical/live checks SHALL remain required; UX acceptance SHALL remain pending until Dave accepts the built experience or explicitly defers review, with deferral recorded as deferred rather than accepted.
 
-Packet 03 SHALL include an early Chat layout review after the basic arrangement is exercisable and before the remaining controls accumulate, including the existing Models-to-Chat journey. Packets 04, 05 and 07 SHALL include major everyday-workspace, Lab and Workflows reviews; 06 and 08 SHALL include focused activity/approval and media reviews. Lab and Workflows SHALL each require an approved detailed layout before substantial interface implementation. Specification approval MUST NOT be treated as visual acceptance of the built product.
+Chat layout changes SHALL include an early review after the basic arrangement is exercisable and before the remaining controls accumulate, including the existing Models-to-Chat journey. Everyday workspace, Lab and Workflows changes SHALL include major surface reviews; delegation/approval and media changes SHALL include focused reviews of those paths. Lab and Workflows SHALL each require an approved detailed layout before substantial interface implementation. Specification approval MUST NOT be treated as visual acceptance of the built product.
 
 #### Scenario: Technical checks pass before user review
 

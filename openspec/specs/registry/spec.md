@@ -4,6 +4,8 @@
 
 Specify one application-owned, versioned integration model for supported model, agent, tool, environment, adapter, and presentation definitions consumed by React Flow, LangChain, and LangGraph.
 
+The current tool catalogue and typed definition checks do not yet implement this full cross-integration registry. Its remaining workflow integration is tracked in [consolidate-product-contract](../../changes/consolidate-product-contract/tasks.md). These requirements are integration constraints, not a claim that every consumer is delivered.
+
 ## Requirements
 
 ### Requirement: REG-001 - Define identity, capabilities and execution together
