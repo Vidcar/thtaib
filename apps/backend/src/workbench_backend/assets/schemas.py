@@ -12,6 +12,7 @@ class RetainedAssetOrigin(str, Enum):
     upload = "upload"
     verified_output = "verified_output"
     capture = "capture"
+    browser_download = "browser_download"
 
 
 class RetainedAssetScope(str, Enum):
@@ -28,6 +29,7 @@ class AssetContentKind(str, Enum):
     code = "code"
     image = "image"
     document = "document"
+    binary = "binary"
 
 
 class ExtractedSection(BaseModel):

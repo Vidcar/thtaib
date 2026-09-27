@@ -365,6 +365,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/assets/{asset_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Asset */
+        get: operations["download_asset_v1_assets__asset_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/assets/{asset_id}/preview": {
         parameters: {
             query?: never;
@@ -451,6 +468,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/browser/sessions/{thread_id}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Browser Action */
+        post: operations["browser_action_v1_browser_sessions__thread_id__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/sessions/{thread_id}/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control Session */
+        post: operations["control_session_v1_browser_sessions__thread_id__control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/sessions/{thread_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Browser Events */
+        get: operations["browser_events_v1_browser_sessions__thread_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/browser/sessions/{thread_id}/reset": {
         parameters: {
             query?: never;
@@ -462,6 +530,23 @@ export interface paths {
         put?: never;
         /** Reset Session */
         post: operations["reset_session_v1_browser_sessions__thread_id__reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/browser/sessions/{thread_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Session */
+        post: operations["start_session_v1_browser_sessions__thread_id__start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2385,6 +2470,27 @@ export interface components {
              * @enum {string}
              */
             approval_mode: "ask" | "full_access";
+            /**
+             * Browser Control
+             * @default agent
+             * @enum {string}
+             */
+            browser_control: "agent" | "taking_control" | "user";
+            /** Browser Observation */
+            browser_observation?: string | null;
+            /** Browser Pause Dispatches */
+            browser_pause_dispatches?: {
+                [key: string]: number[];
+            };
+            /**
+             * Browser Revision
+             * @default 0
+             */
+            browser_revision: number;
+            /** Browser Tool Proposals */
+            browser_tool_proposals?: {
+                [key: string]: number;
+            };
             budgets?: components["schemas"]["AgentBudgets"] | null;
             /**
              * Capture Routes Enabled
@@ -2767,7 +2873,7 @@ export interface components {
          * AssetContentKind
          * @enum {string}
          */
-        AssetContentKind: "text" | "code" | "image" | "document";
+        AssetContentKind: "text" | "code" | "image" | "document" | "binary";
         /** AssetExtraction */
         AssetExtraction: {
             /** Note */
@@ -2782,6 +2888,145 @@ export interface components {
              * @enum {string}
              */
             status: "complete" | "no_text";
+        };
+        /** BrowserActionRequest */
+        BrowserActionRequest: {
+            /** Action */
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["SimpleAction"] | components["schemas"]["SelectTabAction"] | components["schemas"]["NewTabAction"] | components["schemas"]["ResizeAction"] | components["schemas"]["PointerAction"] | components["schemas"]["KeyAction"] | components["schemas"]["TextAction"] | components["schemas"]["DialogAction"] | components["schemas"]["UploadAction"];
+            /** Page Id */
+            page_id: string;
+            /** Revision */
+            revision: number;
+            /** Session Id */
+            session_id: string;
+        };
+        /** BrowserControlRequest */
+        BrowserControlRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "take" | "return";
+        };
+        /** BrowserDialog */
+        BrowserDialog: {
+            /**
+             * Default Value
+             * @default
+             */
+            default_value: string;
+            /** Message */
+            message: string;
+            /** Type */
+            type: string;
+        };
+        /** BrowserDownload */
+        BrowserDownload: {
+            /** Asset Id */
+            asset_id: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+        };
+        /** BrowserFileChooser */
+        BrowserFileChooser: {
+            /**
+             * Multiple
+             * @default false
+             */
+            multiple: boolean;
+        };
+        /** BrowserResetRequest */
+        BrowserResetRequest: {
+            /**
+             * Confirmed
+             * @constant
+             */
+            confirmed: true;
+        };
+        /** BrowserRuntimeStatus */
+        BrowserRuntimeStatus: {
+            /**
+             * Chrome Available
+             * @default false
+             */
+            chrome_available: boolean;
+            /** Chrome Version */
+            chrome_version?: string | null;
+            /** Installed */
+            installed: boolean;
+            /** Node Version */
+            node_version?: string | null;
+            /** Playwright Mcp Version */
+            playwright_mcp_version?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Supported */
+            supported: boolean;
+        };
+        /** BrowserSessionStatus */
+        BrowserSessionStatus: {
+            /** Active Page Id */
+            active_page_id?: string | null;
+            /**
+             * Control
+             * @default agent
+             * @enum {string}
+             */
+            control: "agent" | "taking_control" | "user";
+            dialog?: components["schemas"]["BrowserDialog"] | null;
+            /** Downloads */
+            downloads?: components["schemas"]["BrowserDownload"][];
+            /** Error */
+            error?: string | null;
+            file_chooser?: components["schemas"]["BrowserFileChooser"] | null;
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+            /** Session Id */
+            session_id?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "lost" | "closed";
+            /** Tabs */
+            tabs?: components["schemas"]["BrowserTab"][];
+            /** Thread Id */
+            thread_id: string;
+            viewport?: components["schemas"]["BrowserViewport"];
+            worker: components["schemas"]["BrowserRuntimeStatus"];
+        };
+        /** BrowserTab */
+        BrowserTab: {
+            /** Page Id */
+            page_id: string;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Url
+             * @default about:blank
+             */
+            url: string;
+        };
+        /** BrowserViewport */
+        BrowserViewport: {
+            /**
+             * Height
+             * @default 900
+             */
+            height: number;
+            /**
+             * Width
+             * @default 1440
+             */
+            width: number;
         };
         /** BundleConfigurationOptions */
         BundleConfigurationOptions: {
@@ -4143,6 +4388,18 @@ export interface components {
             /** Width */
             width: number;
         };
+        /** DialogAction */
+        DialogAction: {
+            /** Accept */
+            accept: boolean;
+            /** Prompt Text */
+            prompt_text?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "dialog";
+        };
         /**
          * EffectiveSetup
          * @description Inspectable selected / loaded / applied facts for one run.
@@ -4769,6 +5026,16 @@ export interface components {
             interrupt_id?: string | null;
             /** Namespace */
             namespace?: string[];
+        };
+        /** KeyAction */
+        KeyAction: {
+            /** Key */
+            key: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "key";
         };
         /** KnowledgeAutomaticPolicy */
         KnowledgeAutomaticPolicy: {
@@ -5461,6 +5728,26 @@ export interface components {
              */
             transport_attempted: boolean;
         };
+        /** NavigateAction */
+        NavigateAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "navigate";
+            /** Url */
+            url: string;
+        };
+        /** NewTabAction */
+        NewTabAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "new_tab";
+            /** Url */
+            url?: string | null;
+        };
         /**
          * OutputSchemaRequest
          * @description Caller-supplied JSON schema for one run.
@@ -5501,7 +5788,7 @@ export interface components {
              * @default windows_host_shell
              * @enum {string}
              */
-            environment: "windows_host_shell" | "tool_actions" | "user_input";
+            environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control";
             /** Interrupt Id */
             interrupt_id?: string | null;
             /**
@@ -5513,9 +5800,9 @@ export interface components {
             /**
              * Kind
              * @default deepagents_interrupt_on
-             * @constant
+             * @enum {string}
              */
-            kind: "deepagents_interrupt_on";
+            kind: "deepagents_interrupt_on" | "browser_control";
             /** Namespace */
             namespace?: string[];
             /**
@@ -5557,6 +5844,39 @@ export interface components {
              * @default false
              */
             stop_first: boolean;
+        };
+        /** PointerAction */
+        PointerAction: {
+            /**
+             * Button
+             * @default left
+             * @enum {string}
+             */
+            button: "left" | "middle" | "right";
+            /**
+             * Delta X
+             * @default 0
+             */
+            delta_x: number;
+            /**
+             * Delta Y
+             * @default 0
+             */
+            delta_y: number;
+            /**
+             * Event
+             * @enum {string}
+             */
+            event: "move" | "down" | "up" | "click" | "wheel";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "pointer";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
         };
         /**
          * ProcessIdentity
@@ -5742,6 +6062,24 @@ export interface components {
         RenameProfileRequest: {
             /** Display Name */
             display_name: string;
+        };
+        /** ResizeAction */
+        ResizeAction: {
+            /**
+             * Height
+             * @default 900
+             */
+            height: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "resize";
+            /**
+             * Width
+             * @default 1440
+             */
+            width: number;
         };
         /** ResolvedSetting */
         ResolvedSetting: {
@@ -6021,7 +6359,7 @@ export interface components {
          * RetainedAssetOrigin
          * @enum {string}
          */
-        RetainedAssetOrigin: "upload" | "verified_output" | "capture";
+        RetainedAssetOrigin: "upload" | "verified_output" | "capture" | "browser_download";
         /** RetainedAssetPreview */
         RetainedAssetPreview: {
             /** Content Type */
@@ -6323,6 +6661,16 @@ export interface components {
              */
             automatic_agent_writes: boolean;
         };
+        /** SelectTabAction */
+        SelectTabAction: {
+            /** Page Id */
+            page_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "close_tab" | "select_tab";
+        };
         /**
          * ServerProperties
          * @description What llama-server's ``GET /props`` reported once the deployment was healthy.
@@ -6487,6 +6835,14 @@ export interface components {
             overrides?: components["schemas"]["SetupConfiguration"];
             /** Project Id */
             project_id?: string | null;
+        };
+        /** SimpleAction */
+        SimpleAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "back" | "forward" | "reload";
         };
         /** SkillPackageImportRequest */
         SkillPackageImportRequest: {
@@ -6737,6 +7093,16 @@ export interface components {
             /** Review Prompt */
             review_prompt?: string | null;
         };
+        /** TextAction */
+        TextAction: {
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "text";
+        };
         /** TextContentBlock */
         TextContentBlock: {
             /** Text */
@@ -6785,6 +7151,18 @@ export interface components {
             };
             /** Updated At */
             updated_at: string;
+        };
+        /** UploadAction */
+        UploadAction: {
+            /** Asset Ids */
+            asset_ids?: string[];
+            /** Project Paths */
+            project_paths?: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "upload";
         };
         /** UserOverrideRequest */
         UserOverrideRequest: {
@@ -6858,6 +7236,16 @@ export type SchemaAgentSetupView = components['schemas']['AgentSetupView'];
 export type SchemaAgentStartRequest = components['schemas']['AgentStartRequest'];
 export type SchemaAssetContentKind = components['schemas']['AssetContentKind'];
 export type SchemaAssetExtraction = components['schemas']['AssetExtraction'];
+export type SchemaBrowserActionRequest = components['schemas']['BrowserActionRequest'];
+export type SchemaBrowserControlRequest = components['schemas']['BrowserControlRequest'];
+export type SchemaBrowserDialog = components['schemas']['BrowserDialog'];
+export type SchemaBrowserDownload = components['schemas']['BrowserDownload'];
+export type SchemaBrowserFileChooser = components['schemas']['BrowserFileChooser'];
+export type SchemaBrowserResetRequest = components['schemas']['BrowserResetRequest'];
+export type SchemaBrowserRuntimeStatus = components['schemas']['BrowserRuntimeStatus'];
+export type SchemaBrowserSessionStatus = components['schemas']['BrowserSessionStatus'];
+export type SchemaBrowserTab = components['schemas']['BrowserTab'];
+export type SchemaBrowserViewport = components['schemas']['BrowserViewport'];
 export type SchemaBundleConfigurationOptions = components['schemas']['BundleConfigurationOptions'];
 export type SchemaBundleFile = components['schemas']['BundleFile'];
 export type SchemaBundleProjectors = components['schemas']['BundleProjectors'];
@@ -6911,6 +7299,7 @@ export type SchemaDesktopRuntimeStatus = components['schemas']['DesktopRuntimeSt
 export type SchemaDesktopScopeRequest = components['schemas']['DesktopScopeRequest'];
 export type SchemaDesktopScopeView = components['schemas']['DesktopScopeView'];
 export type SchemaDesktopWindowView = components['schemas']['DesktopWindowView'];
+export type SchemaDialogAction = components['schemas']['DialogAction'];
 export type SchemaEffectiveSetup = components['schemas']['EffectiveSetup'];
 export type SchemaExtractedSection = components['schemas']['ExtractedSection'];
 export type SchemaFileRole = components['schemas']['FileRole'];
@@ -6943,6 +7332,7 @@ export type SchemaInteractionRegistration = components['schemas']['InteractionRe
 export type SchemaInteractionToolOrigin = components['schemas']['InteractionToolOrigin'];
 export type SchemaInterruptDecision = components['schemas']['InterruptDecision'];
 export type SchemaInterruptDecisionRequest = components['schemas']['InterruptDecisionRequest'];
+export type SchemaKeyAction = components['schemas']['KeyAction'];
 export type SchemaKnowledgeAutomaticPolicy = components['schemas']['KnowledgeAutomaticPolicy'];
 export type SchemaKnowledgeConfig = components['schemas']['KnowledgeConfig'];
 export type SchemaKnowledgeConfigUpdateRequest = components['schemas']['KnowledgeConfigUpdateRequest'];
@@ -6971,10 +7361,13 @@ export type SchemaModelCardResponse = components['schemas']['ModelCardResponse']
 export type SchemaModelConfigurationWriteRequest = components['schemas']['ModelConfigurationWriteRequest'];
 export type SchemaModelJudgement = components['schemas']['ModelJudgement'];
 export type SchemaModelRequestCapture = components['schemas']['ModelRequestCapture'];
+export type SchemaNavigateAction = components['schemas']['NavigateAction'];
+export type SchemaNewTabAction = components['schemas']['NewTabAction'];
 export type SchemaOutputSchemaRequest = components['schemas']['OutputSchemaRequest'];
 export type SchemaPendingInterrupt = components['schemas']['PendingInterrupt'];
 export type SchemaPendingInterruptAction = components['schemas']['PendingInterruptAction'];
 export type SchemaPinRuntimeRequest = components['schemas']['PinRuntimeRequest'];
+export type SchemaPointerAction = components['schemas']['PointerAction'];
 export type SchemaProcessIdentity = components['schemas']['ProcessIdentity'];
 export type SchemaProfileWriteRequest = components['schemas']['ProfileWriteRequest'];
 export type SchemaProjectCreateRequest = components['schemas']['ProjectCreateRequest'];
@@ -6988,6 +7381,7 @@ export type SchemaProjectorSelectionRequest = components['schemas']['ProjectorSe
 export type SchemaReconfigureDeploymentRequest = components['schemas']['ReconfigureDeploymentRequest'];
 export type SchemaRelatedFile = components['schemas']['RelatedFile'];
 export type SchemaRenameProfileRequest = components['schemas']['RenameProfileRequest'];
+export type SchemaResizeAction = components['schemas']['ResizeAction'];
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
@@ -7016,6 +7410,7 @@ export type SchemaRuntimeControlDescriptor = components['schemas']['RuntimeContr
 export type SchemaRuntimeControlOption = components['schemas']['RuntimeControlOption'];
 export type SchemaRuntimeManifest = components['schemas']['RuntimeManifest'];
 export type SchemaScopeWritePolicy = components['schemas']['ScopeWritePolicy'];
+export type SchemaSelectTabAction = components['schemas']['SelectTabAction'];
 export type SchemaServerProperties = components['schemas']['ServerProperties'];
 export type SchemaSettingNote = components['schemas']['SettingNote'];
 export type SchemaSettingsBag = components['schemas']['SettingsBag'];
@@ -7024,6 +7419,7 @@ export type SchemaSettingsPreviewRequest = components['schemas']['SettingsPrevie
 export type SchemaSetupConfiguration = components['schemas']['SetupConfiguration'];
 export type SchemaSetupDependencyIssue = components['schemas']['SetupDependencyIssue'];
 export type SchemaSetupResolutionRequest = components['schemas']['SetupResolutionRequest'];
+export type SchemaSimpleAction = components['schemas']['SimpleAction'];
 export type SchemaSkillPackageImportRequest = components['schemas']['SkillPackageImportRequest'];
 export type SchemaSkillResource = components['schemas']['SkillResource'];
 export type SchemaSkillResourceView = components['schemas']['SkillResourceView'];
@@ -7038,9 +7434,11 @@ export type SchemaStorageLocationRequest = components['schemas']['StorageLocatio
 export type SchemaStorageSummary = components['schemas']['StorageSummary'];
 export type SchemaStructuredOutputResult = components['schemas']['StructuredOutputResult'];
 export type SchemaTaskCriteria = components['schemas']['TaskCriteria'];
+export type SchemaTextAction = components['schemas']['TextAction'];
 export type SchemaTextContentBlock = components['schemas']['TextContentBlock'];
 export type SchemaToolMode = components['schemas']['ToolMode'];
 export type SchemaToolOutcome = components['schemas']['ToolOutcome'];
+export type SchemaUploadAction = components['schemas']['UploadAction'];
 export type SchemaUserOverrideRequest = components['schemas']['UserOverrideRequest'];
 export type SchemaUserQuestion = components['schemas']['UserQuestion'];
 export type SchemaValidationError = components['schemas']['ValidationError'];
@@ -7856,6 +8254,40 @@ export interface operations {
             };
         };
     };
+    download_asset_v1_assets__asset_id__download_get: {
+        parameters: {
+            query?: {
+                session_id?: string | null;
+                project_path?: string | null;
+            };
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_asset_v1_assets__asset_id__preview_get: {
         parameters: {
             query?: {
@@ -7940,7 +8372,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BrowserRuntimeStatus"];
                 };
             };
         };
@@ -7960,7 +8392,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BrowserRuntimeStatus"];
                 };
             };
         };
@@ -7982,7 +8414,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
                 };
             };
             /** @description Validation Error */
@@ -7997,6 +8429,107 @@ export interface operations {
         };
     };
     close_session_v1_browser_sessions__thread_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    browser_action_v1_browser_sessions__thread_id__actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    control_session_v1_browser_sessions__thread_id__control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    browser_events_v1_browser_sessions__thread_id__events_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -8036,6 +8569,41 @@ export interface operations {
             };
             cookie?: never;
         };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_session_v1_browser_sessions__thread_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
         requestBody?: never;
         responses: {
             /** @description Successful Response */
@@ -8044,7 +8612,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BrowserSessionStatus"];
                 };
             };
             /** @description Validation Error */

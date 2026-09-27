@@ -76,6 +76,7 @@ class BackupManifest(BaseModel):
     external_references: list[BackupExternalReference] = Field(default_factory=list)
     checkpoint_versions: dict[str, str] = Field(default_factory=dict)
     credentials_excluded: Literal[True] = True
+    browser_profiles_included: bool = False
     no_effect_replay: Literal[True] = True
     note: str = (
         "Application records, compatible checkpoints, retained assets stored in "
@@ -88,6 +89,7 @@ class BackupManifest(BaseModel):
 class BackupCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     destination: str = Field(min_length=1, max_length=4096)
+    include_browser_profiles: bool = False
 
 
 class BackupCreateResult(BaseModel):
@@ -203,7 +205,7 @@ class BackupService:
                 )
             self.reconcile()
             staging = _new_staging_dir(self.paths.root, "backup")
-            manifest = self._stage_backup(staging)
+            manifest = self._stage_backup(staging, include_browser_profiles=request.include_browser_profiles)
             manifest_path = staging / MANIFEST_NAME
             manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
             files = _collect_files(staging)
@@ -256,7 +258,7 @@ class BackupService:
             if staging.exists():
                 shutil.rmtree(staging)
 
-    def _stage_backup(self, staging: Path) -> BackupManifest:
+    def _stage_backup(self, staging: Path, *, include_browser_profiles: bool = False) -> BackupManifest:
         included_roots = ["application.sqlite"]
         _copy_application_db(self.app_store, staging / "application.sqlite")
         _verify_sqlite_integrity(staging / "application.sqlite", required=True)
@@ -270,6 +272,10 @@ class BackupService:
                 _copy_tree_safely(source, staging / dirname)
                 included_roots.append(dirname)
         state_root = staging / "state"
+        browser_profiles = self.paths.state / "browser-profiles"
+        if include_browser_profiles and browser_profiles.exists():
+            _copy_tree_safely(browser_profiles, state_root / "browser-profiles")
+            included_roots.append("state/browser-profiles")
         for dirname in STATE_JSON_DIRS:
             source = self.paths.state / dirname
             if source.exists():
@@ -290,11 +296,15 @@ class BackupService:
             created_at=utc_now(),
             source_root=str(self.paths.root),
             included_roots=included_roots,
-            external_references=self._external_references(),
+            external_references=self._external_references(include_browser_profiles=include_browser_profiles),
             checkpoint_versions=_checkpoint_versions(),
+            browser_profiles_included=include_browser_profiles,
+            note=("Application records and retained assets are included. Models, runtimes, projects and connection credentials remain references only. "
+                + ("This sensitive backup includes chat Chrome profiles and sign-ins. Chrome was closed first; restore opens fresh tabs without replaying actions."
+                   if include_browser_profiles else "Browser sign-ins are excluded; choose sensitive browser-profile inclusion to back them up.")),
         )
 
-    def _external_references(self) -> list[BackupExternalReference]:
+    def _external_references(self, *, include_browser_profiles: bool = False) -> list[BackupExternalReference]:
         refs: dict[tuple[str, str], BackupExternalReference] = {}
         for project in self.app_store.list_projects():
             refs[("project", project.path)] = BackupExternalReference(kind="project", id=project.id, path=project.path, missing=not Path(project.path).is_dir())
@@ -362,6 +372,9 @@ class BackupService:
                     path=str(candidate),
                     missing=False,
                 )
+        browser_profiles = self.paths.state / "browser-profiles"
+        if browser_profiles.exists() and not include_browser_profiles:
+            refs[("credential", str(browser_profiles))] = BackupExternalReference(kind="credential", path=str(browser_profiles), missing=False)
         return list(refs.values())
 
     def _bundle_records(self) -> list[ModelBundle]:

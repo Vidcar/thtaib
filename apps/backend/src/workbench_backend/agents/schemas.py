@@ -174,8 +174,8 @@ class PendingInterrupt(BaseModel):
 
     interrupt_id: str | None = None
     namespace: list[str] = Field(default_factory=list)
-    kind: Literal["deepagents_interrupt_on"] = "deepagents_interrupt_on"
-    environment: Literal["windows_host_shell", "tool_actions", "user_input"] = "windows_host_shell"
+    kind: Literal["deepagents_interrupt_on", "browser_control"] = "deepagents_interrupt_on"
+    environment: Literal["windows_host_shell", "tool_actions", "user_input", "browser_control"] = "windows_host_shell"
     isolation: Literal["none"] = "none"
     note: str = HOST_SHELL_NOTE
     action_requests: list[PendingInterruptAction] = Field(default_factory=list)
@@ -366,3 +366,8 @@ class AgentRun(BaseModel):
     final_snapshot_id: str | None = None
     host_shell: HostShellFacts = Field(default_factory=HostShellFacts)
     pending_interrupt: PendingInterrupt | None = None
+    browser_control: Literal["agent", "taking_control", "user"] = "agent"
+    browser_revision: int = 0
+    browser_observation: str | None = None
+    browser_pause_dispatches: dict[str, list[int]] = Field(default_factory=dict)
+    browser_tool_proposals: dict[str, int] = Field(default_factory=dict)

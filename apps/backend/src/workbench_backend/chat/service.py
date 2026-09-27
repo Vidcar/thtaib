@@ -328,6 +328,9 @@ class ChatService:
             code = getattr(exc, "code", "setup_unavailable")
             action = {
                 "browser_worker_missing": "Install browser worker",
+                "browser_worker_schema_changed": "Refresh browser worker",
+                "browser_chrome_missing": "Install Chrome",
+                "browser_control_active": "Return to agent in Browser",
                 "browser_session_lost": "Reset browser",
                 "browser_unavailable": "Set up browser",
                 "desktop_grant_required": "Grant Windows access",
@@ -1225,6 +1228,9 @@ class ChatService:
         conversation: ChatConversation,
         request: ChatStartRequest,
     ) -> str | None:
+        browser = getattr(self.harness, "browser", None)
+        if browser is not None and conversation.thread_id and browser.status(conversation.thread_id).get("control", "agent") != "agent":
+            raise ChatError("Return browser control to the agent before starting more work.", code="browser_control_active", status_code=409)
         try:
             deployment = self.manager.get_deployment(conversation.deployment_id)
         except ManagerError as exc:
@@ -1286,7 +1292,7 @@ class ChatService:
                     raise ChatError("Browser control is unavailable.", code="browser_unavailable", status_code=409)
                 if conversation.thread_id and browser.status(conversation.thread_id).get("state") == "lost":
                     raise ChatError(
-                        "The previous browser session was lost. Reset it to start a fresh isolated browser.",
+                        "The browser session was lost. Close it to start fresh tabs with retained sign-ins, or Reset to clear this chat's sign-ins.",
                         code="browser_session_lost", status_code=409,
                     )
                 browser.runtime.require_installed()

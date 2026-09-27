@@ -185,13 +185,15 @@ class HarnessService:
         self.assets = assets
         self.browser = browser
         if browser is not None and hasattr(browser, "screenshot_reader"):
-            browser.screenshot_reader = self.prepare_screenshot_reading
+            browser.screenshot_reader = self.screenshot_reading_available
+            browser.state_invalidator = self.invalidate_browser_state
         self.preview = preview
         self.desktop_automation = desktop_automation
         self._runs: dict[str, AgentRun] = {}
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._native_streams: dict[str, Any] = {}
+        self._execution_controls: dict[str, ExecutionControl] = {}
         self._interaction_failure_runs: set[str] = set()
         self._terminal_retries: dict[str, tuple[AgentRunStatus, str]] = {}
         self._decision_ready: dict[str, threading.Event] = {}
@@ -971,6 +973,61 @@ class HarnessService:
         with self._lock:
             return run.model_copy(deep=True)
 
+    def _browser_root(self, thread_id: str) -> AgentRun | None:
+        with self._lock:
+            stored = {run.id: run for run in self.store.list_runs()}
+            stored.update(self._runs)
+            roots = [run for run in stored.values() if run.thread_id == thread_id
+                and not run.parent_run_id and is_run_lifecycle_live(run.status)]
+            if not roots:
+                return None
+            if len(roots) != 1:
+                raise HarnessError("This chat has overlapping owned tasks; stop them before taking browser control.",
+                    code="browser_task_ownership", status_code=409)
+            return self._runs.setdefault(roots[0].id, roots[0])
+
+    def _control_for_run(self, run: AgentRun) -> ExecutionControl:
+        with self._lock:
+            return self._execution_controls.setdefault(run.id,
+                ExecutionControl(run, lambda: self._publish_control_update(run),
+                    cancelled=lambda: bool(self._cancels.get(run.id) and self._cancels[run.id].is_set())))
+
+    async def request_browser_takeover(self, thread_id: str) -> None:
+        """Close root/helper dispatch authority before yielding to the caller."""
+        run = self._browser_root(thread_id)
+        if run is None:
+            return
+        control = self._control_for_run(run)
+        control.take_browser_control()
+        await asyncio.to_thread(control.wait_for_browser_settle)
+
+    async def release_browser_takeover(self, thread_id: str, observation: str) -> None:
+        run = self._browser_root(thread_id)
+        if run is None:
+            return
+        control = self._control_for_run(run)
+        control.return_browser_control(observation)
+        with self._lock:
+            pending = run.pending_interrupt
+            worker = self._threads.get(run.id)
+            needs_restart = (pending is not None and pending.kind == "browser_control"
+                and (worker is None or not worker.is_alive()))
+            if needs_restart:
+                cancel = self._cancels.setdefault(run.id, threading.Event())
+                self._decision_ready.setdefault(run.id, threading.Event())
+                self._pending_decisions[run.id] = []
+                worker = threading.Thread(target=self._resume_after_restart,
+                    args=(run.id, [], cancel), daemon=True)
+                self._threads[run.id] = worker
+        if needs_restart:
+            worker.start()
+
+    async def invalidate_browser_state(self, thread_id: str, observation: str) -> None:
+        """Close/Reset invalidate old page proposals, preserving native approvals."""
+        run = self._browser_root(thread_id)
+        if run is not None:
+            self._control_for_run(run).invalidate_browser_state(observation)
+
     def resume_interrupt(
         self,
         run_id: str,
@@ -995,6 +1052,9 @@ class HarnessService:
                     code="interrupt_missing",
                     status_code=409,
                 )
+            if pending.kind == "browser_control":
+                raise HarnessError("Return to agent in the Browser tab to continue this task.",
+                    code="browser_control_active", status_code=409)
             if not is_run_lifecycle_live(run.status):
                 raise HarnessError(
                     "Interrupt decisions require a live run.",
@@ -1236,12 +1296,16 @@ class HarnessService:
 
     @asynccontextmanager
     async def _compiled_agent_context(self, run, http_sink, fixture_bank):
-        async with self._worker_tools_context(run) as external_tools:
-            control = ExecutionControl(run, lambda: self._publish_control_update(run))
-            async with control.model_lock(run.deployment_id):
-                agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
-                    external_tools=external_tools, execution_control=control)
-            yield agent
+        control = self._control_for_run(run)
+        try:
+            async with self._worker_tools_context(run) as external_tools:
+                async with control.model_lock(run.deployment_id):
+                    agent = await asyncio.to_thread(self._create_compiled_agent, run, http_sink, fixture_bank,
+                        external_tools=external_tools, execution_control=control)
+                yield agent
+        finally:
+            with self._lock:
+                self._execution_controls.pop(run.id, None)
 
     @property
     def connections(self):
@@ -1255,6 +1319,8 @@ class HarnessService:
                     await self._aresume_reject_then_stop(agent, run, reject, _invoke_config(run))
                 else:
                     if decisions is not None:
+                        if run.pending_interrupt is not None and run.pending_interrupt.kind == "browser_control":
+                            payload = await self._browser_resume_command(agent, run)
                         await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
                     await self._adrive_until_terminal(run, agent, cancel, payload)
             except BaseException as exc:
@@ -1264,6 +1330,19 @@ class HarnessService:
                     except Exception:  # noqa: BLE001 - retain the original graph or display failure
                         pass
                 raise
+
+    def screenshot_reading_available(self, run: AgentRun) -> bool:
+        """Read existing setup evidence without dispatching a capability probe.
+
+        Handoff refresh happens while the whole graph is paused. Its optional
+        image observation must not start model work behind that barrier.
+        """
+        from workbench_backend.inference.adapter import image_model_profile
+        try:
+            per_request = run.effective_setup.bags.per_request if run.effective_setup else None
+            return bool(image_model_profile(self.manager.get_deployment(run.deployment_id), per_request).get("image_tool_message"))
+        except Exception:
+            return False
 
     def prepare_screenshot_reading(self, run: AgentRun, *, model: BaseChatModel | None = None) -> bool:
         """Prove screenshot delivery once for this loaded setup, then remember it."""
@@ -1313,7 +1392,8 @@ class HarnessService:
             if needs_check and (deployment.server_props is None or deployment.server_props.modalities.get("vision") is not False):
                 run.activity_phase = "checking_images"
                 self._publish_control_update(run)
-                self.prepare_screenshot_reading(run)
+                with execution_control.model_dispatch(run, purpose="probe", resumable=False):
+                    self.prepare_screenshot_reading(run)
                 execution_control.require_dispatch(run)
                 run.activity_phase = "thinking"
                 self._publish_control_update(run)
@@ -1451,11 +1531,15 @@ class HarnessService:
             failed.notes.append("Native context recovery exhausted before a new work request could be sent.")
             run.context_observation = failed
 
+        def prepare_tool_images():
+            with execution_control.model_dispatch(run, purpose="probe"):
+                return self.prepare_screenshot_reading(run, model=model)
+
         workbench_middleware = WorkbenchHarnessMiddleware(
             run, http_sink, settings_provider=self._capture_settings,
             fixture_bank=fixture_bank, execution_control=execution_control,
             asset_service=self.assets, capture_backend=capture_backend,
-            tool_image_preparer=None if inspection_only else lambda: self.prepare_screenshot_reading(run, model=model),
+            tool_image_preparer=None if inspection_only else prepare_tool_images,
             generation_recorder=None if inspection_only else lambda: self._merge_latest_generation_sample(run),
         )
         summarization = BudgetedSummarizationMiddleware(
@@ -1466,6 +1550,7 @@ class HarnessService:
             token_counter=token_counter_for_model(model, response_format=provider_format,
                 message_projection=workbench_middleware.tool_image_messages_for_count),
             request_preparer=workbench_middleware._with_outline,
+            execution_control=execution_control, run=run,
             on_context_failure=retain_failed_context,
             trim_tokens_to_summarize=None,
         )
@@ -1544,12 +1629,46 @@ class HarnessService:
                 return
             await self._alink_run(run, agent)
             await asyncio.to_thread(self._publish_interrupt, run, pending)
+            if pending.kind == "browser_control":
+                control = self._control_for_run(run)
+                returned = await asyncio.to_thread(control.wait_for_browser_return)
+                if not returned or cancel.is_set():
+                    await self._alink_run(run, agent)
+                    await asyncio.to_thread(self._finish, run, AgentRunStatus.cancelled, "cancelled")
+                    return
+                await asyncio.to_thread(self._clear_pending_interrupt, run, [])
+                current = await self._browser_resume_command(agent, run)
+                continue
             decisions = await asyncio.to_thread(self._wait_for_interrupt_decisions, run.id, cancel)
             if decisions is None:
                 await self._aresume_reject_then_stop(agent, run, pending, config, message_nodes)
                 return
+            if not await asyncio.to_thread(self._control_for_run(run).wait_for_browser_return):
+                await self._aresume_reject_then_stop(agent, run, pending, config, message_nodes)
+                return
             await asyncio.to_thread(self._clear_pending_interrupt, run, decisions)
             current = Command(resume=_resume_value(decisions))
+
+    async def _browser_resume_command(self, agent: Any, run: AgentRun) -> Command:
+        """Address every native browser boundary while retaining other approvals."""
+        state = await agent.aget_state(_invoke_config(run), subgraphs=True)
+        identities: set[str] = set()
+        def collect(snapshot):
+            for item in getattr(snapshot, "interrupts", ()):
+                value = getattr(item, "value", None)
+                ident = getattr(item, "id", None)
+                if isinstance(value, dict) and value.get("kind") == "browser_control" and ident:
+                    identities.add(str(ident))
+            for task in getattr(snapshot, "tasks", ()):
+                collect(task)
+                nested = getattr(task, "state", None)
+                if nested is not None and not isinstance(nested, dict):
+                    collect(nested)
+        collect(state)
+        if not identities:
+            raise HarnessError("The browser interruption has no saved graph boundary; no action was repeated.",
+                code="browser_interrupt_missing", status_code=409)
+        return Command(resume={ident: {"browser_control": "agent"} for ident in identities})
 
     async def _stream_until_pause(
         self,
@@ -1676,7 +1795,8 @@ class HarnessService:
                     ready.clear()
                 if cancel.is_set():
                     return None
-                return decisions
+                if decisions is not None:
+                    return decisions
 
     async def _aresume_reject_then_stop(
         self,
@@ -1854,6 +1974,7 @@ class HarnessService:
         self._merge_latest_generation_sample(run)
         run.finalization_phase = None
         run.activity_phase = None
+        run.browser_control = "agent"
         run.settled_status = None
         run.settled_stop_reason = None
         run.status = status

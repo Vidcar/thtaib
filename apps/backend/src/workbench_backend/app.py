@@ -168,6 +168,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         application.state.manager.paths,
         capture_publisher=application.state.assets.register_capture,
         app_store=application.state.app_store,
+        assets=application.state.assets,
     )
     application.state.preview = PreviewService(application.state.manager.paths)
     application.state.desktop_automation = DesktopAutomationService(
@@ -225,6 +226,7 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
         preview=application.state.preview,
         desktop_automation=application.state.desktop_automation,
     )
+    application.state.browser.state_invalidator = application.state.harness.invalidate_browser_state
     application.state.lab = LabService(
         lambda: application.state.manager,
         lambda: application.state.harness,
@@ -252,6 +254,10 @@ def create_app(*, data_root: Path | None = None) -> FastAPI:
                 if not is_run_lifecycle_live(run.status):
                     application.state.asset_lifecycle.collect_verified_outputs_for_run(conversation.id, run.id)
         application.state.chat.reconcile_saved_queue_on_startup()
+        # Profiles are sensitive local state. Close every owned Chrome context
+        # before copying it; live pages and unfinished actions are never backed up.
+        submit_checkpoint_task(application.state.manager.paths.checkpoints_db,
+            application.state.browser.shutdown()).result(timeout=30)
     application.state.backups = BackupService(application.state.manager.paths, application.state.app_store,
         maintenance_gate=application.state.maintenance_gate, active_work=_active_work, reconcile=_reconcile_for_backup)
     application.include_router(router)

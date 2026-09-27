@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import json
+import mimetypes
 import os
 import uuid
 from pathlib import Path, PurePath
@@ -210,6 +211,50 @@ class RetainedAssetService:
         )
         self.store.add_consumer(asset.id, kind="run", consumer_id=run.id, recorded_at=asset.observed_at)
         return asset, capture_virtual_path(asset)
+
+    def retain_browser_download(self, thread_id: str, source_path: Path, *, filename: str,
+        source_url: str, controlled_root: Path, attribution: dict[str, Any]) -> RetainedAsset:
+        """Retain bytes only after the owned worker confirms a completed download."""
+        conversation = self.session_for_thread(thread_id)
+        if conversation is None:
+            raise HTTPException(404, "Download conversation not found.")
+        root = controlled_root.resolve(strict=True)
+        path = source_path.resolve(strict=True)
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(403, "Download is outside the owned browser directory.") from exc
+        if not path.is_file() or path.stat().st_size > 50_000_000:
+            raise HTTPException(413, "Download exceeds the 50 MB retained file limit.")
+        content = path.read_bytes()
+        if len(content) > 50_000_000:
+            raise HTTPException(413, "Download exceeds the 50 MB retained file limit.")
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        kind = (AssetContentKind.image if content_type in IMAGE_TYPES else
+            AssetContentKind.document if content_type in DOCUMENT_TYPES else
+            AssetContentKind.text if content_type in SUPPORTED_TEXT_TYPES else AssetContentKind.binary)
+        # Unsupported/oversize extraction does not discard a completed file.
+        try:
+            if len(content) > _size_limit(kind):
+                kind = AssetContentKind.binary
+            text, extraction, dimensions = _inspect_content(content, content_type, kind)
+        except (HTTPException, ValueError):
+            kind = AssetContentKind.binary
+            text, extraction, dimensions = "", None, None
+        source_run = attribution.get("run_id")
+        if source_run not in conversation.run_ids:
+            source_run = conversation.current_run_id
+        asset = self._create_asset(origin=RetainedAssetOrigin.browser_download,
+            session_id=conversation.id, project_path=_conversation_project_path(conversation),
+            filename=filename, content_type=content_type, content_kind=kind,
+            content=content, text=text, extraction=extraction, dimensions=dimensions,
+            source_run_id=source_run, source_tool_call_id=attribution.get("tool_call_id"),
+            source_tool_name=attribution.get("tool_name") or "browser_download",
+            source_target=source_url[:2048],
+            observation=f"Completed browser download of {len(content)} bytes from {source_url[:300]}.")
+        if source_run:
+            self.store.add_consumer(asset.id, kind="run", consumer_id=source_run, recorded_at=asset.observed_at)
+        return asset
 
     def retain_tool_image(
         self,
@@ -594,7 +639,7 @@ class RetainedAssetService:
             filename=filename,
             content_type=content_type,
             content_kind=content_kind,
-            encoding="base64" if content_kind in {AssetContentKind.image, AssetContentKind.document} else "utf-8",
+            encoding="base64" if content_kind in {AssetContentKind.image, AssetContentKind.document, AssetContentKind.binary} else "utf-8",
             extraction=extraction,
             image_width=dimensions[0] if dimensions else None,
             image_height=dimensions[1] if dimensions else None,
@@ -739,10 +784,12 @@ def _content_kind(content_type: str, requested: AssetContentKind) -> AssetConten
 
 
 def _size_limit(kind: AssetContentKind) -> int:
-    return MAX_IMAGE_BYTES if kind is AssetContentKind.image else MAX_DOCUMENT_BYTES if kind is AssetContentKind.document else MAX_ASSET_BYTES
+    return 50_000_000 if kind is AssetContentKind.binary else MAX_IMAGE_BYTES if kind is AssetContentKind.image else MAX_DOCUMENT_BYTES if kind is AssetContentKind.document else MAX_ASSET_BYTES
 
 
 def _inspect_content(content: bytes, content_type: str, kind: AssetContentKind) -> tuple[str, AssetExtraction | None, tuple[int, int] | None]:
+    if kind is AssetContentKind.binary:
+        return "", None, None
     if kind is AssetContentKind.image:
         return "", None, inspect_image(content, content_type)
     if kind is AssetContentKind.document:
@@ -754,6 +801,8 @@ def _inspect_content(content: bytes, content_type: str, kind: AssetContentKind) 
 
 
 def _asset_text(asset: RetainedAsset, content: bytes) -> str:
+    if asset.content_kind is AssetContentKind.binary:
+        return f"Retained file ({asset.size_bytes:,} bytes, {asset.content_type}). Text extraction is unavailable."
     if asset.content_kind is AssetContentKind.image:
         return f"Image ({asset.image_width} × {asset.image_height} pixels)."
     if asset.extraction:

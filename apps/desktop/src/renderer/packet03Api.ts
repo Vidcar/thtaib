@@ -69,6 +69,7 @@ export interface BackupManifest {
   external_references: BackupExternalReference[];
   checkpoint_versions: Record<string, string>;
   credentials_excluded: true;
+  browser_profiles_included?: boolean;
   no_effect_replay: true;
   note: string;
 }
@@ -130,8 +131,8 @@ export const packet03Api = {
   savePresentation: (payload: Partial<PresentationSettings>) => api.updatePresentationSettings(payload),
   grants: () => packet03Request<PermissionGrant[]>("/v1/settings/grants"),
   revokeGrant: (grantId: string) => packet03Request<{ revoked: true }>(`/v1/settings/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
-  createBackup: (destination: string) =>
-    packet03Request<BackupCreateResult>("/v1/backups", { method: "POST", body: JSON.stringify({ destination }) }),
+  createBackup: (destination: string, include_browser_profiles = false) =>
+    packet03Request<BackupCreateResult>("/v1/backups", { method: "POST", body: JSON.stringify({ destination, include_browser_profiles }) }),
   restoreBackup: (archivePath: string, destinationRoot: string) =>
     packet03Request<BackupRestoreResult>("/v1/backups/restore", {
       method: "POST",

@@ -24,6 +24,19 @@ class WindowsJob:
 
     @classmethod
     def attach_suspended(cls, process: subprocess.Popen) -> "WindowsJob":
+        return cls._attach(process, suspended=True)
+
+    @classmethod
+    def attach_running(cls, pid: int) -> "WindowsJob":
+        """Attach a childless worker before its browser-launch command is allowed.
+
+        Callers must enforce that launch barrier. This complements suspended
+        native-command startup without introducing a second process owner.
+        """
+        return cls._attach(psutil.Process(pid), suspended=False)
+
+    @classmethod
+    def _attach(cls, process: subprocess.Popen | psutil.Process, *, suspended: bool) -> "WindowsJob":
         from ctypes import wintypes
 
         class _BasicLimits(ctypes.Structure):
@@ -85,16 +98,18 @@ class WindowsJob:
                 raise OSError(ctypes.get_last_error(), "Could not attach process to its job")
             # CREATE_SUSPENDED prevents the command from spawning a child before
             # the job owns it. A suspended new process has one initial thread.
-            thread_ids = [thread.id for thread in psutil.Process(process.pid).threads()]
-            if len(thread_ids) != 1:
-                raise OSError("Owned process did not have one suspended startup thread")
-            thread_handle = kernel.OpenThread(0x0002, False, thread_ids[0])  # THREAD_SUSPEND_RESUME
-            if not thread_handle or kernel.ResumeThread(thread_handle) == 0xFFFFFFFF:
-                raise OSError(ctypes.get_last_error(), "Could not resume owned process")
+            if suspended:
+                thread_ids = [thread.id for thread in psutil.Process(process.pid).threads()]
+                if len(thread_ids) != 1:
+                    raise OSError("Owned process did not have one suspended startup thread")
+                thread_handle = kernel.OpenThread(0x0002, False, thread_ids[0])  # THREAD_SUSPEND_RESUME
+                if not thread_handle or kernel.ResumeThread(thread_handle) == 0xFFFFFFFF:
+                    raise OSError(ctypes.get_last_error(), "Could not resume owned process")
             return job
         except BaseException:
             job.stop()
-            if process.poll() is None:
+            running = process.poll() is None if isinstance(process, subprocess.Popen) else process.is_running()
+            if running:
                 process.terminate()
                 process.wait(timeout=3)
             raise

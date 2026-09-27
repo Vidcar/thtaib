@@ -1,1 +1,1 @@
-{"name":"workbench-browser-worker","version":"0.0.1","private":true,"dependencies":{"@playwright/mcp":"0.0.82"}}
+{"name":"workbench-browser-worker","version":"0.0.2","private":true,"dependencies":{"@modelcontextprotocol/sdk":"1.29.0","@playwright/mcp":"0.0.82"}}

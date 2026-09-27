@@ -48,6 +48,8 @@ VISUAL_ACTION_TOOLS = frozenset({
     "browser_click", "browser_hover", "browser_press_key", "browser_type",
     "browser_select_option", "browser_fill_form", "browser_resize",
     "browser_handle_dialog", "desktop_invoke", "desktop_set_value",
+    "browser_drag", "browser_file_upload", "browser_mouse_move_xy", "browser_mouse_click_xy",
+    "browser_mouse_drag_xy", "browser_mouse_down", "browser_mouse_up", "browser_mouse_wheel",
     "desktop_send_keys", "start_preview", "stop_preview",
 })
 
@@ -207,6 +209,9 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
     value = _interrupt_value(raw)
     if value is None:
         return None
+    if value.get("kind") == "browser_control":
+        return PendingInterrupt(kind="browser_control", environment="browser_control",
+            note="The browser is under your control. Return to agent in the Browser tab to continue.")
     requests = value.get("action_requests")
     reviews = value.get("review_configs")
     if not isinstance(requests, list) or not requests:
@@ -325,6 +330,6 @@ def _interrupt_value(raw: Any) -> dict[str, Any] | None:
                 return found
         return None
     value = getattr(raw, "value", raw)
-    if isinstance(value, dict) and value.get("action_requests"):
+    if isinstance(value, dict) and (value.get("action_requests") or value.get("kind") == "browser_control"):
         return value
     return None

@@ -105,6 +105,49 @@
             "title": "Approval Mode",
             "type": "string"
           },
+          "browser_control": {
+            "default": "agent",
+            "enum": [
+              "agent",
+              "taking_control",
+              "user"
+            ],
+            "title": "Browser Control",
+            "type": "string"
+          },
+          "browser_observation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Browser Observation"
+          },
+          "browser_pause_dispatches": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Browser Pause Dispatches",
+            "type": "object"
+          },
+          "browser_revision": {
+            "default": 0,
+            "title": "Browser Revision",
+            "type": "integer"
+          },
+          "browser_tool_proposals": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Browser Tool Proposals",
+            "type": "object"
+          },
           "budgets": {
             "anyOf": [
               {
@@ -1419,7 +1462,8 @@
           "text",
           "code",
           "image",
-          "document"
+          "document",
+          "binary"
         ],
         "title": "AssetContentKind",
         "type": "string"
@@ -1462,6 +1506,402 @@
           "parser"
         ],
         "title": "AssetExtraction",
+        "type": "object"
+      },
+      "BrowserActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "discriminator": {
+              "mapping": {
+                "back": "#/components/schemas/SimpleAction",
+                "close_tab": "#/components/schemas/SelectTabAction",
+                "dialog": "#/components/schemas/DialogAction",
+                "forward": "#/components/schemas/SimpleAction",
+                "key": "#/components/schemas/KeyAction",
+                "navigate": "#/components/schemas/NavigateAction",
+                "new_tab": "#/components/schemas/NewTabAction",
+                "pointer": "#/components/schemas/PointerAction",
+                "reload": "#/components/schemas/SimpleAction",
+                "resize": "#/components/schemas/ResizeAction",
+                "select_tab": "#/components/schemas/SelectTabAction",
+                "text": "#/components/schemas/TextAction",
+                "upload": "#/components/schemas/UploadAction"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NavigateAction"
+              },
+              {
+                "$ref": "#/components/schemas/SimpleAction"
+              },
+              {
+                "$ref": "#/components/schemas/SelectTabAction"
+              },
+              {
+                "$ref": "#/components/schemas/NewTabAction"
+              },
+              {
+                "$ref": "#/components/schemas/ResizeAction"
+              },
+              {
+                "$ref": "#/components/schemas/PointerAction"
+              },
+              {
+                "$ref": "#/components/schemas/KeyAction"
+              },
+              {
+                "$ref": "#/components/schemas/TextAction"
+              },
+              {
+                "$ref": "#/components/schemas/DialogAction"
+              },
+              {
+                "$ref": "#/components/schemas/UploadAction"
+              }
+            ],
+            "title": "Action"
+          },
+          "page_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Page Id",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "page_id",
+          "revision",
+          "action"
+        ],
+        "title": "BrowserActionRequest",
+        "type": "object"
+      },
+      "BrowserControlRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "take",
+              "return"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "BrowserControlRequest",
+        "type": "object"
+      },
+      "BrowserDialog": {
+        "properties": {
+          "default_value": {
+            "default": "",
+            "title": "Default Value",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "BrowserDialog",
+        "type": "object"
+      },
+      "BrowserDownload": {
+        "properties": {
+          "asset_id": {
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_id",
+          "name",
+          "url"
+        ],
+        "title": "BrowserDownload",
+        "type": "object"
+      },
+      "BrowserFileChooser": {
+        "properties": {
+          "multiple": {
+            "default": false,
+            "title": "Multiple",
+            "type": "boolean"
+          }
+        },
+        "title": "BrowserFileChooser",
+        "type": "object"
+      },
+      "BrowserResetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmed": {
+            "const": true,
+            "title": "Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "confirmed"
+        ],
+        "title": "BrowserResetRequest",
+        "type": "object"
+      },
+      "BrowserRuntimeStatus": {
+        "properties": {
+          "chrome_available": {
+            "default": false,
+            "title": "Chrome Available",
+            "type": "boolean"
+          },
+          "chrome_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chrome Version"
+          },
+          "installed": {
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "node_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Version"
+          },
+          "playwright_mcp_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playwright Mcp Version"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported",
+          "installed"
+        ],
+        "title": "BrowserRuntimeStatus",
+        "type": "object"
+      },
+      "BrowserSessionStatus": {
+        "properties": {
+          "active_page_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Page Id"
+          },
+          "control": {
+            "default": "agent",
+            "enum": [
+              "agent",
+              "taking_control",
+              "user"
+            ],
+            "title": "Control",
+            "type": "string"
+          },
+          "dialog": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserDialog"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "downloads": {
+            "items": {
+              "$ref": "#/components/schemas/BrowserDownload"
+            },
+            "title": "Downloads",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "file_chooser": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserFileChooser"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "default": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "lost",
+              "closed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/BrowserTab"
+            },
+            "title": "Tabs",
+            "type": "array"
+          },
+          "thread_id": {
+            "title": "Thread Id",
+            "type": "string"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/BrowserViewport"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/BrowserRuntimeStatus"
+          }
+        },
+        "required": [
+          "thread_id",
+          "state",
+          "worker"
+        ],
+        "title": "BrowserSessionStatus",
+        "type": "object"
+      },
+      "BrowserTab": {
+        "properties": {
+          "page_id": {
+            "title": "Page Id",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "default": "about:blank",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "title": "BrowserTab",
+        "type": "object"
+      },
+      "BrowserViewport": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "default": 900,
+            "maximum": 2160.0,
+            "minimum": 240.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "default": 1440,
+            "maximum": 3840.0,
+            "minimum": 240.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "title": "BrowserViewport",
         "type": "object"
       },
       "BundleConfigurationOptions": {
@@ -5636,6 +6076,38 @@
         "title": "DesktopWindowView",
         "type": "object"
       },
+      "DialogAction": {
+        "additionalProperties": false,
+        "properties": {
+          "accept": {
+            "title": "Accept",
+            "type": "boolean"
+          },
+          "prompt_text": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Text"
+          },
+          "type": {
+            "const": "dialog",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "accept"
+        ],
+        "title": "DialogAction",
+        "type": "object"
+      },
       "EffectiveSetup": {
         "description": "Inspectable selected / loaded / applied facts for one run.",
         "properties": {
@@ -7498,6 +7970,28 @@
         "title": "InterruptDecisionRequest",
         "type": "object"
       },
+      "KeyAction": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key",
+            "type": "string"
+          },
+          "type": {
+            "const": "key",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "key"
+        ],
+        "title": "KeyAction",
+        "type": "object"
+      },
       "KnowledgeAutomaticPolicy": {
         "additionalProperties": false,
         "properties": {
@@ -9189,6 +9683,55 @@
         "title": "ModelRequestCapture",
         "type": "object"
       },
+      "NavigateAction": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "navigate",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "url"
+        ],
+        "title": "NavigateAction",
+        "type": "object"
+      },
+      "NewTabAction": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "new_tab",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "NewTabAction",
+        "type": "object"
+      },
       "OutputSchemaRequest": {
         "additionalProperties": false,
         "description": "Caller-supplied JSON schema for one run.\n\nThe schema is passed to Deep Agents' existing ``response_format`` seam.\nIt is not parsed out of assistant prose.",
@@ -9254,7 +9797,8 @@
             "enum": [
               "windows_host_shell",
               "tool_actions",
-              "user_input"
+              "user_input",
+              "browser_control"
             ],
             "title": "Environment",
             "type": "string"
@@ -9277,8 +9821,11 @@
             "type": "string"
           },
           "kind": {
-            "const": "deepagents_interrupt_on",
             "default": "deepagents_interrupt_on",
+            "enum": [
+              "deepagents_interrupt_on",
+              "browser_control"
+            ],
             "title": "Kind",
             "type": "string"
           },
@@ -9365,6 +9912,71 @@
           }
         },
         "title": "PinRuntimeRequest",
+        "type": "object"
+      },
+      "PointerAction": {
+        "additionalProperties": false,
+        "properties": {
+          "button": {
+            "default": "left",
+            "enum": [
+              "left",
+              "middle",
+              "right"
+            ],
+            "title": "Button",
+            "type": "string"
+          },
+          "delta_x": {
+            "default": 0,
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Delta X",
+            "type": "number"
+          },
+          "delta_y": {
+            "default": 0,
+            "maximum": 10000.0,
+            "minimum": -10000.0,
+            "title": "Delta Y",
+            "type": "number"
+          },
+          "event": {
+            "enum": [
+              "move",
+              "down",
+              "up",
+              "click",
+              "wheel"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "type": {
+            "const": "pointer",
+            "title": "Type",
+            "type": "string"
+          },
+          "x": {
+            "maximum": 3840.0,
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "maximum": 2160.0,
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "event",
+          "x",
+          "y"
+        ],
+        "title": "PointerAction",
         "type": "object"
       },
       "ProcessIdentity": {
@@ -9870,6 +10482,35 @@
           "display_name"
         ],
         "title": "RenameProfileRequest",
+        "type": "object"
+      },
+      "ResizeAction": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "default": 900,
+            "maximum": 2160.0,
+            "minimum": 240.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "type": {
+            "const": "resize",
+            "title": "Type",
+            "type": "string"
+          },
+          "width": {
+            "default": 1440,
+            "maximum": 3840.0,
+            "minimum": 240.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ResizeAction",
         "type": "object"
       },
       "ResolvedSetting": {
@@ -10704,7 +11345,8 @@
         "enum": [
           "upload",
           "verified_output",
-          "capture"
+          "capture",
+          "browser_download"
         ],
         "title": "RetainedAssetOrigin",
         "type": "string"
@@ -11404,6 +12046,31 @@
         "title": "ScopeWritePolicy",
         "type": "object"
       },
+      "SelectTabAction": {
+        "additionalProperties": false,
+        "properties": {
+          "page_id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Page Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "select_tab",
+              "close_tab"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "page_id"
+        ],
+        "title": "SelectTabAction",
+        "type": "object"
+      },
       "ServerProperties": {
         "description": "What llama-server's ``GET /props`` reported once the deployment was healthy.\n\nRecorded as reported, not interpreted. This is not a compatibility\nrecord and not a capability claim (MOD-006 / OQ-007 stay open).",
         "properties": {
@@ -11975,6 +12642,25 @@
           }
         },
         "title": "SetupResolutionRequest",
+        "type": "object"
+      },
+      "SimpleAction": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": [
+              "back",
+              "forward",
+              "reload"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "SimpleAction",
         "type": "object"
       },
       "SkillPackageImportRequest": {
@@ -12578,6 +13264,27 @@
         "title": "TaskCriteria",
         "type": "object"
       },
+      "TextAction": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 20000,
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "TextAction",
+        "type": "object"
+      },
       "TextContentBlock": {
         "additionalProperties": false,
         "properties": {
@@ -12695,6 +13402,37 @@
           "updated_at"
         ],
         "title": "ToolOutcome",
+        "type": "object"
+      },
+      "UploadAction": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Asset Ids",
+            "type": "array"
+          },
+          "project_paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Project Paths",
+            "type": "array"
+          },
+          "type": {
+            "const": "upload",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "UploadAction",
         "type": "object"
       },
       "UserOverrideRequest": {
@@ -13990,6 +14728,75 @@
         "summary": "Asset Content"
       }
     },
+    "/v1/assets/{asset_id}/download": {
+      "get": {
+        "operationId": "download_asset_v1_assets__asset_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Asset"
+      }
+    },
     "/v1/assets/{asset_id}/preview": {
       "get": {
         "operationId": "preview_asset_v1_assets__asset_id__preview_get",
@@ -14117,7 +14924,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserRuntimeStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -14133,7 +14942,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserRuntimeStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -14160,7 +14971,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -14195,7 +15008,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -14214,9 +15029,107 @@
         "summary": "Session Status"
       }
     },
-    "/v1/browser/sessions/{thread_id}/reset": {
+    "/v1/browser/sessions/{thread_id}/actions": {
       "post": {
-        "operationId": "reset_session_v1_browser_sessions__thread_id__reset_post",
+        "operationId": "browser_action_v1_browser_sessions__thread_id__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Browser Action"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}/control": {
+      "post": {
+        "operationId": "control_session_v1_browser_sessions__thread_id__control_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Control Session"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}/events": {
+      "get": {
+        "operationId": "browser_events_v1_browser_sessions__thread_id__events_get",
         "parameters": [
           {
             "in": "path",
@@ -14248,7 +15161,95 @@
             "description": "Validation Error"
           }
         },
+        "summary": "Browser Events"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}/reset": {
+      "post": {
+        "operationId": "reset_session_v1_browser_sessions__thread_id__reset_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
         "summary": "Reset Session"
+      }
+    },
+    "/v1/browser/sessions/{thread_id}/start": {
+      "post": {
+        "operationId": "start_session_v1_browser_sessions__thread_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Session"
       }
     },
     "/v1/bundles": {

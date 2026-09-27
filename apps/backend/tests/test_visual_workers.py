@@ -107,7 +107,7 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
             accepted = await navigate.ainvoke({"type": "tool_call", "id": "good_url", "name": "browser_navigate", "args": {"url": "http://127.0.0.1:8000/page.html"}})
             self.assertEqual(accepted.status, "success")
 
-    async def test_session_survives_turns_and_marks_restart_lost(self):
+    async def test_session_survives_turns_and_clean_shutdown_preserves_profile(self):
         async with self.service.open_tools(self.run) as tools:
             by_name = {item.name: item for item in tools}
             self.assertNotIn("filename", by_name["browser_snapshot"].args_schema["properties"])
@@ -148,13 +148,88 @@ class BrowserWorkerTests(unittest.IsolatedAsyncioTestCase):
         async with self.service.open_tools(self.run):
             self.assertEqual(self.starts, 1)
         self.assertEqual(self.service.status("thread_1")["state"], "active")
+        profile = self.paths.state / "browser-profiles" / "thread_1"
+        profile.mkdir(parents=True)
+        (profile / "fixture-cookie").write_text("sign-in", encoding="utf-8")
         await self.service.shutdown()
-        self.assertEqual(self.service.status("thread_1")["state"], "lost")
+        self.assertEqual(self.service.status("thread_1")["state"], "closed")
+        self.assertTrue((profile / "fixture-cookie").is_file())
+        # An unexpected previous worker remains explicit, never replayed.
+        self.service._write_marker("thread_1")
         with self.assertRaises(HarnessError):
             async with self.service.open_tools(self.run):
                 pass
         await self.service.reset("thread_1")
         self.assertEqual(self.service.status("thread_1")["state"], "closed")
+        self.assertFalse(profile.exists())
+
+    async def test_takeover_blocks_browser_tools_until_fresh_observation(self):
+        class Handoff:
+            observation = None
+            async def request_browser_takeover(self, _thread):
+                pass
+            async def release_browser_takeover(self, _thread, observation):
+                self.observation = observation
+        handoff = Handoff()
+        async with self.service.open_tools(self.run) as available:
+            navigate = next(item for item in available if item.name == "browser_navigate")
+            await navigate.coroutine(url="https://example.test/page")
+            await self.service.control("thread_1", "take", handoff)
+            self.assertEqual(self.service.status("thread_1")["control"], "user")
+            with self.assertRaises(ToolException):
+                await navigate.coroutine(url="https://example.test/stale")
+            # Fixture has no management client, but still a fresh accessible
+            # snapshot. Exercise the same continuation path without Chrome.
+            session = self.service._sessions["thread_1"]
+            session.metadata["session_id"] = "fixture-session"
+            await self.service.control("thread_1", "return", handoff)
+            self.assertIn("https://example.test/page", handoff.observation)
+            self.assertNotIn("stale", handoff.observation)
+            await navigate.coroutine(url="https://example.test/next")
+
+    async def test_failed_takeover_cannot_grant_manual_authority_and_failed_return_restores_user(self):
+        class Handoff:
+            async def request_browser_takeover(self, _thread):
+                raise HarnessError("Overlapping tasks", code="browser_task_ownership", status_code=409)
+            async def release_browser_takeover(self, _thread, _observation):
+                raise AssertionError("A failed refresh must not resume the task")
+        async with self.service.open_tools(self.run):
+            with self.assertRaises(HarnessError):
+                await self.service.control("thread_1", "take", Handoff())
+            self.assertEqual(self.service.status("thread_1")["control"], "agent")
+            session = self.service._sessions["thread_1"]
+            self.service._controls["thread_1"] = session.control = "user"
+            session.metadata["session_id"] = "fixture"
+            original = session.tools["browser_snapshot"]
+            async def failed_snapshot(**_arguments):
+                raise ToolException("The current page could not be observed")
+            session.tools["browser_snapshot"] = original.model_copy(update={"coroutine": failed_snapshot})
+            with self.assertRaises(ToolException):
+                await self.service.control("thread_1", "return", Handoff())
+            self.assertEqual(self.service.status("thread_1")["control"], "user")
+
+    async def test_reset_waits_for_lost_owner_to_confirm_stop_before_removing_profile(self):
+        async with self.service.open_tools(self.run):
+            session = self.service._sessions["thread_1"]
+            actual_owner = session.owner_task
+            stopped = asyncio.Event()
+            session.owner_task = asyncio.create_task(stopped.wait())
+            profile = self.paths.state / "browser-profiles/thread_1"
+            profile.mkdir(parents=True)
+            (profile / "cookie-fixture").write_text("retained", encoding="utf8")
+            loss = asyncio.create_task(self.service._mark_lost(session))
+            await asyncio.sleep(0)  # Admit the loss boundary, not a timed delay.
+            reset = asyncio.create_task(self.service.reset("thread_1"))
+            await asyncio.sleep(0)
+            try:
+                self.assertFalse(reset.done())
+                self.assertTrue(profile.is_dir())
+                self.assertTrue(self.service._marker("thread_1").exists())
+            finally:
+                stopped.set()
+                await asyncio.gather(loss, reset, actual_owner)
+            self.assertFalse(profile.exists())
+            self.assertEqual(self.service.status("thread_1")["state"], "closed")
 
 
 class PageObservationTests(unittest.TestCase):

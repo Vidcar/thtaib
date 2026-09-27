@@ -64,6 +64,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
   const [grants, setGrants] = useState<PermissionGrant[]>([]);
   const [activeRunIds, setActiveRunIds] = useState<string[]>([]);
   const [backupDestination, setBackupDestination] = useState("");
+  const [includeBrowserProfiles, setIncludeBrowserProfiles] = useState(false);
   const [restoreArchive, setRestoreArchive] = useState("");
   const [restoreDestination, setRestoreDestination] = useState("");
   const [lastBackup, setLastBackup] = useState<BackupCreateResult | null>(null);
@@ -185,7 +186,7 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
     setBusy(true);
     setMessage("");
     try {
-      const result = await packet03Api.createBackup(backupArchivePath(backupDestination));
+      const result = await packet03Api.createBackup(backupArchivePath(backupDestination), includeBrowserProfiles);
       setLastBackup(result);
       setMessage("Backup created.");
     } catch (error) {
@@ -273,14 +274,17 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
       </div>
 
       <div className="settings-category-content" hidden={category !== "Backup"}>
-        <SettingSection title="Create a backup" description="App records, compatible checkpoints and retained files. Models, runtimes, project files and credentials stay where they are.">
-          <SettingRow stacked label="Destination folder" htmlFor="backup-destination" hint={lastBackup ? `Created ${lastBackup.archive_path}. Credentials excluded; effects will not be replayed on restore.` : undefined}>
+        <SettingSection title="Create a backup" description="App records, compatible checkpoints and retained files. Models, runtimes and project files stay where they are. Browser sign-ins are excluded unless selected below.">
+          <SettingRow stacked label="Destination folder" htmlFor="backup-destination" hint={lastBackup ? `Created ${lastBackup.archive_path}. ${lastBackup.manifest.browser_profiles_included ? "Browser sign-ins included (sensitive); connection credentials excluded." : "Browser sign-ins and connection credentials excluded."} Effects will not be replayed on restore.` : undefined}>
             <div className="path-field">
               <input id="backup-destination" value={backupDestination} onChange={(event) => setBackupDestination(event.target.value)} placeholder="Choose a folder for the backup archive" />
               <button type="button" onClick={() => void chooseFolder(setBackupDestination)} disabled={!window.workbench?.selectPath}>
                 <Icon name="folder" size={14} /> Choose folder
               </button>
             </div>
+          </SettingRow>
+          <SettingRow label="Include browser sign-ins (sensitive)" hint="Including sign-ins closes browser pages first. Restored browsers open fresh tabs; connection credentials stay excluded.">
+            <CompactSwitch bare label="Include browser sign-ins (sensitive)" checked={includeBrowserProfiles} disabled={busy} onChange={setIncludeBrowserProfiles} />
           </SettingRow>
           <div className="setting-actions">
             <button type="button" className="primary-button" disabled={busy || !backupDestination.trim()} onClick={() => void createBackup()}>

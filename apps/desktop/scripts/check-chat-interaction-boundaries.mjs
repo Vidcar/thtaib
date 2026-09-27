@@ -2725,6 +2725,8 @@ async function testToolReadinessActionsOpenRecovery(vite) {
     await act(async () => button(renderer, "Reset browser").props.onClick());
     assert.equal(visualControls(renderer)[0].props.focusSection, "browser", "lost-session recovery keeps Browser focused");
     await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Reset")[0].props.onClick());
+    assert.equal(harness.state.browserSessionState, "lost", "opening Reset leaves the chat sign-ins intact until confirmed");
+    await act(async () => visualControls(renderer)[0].findAll(node => node.type === "button" && textOf(node) === "Clear sign-ins and reset")[0].props.onClick());
     await waitFor(() => assert.equal(harness.state.browserSessionState, "closed"), "Reset recovery reaches the Browser session action");
     assert.ok(harness.state.outgoingRequests.some(item => item.path === "/v1/browser/sessions/native_thread_a/reset"), "Reset addresses the actual lost browser session");
     assert.ok(!harness.state.outgoingRequests.some(item => item.path.startsWith("/v1/browser/sessions/thread_a")), "logical stream identity never reaches browser process endpoints");

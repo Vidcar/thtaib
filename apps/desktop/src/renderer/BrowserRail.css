@@ -1,0 +1,36 @@
+.browser-rail {display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; gap: var(--space-tight); font-size: var(--text-small);}
+.browser-rail button {white-space: nowrap;}
+.browser-lifecycle, .browser-navigation, .browser-resolution {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-tight);}
+.browser-state {margin-right: auto; color: var(--muted);}
+.browser-navigation {flex-wrap: nowrap;}
+.browser-navigation > button {min-width: 28px; padding-inline: 6px;}
+.browser-navigation form {display: flex; flex: 1; min-width: 0; gap: var(--space-tight);}
+.browser-navigation input {flex: 1; min-width: 0; font-size: var(--text-small);}
+.browser-page-tabs {display: flex; align-items: center; gap: var(--space-tight); overflow-x: auto; flex: 0 0 auto; padding-block: 2px;}
+.browser-page-tab {display: flex; max-width: 190px; flex: 0 0 auto; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); overflow: hidden;}
+.browser-page-tab button {border: 0; border-radius: 0; background: transparent; padding: 4px 6px; min-height: 26px;}
+.browser-page-tab button[role="tab"] {overflow: hidden; text-overflow: ellipsis; max-width: 155px;}
+.browser-page-tab button[aria-selected="true"] {background: var(--bg-raised); color: var(--accent);}
+.browser-resolution {color: var(--muted);}
+.browser-resolution label {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-tight); min-width: 0;}
+.browser-resolution select {font-size: var(--text-small); max-width: 190px;}
+.browser-resolution small {margin-left: auto; white-space: nowrap;}
+.browser-resolution form {display: flex; align-items: center; gap: var(--space-tight); width: 100%;}
+.browser-resolution input {width: 76px;}
+.browser-viewport {position: relative; display: grid; place-items: center; flex: 1 1 220px; min-height: 150px; overflow: hidden; background: var(--bg-panel); border: var(--line-hairline) solid var(--border); outline: none; touch-action: none; overscroll-behavior: contain;}
+.browser-viewport img {position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; user-select: none;}
+.browser-viewport.has-control {cursor: default;}
+.browser-viewport:focus-visible {outline: 2px solid var(--accent); outline-offset: -2px;}
+.browser-empty {color: var(--muted);}
+.browser-hint {margin: 0; color: var(--muted); font-size: var(--text-small);}
+.browser-dialog, .browser-confirm, .browser-upload {padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel);}
+.browser-dialog p, .browser-confirm p {margin: 0 0 var(--space-tight); white-space: pre-wrap; overflow-wrap: anywhere;}
+.browser-dialog button, .browser-confirm button {margin-right: var(--space-tight);}
+.browser-dialog input {width: 100%; margin-bottom: var(--space-tight);}
+.browser-upload {display: grid; gap: var(--space-tight); max-height: 260px; overflow: auto;}
+.browser-upload label {display: flex; align-items: center; gap: var(--space-tight); overflow-wrap: anywhere;}
+.browser-upload label:has(textarea) {display: grid;}
+.browser-upload textarea {min-height: 54px; resize: vertical;}
+.browser-error {margin: 0; color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere;}
+.browser-downloads {display: flex; align-items: center; gap: var(--space-tight);}
+.browser-downloads span {overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;}

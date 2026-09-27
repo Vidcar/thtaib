@@ -33,9 +33,10 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   const [selectedHwnd, setSelectedHwnd] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [confirmBrowserReset, setConfirmBrowserReset] = useState(false);
   const needsWindowGrant = desktopAccess !== "off" && Boolean(conversationId) && (windowAccess?.scope !== desktopAccess || windowAccess?.stale || (desktopAccess === "selected" && !windowAccess?.selected_window?.hwnd));
   const lastRuntimeState = useRef<string | null>(null);
-  const runtimeState = JSON.stringify([browserRuntime?.supported, browserRuntime?.installed, browserSession?.state, windowRuntime?.available, windowRuntime?.installed, windowAccess?.scope, windowAccess?.stale, windowAccess?.selected_window?.hwnd]);
+  const runtimeState = JSON.stringify([browserRuntime?.supported, browserRuntime?.installed, browserRuntime?.chrome_available, browserRuntime?.chrome_version, browserSession?.state, windowRuntime?.available, windowRuntime?.installed, windowAccess?.scope, windowAccess?.stale, windowAccess?.selected_window?.hwnd]);
 
   useEffect(() => {
     if (lastRuntimeState.current !== null && lastRuntimeState.current !== runtimeState) onReadinessChange?.();
@@ -53,7 +54,7 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
   // polling therefore stop when the menu closes.
   useEffect(() => {
     let stale = false;
-    setBrowserSession(null); setWindowAccess(null); setWindows([]); setChoosingWindow(false); setError("");
+    setBrowserSession(null); setWindowAccess(null); setWindows([]); setChoosingWindow(false); setError(""); setConfirmBrowserReset(false);
     void Promise.allSettled([
       api.browserRuntime(), api.windowRuntime(),
       threadId ? api.browserSession(threadId) : Promise.resolve(null),
@@ -130,7 +131,7 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
     });
   }
 
-  const browserStatus = browserRuntime?.supported === false ? "Unsupported" : browserRuntime?.installed ? browserSession?.state ?? "Installed" : browserRuntime ? "Needs install" : "Checking";
+  const browserStatus = browserRuntime?.supported === false ? "Unsupported" : browserRuntime?.chrome_available === false ? "Needs Chrome" : browserRuntime?.installed ? browserSession?.state ?? "Installed" : browserRuntime ? "Needs install" : "Checking";
   const windowsStatus = windowRuntime?.available ? desktopAccess === "off" ? "Off" : needsWindowGrant || !conversationId ? "Needs grant" : desktopAccess === "selected" ? "Selected" : "All" : windowRuntime?.installed ? "Unavailable" : windowRuntime ? "Needs install" : "Checking";
 
   return <div className="visual-testing-controls" role="group" aria-label="Browser and Windows tools">
@@ -140,10 +141,12 @@ export function VisualTestingControls({ conversationId, threadId, browserEnabled
         <label className="visual-testing-switch"><input type="checkbox" aria-label="Browser tools" checked={browserEnabled} disabled={disabled || Boolean(busy)} onChange={event => { onBrowserEnabled(event.target.checked); onReadinessChange?.(); }} />{browserEnabled ? "On" : "Off"}</label>
       </div>
       {expanded === "browser" ? <div className="visual-testing-detail">
-        <p className="hint">Isolated pages and screenshots. A vision model is needed to judge an image; any model can inspect page structure.</p>
+        <p className="hint">Chrome runs inside the Browser tab. This chat retains its own sign-ins. Any model can inspect page structure; screenshots need image support.</p>
+        {browserRuntime?.chrome_available === false ? <p className="hint">Install Chrome to use the browser. Worker installation is separate.</p> : browserRuntime?.chrome_version ? <p className="hint">Chrome {browserRuntime.chrome_version}</p> : null}
         {browserRuntime?.supported === false ? <p className="hint">The managed browser worker currently needs Windows x64.</p> : null}
         {!browserRuntime?.installed && browserRuntime?.supported !== false ? <button type="button" disabled={disabled || Boolean(busy)} onClick={() => void perform("install-browser", async () => { setBrowserRuntime(await api.installBrowserRuntime()); onReadinessChange?.(); })}>{busy === "install-browser" ? "Installing…" : "Install browser worker"}</button> : null}
-        {browserRuntime?.installed ? <div className="visual-testing-session"><span>Session: {threadId ? browserSession?.state ?? "checking" : "starts with this chat"}</span>{threadId ? <><button type="button" disabled={disabled || Boolean(busy)} onClick={() => void perform("reset-browser", async () => { setBrowserSession(await api.resetBrowserSession(threadId)); onReadinessChange?.(); })}>Reset</button><button type="button" disabled={disabled || Boolean(busy) || browserSession?.state === "closed"} onClick={() => void perform("close-browser", async () => { setBrowserSession(await api.closeBrowserSession(threadId)); onReadinessChange?.(); })}>Close</button></> : null}</div> : null}
+        {browserRuntime?.installed ? <div className="visual-testing-session"><span>Session: {threadId ? browserSession?.state ?? "checking" : "starts with this chat"}</span>{threadId ? <><button type="button" disabled={disabled || Boolean(busy)} onClick={() => setConfirmBrowserReset(true)}>Reset</button><button type="button" disabled={disabled || Boolean(busy) || browserSession?.state === "closed"} onClick={() => void perform("close-browser", async () => { setBrowserSession(await api.closeBrowserSession(threadId)); onReadinessChange?.(); })}>Close</button></> : null}</div> : null}
+        {confirmBrowserReset && threadId ? <div className="visual-testing-session" role="alertdialog" aria-label="Reset this chat browser"><p>Reset closes Chrome and clears this chat’s sign-ins and browser data.</p><button type="button" disabled={disabled || Boolean(busy)} onClick={() => { setConfirmBrowserReset(false); void perform("reset-browser", async () => { setBrowserSession(await api.resetBrowserSession(threadId)); onReadinessChange?.(); }); }}>Clear sign-ins and reset</button><button type="button" onClick={() => setConfirmBrowserReset(false)}>Cancel</button></div> : null}
       </div> : null}
     </div>
     <div className="visual-testing-capability">

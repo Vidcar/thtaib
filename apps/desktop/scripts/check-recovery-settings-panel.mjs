@@ -252,13 +252,16 @@ async function checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettings
 
   await submitBackup(renderer, "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups");
   const typedFolderRequest = backupRequests(requests).at(-1);
+  assert.equal(typedFolderRequest.body.include_browser_profiles, false, "browser sign-ins stay out of backups by default");
   assertNestedBackupArchive(
     typedFolderRequest.body.destination,
     "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups",
   );
 
+  await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Include browser sign-ins (sensitive)" }).props.onClick());
   await submitBackup(renderer, "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups\\");
   const trailingSeparatorRequest = backupRequests(requests).at(-1);
+  assert.equal(trailingSeparatorRequest.body.include_browser_profiles, true, "the sensitive backup choice is sent explicitly");
   assertNestedBackupArchive(
     trailingSeparatorRequest.body.destination,
     "D:\\CodeProjects\\thtaib\\.scratch\\packet03-native-backups",
@@ -305,7 +308,7 @@ function themeSelect(renderer) {
 }
 
 function preferenceCheckboxes(renderer) {
-  const controls = renderer.root.findAll((node) => node.type === "button" && node.props.role === "switch");
+  const controls = renderer.root.findAll((node) => node.type === "button" && node.props.role === "switch" && node.props["aria-label"] !== "Include browser sign-ins (sensitive)");
   assert.equal(controls.length, 3, "all three boolean preferences use independent switches");
   return controls;
 }
