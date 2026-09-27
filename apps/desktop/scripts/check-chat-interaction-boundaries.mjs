@@ -1548,9 +1548,10 @@ async function testPendingSubmitDoesNotReusePreviousCancelledStatus(vite) {
       await Promise.resolve();
     });
     await waitFor(() => assert.equal(harness.state.requests.commands.length, 1), "pending follow-up command held");
-    const waiting = renderer.root.findByProps({ className: "chat-waiting" });
-    assert.equal(waiting.props.role, "status", "waiting is announced once in the answer area");
-    assert.match(textOf(waiting), /Preparing reply/, "pending submit shows its own preparation status");
+    const waiting = renderer.root.findByProps({ className: "chat-measurements" });
+    assert.equal(waiting.findAllByProps({role:"status"}).length, 1, "pending admission is announced once beside Stop");
+    assert.match(textOf(waiting), /Starting/, "pending submit shows its own preparation status");
+    assert.equal(renderer.root.findAllByProps({className:"chat-waiting"}).length, 0, "there is no duplicate transcript progress");
     assert.doesNotMatch(textOf(waiting), /Cancelled|Stopped/, "pending submit must not reuse previous terminal run status");
     assert.equal(buttonByAriaLabel(renderer, "Starting…").props.disabled, true,
       "a pending submission without an accepted run cannot queue another message");
@@ -1602,14 +1603,14 @@ async function testPendingSubmitStopUsesPendingInputIdentity(vite) {
       "pending stop must carry the pending input identity",
     );
     assert.deepEqual(harness.state.requests.cancels, [], "pending stop must not cancel the previous terminal run");
-    assert.match(allText(renderer), /Working(?:(?!This can continue).)*Stopping submission/s, "pending stop should show an in-flight stopping state");
+    assert.equal(composerStatus(renderer), "Stopping", "pending stop should show an in-flight stopping state beside Stop");
     harness.state.conversations.conv_a.title = "Stop acknowledged";
     heldStop.resolve();
     await waitFor(() => button(renderer, "Stop acknowledged"), "cancel acknowledgment rendered");
-    assert.match(allText(renderer), /Working(?:(?!This can continue).)*Stopping submission/s,
+    assert.equal(composerStatus(renderer), "Stopping",
       "acknowledgment with only the previous terminal run must not claim pending work stopped");
     heldCommand.resolve();
-    await waitFor(() => assert.doesNotMatch(allText(renderer), /Stopping submission/), "accepted submit clears pending stop");
+    await waitFor(() => assert.notEqual(composerStatus(renderer), "Stopping"), "accepted submit clears pending stop");
     await waitFor(() => assert.match(allText(renderer), /accepted 1/), "accepted submit renders after pending stop clears");
   } finally {
     heldStop.resolve();
@@ -1636,8 +1637,8 @@ async function testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear(vit
       button(renderer, "Conversation A").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.match(allText(renderer), /Working(?:(?!This can continue).)*Stopping submission/s), "reopened pending cancel shows stopping");
-    assert.doesNotMatch(allText(renderer), /Working(?:(?!This can continue).)*Cancelled/s, "reopened pending cancel does not show previous terminal run as current work");
+    await waitFor(() => assert.equal(composerStatus(renderer), "Stopping"), "reopened pending cancel shows stopping");
+    assert.doesNotMatch(textOf(renderer.root.findByProps({className:"chat-measurements"})), /Cancelled/, "reopened pending cancel does not show previous terminal run as current work");
     assert.equal(buttons(renderer, "Stop").at(-1).props.disabled, true, "durable pending cancel must not cancel previous terminal run");
     await act(async () => {
       button(renderer, "New").props.onClick();
@@ -1648,7 +1649,7 @@ async function testReopenedPendingCancelShowsStoppingUntilAuthoritativeClear(vit
       button(renderer, "Conversation A").props.onClick();
       await Promise.resolve();
     });
-    await waitFor(() => assert.doesNotMatch(allText(renderer), /Stopping submission/), "authoritative terminal view clears pending cancel");
+    await waitFor(() => assert.notEqual(composerStatus(renderer), "Stopping"), "authoritative terminal view clears pending cancel");
     await waitFor(() => assert.equal(selectedRunId(renderer), "run_after_pending_cancel"), "authoritative terminal run selected after pending cancel clears");
     await waitFor(() => assert.equal((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 3, true), "terminal hydration fetched after cleared pending cancel");
     assert.equal(selectedRunId(renderer), "run_after_pending_cancel", "stale terminal hydration must not restore the previous cancelled run");
@@ -2244,7 +2245,7 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
   const other = { ...run("measurement_run_b"), generation_observation: null, context_observation: context(300) };
   const measured = {
     ...initial,
-    generation_observation: { input_tokens: 1200, output_tokens: 456, elapsed_seconds: 10, tokens_per_second: 45.6, context_limit: 8192, measured_at: now() },
+    generation_observation: { request_id:"measurement-request", phase:"generating", input_tokens: 1200, output_tokens: 456, elapsed_seconds: 10, tokens_per_second: 45.6, context_limit: 8192, measured_at: now() },
     context_observation: initial.context_observation,
   };
   const harness = makeHarness({ aRun: initial, bRun: other });
@@ -2295,6 +2296,77 @@ async function testMeasurementOnlyProjectionRefreshesCurrentConversation(vite) {
   }
 }
 
+function composerStatus(renderer) {
+  return renderer.root.findByProps({className:"chat-measurements"}).findAllByProps({role:"status"}).map(textOf).join("");
+}
+
+async function testActivityOnlyProjectionUpdatesComposer(vite) {
+  const messages = [{id:"activity-input",type:"human",content:"Read then explain"},
+    {id:"activity-reply",type:"ai",content:[{type:"reasoning",reasoning:"Returned reasoning."}]}];
+  const initial = {...run("activity-run", "running", "activity-input"), messages, activity_phase:"using_tools",
+    generation_observation:{request_id:"before-tool",phase:"completed",input_tokens:20,output_tokens:10,tokens_per_second:20}};
+  const other = {...run("other-activity-run"),activity_phase:"using_tools"};
+  const harness = makeHarness({aRun:initial,bRun:other});
+  const renderer = await renderChat(vite,harness);
+  const publish = async (next, thread="thread_a", incomplete=true) => {
+    if (thread === "thread_a") {
+      harness.state.conversations.conv_a = {...harness.state.conversations.conv_a,current_run:next};
+      harness.state.streamRuns.set(thread,next);
+    }
+    const frame = streamFrame(next);
+    frame.params.data.workbench.incomplete_message_ids = incomplete ? ["activity-reply"] : [];
+    await act(async () => {harness.state.openStreams.get(thread).write(`data: ${JSON.stringify(frame)}\n\n`);await Promise.resolve();});
+  };
+  try {
+    await waitFor(()=>button(renderer,"Conversation A"),"chat list");
+    await act(async()=>button(renderer,"Conversation A").props.onClick());
+    await waitFor(()=>assert.ok(harness.state.openStreams.has("thread_a")),"A stream connected");
+    await waitFor(()=>assert.equal(composerStatus(renderer),"Using tools"),"initial tool phase");
+    const measured = {...initial,activity_phase:"thinking",generation_observation:{request_id:"after-tool",phase:"generating",input_tokens:30,output_tokens:12,tokens_per_second:31}};
+    assert.equal(measured.events.length,initial.events.length,"activity update has no audit event");
+    await publish(measured);
+    await waitFor(()=>assert.equal(composerStatus(renderer),"Generating"),"activity-only transition reaches composer");
+    assert.match(allText(renderer),/Returned reasoning\./);
+    assert.equal(renderer.root.findAllByProps({className:"message-state"}).length,0,"main Chat has no active message badge");
+    assert.equal(renderer.root.findAllByProps({className:"chat-waiting"}).length,0,"main Chat has no generic progress line");
+    const measurements = ()=>renderer.root.find(node=>typeof node.type==="function"&&node.type.name==="ChatMeasurements");
+    assert.equal(measurements().props.run.activity_phase,"using_tools","phase-only updates do not rebuild the full conversation");
+    const pending = {kind:"deepagents_interrupt_on",environment:"windows_host_shell",isolation:"none",
+      action_requests:[{name:"execute",args:{command:"echo ok"},allowed_decisions:["approve","reject"]}]};
+    for (const [patch,label] of [
+      [{activity_phase:"using_tools"},"Using tools"],
+      [{activity_phase:"thinking",generation_observation:null},"Working"],
+      [{activity_phase:"thinking",generation_observation:{request_id:"next",phase:"prompt_processing"}},"Preparing"],
+      [{activity_phase:"summarizing"},"Summarizing"],
+      [{pending_interrupt:pending},"Waiting"],
+      [{status:"cancel_requested"},"Stopping"],
+      [{finalization_phase:"saving_changes"},"Saving project state"],
+    ]) {
+      await publish({...measured,...patch});
+      await waitFor(()=>assert.equal(composerStatus(renderer),label),`same-event-count ${label}`);
+      assert.equal(renderer.root.findAllByProps({className:"message-state"}).length,0);
+    }
+    await publish({...measured,generation_observation:null});
+    await waitFor(()=>assert.equal(renderer.root.findByProps({className:"chat-measurements"}).props["data-tokens-per-second"],""),"new call clears prior speed rather than falling back to cached run");
+    const cancelled = {...measured,status:"cancelled",activity_phase:null,generation_observation:{...measured.generation_observation,phase:"interrupted"}};
+    await publish(cancelled);
+    await waitFor(()=>assert.equal(composerStatus(renderer),"Stopped"),"confirmed interruption replaces live activity");
+    await waitFor(()=>assert.equal(textOf(renderer.root.findByProps({className:"message-state"})),"Partial"),"cancelled response retains Partial");
+    const completed = {...measured,status:"completed"};
+    await publish(completed,"thread_a",false);
+    await waitFor(()=>assert.equal(composerStatus(renderer),""),"terminal run ignores retained generation phase");
+    await act(async()=>button(renderer,"Conversation B").props.onClick());
+    await waitFor(()=>assert.ok(harness.state.openStreams.has("thread_b")),"B stream connected");
+    await waitFor(()=>assert.equal(composerStatus(renderer),"Using tools"),"B owns composer");
+    await publish(measured,"thread_b");
+    await flush();
+    assert.equal(composerStatus(renderer),"Using tools","late A activity cannot replace B");
+    await act(async()=>button(renderer,"Conversation A").props.onClick());
+    await waitFor(()=>assert.equal(measurements().props.run?.status,"completed"),"reopened A terminal state");
+    assert.equal(composerStatus(renderer),"","reopening cannot reuse the previous live owner snapshot");
+  } finally {await closeHarness(renderer,harness);}
+}
+
 async function testSavingProjectStateDisablesStop(vite) {
   const initial = run("run_a");
   const finalizing = { ...initial, finalization_phase: "saving_changes", settled_status: "completed",
@@ -2343,7 +2415,8 @@ async function testUnknownProjectionAdoptsAuthoritativeNewCurrentRun(vite) {
     await waitFor(() => assert.ok((harness.state.chatGetCounts.get("conv_a") ?? 0) >= 2), "unknown projection authoritative lookup");
     await waitFor(() => assert.equal(selectedRunId(renderer), nextRun.id), "authoritative new run adopted from ownership lookup");
     assert.equal(button(renderer, "Stop").props.disabled, false, "the composer Stop control is the running stop");
-    assert.doesNotMatch(allText(renderer), /Working/, "an observed active run has no duplicate generic progress row");
+    assert.equal(composerStatus(renderer), "Working", "an active run without a precise phase has a truthful composer fallback");
+    assert.equal(renderer.root.findAllByProps({className:"chat-waiting"}).length, 0, "an observed active run has no duplicate generic progress row");
     assert.match(allText(renderer), /new queued answer/, "authoritative new stream output renders");
   } finally {
     await closeHarness(renderer, harness);
@@ -3494,6 +3567,7 @@ try {
     ["stopped managed deployment shows load-on-send notice", testStoppedManagedDeploymentShowsLoadOnSendNotice],
     ["unknown projection requires authoritative current run", testUnknownProjectionRequiresAuthoritativeCurrentRun],
     ["measurement-only projection refresh and isolation", testMeasurementOnlyProjectionRefreshesCurrentConversation],
+    ["activity-only composer transitions and isolation", testActivityOnlyProjectionUpdatesComposer],
     ["saving project state disables Stop", testSavingProjectStateDisablesStop],
     ["unknown projection adopts authoritative new current run", testUnknownProjectionAdoptsAuthoritativeNewCurrentRun],
     ["older unknown projection lookup cannot overwrite newer adopted run", testOlderUnknownProjectionLookupCannotOverwriteNewerAdoptedRun],

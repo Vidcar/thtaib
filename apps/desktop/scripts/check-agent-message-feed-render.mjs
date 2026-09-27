@@ -331,7 +331,18 @@ try {
     }));
     assert.equal(phaseMarkup.match(/class="message-state"[^>]*>([^<]+)</)?.[1], expected,
       `phase ${phase ?? generationPhase} must describe actual work before/after answer text`);
+    const compactPhase = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+      messages: [new AIMessage({ id: "phase-message", content: [{type:"reasoning",reasoning:"Returned reasoning."}, {type:"text",text:answer}] })],
+      live: true, currentRunId: phaseRun.id, helperRuns: [phaseRun], showLiveMessageStatus: false,
+    }));
+    assert.doesNotMatch(compactPhase, /class="message-state"/, "main Chat hides duplicate live badges");
+    assert.match(compactPhase, /Returned reasoning\./, "removing a status does not remove reasoning");
   }
+  const compactPartial = renderToStaticMarkup(React.createElement(AgentMessageFeed, {
+    messages: [new AIMessage({id:"partial-message",content:"Retained interrupted text."})],
+    live:false, incompleteMessageIds:new Set(["partial-message"]), showLiveMessageStatus:false,
+  }));
+  assert.match(compactPartial, /Incomplete response[^>]*>Partial</, "stopped incomplete content retains its historical marker");
   const historical = renderToStaticMarkup(React.createElement(AgentMessageFeed, {messages: [
     new AIMessage({id: "saved-call", content: "", tool_calls: [{id: "call-old", name: "lookup", args: {q: "retained"}}]}),
     new ToolMessage({id: "saved-result", tool_call_id: "call-old", name: "lookup", content: "Saved lookup result"}),

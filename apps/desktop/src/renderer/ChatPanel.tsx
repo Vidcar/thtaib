@@ -44,11 +44,9 @@ import { errorMessage } from "./errors";
 import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, type WorkbenchStream } from "./InteractionStream";
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
-import { StatusBadge } from "./StatusBadge";
 import {
   isAgentRunLive,
   isDeclaredEmbedder,
-  visiblePendingInterrupt,
   type ChatConversation,
   type ChatMessage,
   type AgentRun,
@@ -289,20 +287,7 @@ function ChatInteractionStreamContent(props: {
   if (projectionRunOwned) verifiedProjection.current = projection;
   const displayProjection = projectionRunOwned ? projection : verifiedProjection.current;
   const displayRun = displayProjection?.run ?? null;
-  const savingProjectState = projectionRunOwned && run?.finalization_phase === "saving_changes";
   const visibleInterrupt = visibleApprovalInterrupt(stream, run ?? conversation.current_run);
-  const inputId = pendingSubmit?.id ?? run?.input_message_id;
-  const reverseInputIndex = [...projection.messages].reverse().findIndex(message => inputId ? message.id === inputId : message.getType() === "human");
-  const inputIndex = reverseInputIndex < 0 ? -1 : projection.messages.length - reverseInputIndex - 1;
-  const hasTurnOutput = inputIndex >= 0 && projection.messages.slice(inputIndex + 1).some(message =>
-    message.getType() !== "human" && (message.content.length > 0 || Boolean((message as { tool_calls?: unknown[] }).tool_calls?.length)),
-  ) || (inputId === run?.input_message_id && projection.toolCalls.some(call =>
-    ((call.status as string) === "preparing" || call.status === "running") &&
-    ((run?.events ?? []).some(event => event.kind === "tool_call" && event.detail.id === (call.callId || call.id)) ||
-      projection.workbench?.tool_origins?.some(origin => origin.run_id === run?.id && origin.call_id === (call.callId || call.id))),
-  ));
-  const waitingForOutput = projectionRunOwned && !savingProjectState && !visibleInterrupt && !hasTurnOutput &&
-    Boolean(pendingSubmit || (run && isAgentRunLive(run.status)));
   const currentParentRun = displayRun ?? (projectionRunOwned ? conversation.current_run : null);
   const helperRuns = [...props.historicalRuns, ...(currentParentRun ? [currentParentRun] : [])];
   const helpers = helperEntries(helperRuns, projectionRunOwned ? stream.subagents.values() : [], currentParentRun?.id);
@@ -349,7 +334,7 @@ function ChatInteractionStreamContent(props: {
   }, [conversation.current_run_id, conversation.id, isCurrentOwner, owner, projectionBlockedByPendingCancel, projectionMatchesPendingSubmit, projectionRunOwned, run, setMessage, updateConversationIfCurrentRun]);
 
   useEffect(() => {
-    if (!run || !projectionRunOwned) {
+    if (!run || !projectionRunOwned || !isCurrentOwner(owner)) {
       return;
     }
     const signature = JSON.stringify({
@@ -360,7 +345,12 @@ function ChatInteractionStreamContent(props: {
       childRuns: run?.child_runs?.map(child => `${child.tool_call_id}:${child.status}:${child.namespace.join("|")}`) ?? [],
     });
     publishLiveMeasurement({
+      ownerKey: JSON.stringify([owner.conversationId, owner.threadId, owner.generation]),
       runId: run.id,
+      status: run.status,
+      activityPhase: run.activity_phase,
+      finalizationPhase: run.finalization_phase,
+      waiting: Boolean(run.pending_interrupt),
       generation: run.generation_observation,
       context: run.context_observation,
     });
@@ -383,7 +373,7 @@ function ChatInteractionStreamContent(props: {
       run_ids: run && !conversation.run_ids.includes(run.id) ? [...conversation.run_ids, run.id] : conversation.run_ids,
       updated_at: new Date().toISOString(),
     }, owner);
-  }, [clearPendingSubmit, clearSubmittedDraft, conversation, owner, pendingSubmit, projectionMatchesPendingSubmit, projectionRunOwned, refreshDeployments, run, updateConversation]);
+  }, [clearPendingSubmit, clearSubmittedDraft, conversation, isCurrentOwner, owner, pendingSubmit, projectionMatchesPendingSubmit, projectionRunOwned, refreshDeployments, run, updateConversation]);
 
   useEffect(() => {
     if (!run || !projectionRunOwned || isAgentRunLive(run.status)) {
@@ -493,7 +483,7 @@ function ChatInteractionStreamContent(props: {
 
   return (
     <>
-        <AgentMessageFeed waiting={Boolean(projectionRunOwned && visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} currentInputMessageId={currentParentRun?.input_message_id} toolOrigins={displayProjection?.workbench?.tool_origins} toolCallOrigins={displayProjection?.toolCallOrigins} toolAuthorizations={displayRun?.tool_authorizations} toolAuthorizationGrants={displayRun?.tool_authorization_grants} live={displayRun ? isAgentRunLive(displayRun.status) : projectionRunOwned && stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={displayProjection?.messages ?? []} toolCalls={displayProjection?.toolCalls ?? []} incompleteMessageIds={displayProjection?.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageContent={message => {
+        <AgentMessageFeed showLiveMessageStatus={false} waiting={Boolean(projectionRunOwned && visibleInterrupt)} onHelperOpen={props.onHelperOpen} helperName={helperName} helperStatus={helperStatus} hiddenHelperResultIds={new Set(helpers.map(helper => helper.key))} helperRuns={helperRuns} currentRunId={currentParentRun?.id} currentInputMessageId={currentParentRun?.input_message_id} toolOrigins={displayProjection?.workbench?.tool_origins} toolCallOrigins={displayProjection?.toolCallOrigins} toolAuthorizations={displayRun?.tool_authorizations} toolAuthorizationGrants={displayRun?.tool_authorization_grants} live={displayRun ? isAgentRunLive(displayRun.status) : projectionRunOwned && stream.isLoading} sourceScope={{ sessionId: conversation.id, projectPath: conversation.project_path ?? undefined }} messages={displayProjection?.messages ?? []} toolCalls={displayProjection?.toolCalls ?? []} incompleteMessageIds={displayProjection?.incompleteMessageIds} detailedStreams={props.detailedStreams} renderMessageFooter={props.renderMessageFooter} renderAnswerActions={props.renderAnswerActions} userMessageContent={message => {
           const retained = conversation.transcript.find(item => item.id === message.id && item.role === "user");
           if (!retained) return undefined;
           // Model-only context is never part of the submitted user message.
@@ -503,8 +493,6 @@ function ChatInteractionStreamContent(props: {
           ];
         }} />
       {projectionRunOwned ? <RunActivitySummary run={run} showHelpers={false} onRecover={props.onRecoverRun} /> : null}
-      {savingProjectState ? <div className="chat-waiting" role="status">Saving project state…</div> : null}
-      {waitingForOutput ? <div className="chat-waiting" role="status"><span className="chat-waiting-dot" aria-hidden="true" />{pendingSubmit ? "Preparing reply…" : run?.status === "cancel_requested" ? "Stopping…" : "Thinking…"}</div> : null}
       {projectionRunOwned && visibleInterrupt ? (
         <InterruptApproval
           ownerLabel={helperApprovalOwner(run, visibleInterrupt.namespace)}
@@ -1216,7 +1204,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
   const selectedAgent = agentSetups.find(setup => setup.current_version_id === agentSetupVersionId);
   const hasModelChoice = Boolean(selectedProfile || deployments.some(item => item.id === deploymentId));
-  const pendingInterrupt = visiblePendingInterrupt(conversation?.current_run);
   const embedderDeployments = deployments.filter((item) => isDeclaredEmbedder(item));
   const chatDeployments = deployments.filter((item) => !isDeclaredEmbedder(item));
   const modelChoices = chatDeployments.length > 0 ? chatDeployments : deployments;
@@ -1923,17 +1910,6 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               </article>
             ))
           )}
-          {runBusy && !pendingInterrupt && (pendingStopActive || !canObserveInteraction) ? (
-            <p className="hint" role="status">
-              {savingProjectState ? "Saving project state…" : "Working…"} {pendingStopActive ? (
-                <StatusBadge label="Stopping submission" tone="warn" />
-              ) : savingProjectState ? null : pendingSubmissionActive ? (
-                <StatusBadge label="Loading model" tone="live" />
-              ) : (
-                <StatusBadge status={conversation?.current_run?.status} />
-              )}
-            </p>
-          ) : null}
         </div>
 
         {recoveryRun && conversation?.run_ids.includes(recoveryRun.id) ? <section className="run-failure" aria-label="Unconfirmed effects">
@@ -2129,7 +2105,7 @@ export function ChatPanel(props: ChatPanelProps = {}) {
             </div>}</MenuPopover>
             <MenuPopover label="Named helpers" align="end" trigger={<><Icon name="sparkles" size={16} />{helperAgentIds.length ? <span>{helperAgentIds.length}</span> : null}</>} disabled={selectionBusy || sending}><h3>Helpers</h3>{agentSetups.length ? agentSetups.map(agent => <label className="helper-choice" key={agent.id}><input type="checkbox" checked={helperAgentIds.includes(agent.id)} disabled={Boolean(agent.helper_missing_dependencies?.length)} title={agent.helper_missing_dependencies?.map(issue => issue.reason).join(", ")} onChange={event => { markSetupEdited("helper_agent_ids"); setHelperAgentIds(current => event.target.checked ? [...current, agent.id] : current.filter(id => id !== agent.id)); }} /><span>{agent.name}<small>{helperModelLabel(agent)}</small></span></label>) : <p className="hint">Create an agent to choose a helper.</p>}<div className="menu-section"><small className="hint">Only selected helpers can run. Helpers cannot delegate again.</small><button type="button" className="menu-action" onClick={() => navigateAway("agents")}>Manage agents</button></div></MenuPopover>
             <span className="composer-spacer" />
-            <ChatMeasurements run={conversation?.current_run} />
+            <ChatMeasurements run={conversation?.current_run} ownerKey={JSON.stringify([conversation?.id, interactionThreadId, boundGeneration])} starting={pendingSubmissionActive || (sending && !currentRunLive)} stopping={pendingStopActive} />
             <button
               type="button"
               aria-label={savingProjectState ? "Saving project state" : pendingStopActive ? "Stopping…" : "Stop"}

@@ -266,6 +266,10 @@ Context details SHALL open on pointer hover and keyboard focus, with touch acces
 
 Opening the application or restoring a chat SHALL NOT warm its selected model. Sending with an unloaded installed managed model SHALL load the selected setup through the existing manager and admission path, show waiting/loading/readiness, then submit once ready. Failure SHALL preserve input and offer recovery. A passive status probe MUST NOT cause loading. Active-work protections and connected-endpoint ownership MUST NOT be bypassed and models/settings MUST NOT be silently substituted.
 
+Chat SHALL expose one live activity status beside the composer Stop control. Model output SHALL be labelled Generating without inferring current reasoning from retained content. Current tool execution, prompt preparation, summarization, approval waiting, finalization and cancellation SHALL remain distinguishable; pending admission SHALL show Starting and unknown active activity SHALL show Working. Activity-only changes SHALL update the status even without a new audit event. Terminal work SHALL NOT retain a live activity label, and late observations from another selection or run SHALL NOT replace the selected status. Measurement updates SHALL remain isolated from transcript rendering.
+
+The context/speed hover panel SHALL retain total context, capacity, percentage and available input-total, cached-input, newly-processed-input and output counts in aligned label/value rows. Numbers SHALL remain intact at narrow widths and larger text sizes. Cached and newly processed input SHALL be identified as subdivisions of input total. Current and last-request speed, estimates and unavailable measurements SHALL remain explicit.
+
 #### Scenario: Unsupported reasoning and unavailable telemetry
 - **WHEN** the selected model lacks a supported thinking-off control or supplies no usable token measurement
 - **THEN** the control/measurement explicitly reflects that limitation rather than claiming thinking is off or showing an invented tok/s value.
@@ -290,11 +294,23 @@ Opening the application or restoring a chat SHALL NOT warm its selected model. S
 - **WHEN** the user selects Balanced or Deep and later an internal summary runs
 - **THEN** Chat SHALL show the effective supported thinking/response limits and distinguish work, summary, cached input, current measurements and completed measurements without inventing unavailable values.
 
+#### Scenario: Tool activity changes without an audit event
+
+- **WHEN** an owned live run changes from tools to model generation without increasing its audit event count
+- **THEN** the composer status changes from Using tools to Generating with the current measurements
+- **AND** late events from another conversation or completed run cannot restore stale activity.
+
+#### Scenario: Read measurements in a narrow panel
+
+- **WHEN** all four token counts are available in a narrow window or with larger text
+- **THEN** each label and intact number occupies a readable aligned row
+- **AND** the panel explains input subdivisions and whether the speed is current or from the last request.
+
 ### Requirement: API-018 - Keep answer streaming independent of detail visibility
 
 Answer text SHALL always appear incrementally, including through a long reply. Painting the reply MUST stay with generation: earlier finished messages, and finished parts of the same reply, stay in place and remain readable. A compact Reasoning and tools switch in the header's Conversation view menu SHALL default off and remember the user's preference across conversations/reopening. Its presentation controls stay distinct from model Thinking and effort controls. Changing this switch SHALL only change the visibility of returned detail, never model reasoning or tool permissions. The composer Stop control is the only stop. Chat does not show a separate Activity row with its own cancel control. When enabled, available returned thinking, tool input, tool output and other raw detail SHALL be distinctly labelled apart from answers; absent streams MUST NOT be fabricated. When disabled, that expanded detail stays collapsed while answer text continues streaming. The planning checklist and the one-line activity rows in API-026 remain visible in both modes. Motion preferences SHALL be respected.
 
-While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. One status announces that a reply is being written, has stopped, or is waiting.
+While a reply is running and the person is already at the bottom, the transcript SHALL follow the newest line immediately. Scrolling away stops following. Returning to the bottom follows again. Following sets the position directly. Smooth scrolling is reserved for an explicit jump, such as opening a chat or a notice, and reduced motion stays immediate. A text selection inside the transcript MUST be left in place. An open reasoning section follows the newest line the same way until the person scrolls inside that section, and the full reasoning text stays reachable by scrolling. Token growth MUST NOT be announced as a stream of accessibility updates. The composer status is the sole generic live activity announcement. Main Chat SHALL NOT repeat it as active response badges or generic transcript progress lines. Returned reasoning and named tool/helper activity SHALL remain visible according to the presentation preference; interrupted historical responses SHALL retain their Partial markers.
 
 A speed or context measurement SHALL update its readout only. It MUST NOT rebuild the transcript, move the scroll position, delay the next tokens, or change execution.
 
@@ -348,6 +364,12 @@ Each output section SHALL independently expand/collapse through a heading or che
 - **WHEN** reasoning is open during a long trace and the person then scrolls up inside that section
 - **THEN** the section was following the newest line until that scroll
 - **AND** the earlier reasoning remains reachable.
+
+#### Scenario: One live status with retained reasoning
+
+- **WHEN** a response emits reasoning, executes tools and then generates an answer
+- **THEN** the composer alone shows the generic current activity while reasoning and named tool details remain inspectable
+- **AND** cancellation retains partial content, its Partial marker and actionable failures or approvals.
 
 ### Requirement: API-019 - Present queued work and scoped attention clearly
 

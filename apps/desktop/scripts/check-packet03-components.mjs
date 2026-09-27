@@ -120,12 +120,12 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.match(tipText(), /2,516/);
     assert.equal(renderer.root.findByProps({ role: "tooltip" }).props.style.left, 520, "usage is kept inside a narrow window");
     await update({ request_id: "call-a", phase: "generating", input_tokens: 1946, output_tokens: 59, context_used_tokens: 2005, context_limit: 65536, tokens_per_second: 43.29, basis: "llama_cpp_timings", interval: "current_model_call_generation" });
-    assert.match(tipText(), /Thinking/);
+    assert.match(tipText(), /Generating/);
     assert.match(tipText(), /2,005/);
     assert.doesNotMatch(tipText(), /Estimated|2,516/);
     assert.match(tipText(), /43.3 tok\/s/);
-    assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Thinking", "the screen-reader stage matches the visible model stage");
-    assert.match(textOf(trigger), /Thinking.*43.3 tok\/s/, "thinking is visible without opening the measurements popover");
+    assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Generating", "the screen-reader stage matches the visible model stage");
+    assert.match(textOf(trigger), /Generating.*43.3 tok\/s/, "generation is visible without opening the measurements popover");
     for (const [phase, label] of [["using_tools", "Using tools"], ["summarizing", "Summarizing"]]) {
       run = { ...run, activity_phase: phase };
       await act(async () => renderer.update(React.createElement(ChatMeasurements, { run })));
@@ -145,7 +145,8 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Saving project state");
     run = { ...run, finalization_phase: null };
     await update({ ...run.generation_observation, phase: "completed", interval: "last_model_call_generation" });
-    assert.match(tipText(), /Last work request/);
+    assert.match(tipText(), /Last request generation average/);
+    assert.equal(renderer.root.findByProps({ role: "status" }).children.join(""), "Working", "unknown active work does not infer a thinking phase");
     assert.doesNotMatch(tipText(), /Live/);
     await update(null);
     assert.match(tipText(), /Estimated/);
@@ -154,8 +155,18 @@ async function checkChatMeasurements(ChatMeasurements) {
     assert.match(tipText(), /Preparing/);
     assert.doesNotMatch(tipText(), /Estimated|0.0 tok\/s/, "zero reported context is real; missing speed is not zero");
     await update({ phase: "completed", input_tokens: 1946, output_tokens: 59, tokens_per_second: 38.7, basis: "reported_tokens_model_call_wall_time" });
-    assert.match(tipText(), /Including prompt processing/);
+    assert.match(tipText(), /including prompt processing/);
     assert.match(tipText(), /2,005/, "reported legacy usage is actual even without native timing fields");
+    await update({ phase: "completed", input_tokens: 26587, cached_input_tokens: 26506, processed_input_tokens: 81, output_tokens: 914, context_used_tokens: 27501, context_limit: 65536, tokens_per_second: 51.3, basis: "llama_cpp_timings" });
+    const rows = renderer.root.findByProps({ className: "usage-token-counts" }).children;
+    assert.deepEqual(rows.map(textOf), ["Input total26,587", "Cached input26,506", "Newly processed81", "Output914"]);
+    assert.match(tipText(), /parts of input total/);
+    assert.match(tipText(), /27,501.*65,536.*42%/);
+    for (const [patch, label] of [[{pending_interrupt:{}}, "Waiting"], [{pending_interrupt:null,status:"cancel_requested"}, "Stopping"], [{status:"queued"}, "Starting"]]) {
+      run = {...run,...patch};
+      await act(async () => renderer.update(React.createElement(ChatMeasurements, {run})));
+      assert.equal(renderer.root.findByProps({role:"status"}).children.join(""), label);
+    }
     await act(async () => listeners.get("keydown")({ key: "Escape", stopPropagation() {} }));
     assert.equal(renderer.root.findAllByProps({ role: "tooltip" }).length, 0);
     await act(async () => trigger.props.onFocus());
