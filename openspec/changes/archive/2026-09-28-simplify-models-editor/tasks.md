@@ -15,4 +15,4 @@
 ## 4. Delivery
 - [x] 4.1 Pass focused and standard backend/desktop/contracts/OpenSpec/whitespace checks.
 - [x] 4.2 Verify mounted Windows geometry, themes/scales/widths, keyboard, preset/setup flow and retained drafts.
-- [ ] 4.3 Synchronize/archive specs, review/merge and refresh established app; update handover.
+- [x] 4.3 Synchronize/archive specs, review/merge and refresh established app; update handover.
