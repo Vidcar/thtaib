@@ -450,10 +450,19 @@ class RetainedAssetService:
         *,
         session_id: str | None = None,
         project_path: str | None = None,
+        metadata_only: bool = False,
     ) -> None:
         with self.app_store._lock:
             for asset_id in dict.fromkeys(asset_ids):
-                self._load_content(asset_id, session_id=session_id, project_path=project_path)
+                if not metadata_only:
+                    self._load_content(asset_id, session_id=session_id, project_path=project_path)
+                    continue
+                asset = self.store.get_metadata(asset_id)
+                if asset is None:
+                    raise HTTPException(status_code=404, detail="Retained asset not found.")
+                if asset.deleted_at is not None:
+                    raise HTTPException(status_code=410, detail="Retained asset was deleted.")
+                self._check_access(asset, session_id=session_id, project_path=project_path)
 
     def deletion_preview(self, request: RetainedAssetDeletionRequest) -> RetainedAssetDeletionPreview:
         with self.app_store._lock:

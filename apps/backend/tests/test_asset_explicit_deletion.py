@@ -42,8 +42,11 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = ApplicationStore(WorkbenchPaths(Path(self.tmp.name)))
         self.assets = RetainedAssetService(self.store)
+        self.admission_apps = []
 
     def tearDown(self) -> None:
+        for app in self.admission_apps:
+            close_workbench_sqlite(app)
         close_workbench_sqlite(self.store)
         self.tmp.cleanup()
 
@@ -92,6 +95,18 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
             app_store=self.store,
             assets_provider=lambda: self.assets,
         )
+
+    def admitting_chat_service(self) -> ChatService:
+        """Exercise resolved input exclusions before the unchanged asset gate."""
+        from workbench_backend.inference.schemas import ConnectedDeploymentRequest
+        app = create_app(data_root=Path(self.tmp.name))
+        self.admission_apps.append(app)
+        deployment = app.state.manager.attach_connected(ConnectedDeploymentRequest(
+            display_name='Admission fixture', endpoint='http://127.0.0.1:9/v1'))
+        for conversation in self.store.list_conversations():
+            conversation.deployment_id = deployment.id
+            self.store.put_conversation(conversation)
+        return app.state.chat
 
     def test_explicit_unused_upload_delete_ignores_owner_provenance(self) -> None:
         self.put_conversation('chat_unused')
@@ -342,28 +357,32 @@ class ExplicitAssetDeletionTests(unittest.TestCase):
         asset = self.upload('chat_unused')
         self.assets.mark_deletable_assets_deleted(RetainedAssetDeletionRequest(asset_ids=[asset.id]))
 
+        service = self.admitting_chat_service()
         with self.assertRaises(HTTPException) as raised:
-            self.chat_service().enqueue(
+            service.enqueue(
                 'chat_target',
                 ChatStartRequest(task='queued stale attachment', attachment_ids=[asset.id]),
             )
 
         self.assertEqual(raised.exception.status_code, 410)
         self.assertEqual(self.store.get_conversation('chat_target').queue, [])
+        self.assertEqual(service.harness.list_runs(), [])
 
     def test_foreign_asset_cannot_be_enqueued(self) -> None:
         self.put_conversation('chat_owner')
         self.put_conversation('chat_target')
         asset = self.upload('chat_owner')
 
+        service = self.admitting_chat_service()
         with self.assertRaises(HTTPException) as raised:
-            self.chat_service().enqueue(
+            service.enqueue(
                 'chat_target',
                 ChatStartRequest(task='queued wrong scope', attachment_ids=[asset.id]),
             )
 
         self.assertEqual(raised.exception.status_code, 403)
         self.assertEqual(self.store.get_conversation('chat_target').queue, [])
+        self.assertEqual(service.harness.list_runs(), [])
 
     def test_public_asset_delete_rejects_owner_selectors_that_would_bypass_references(self) -> None:
         with tempfile.TemporaryDirectory() as root:

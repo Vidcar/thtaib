@@ -54,6 +54,15 @@ class RetainedAssetStore:
             return None
         return RetainedAsset.model_validate_json(row["payload"]), bytes(row["content"])
 
+    def get_metadata(self, asset_id: str) -> RetainedAsset | None:
+        """Read selection/access facts without loading bytes or extracted text."""
+        with self.app_store._lock:
+            row = self.app_store._conn.execute(
+                "SELECT json_remove(payload, '$.extraction.sections') AS payload FROM retained_assets WHERE id = ?",
+                (asset_id,),
+            ).fetchone()
+        return RetainedAsset.model_validate_json(row["payload"]) if row is not None else None
+
     def list(
         self,
         *,

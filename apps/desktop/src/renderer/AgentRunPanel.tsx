@@ -16,6 +16,9 @@ import { InteractionStream, useWorkbenchProjection, visibleApprovalInterrupt, ty
 import { InterruptApproval } from "./InterruptApproval";
 import { Notice } from "./Notice";
 import { RunProgress } from "./RunProgress";
+import { AgentInputs } from "./AgentInputs";
+import type { CapabilitySetupRequest } from "./agentInputPolicy";
+import type { WorkbenchTab } from "./types";
 import {
   isAgentRunLive,
   isDeclaredEmbedder,
@@ -47,6 +50,7 @@ function AgentRunStream(props: {
   clearSubmittedDraft: (pending: PendingAgentSubmit) => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: AgentRunOwner) => boolean;
+  onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
   const { threadId, generation, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
   const owner = { threadId, generation };
@@ -70,6 +74,7 @@ function AgentRunStream(props: {
           clearSubmittedDraft={clearSubmittedDraft}
           setMessage={setMessage}
           isCurrentOwner={isCurrentOwner}
+          onConfigureSetup={props.onConfigureSetup}
         />
       )}
     </InteractionStream>
@@ -91,6 +96,7 @@ function AgentRunStreamContent(props: {
   clearSubmittedDraft: (pending: PendingAgentSubmit) => void;
   setMessage: (message: string) => void;
   isCurrentOwner: (owner: AgentRunOwner) => boolean;
+  onConfigureSetup?: (setup: CapabilitySetupRequest) => void;
 }) {
   const { stream, owner, run, pendingSubmit, clearPendingSubmit, updateRun, clearSubmittedDraft, setMessage, isCurrentOwner } = props;
   const projection = useWorkbenchProjection(stream);
@@ -161,6 +167,7 @@ function AgentRunStreamContent(props: {
         <InterruptApproval
           ownerLabel={helperApprovalOwner(displayRun, visibleInterrupt.namespace)}
           pending={visibleInterrupt.pending}
+          onConfigureSetup={props.onConfigureSetup}
           onRespond={(payload) => {
             void stream
               .respond(
@@ -208,12 +215,14 @@ function AgentRunStreamContent(props: {
 interface AgentRunPanelProps {
   attentionRunId?: string | null;
   onAttentionHandled?: (runId: string) => void;
+  onNavigate?: (tab: WorkbenchTab, id?: string) => void;
 }
 
-export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPanelProps = {}) {
+export function AgentRunPanel({ attentionRunId, onAttentionHandled, onNavigate }: AgentRunPanelProps = {}) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profiles, setProfiles] = useState<RunProfile[]>([]);
   const [configuration, setConfiguration] = useState<SetupConfiguration>({});
+  const [showInputs, setShowInputs] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("ask");
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [deploymentId, setDeploymentId] = useState("");
@@ -427,11 +436,19 @@ export function AgentRunPanel({ attentionRunId, onAttentionHandled }: AgentRunPa
           clearSubmittedDraft={clearSubmittedDraft}
           setMessage={setMessage}
           isCurrentOwner={isCurrentOwner}
+          onConfigureSetup={setup => {
+            if (setup.target === "context") { setShowInputs(true); return; }
+            if (["settings", "browser", "windows"].includes(setup.target)) {
+              try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch { /* Settings still opens. */ }
+              onNavigate?.("settings", setup.target_id ?? undefined);
+            } else onNavigate?.(setup.target === "agent" ? "agents" : setup.target === "project" ? "projects" : "knowledge", setup.target_id ?? undefined);
+          }}
         />
       ) : (
         <EmptyState title="Ready for a task">Choose a model and describe what to do.</EmptyState>
       )}
       {message ? <Notice tone="error" action={attentionFailed && attentionRunId ? <button type="button" disabled={starting} onClick={() => setAttentionAttempt(current => current + 1)}>Retry</button> : undefined}>{message}</Notice> : null}
+      {showInputs ? <AgentInputs configuration={configuration} run={run} onChange={setConfiguration} onClose={() => setShowInputs(false)} onEditSource={onNavigate} /> : null}
     </section>
   );
 }

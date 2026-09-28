@@ -20,7 +20,7 @@ import type { InspectReport, ModelBundle, RunProfile } from "./types";
 import { HuggingFaceImport } from "./HuggingFaceImport";
 import "./ModelsPanel.css";
 
-export function ModelsPanel({ active = true }: { active?: boolean } = {}) {
+export function ModelsPanel({ active = true, openRecordId, openRequest }: { active?: boolean; openRecordId?: string; openRequest?: number } = {}) {
   const [view, setView] = useState<"library" | "add" | "downloads">("library");
   const [localBusy, setLocalBusy] = useState(false);
   const [bundles, setBundles] = useState<ModelBundle[]>([]);
@@ -43,6 +43,7 @@ export function ModelsPanel({ active = true }: { active?: boolean } = {}) {
   useEffect(() => { setInspectorView(null); }, [selectedId, active, view]);
   const refreshGeneration = useRef(0);
   const hasLoadedCatalogue = useRef(false);
+  const openedRequest = useRef("");
 
   async function refresh(): Promise<void> {
     const generation = ++refreshGeneration.current;
@@ -80,6 +81,16 @@ export function ModelsPanel({ active = true }: { active?: boolean } = {}) {
       setLoadError(errorMessage(error));
     });
   }, [active]);
+
+  useEffect(() => {
+    if (!active || !openRecordId || !hasLoadedCatalogue.current) return;
+    const request = `${openRequest ?? 0}:${openRecordId}`;
+    if (openedRequest.current === request) return;
+    const bundleId = profiles.find(profile => profile.id === openRecordId)?.bundle_id ?? openRecordId;
+    if (!bundles.some(bundle => bundle.id === bundleId)) { setMessage("This model setup is unavailable. Choose another model."); openedRequest.current = request; return; }
+    openedRequest.current = request;
+    setSelectedId(bundleId); setView("library"); setSearch("");
+  }, [active, openRecordId, openRequest, profiles, bundles]);
 
   const imports = useImportJobs(importRevision, refresh, active);
   const tabs = ["library", "add", "downloads"] as const;
@@ -261,7 +272,7 @@ export function ModelsPanel({ active = true }: { active?: boolean } = {}) {
         items={bundles.filter(bundle => `${bundle.display_name} ${modelFileLabel(bundle)}`.toLowerCase().includes(search.trim().toLowerCase())).map(bundle => ({ id: bundle.id, name: bundle.display_name, icon: "models", detail: `${bundle.quantization ?? "GGUF"} · ${formatBytes(bundle.files.reduce((sum, file) => sum + file.size_bytes, 0))}`, status: draftModelIds.has(bundle.id) ? "Unsaved changes" : !bundle.disk_matches ? "Files need attention" : undefined, selectorLabel: `${bundle.display_name} · ${modelFileLabel(bundle)}` }))}>
       <div className="model-detail" aria-label="Selected model"><ModelInspector view={inspectorView} onClose={closeInspector} onTarget={setInspectorTarget} content={information}>
       {selected ? <><header className="selected-model-heading"><div><span className="model-detail-eyebrow">Installed model</span><h3 className="selected-model-name">{selected.display_name}</h3></div><span className="model-weight-variant" title={selected.primary_path ?? modelFileLabel(selected)}>{modelFileLabel(selected)}</span>{!selected.disk_matches ? <span className="model-file-attention">Files need attention</span> : null}</header><div className="model-information-actions"><button type="button" onClick={() => setInspectorView("card")}>Model card</button><button type="button" onClick={() => setInspectorView("files")}>Files</button></div></> : null}
-      <DeploymentsPanel inspector={{ view: inspectorView, target: inspectorTarget, open: setInspectorView, close: closeInspector }} active={active && view === "library"} selectedBundleId={selectedId} bundlesVersion={selectedBundleVersion} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} onDirtyModelsChange={setDraftModelIds} />
+      <DeploymentsPanel inspector={{ view: inspectorView, target: inspectorTarget, open: setInspectorView, close: closeInspector }} active={active && view === "library"} openConfigurationId={profiles.some(profile => profile.id === openRecordId) ? openRecordId : undefined} openRequest={openRequest} selectedBundleId={selectedId} bundlesVersion={selectedBundleVersion} initialBundles={bundles} initialProfiles={profiles} onBundlesChanged={refresh} onSelectBundle={id => { setSelectedId(id); setInspect(null); }} onDirtyModelsChange={setDraftModelIds} />
 
       </ModelInspector></div></CatalogueWorkspace></div>
       <div id="models-panel-downloads" role="tabpanel" aria-labelledby="models-tab-downloads" className="models-tab-panel models-downloads-panel" hidden={view !== "downloads"}>

@@ -37,7 +37,7 @@ from workbench_backend.knowledge.schemas import (
     SkillPreviewRequest, SkillPreview,
 )
 from workbench_backend.knowledge.store import KnowledgeStore
-from workbench_backend.knowledge.packages import parse_skill_markdown, read_skill_package, safe_resource_path, guided_skill_source, MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES
+from workbench_backend.knowledge.packages import parse_skill_markdown, parse_skill_requirements, read_skill_package, safe_resource_path, guided_skill_source, MAX_FILE_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES
 from workbench_backend.paths import WorkbenchPaths
 
 PROTECTED_KIND = "protected_instruction"
@@ -64,7 +64,7 @@ class KnowledgeService:
         guided = False
         valid = False
         try:
-            content, fields = guided_skill_source(content, request.fields.model_dump() if request.fields else None)
+            content, fields = guided_skill_source(content, request.fields.model_dump(exclude_unset=True) if request.fields else None)
             guided = True
         except KnowledgeError as exc:
             issues.append(str(exc))
@@ -175,6 +175,7 @@ class KnowledgeService:
         now = utc_now()
         entry_id = new_id("kn")
         version_id = new_id("knv")
+        metadata = self._version_metadata(request.kind, request.content, request.display_name, request.description)
         version = KnowledgeVersion(
             id=version_id,
             entry_id=entry_id,
@@ -187,6 +188,7 @@ class KnowledgeService:
             created_at=now,
             resources=list(resources or []),
             package_source=package_source,
+            **metadata,
         )
         entry = KnowledgeEntry(
             id=entry_id,
@@ -238,6 +240,8 @@ class KnowledgeService:
                 provenance=provenance,
                 previous_version_id=entry.current_version_id,
                 resource_changes=request.resource_changes,
+                description=request.description,
+                preserve_description="description" not in request.model_fields_set,
             )
 
     def revert(self, entry_id: str, request: KnowledgeRevertRequest, *, actor: str = "human", run_id: str | None = None) -> KnowledgeEntryView:
@@ -262,6 +266,8 @@ class KnowledgeService:
                 reverted_from_version_id=target.id,
                 resources=target.resources,
                 package_source=target.package_source,
+                description=target.description,
+                preserve_description=False,
             )
 
     def capture(self, request: ContextCaptureRequest) -> ContextCapture:
@@ -373,11 +379,15 @@ class KnowledgeService:
         resources: list[SkillResource] | None = None,
         package_source: str | None = None,
         resource_changes: list[SkillResourceChange] | None = None,
+        description: str | None = None,
+        preserve_description: bool = True,
     ) -> KnowledgeEntryView:
         if entry.kind == "skill":
             self._require_unique_skill(content, entry.scope, entry.scope_id, exclude_id=entry.id)
         now = utc_now()
         prior = self.get_version(previous_version_id)
+        metadata = self._version_metadata(entry.kind, content, entry.display_name,
+            prior.description if preserve_description else description)
         resources = self._changed_resources(entry.kind, resource_changes or [], list(resources if resources is not None else prior.resources), source_bytes=len(content.encode("utf-8")) if entry.kind == "skill" else 0)
         version = KnowledgeVersion(
             id=new_id("knv"),
@@ -392,6 +402,7 @@ class KnowledgeService:
             created_at=now,
             resources=list(resources if resources is not None else prior.resources),
             package_source=package_source if package_source is not None else prior.package_source,
+            **metadata,
         )
         updated = entry.model_copy(
             update={"current_version_id": version.id, "updated_at": now}
@@ -399,6 +410,14 @@ class KnowledgeService:
         self.store.append_version(version)
         self.store.put_entry(updated)
         return self._view(updated, version)
+
+    @staticmethod
+    def _version_metadata(kind, content, display_name, description) -> dict:
+        if kind == "skill":
+            name, native_description = parse_skill_markdown(content)
+            return {"display_name": display_name or name, "description": native_description,
+                **parse_skill_requirements(content)}
+        return {"display_name": display_name, "description": description}
 
     def _require_entry(self, entry_id: str) -> KnowledgeEntry:
         entry = self.store.get_entry(entry_id)
@@ -475,6 +494,10 @@ class KnowledgeService:
             scope_label=option.label if option else "Unbound legacy scope",
             resources=version.resources,
             package_source=version.package_source,
+            description=version.description,
+            required_tools=version.required_tools,
+            required_connections=version.required_connections,
+            requires_project=version.requires_project,
         )
 
     def import_skill(self, request: SkillPackageImportRequest) -> KnowledgeEntryView:

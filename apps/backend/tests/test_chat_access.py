@@ -188,7 +188,7 @@ class ChatAccessTests(unittest.TestCase):
                     wait_for_chat(self.client, chat["id"])
                 prompt = run["effective_setup"]["system_prompt"]
                 self.assertIn(f"Access for this turn: {label}.", prompt)
-                self.assertIn("Questions still require the person's answer", prompt)
+                self.assertIn("Task questions still need an answer", prompt)
                 self.assertNotIn("dangerous commands pause for approval", prompt)
                 self.assertTrue(RECEIVED_PROMPTS)
                 self.assertTrue(all(f"Access for this turn: {label}." in received for received in RECEIVED_PROMPTS))

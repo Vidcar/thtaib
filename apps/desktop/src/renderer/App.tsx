@@ -60,6 +60,8 @@ export function App() {
   const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
   const [visitedEditors, setVisitedEditors] = useState<Set<WorkbenchTab>>(new Set());
   const [agentReview, setAgentReview] = useState<{ id?: string; request: number }>({ request: 0 });
+  const [knowledgeReview, setKnowledgeReview] = useState<{ id?: string; request: number }>({ request: 0 });
+  const [modelReview, setModelReview] = useState<{ id?: string; request: number }>({ request: 0 });
   useEffect(() => { if (["models", "agents", "knowledge"].includes(tab)) setVisitedEditors(current => new Set([...current, tab])); }, [tab]);
   const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
@@ -197,6 +199,14 @@ export function App() {
     };
   }, [openAttentionTarget]);
 
+  function openOwner(next: WorkbenchTab, recordId?: string) {
+    if (next === "agents" && recordId) setAgentReview(previous => ({ id: recordId, request: previous.request + 1 }));
+    if (next === "knowledge" && recordId) setKnowledgeReview(previous => ({ id: recordId, request: previous.request + 1 }));
+    if (next === "models" && recordId) setModelReview(previous => ({ id: recordId, request: previous.request + 1 }));
+    if (next === "projects" && recordId) setFocusProjectId(recordId);
+    setTab(next);
+  }
+
   function renderTab(current: WorkbenchTab) {
     switch (current) {
       case "chat":
@@ -220,7 +230,7 @@ export function App() {
             onAttentionHandled={clearAttentionConversation}
             navigationPreparationRef={prepareChatNavigation}
             onPresentationChange={setPresentation}
-            onNavigate={(next, recordId) => { if (next === "agents" && recordId) setAgentReview(previous => ({ id: recordId, request: previous.request + 1 })); setTab(next); }}
+            onNavigate={openOwner}
             presentation={presentation}
             productName={productName}
             onModelPhase={onModelPhase}
@@ -229,13 +239,13 @@ export function App() {
       case "projects":
         return <ProjectsPanel contextual projectRevision={projectRevision} onProjectChanged={() => setProjectRevision(value => value + 1)} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
       case "agents":
-        return <AgentSetupsPanel active={tab === "agents"} openAgentId={agentReview.id} openRequest={agentReview.request} onUse={setup => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
+        return <AgentSetupsPanel active={tab === "agents"} openAgentId={agentReview.id} openRequest={agentReview.request} onNavigate={openOwner} onUse={setup => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
-        return <ModelsPanel active={tab === "models"} />;
+        return <ModelsPanel active={tab === "models"} openRecordId={modelReview.id} openRequest={modelReview.request} />;
       case "knowledge":
-        return <KnowledgePanel active={tab === "knowledge"} />;
+        return <KnowledgePanel active={tab === "knowledge"} openEntryId={knowledgeReview.id} openRequest={knowledgeReview.request} />;
       case "agent-run":
-        return <AgentRunPanel attentionRunId={attentionRunId} onAttentionHandled={clearAttentionRun} />;
+        return <AgentRunPanel attentionRunId={attentionRunId} onAttentionHandled={clearAttentionRun} onNavigate={openOwner} />;
       case "lab":
         return <LabPanel />;
       case "library":

@@ -436,6 +436,7 @@ class HostShellHarnessTests(unittest.TestCase):
                 "deployment_id": self.deployment_id,
                 "task": "nope",
                 "presented_tools": ["execute"],
+                "input_policy": {"tool_loading": "always"},
             },
         )
         self.assertEqual(blocked.status_code, 400, blocked.text)
@@ -939,7 +940,7 @@ class HostShellHarnessTests(unittest.TestCase):
         self.assertFalse(created.json()["shell_tools_available"])
         response = self.client.post(
             f"/v1/chat/conversations/{created.json()['id']}/start",
-            json={"task": "Run a command.", "presented_tools": ["execute"]},
+            json={"task": "Run a command.", "presented_tools": ["execute"], "input_policy": {"tool_loading": "always"}},
         )
         self.assertEqual(response.status_code, 400, response.text)
         self.assertEqual(response.json()["code"], "shell_requires_project")

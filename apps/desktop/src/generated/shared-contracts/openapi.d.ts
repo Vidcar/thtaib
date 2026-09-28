@@ -2525,6 +2525,54 @@ export interface components {
             /** Kind */
             kind: string;
         };
+        /**
+         * AgentInputPolicy
+         * @description Frozen disclosure choices; these never grant execution authority.
+         */
+        AgentInputPolicy: {
+            /** Excluded Sources */
+            excluded_sources?: string[];
+            /** Instruction Override */
+            instruction_override?: string | null;
+            /** Pinned Tools */
+            pinned_tools?: string[];
+            /** Reference Loading */
+            reference_loading?: {
+                [key: string]: "off" | "when_needed" | "always";
+            };
+            /**
+             * Tool Loading
+             * @default when_needed
+             * @enum {string}
+             */
+            tool_loading: "when_needed" | "always";
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /** AgentInputPreview */
+        AgentInputPreview: {
+            /** Estimated Input Tokens */
+            estimated_input_tokens?: number | null;
+            /**
+             * Note
+             * @default Next-input estimate. Native model formatting and retained history are measured at dispatch.
+             */
+            note: string;
+            policy?: components["schemas"]["AgentInputPolicy"] | null;
+            /**
+             * Prepared
+             * @default false
+             */
+            prepared: boolean;
+            /** Sources */
+            sources?: components["schemas"]["InputSourceRow"][];
+            /** Token Counting Method */
+            token_counting_method?: string | null;
+        };
         /** AgentRun */
         AgentRun: {
             /** Activity Phase */
@@ -2648,6 +2696,9 @@ export interface components {
             id: string;
             /** Input Message Id */
             input_message_id?: string | null;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
+            /** Input Sources */
+            input_sources?: components["schemas"]["InputSourceRow"][];
             /**
              * Knowledge
              * @default none
@@ -2897,6 +2948,9 @@ export interface components {
             id: string;
             /** Input Message Id */
             input_message_id?: string | null;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
+            /** Input Sources */
+            input_sources?: components["schemas"]["InputSourceRow"][];
             /**
              * Knowledge
              * @default none
@@ -3120,6 +3174,7 @@ export interface components {
             inherit_deployment_settings: boolean;
             /** Input Message Id */
             input_message_id?: string | null;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Instructions */
             instructions?: string | null;
             /** Knowledge Version Refs */
@@ -3495,6 +3550,39 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** CapabilitySetupRequest */
+        CapabilitySetupRequest: {
+            /** Action */
+            action: string;
+            /** Capability */
+            capability: string;
+            /** Code */
+            code: string;
+            /** Id */
+            id: string;
+            /** Message */
+            message: string;
+            /**
+             * Requires New Input
+             * @default false
+             */
+            requires_new_input: boolean;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "settings" | "browser" | "windows" | "agent" | "knowledge" | "project" | "context";
+            /** Target Id */
+            target_id?: string | null;
+            /** Tool Names */
+            tool_names?: string[];
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
         /** ChatCancelRequest */
         ChatCancelRequest: {
             /** Input Message Id */
@@ -3621,6 +3709,7 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Memory Entry Ids */
             memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
@@ -3727,6 +3816,7 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Instructions */
             instructions?: string | null;
             /** Knowledge Version Refs */
@@ -3874,6 +3964,7 @@ export interface components {
              * @default true
              */
             inherit_deployment_settings: boolean;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Memory Entry Ids */
             memory_entry_ids?: string[] | null;
             /** Memory Version Refs */
@@ -4166,6 +4257,7 @@ export interface components {
         ChatReadiness: {
             /** Can Send */
             can_send: boolean;
+            input_preview?: components["schemas"]["AgentInputPreview"] | null;
             /** Issues */
             issues?: components["schemas"]["ChatReadinessIssue"][];
             selection?: components["schemas"]["ResolvedSetupSelection"] | null;
@@ -4193,7 +4285,20 @@ export interface components {
             agent_setup_id?: string | null;
             /** Agent Setup Version Id */
             agent_setup_version_id?: string | null;
+            /** Attachment Ids */
+            attachment_ids?: string[];
+            /** Document Asset Ids */
+            document_asset_ids?: string[] | null;
+            /**
+             * Include Input Content
+             * @default false
+             */
+            include_input_content: boolean;
             overrides?: components["schemas"]["SetupConfiguration"];
+            /** Project File Refs */
+            project_file_refs?: string[];
+            /** Shortcut Ids */
+            shortcut_ids?: string[];
         };
         /** ChatSearchResult */
         ChatSearchResult: {
@@ -4234,6 +4339,7 @@ export interface components {
             inherit_deployment_settings: boolean;
             /** Input Message Id */
             input_message_id?: string | null;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Instructions */
             instructions?: string | null;
             /** Knowledge Version Refs */
@@ -4800,6 +4906,9 @@ export interface components {
             bags?: components["schemas"]["SettingsBags"];
             /** Gaps */
             gaps?: string[];
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
+            /** Input Sources */
+            input_sources?: components["schemas"]["InputSourceRow"][];
             /** Instruction Layers */
             instruction_layers?: components["schemas"]["InstructionLayer"][];
             /**
@@ -4901,6 +5010,8 @@ export interface components {
         FrozenExecutionSelection: {
             /** Cleared Fields */
             cleared_fields?: string[];
+            /** Connection Snapshots */
+            connection_snapshots?: components["schemas"]["ConnectionSnapshot"][] | null;
             conversation_overrides?: components["schemas"]["SetupConfiguration"] | null;
             /** Helper Snapshots */
             helper_snapshots?: components["schemas"]["FrozenHelperSelection"][];
@@ -4927,6 +5038,8 @@ export interface components {
             /** Agent Id */
             agent_id: string;
             configuration: components["schemas"]["SetupConfiguration"];
+            /** Connection Snapshots */
+            connection_snapshots?: components["schemas"]["ConnectionSnapshot"][] | null;
             /** Instruction Layers */
             instruction_layers?: components["schemas"]["InstructionLayer"][];
             /** Name */
@@ -5357,6 +5470,70 @@ export interface components {
          * @enum {string}
          */
         ImportStatus: "pending" | "running" | "stopping" | "stopped" | "complete" | "failed" | "interrupted" | "discarded";
+        /** InputSourceRow */
+        InputSourceRow: {
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /** Content */
+            content?: string | null;
+            /**
+             * Editable
+             * @default false
+             */
+            editable: boolean;
+            /** Entry Id */
+            entry_id?: string | null;
+            /** Estimated Tokens */
+            estimated_tokens?: number | null;
+            /** History Hint */
+            history_hint?: string | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Mode
+             * @default always
+             * @enum {string}
+             */
+            mode: "off" | "when_needed" | "always";
+            /**
+             * Observed
+             * @default false
+             */
+            observed: boolean;
+            /** Origin */
+            origin: string;
+            /** Path */
+            path?: string | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /** Required Connections */
+            required_connections?: string[];
+            /** Required Tools */
+            required_tools?: string[];
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
+            /** Title */
+            title: string;
+            /** Token Counting Method */
+            token_counting_method?: string | null;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Version Id */
+            version_id?: string | null;
+        };
         /** InspectReport */
         InspectReport: {
             /** Architecture */
@@ -5563,6 +5740,8 @@ export interface components {
         KnowledgeCreateRequest: {
             /** Content */
             content: string;
+            /** Description */
+            description?: string | null;
             /** Display Name */
             display_name?: string | null;
             /**
@@ -5587,6 +5766,8 @@ export interface components {
             base_version: string;
             /** Content */
             content: string;
+            /** Description */
+            description?: string | null;
             provenance?: components["schemas"]["KnowledgeProvenance"] | null;
             /** Resource Changes */
             resource_changes?: components["schemas"]["SkillResourceChange"][];
@@ -5604,6 +5785,8 @@ export interface components {
             created_at: string;
             /** Current Version Id */
             current_version_id: string;
+            /** Description */
+            description?: string | null;
             /** Display Name */
             display_name?: string | null;
             /**
@@ -5625,6 +5808,15 @@ export interface components {
             /** Previous Version Id */
             previous_version_id?: string | null;
             provenance: components["schemas"]["KnowledgeProvenance"];
+            /** Required Connections */
+            required_connections?: string[];
+            /** Required Tools */
+            required_tools?: string[];
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
             /** Resources */
             resources?: components["schemas"]["SkillResource"][];
             /** Reverted From Version Id */
@@ -5750,6 +5942,10 @@ export interface components {
             content: string;
             /** Created At */
             created_at: string;
+            /** Description */
+            description?: string | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Entry Id */
             entry_id: string;
             /** Estimated Content Tokens */
@@ -5766,6 +5962,15 @@ export interface components {
             /** Previous Version Id */
             previous_version_id?: string | null;
             provenance: components["schemas"]["KnowledgeProvenance"];
+            /** Required Connections */
+            required_connections?: string[];
+            /** Required Tools */
+            required_tools?: string[];
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
             /** Resources */
             resources?: components["schemas"]["SkillResource"][];
             /** Reverted From Version Id */
@@ -6237,6 +6442,8 @@ export interface components {
             http_payloads?: {
                 [key: string]: unknown;
             }[];
+            /** Input Sources */
+            input_sources?: components["schemas"]["InputSourceRow"][];
             /** Instructions */
             instructions?: string | null;
             /** Loaded Knowledge */
@@ -6295,6 +6502,10 @@ export interface components {
             skill_versions?: string[];
             /** Startup Mismatches */
             startup_mismatches?: {
+                [key: string]: unknown;
+            }[];
+            /** Tool Schemas */
+            tool_schemas?: {
                 [key: string]: unknown;
             }[];
             /**
@@ -6368,7 +6579,7 @@ export interface components {
              * @default windows_host_shell
              * @enum {string}
              */
-            environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control";
+            environment: "windows_host_shell" | "tool_actions" | "user_input" | "browser_control" | "capability_setup";
             /** Interrupt Id */
             interrupt_id?: string | null;
             /**
@@ -6382,7 +6593,7 @@ export interface components {
              * @default deepagents_interrupt_on
              * @enum {string}
              */
-            kind: "deepagents_interrupt_on" | "browser_control";
+            kind: "deepagents_interrupt_on" | "browser_control" | "capability_setup";
             /** Namespace */
             namespace?: string[];
             /**
@@ -6404,6 +6615,7 @@ export interface components {
             /** Name */
             name: string;
             question?: components["schemas"]["UserQuestion"] | null;
+            setup?: components["schemas"]["CapabilitySetupRequest"] | null;
         };
         /**
          * PinRuntimeRequest
@@ -6710,6 +6922,8 @@ export interface components {
             effective_values?: {
                 [key: string]: components["schemas"]["ResolvedSetting"];
             };
+            /** Input Sources */
+            input_sources?: components["schemas"]["InputSourceRow"][];
             /** Instruction Layers */
             instruction_layers?: components["schemas"]["InstructionLayer"][];
             /** Project Id */
@@ -7475,6 +7689,7 @@ export interface components {
             helper_agent_ids?: string[] | null;
             /** Inherit Deployment Settings */
             inherit_deployment_settings?: boolean | null;
+            input_policy?: components["schemas"]["AgentInputPolicy"] | null;
             /** Instructions */
             instructions?: string | null;
             /** Memory Entry Ids */
@@ -7532,6 +7747,11 @@ export interface components {
              * @enum {string}
              */
             editing_layer: "application" | "project" | "agent" | "conversation";
+            /**
+             * Include Input Content
+             * @default false
+             */
+            include_input_content: boolean;
             overrides?: components["schemas"]["SetupConfiguration"];
             /** Project Id */
             project_id?: string | null;
@@ -7552,6 +7772,15 @@ export interface components {
             instructions: string;
             /** Name */
             name: string;
+            /** Required Connections */
+            required_connections?: string[];
+            /** Required Tools */
+            required_tools?: string[];
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
         };
         /** SkillPackageImportRequest */
         SkillPackageImportRequest: {
@@ -7589,6 +7818,15 @@ export interface components {
             issues?: string[];
             /** Name */
             name?: string | null;
+            /** Required Connections */
+            required_connections?: string[];
+            /** Required Tools */
+            required_tools?: string[];
+            /**
+             * Requires Project
+             * @default false
+             */
+            requires_project: boolean;
             /**
              * Valid
              * @default false
@@ -7983,6 +8221,8 @@ export interface components {
 }
 export type SchemaAgentBudgets = components['schemas']['AgentBudgets'];
 export type SchemaAgentEvent = components['schemas']['AgentEvent'];
+export type SchemaAgentInputPolicy = components['schemas']['AgentInputPolicy'];
+export type SchemaAgentInputPreview = components['schemas']['AgentInputPreview'];
 export type SchemaAgentRun = components['schemas']['AgentRun'];
 export type SchemaAgentRunOperational = components['schemas']['AgentRunOperational'];
 export type SchemaAgentSetupCreateRequest = components['schemas']['AgentSetupCreateRequest'];
@@ -8012,6 +8252,7 @@ export type SchemaBundleSourceKind = components['schemas']['BundleSourceKind'];
 export type SchemaCapabilityEvidence = components['schemas']['CapabilityEvidence'];
 export type SchemaCapabilityProbeReport = components['schemas']['CapabilityProbeReport'];
 export type SchemaCapabilityProbeRequest = components['schemas']['CapabilityProbeRequest'];
+export type SchemaCapabilitySetupRequest = components['schemas']['CapabilitySetupRequest'];
 export type SchemaChatCancelRequest = components['schemas']['ChatCancelRequest'];
 export type SchemaChatContinuity = components['schemas']['ChatContinuity'];
 export type SchemaChatConversation = components['schemas']['ChatConversation'];
@@ -8083,6 +8324,7 @@ export type SchemaImportJob = components['schemas']['ImportJob'];
 export type SchemaImportProgress = components['schemas']['ImportProgress'];
 export type SchemaImportStage = components['schemas']['ImportStage'];
 export type SchemaImportStatus = components['schemas']['ImportStatus'];
+export type SchemaInputSourceRow = components['schemas']['InputSourceRow'];
 export type SchemaInspectReport = components['schemas']['InspectReport'];
 export type SchemaInspectTensor = components['schemas']['InspectTensor'];
 export type SchemaInstructionLayer = components['schemas']['InstructionLayer'];

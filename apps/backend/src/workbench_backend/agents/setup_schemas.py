@@ -4,7 +4,64 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from workbench_backend.connections.schemas import ConnectionSnapshot
+
+
+InputLoadingMode = Literal["off", "when_needed", "always"]
+
+
+class AgentInputPolicy(BaseModel):
+    """Frozen disclosure choices; these never grant execution authority."""
+
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    tool_loading: Literal["when_needed", "always"] = "when_needed"
+    pinned_tools: list[str] = Field(default_factory=list)
+    reference_loading: dict[str, InputLoadingMode] = Field(default_factory=dict)
+    excluded_sources: list[str] = Field(default_factory=list)
+    instruction_override: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_authored_choices(self, handler):
+        # Stored authored layers must keep omission distinct from an explicit
+        # default/empty choice. Admission resolution sets every field, so its
+        # frozen snapshot still serializes the complete policy.
+        payload = handler(self)
+        return {key: value for key, value in payload.items() if key == "version" or key in self.model_fields_set}
+
+
+class InputSourceRow(BaseModel):
+    id: str
+    title: str
+    kind: str
+    origin: str
+    reason: str
+    mode: InputLoadingMode = "always"
+    estimated_tokens: int | None = None
+    token_counting_method: str | None = None
+    content: str | None = None
+    path: str | None = None
+    required: bool = False
+    editable: bool = False
+    available: bool = True
+    history_hint: str | None = None
+    version_id: str | None = None
+    entry_id: str | None = None
+    tool_name: str | None = None
+    observed: bool = False
+    required_tools: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    requires_project: bool = False
+
+
+class AgentInputPreview(BaseModel):
+    policy: AgentInputPolicy | None = None
+    sources: list[InputSourceRow] = Field(default_factory=list)
+    estimated_input_tokens: int | None = None
+    token_counting_method: str | None = None
+    prepared: bool = False
+    note: str = "Next-input estimate. Native model formatting and retained history are measured at dispatch."
 
 
 class ReviewConfiguration(BaseModel):
@@ -26,6 +83,7 @@ class SetupConfiguration(BaseModel):
     profile_id: str | None = None
     inherit_deployment_settings: bool | None = None
     instructions: str | None = None
+    input_policy: AgentInputPolicy | None = None
     presented_tools: list[str] | None = None
     approval_mode: Literal["ask", "full_access"] | None = None
     connection_ids: list[str] | None = None
@@ -65,6 +123,7 @@ class FrozenHelperSelection(BaseModel):
     configuration: SetupConfiguration
     instruction_layers: list[InstructionLayer] = Field(default_factory=list)
     settings_snapshot: dict[str, Any] | None = None
+    connection_snapshots: list[ConnectionSnapshot] | None = None
 
 
 class ResolvedSetting(BaseModel):
@@ -180,6 +239,7 @@ class ResolvedSetupSelection(BaseModel):
     agent_setup_version_id: str | None = None
     configuration: SetupConfiguration
     instruction_layers: list[InstructionLayer] = Field(default_factory=list)
+    input_sources: list[InputSourceRow] = Field(default_factory=list)
     effective_values: dict[str, ResolvedSetting] = Field(default_factory=dict)
 
 
@@ -192,6 +252,7 @@ class FrozenExecutionSelection(BaseModel):
     shortcuts: list[dict[str, str]] = Field(default_factory=list)
     intended_config: dict[str, Any] = Field(default_factory=dict)
     helper_snapshots: list[FrozenHelperSelection] = Field(default_factory=list)
+    connection_snapshots: list[ConnectionSnapshot] | None = None
     request_fingerprint: str | None = None
     conversation_overrides: SetupConfiguration | None = None
     cleared_fields: list[str] = Field(default_factory=list)
@@ -204,3 +265,4 @@ class SetupResolutionRequest(BaseModel):
     agent_setup_version_id: str | None = None
     agent_setup_id: str | None = None
     overrides: SetupConfiguration = Field(default_factory=SetupConfiguration)
+    include_input_content: bool = False

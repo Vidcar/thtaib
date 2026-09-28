@@ -66,6 +66,16 @@ class ConnectionService:
         except HarnessError:
             return False
 
+    def exists(self, connection_id):
+        """Cold enabled-record lookup; it never reads credentials or connects."""
+        record = self.store.get(connection_id)
+        return bool(record is not None and record.enabled)
+
+    def tool_definitions(self, connection_id):
+        """Saved tool metadata only; no credential-vault or session access."""
+        record = self.store.get(connection_id)
+        return list(record.tools) if record is not None and record.enabled else []
+
     def create(self, request):
         if request.transport == "stdio" and not Path(request.command).is_file():
             raise HarnessError("The selected MCP executable is missing.", code="connection_runtime_missing")
@@ -121,13 +131,18 @@ class ConnectionService:
         if record.transport == "stdio" and not Path(record.command or "").is_file():
             raise HarnessError(f"The executable for {record.name} is missing.", code="connection_runtime_missing", status_code=409)
 
-    def snapshot(self, connection_ids, *, tools_enabled=True):
+    def snapshot(self, connection_ids, *, tools_enabled=True, allow_unready=False):
         if not tools_enabled:
             return []
         snapshots = []
         for connection_id in dict.fromkeys(connection_ids or []):
-            record = self.get(connection_id)
-            self._require_ready(record)
+            record = self.store.get(connection_id) if allow_unready else self.get(connection_id)
+            if record is None:
+                raise HarnessError("This connection is missing.", code="connection_missing", status_code=404)
+            if not record.enabled:
+                raise HarnessError(f"{record.name} is disconnected. Update the connection selection.", code="connection_disabled", status_code=409)
+            if not allow_unready:
+                self._require_ready(record)
             snapshots.append(ConnectionSnapshot.model_validate(record.model_dump()))
         return snapshots
 
@@ -142,6 +157,10 @@ class ConnectionService:
         if current.version != snapshot.version or current.credential_ref != snapshot.credential_ref:
             raise HarnessError(f"{current.name} changed. Start a new message with the current connection.", code="connection_changed", status_code=409)
         return current
+
+    def validate_snapshot(self, snapshot):
+        """Cold readiness check for an accepted feature; no adapter or effects."""
+        return self._revalidate(snapshot)
 
     @asynccontextmanager
     async def _adapter(self, record, unsupported):

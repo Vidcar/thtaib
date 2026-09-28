@@ -30,6 +30,7 @@ from workbench_backend.agents.memory_skills import knowledge_routes_selected
 from workbench_backend.state.preferences import matched_permission_snapshot
 from workbench_backend.agents.schemas import (
     AgentRun,
+    CapabilitySetupRequest,
     InterruptDecision,
     PendingInterrupt,
     PendingInterruptAction,
@@ -181,9 +182,12 @@ def interrupt_on_for_run(run: AgentRun, grants: Any = None) -> dict[str, bool | 
     return result or None
 
 
-def approval_mode_instructions(mode: str) -> str:
+def approval_mode_instructions(mode: str, *, compact: bool = False) -> str:
     """Explain the same per-turn policy enforced by the tool approval gates."""
 
+    if compact:
+        policy = "Full access. Selected actions proceed." if mode == "full_access" else "Ask. Selected actions pause unless a saved matching permission allows them."
+        return f"Access for this turn: {policy} The application handles access decisions. Task questions still need an answer. Access cannot enable unselected tools or automatic memory saving."
     if mode == "full_access":
         policy = (
             "Access for this turn: Full access. Selected file mutations, shell commands, "
@@ -235,6 +239,12 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
         args = item.get("args")
         description = item.get("description")
         question = None
+        setup = None
+        if value.get("kind") == "capability_setup" and isinstance(item.get("setup"), dict):
+            try:
+                setup = CapabilitySetupRequest.model_validate(item["setup"])
+            except ValidationError:
+                return None
         if name == "ask_user" and isinstance(args, dict):
             try:
                 question = UserQuestion.model_validate({**args, "choices": args.get("choices") or []})
@@ -249,10 +259,14 @@ def pending_interrupt_from_raw(raw: Any) -> PendingInterrupt | None:
                 description=description if isinstance(description, str) else None,
                 allowed_decisions=review_map.get(name, ["respond", "reject"] if name == "ask_user" else ["approve", "reject"]),
                 question=question,
+                setup=setup,
             )
         )
     if not actions:
         return None
+    if value.get("kind") == "capability_setup" and all(action.setup is not None for action in actions):
+        return PendingInterrupt(action_requests=actions, kind="capability_setup", environment="capability_setup",
+            note="Repair the selected feature, then continue; setup does not grant additional access.")
     if all(action.name == "execute" for action in actions):
         return PendingInterrupt(action_requests=actions)
     if all(action.name == "ask_user" for action in actions):
@@ -288,7 +302,14 @@ def validated_decision_payloads(
             raise ValueError("interrupt_decision_not_allowed")
         if decision.type != "approve" and decision.scope != "once":
             raise ValueError("Only approvals can save permission grants")
-        if action.name == "ask_user":
+        if action.setup is not None:
+            if decision.type == "respond" and decision.message != "continue":
+                raise ValueError("Setup requires Continue or Skip")
+            if decision.type not in {"respond", "reject"}:
+                raise ValueError("Setup cannot grant access")
+            if decision.type == "respond" and action.setup.requires_new_input:
+                raise ValueError("This change requires a new input with the updated selection")
+        elif action.name == "ask_user":
             if decision.type == "respond":
                 question = action.question
                 if question is None:

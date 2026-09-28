@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from workbench_backend.agents.context import ContextObservation
 from workbench_backend.agents.effective_setup import EffectiveSetup, LoadedKnowledgeFact
 from workbench_backend.agents.structured import OutputSchemaRequest, StructuredOutputResult
-from workbench_backend.agents.setup_schemas import FrozenHelperSelection, ReviewConfiguration
+from workbench_backend.agents.setup_schemas import AgentInputPolicy, InputSourceRow, FrozenHelperSelection, ReviewConfiguration
 from workbench_backend.contracts.lifecycle import RunLifecycleStatus
 from workbench_backend.connections.schemas import ConnectionSnapshot
 from workbench_backend.inference.user_content import UserContentBlock
@@ -99,6 +99,8 @@ class ModelRequestCapture(BaseModel):
     messages: list[dict[str, Any]] = Field(default_factory=list)
     available_tools: list[str] = Field(default_factory=list)
     presented_tools: list[str] = Field(default_factory=list)
+    input_sources: list[InputSourceRow] = Field(default_factory=list)
+    tool_schemas: list[dict[str, Any]] = Field(default_factory=list)
     generation_settings: dict[str, Any] = Field(default_factory=dict)
     memory_versions: list[str] = Field(default_factory=list)
     skill_versions: list[str] = Field(default_factory=list)
@@ -155,12 +157,27 @@ class HostShellFacts(BaseModel):
     note: str = HOST_SHELL_NOTE
 
 
+class CapabilitySetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: Literal[1] = 1
+    capability: str
+    id: str
+    tool_names: list[str] = Field(default_factory=list)
+    code: str
+    message: str
+    action: str
+    target: Literal["settings", "browser", "windows", "agent", "knowledge", "project", "context"]
+    target_id: str | None = None
+    requires_new_input: bool = False
+
+
 class PendingInterruptAction(BaseModel):
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
     description: str | None = None
     allowed_decisions: list[str] = Field(default_factory=lambda: ["approve", "reject"])
     question: UserQuestion | None = None
+    setup: CapabilitySetupRequest | None = None
 
 
 class UserQuestion(BaseModel):
@@ -175,8 +192,8 @@ class PendingInterrupt(BaseModel):
 
     interrupt_id: str | None = None
     namespace: list[str] = Field(default_factory=list)
-    kind: Literal["deepagents_interrupt_on", "browser_control"] = "deepagents_interrupt_on"
-    environment: Literal["windows_host_shell", "tool_actions", "user_input", "browser_control"] = "windows_host_shell"
+    kind: Literal["deepagents_interrupt_on", "browser_control", "capability_setup"] = "deepagents_interrupt_on"
+    environment: Literal["windows_host_shell", "tool_actions", "user_input", "browser_control", "capability_setup"] = "windows_host_shell"
     isolation: Literal["none"] = "none"
     note: str = HOST_SHELL_NOTE
     action_requests: list[PendingInterruptAction] = Field(default_factory=list)
@@ -198,6 +215,7 @@ class InterruptDecisionRequest(BaseModel):
 
 class AgentStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    input_policy: AgentInputPolicy | None = None
 
     deployment_id: str | None = None
     project_id: str | None = None
@@ -280,6 +298,8 @@ class RunFailure(BaseModel):
 
 
 class AgentRun(BaseModel):
+    input_policy: AgentInputPolicy | None = None
+    input_sources: list[InputSourceRow] = Field(default_factory=list)
     id: str
     status: AgentRunStatus = AgentRunStatus.queued
     deployment_id: str

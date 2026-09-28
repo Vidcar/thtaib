@@ -274,7 +274,7 @@ class ChatDocumentPersistenceTests(unittest.TestCase):
     def test_queued_documents_and_memory_keep_submitted_selection(self):
         memory = self.client.post('/v1/knowledge/entries', json={"scope": "user", "kind": "memory", "content": "Version one"}).json()
         original = memory["current_version_id"]
-        chat = self._create(memory_version_refs=[original])
+        chat = self._create(memory_version_refs=[original], input_policy={'reference_loading': {memory['id']: 'always'}})
         asset = RetainedAssetService(self.app.state.app_store).retain_upload(RetainedUploadRequest(session_id=chat["id"], filename="frozen.md", content_type="text/markdown", content_base64=base64.b64encode(b"Frozen receipt").decode()))
         hold = threading.Event()
         set_generate_hold(hold)
@@ -352,18 +352,21 @@ class HelperMemorySelectionTests(unittest.TestCase):
         self.assertIn(original_path, contents)
         self.assertNotIn('LATER-MEMORY-VERSION', contents)
         self.assertNotIn(changed['current_version_id'], contents)
-        self.assertEqual(actual_inputs[-1].count('Current turn memory selection:'), 1)
+        self.assertNotIn('Current turn memory selection:', actual_inputs[-1])
+        self.assertEqual(actual_inputs[-1].count('## Selected references'), 1)
+        self.assertIn(version, actual_inputs[-1])
         self.assertNotIn('Current turn memory selection:', contents)
         self.assertIsNone(finished['content_blocks'])
 
-    def test_helper_current_turn_notice_uses_its_own_frozen_selection(self):
+    def test_helper_system_uses_its_own_frozen_selection(self):
         from tests.support import wait_for_run
 
         parent_memory = self.post('/v1/knowledge/entries', {
             "scope": "user", "kind": "memory", "content": "PARENT-MEMORY-CONTENT"})
         helper_memory = self.post('/v1/knowledge/entries', {
             "scope": "user", "kind": "memory", "content": "HELPER-MEMORY-CONTENT"})
-        helper = self.setup(presented_tools=[], memory_version_refs=[helper_memory['current_version_id']])
+        helper = self.setup(presented_tools=[], memory_version_refs=[helper_memory['current_version_id']],
+            input_policy={'reference_loading': {helper_memory['id']: 'always'}})
         parent_model = ScriptedChatModel([
             helper_fixture.call('task', {'subagent_type': helper['id'], 'description': 'Report from your selected memory'}, 'delegate'),
             AIMessage(content='Finished'),
@@ -384,9 +387,10 @@ class HelperMemorySelectionTests(unittest.TestCase):
             memory_version_refs=[parent_memory['current_version_id']])['id'])
         self.assertEqual(finished['status'], 'completed', finished.get('error'))
         child = self.app.state.harness.get_run(finished['child_runs'][0]['run_id'])
+        self.assertEqual(child.presented_tools, [], 'A tools-off helper cannot inherit parent discovery or reference tools')
         current_input = str(child_inputs[-1])
-        self.assertEqual(current_input.count('Current turn memory selection:'), 1)
-        self.assertIn(helper_memory['current_version_id'], current_input)
+        self.assertNotIn('Current turn memory selection:', current_input)
+        self.assertIn(helper_memory['current_version_id'], str(child_prompts[0]))
         self.assertNotIn(parent_memory['current_version_id'], current_input)
         self.assertNotIn('HELPER-MEMORY-CONTENT', current_input)
         self.assertIn('HELPER-MEMORY-CONTENT', str(child_prompts[0]))

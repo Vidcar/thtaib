@@ -38,7 +38,7 @@ description: Describe when the assistant should use this skill.
 Explain the steps the assistant should follow.
 `;
 
-export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
+export function KnowledgePanel({ active = true, openEntryId, openRequest }: { active?: boolean; openEntryId?: string; openRequest?: number } = {}) {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [selected, setSelected] = useState<KnowledgeEntry | null>(null);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
@@ -53,9 +53,12 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
   const [proposalsError, setProposalsError] = useState("");
   const [versionsError, setVersionsError] = useState("");
   const initialized = useRef(false);
+  const openedRequest = useRef("");
   const [scope, setScope] = useState<KnowledgeScope>("user");
   const [kind, setKind] = useState<KnowledgeKind>("memory");
   const [displayName, setDisplayName] = useState("");
+  const [description, setDescription] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const [scopeId, setScopeId] = useState("");
   const [scopes, setScopes] = useState<KnowledgeScopeOption[]>([]);
   const [proposals, setProposals] = useState<KnowledgeProposal[]>([]);
@@ -64,7 +67,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
   const [policyDestination, setPolicyDestination] = useState("user:");
   const [filterKind, setFilterKind] = useState<KnowledgeKind>("memory");
   const [query, setQuery] = useState("");
-  const [drafts, setDrafts] = useState<Record<string, { content: string; baseVersion: string; resourceChanges?: SkillResourceChange[] }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { content: string; description?: string; baseVersion: string; resourceChanges?: SkillResourceChange[] }>>({});
   const [newResources, setNewResources] = useState<SkillResourceChange[]>([]);
   const [newSkillValid, setNewSkillValid] = useState(false);
   const [editSkillValid, setEditSkillValid] = useState(false);
@@ -110,6 +113,16 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
   }, [active]);
 
   useEffect(() => {
+    if (!active || !openEntryId || loading) return;
+    const request = `${openRequest ?? 0}:${openEntryId}`;
+    if (openedRequest.current === request) return;
+    const entry = entries.find(item => item.id === openEntryId);
+    if (!entry) { setMessage("This Knowledge entry is unavailable. Choose another entry."); openedRequest.current = request; return; }
+    openedRequest.current = request;
+    setSelected(entry); setFilterKind(entry.kind); setCreating(false); setQuery("");
+  }, [active, openEntryId, openRequest, entries, loading]);
+
+  useEffect(() => {
     if (!active) return;
     setVersions([]);
     setVersionsError("");
@@ -126,6 +139,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
       .catch((error: unknown) => { if (!cancelled) setVersionsError(errorMessage(error)); })
       .finally(() => { if (!cancelled) setVersionsLoading(false); });
     setEditContent(drafts[selected.id]?.content ?? selected.content);
+    setEditDescription(drafts[selected.id]?.description ?? selected.description ?? "");
     return () => { cancelled = true; };
   }, [selected, active]);
 
@@ -153,14 +167,16 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
     return entry.display_name?.trim() || `Untitled ${knowledgeKindLabel(entry.kind).toLowerCase()}`;
   }
 
-  function updateEntryDraft(value: string, resourceChanges?: SkillResourceChange[]) {
+  function updateEntryDraft(value: string, resourceChanges?: SkillResourceChange[], nextDescription?: string) {
     if (!selected) return;
     setEditContent(value);
+    if (nextDescription !== undefined) setEditDescription(nextDescription);
     setDrafts(current => {
       const resources = resourceChanges ?? current[selected.id]?.resourceChanges ?? [];
+      const description = nextDescription ?? current[selected.id]?.description ?? selected.description ?? "";
       const next = { ...current };
-      if (value === selected.content && !resources.length) delete next[selected.id];
-      else next[selected.id] = { content: value, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id, resourceChanges: resources };
+      if (value === selected.content && description === (selected.description ?? "") && !resources.length) delete next[selected.id];
+      else next[selected.id] = { content: value, description, baseVersion: current[selected.id]?.baseVersion ?? selected.current_version_id, resourceChanges: resources };
       return next;
     });
   }
@@ -183,12 +199,14 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
               kind,
               content,
               display_name: displayName.trim() || undefined,
+              ...(kind === "memory" ? { description: description.trim() || null } : {}),
               scope_id: scope === "user" ? undefined : scopeId,
               resource_changes: kind === "skill" ? newResources : [],
             })
             .then(async (next) => {
               setMessage(`Created ${entryTitle(next)}.`);
               setContent("");
+              setDescription("");
               await refresh();
               setSelected(next);
               setFilterKind(next.kind);
@@ -201,6 +219,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
         <SegmentedChoice label="Use in" value={scope} disabled={busy} options={[{ value: "user", label: "Personal" }, { value: "agent", label: "Agent" }, { value: "project", label: "Project" }]} onChange={value => { setScope(value as KnowledgeScope); setScopeId(""); }} />
         {scope !== "user" ? <SettingRow label={scope === "project" ? "Project" : "Agent"} htmlFor="knowledge-create-scope"><select id="knowledge-create-scope" value={scopeId} disabled={busy || Boolean(scopesError)} required onChange={event => setScopeId(event.target.value)}><option value="">Choose {scope === "project" ? "a project" : "an agent"}</option>{scopes.filter(option => option.scope === scope && option.active).map(record => <option key={record.scope_id} value={record.scope_id ?? ""}>{record.label}</option>)}</select></SettingRow> : null}
         <SettingRow label="Display name (optional)" htmlFor="knowledge-create-name" help={kind === "skill" ? "A label in Knowledge. The skill's native name is saved separately in SKILL.md." : undefined}><input id="knowledge-create-name" disabled={busy} value={displayName} onChange={event => setDisplayName(event.target.value)} /></SettingRow>
+        {kind === "memory" ? <SettingRow stacked label="When to use (optional)" htmlFor="knowledge-create-description" help="A short description helps the agent find this memory before reading its full text."><textarea id="knowledge-create-description" rows={2} maxLength={1024} value={description} disabled={busy} onChange={event => setDescription(event.target.value)} /></SettingRow> : null}
         {kind === "skill" ? <SkillEditor content={content} onChange={value => { setContent(value); setNewSkillValid(false); }} disabled={busy} scope={scope} scopeId={scope === "user" ? null : scopeId} resourceChanges={newResources} onResourceChanges={setNewResources} onStateChange={setNewSkillValid} /> : <SettingRow stacked label="Content" htmlFor="knowledge-create-content"><textarea id="knowledge-create-content" disabled={busy} value={content} onChange={event => setContent(event.target.value)} /></SettingRow>}
         <div className="actions knowledge-save-actions"><button type="submit" className="primary-button" disabled={busy || !content.trim() || (kind === "skill" && !newSkillValid) || (scope !== "user" && (!scopeId || Boolean(scopesError)))}><Icon name="plus" size={14} /> Save</button><button type="button" disabled={busy} onClick={() => setCreating(false)}>Cancel</button></div>
       </form>
@@ -210,7 +229,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
     <section className="surface workspace-records-surface knowledge-surface">
       <header className="surface-head">
         <div className="entity-head"><Icon name="knowledge" /><h2>Knowledge</h2><HoverHelp title="About Knowledge">Save memories, skills and instructions. New messages use the latest saved selected entries.</HoverHelp></div>
-        <button type="button" disabled={busy} onClick={() => { initialized.current = true; setKind(filterKind); setDisplayName(""); setContent(filterKind === "skill" ? SKILL_STARTER : ""); setNewResources([]); setNewSkillValid(false); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
+        <button type="button" disabled={busy} onClick={() => { initialized.current = true; setKind(filterKind); setDisplayName(""); setDescription(""); setContent(filterKind === "skill" ? SKILL_STARTER : ""); setNewResources([]); setNewSkillValid(false); setCreating(true); }}><Icon name="plus" size={15} />New {knowledgeKindLabel(filterKind).toLowerCase()}</button>
       </header>
       {loadError ? <Notice tone="error" action={<button type="button" disabled={busy} onClick={() => void refresh().catch(failure => setLoadError(errorMessage(failure)))}>Retry entries</button>}>{loadError}</Notice> : null}
       {scopesError ? <Notice tone="warn" action={<button type="button" onClick={() => void refreshScopes()}>Retry destinations</button>}>Project and agent destinations could not load. Personal entries remain available. {scopesError}</Notice> : null}
@@ -230,7 +249,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
               <p className="hint">
                 {scopeLabel(selected)} · updated {formatWhen(selected.updated_at)}
               </p>
-              {selected.kind === "memory" ? <p className="hint" title={selected.token_counting_method}>{selected.estimated_content_tokens != null ? `~${selected.estimated_content_tokens.toLocaleString()} tokens when selected.` : "Memory is included in full."}</p> : null}
+              {selected.kind === "memory" ? <><p className="hint" title={selected.token_counting_method}>{selected.estimated_content_tokens != null ? `~${selected.estimated_content_tokens.toLocaleString()} tokens when read.` : "Full text is read when needed."} Choose its loading mode in Agents or Chat.</p><SettingRow stacked label="When to use (optional)" htmlFor="knowledge-edit-description" help="A short description helps the agent find this memory before reading its full text."><textarea id="knowledge-edit-description" rows={2} maxLength={1024} value={editDescription} disabled={busy} onChange={event => updateEntryDraft(editContent, undefined, event.target.value)} /></SettingRow></> : null}
               {selected.scope_bound === false ? <Notice tone="warn">This entry's project or agent is unavailable. Its history remains readable, but it cannot be used in a new run.</Notice> : null}
               <div className="actions"><button type="button" disabled={busy} onClick={() => { const value = renameDrafts.current[selected.id] ?? selected.display_name ?? ""; renameDrafts.current[selected.id] = value; setRename(value); }}>Rename</button>{selected.enabled === false ? <><button type="button" disabled={busy} onClick={() => void action(async () => { await knowledgeApi.updateEntry(selected.id, { enabled: true }); await refresh(); })}>Enable</button><StatusBadge label="Disabled" /></> : <LifecycleAction key={`disable:${selected.id}`} path={`/v1/knowledge/entries/${selected.id}`} name={entryTitle(selected)} label="Disable" confirmLabel="Disable entry" method="PATCH" body={{ enabled: false }} disabled={busy} onBusyChange={setBusy} onComplete={async () => { await refresh(); }} />}<LifecycleAction key={`remove:${selected.id}`} path={`/v1/knowledge/entries/${selected.id}`} name={entryTitle(selected)} label="Remove" confirmLabel="Remove entry" disabled={busy} onBusyChange={setBusy} onComplete={async () => { setDrafts(current => { const next = { ...current }; delete next[selected.id]; return next; }); await refresh(); }} /></div>
               {rename !== null ? <form className="knowledge-rename" onSubmit={event => { event.preventDefault(); void action(async () => { await knowledgeApi.updateEntry(selected.id, { display_name: rename.trim() }); await refresh(); delete renameDrafts.current[selected.id]; setRename(null); }); }}><SettingRow label="Display name" htmlFor="knowledge-rename-name" help={selected.kind === "skill" ? "Renaming this label does not change the native skill name in SKILL.md." : undefined}><input id="knowledge-rename-name" autoFocus value={rename} disabled={busy} onChange={event => { renameDrafts.current[selected.id] = event.target.value; setRename(event.target.value); }} /></SettingRow><div className="actions"><button type="submit" disabled={busy || !rename.trim()}>Save name</button><button type="button" disabled={busy} onClick={() => { delete renameDrafts.current[selected.id]; setRename(null); }}>Cancel</button></div></form> : null}
@@ -244,10 +263,10 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
               <div className="actions knowledge-save-actions">
                 <button
                   type="button"
-                  disabled={busy || !editContent.trim() || (selected.kind === "skill" && !editSkillValid) || (editContent === selected.content && !drafts[selected.id]?.resourceChanges?.length)}
+                  disabled={busy || !editContent.trim() || (selected.kind === "skill" && !editSkillValid) || !drafts[selected.id]}
                   onClick={() => {
                     void action(async () => { await knowledgeApi
-                      .editEntry(selected.id, editContent, drafts[selected.id]?.baseVersion ?? selected.current_version_id, drafts[selected.id]?.resourceChanges ?? [])
+                      .editEntry(selected.id, editContent, drafts[selected.id]?.baseVersion ?? selected.current_version_id, drafts[selected.id]?.resourceChanges ?? [], selected.kind === "memory" ? editDescription.trim() || null : undefined)
                       .then(async (next) => {
                         setMessage("Saved a new version.");
                         await refresh();
@@ -259,7 +278,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
                 >
                   <Icon name="check" size={14} /> Save
                 </button>
-                {drafts[selected.id] ? <button type="button" disabled={busy} onClick={() => void action(async () => { const refreshed = await refresh(); setDrafts(current => { const next = { ...current }; delete next[selected.id]; return next; }); setEditContent(refreshed.find(item => item.id === selected.id)?.content ?? selected.content); })}>Discard edits and reload</button> : null}
+                {drafts[selected.id] ? <button type="button" disabled={busy} onClick={() => void action(async () => { const refreshed = await refresh(); const saved = refreshed.find(item => item.id === selected.id) ?? selected; setDrafts(current => { const next = { ...current }; delete next[selected.id]; return next; }); setEditContent(saved.content); setEditDescription(saved.description ?? ""); })}>Discard edits and reload</button> : null}
               </div>
               <details><summary><Icon name="restore" size={14} /> Version history <span className="badge">{versionsError ? "Unavailable" : versionsLoading ? "Loading…" : versions.length}</span></summary>
               {versionsError ? <Notice tone="error">{versionsError}</Notice> : null}
@@ -274,7 +293,7 @@ export function KnowledgePanel({ active = true }: { active?: boolean } = {}) {
                         {version.id === selected.current_version_id ? " · current" : ""}
                         {version.reverted_from_version_id ? " · restored from an earlier version" : ""}
                       </p>
-                      <details><summary>Read this version</summary><pre className="wrapped-text">{version.content}</pre></details>
+                      <details><summary>Read this version</summary>{version.description ? <p className="hint">When to use: {version.description}</p> : null}<pre className="wrapped-text">{version.content}</pre></details>
                       {selected.kind === "skill" ? <SkillResources versionId={version.id} resources={version.resources} /> : null}
                       {version.id !== selected.current_version_id ? (
                         <button

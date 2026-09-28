@@ -24,6 +24,30 @@ class HelperRecoveryTests(unittest.TestCase):
     harness = helper_fixture.AgentCapabilitiesTests.harness
     start = helper_fixture.AgentCapabilitiesTests.start
 
+    def test_always_skill_requirement_survives_parent_tool_intersection_before_child_model(self):
+        skill = self.post("/v1/knowledge/entries", {"scope": "user", "kind": "skill",
+            "content": "---\nname: echo-required\ndescription: Use the selected echo.\nrequired-tools: [echo]\n---\nUse echo before replying.\n"})
+        helper = self.setup(presented_tools=["echo"], skill_entry_ids=[skill["id"]],
+            input_policy={"reference_loading": {skill["id"]: "always"}})
+        main = ScriptedChatModel([helper_fixture.call("task", {"subagent_type": helper["id"],
+            "description": "Report"}, "delegate"), AIMessage(content="Done")])
+        child_calls = []
+
+        def factory(run, _sink):
+            if run.parent_run_id:
+                child_calls.append(run)
+                return ScriptedChatModel([AIMessage(content="Body must not reach this model")])
+            return main
+
+        self.harness(factory)
+        final = wait_for_run(self.client, self.start(presented_tools=["time_now"], helper_agent_ids=[helper["id"]])["id"])
+        self.assertEqual(final["status"], "failed", final)
+        self.assertIn("Select these tools: echo", final["error"])
+        self.assertEqual(final["child_runs"][0]["status"], "failed")
+        self.assertEqual(final["tool_outcomes"]["delegate"]["outcome"], "failed")
+        self.assertEqual(child_calls, [])
+        self.assertNotIn("echo", final["presented_tools"])
+
     def test_child_does_not_inherit_parent_outcomes_failure_or_housekeeping(self):
         helper = self.setup(presented_tools=["echo"])
         main = ScriptedChatModel([helper_fixture.call("task", {"subagent_type": helper["id"], "description": "Return an echo"}, "delegate"), AIMessage(content="Done")])

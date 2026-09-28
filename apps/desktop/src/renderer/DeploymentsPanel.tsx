@@ -33,7 +33,7 @@ const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
 const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "", flash_attn: "", fit: "", cache_type_k: "", cache_type_v: "", kv_offload: "", kv_unified: "", op_offload: "", mmproj_use_gpu: "", spec_draft_ngl: "", threads: "", threads_batch: "", load_mode: "", parallel: "", port: "", batch_size: "", ubatch_size: "", reasoning: "", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "", reasoning_budget: "", embedding: "", pooling: "", spec_type: "", spec_draft_n_max: "" };
 const EMPTY_BUNDLES: ModelBundle[] = [];
 const EMPTY_PROFILES: RunProfile[] = [];
-type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[]; presetApplied: boolean };
+type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; agent: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[]; presetApplied: boolean };
 const draftKey = (bundle: string, profile: string) => `${bundle}:${profile || "default"}`;
 
 function startupValueLabel(key: string, value: unknown): string {
@@ -72,6 +72,8 @@ export function DeploymentsPanel({
   onDirtyModelsChange,
   active = true,
   inspector,
+  openConfigurationId,
+  openRequest,
 }: {
   selectedBundleId?: string;
   bundlesVersion?: string;
@@ -82,6 +84,8 @@ export function DeploymentsPanel({
   onDirtyModelsChange?: (ids: ReadonlySet<string>) => void;
   active?: boolean;
   inspector?: ModelInspectorConnection;
+  openConfigurationId?: string;
+  openRequest?: number;
 } = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const selection = useRef(selectedBundleId); selection.current = selectedBundleId;
@@ -92,6 +96,7 @@ export function DeploymentsPanel({
   const drafts = useRef(new Map<string, ModelDraft>());
   const activeDraftKey = useRef("");
   const actionPending = useRef(false);
+  const openedRequest = useRef("");
   const changedStartup = useRef(new Set<string>());
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -110,6 +115,7 @@ export function DeploymentsPanel({
   const [variantName, setVariantName] = useState("");
   const [creatingVariant, setCreatingVariant] = useState(false);
   const [response, setResponse] = useState<Record<string, unknown>>({});
+  const [agentSettings, setAgentSettings] = useState<Record<string, unknown>>({});
   const [recipeOrigin, setRecipeOrigin] = useState<ResponseRecipeOrigin | null>(null);
   const [logs, setLogs] = useState<Record<string, string>>({});
   const [generation, setGeneration] = useState<Record<string, string>>({});
@@ -163,7 +169,7 @@ export function DeploymentsPanel({
   const canonical = (values: Record<string, unknown>) => JSON.stringify(Object.fromEntries(Object.keys(values).sort().map(key => [key, values[key]])));
   if (hydrated.current.bundle === selectedBundleId && hydrated.current.profile === profileId && selectedProfile) {
     dirty.current = presetApplied.current || Boolean(stagedStartupError) || canonical(mergedStartup(selectedProfile.bags.startup.requested, stagedStartup ?? {})) !== canonical(selectedProfile.bags.startup.requested)
-      || canonical(response) !== canonical(savedResponses) || JSON.stringify(recipeOrigin) !== JSON.stringify(selectedProfile.recipe_origin ?? null) || configurationName.trim() !== selectedProfile.display_name;
+      || canonical(response) !== canonical(savedResponses) || canonical(agentSettings) !== canonical(selectedProfile.bags.agent.requested) || JSON.stringify(recipeOrigin) !== JSON.stringify(selectedProfile.recipe_origin ?? null) || configurationName.trim() !== selectedProfile.display_name;
     if (!dirty.current) drafts.current.delete(activeDraftKey.current);
   }
   // The editor previews a replacement model configuration. Only changed keys
@@ -180,7 +186,7 @@ export function DeploymentsPanel({
   const presentationSelection = `${selectedBundleId}:${profileId}`;
   if (setupPreview.data) presentation.current = { selection: presentationSelection, facts: modelFacts };
   const presentationFacts = presentation.current.selection === presentationSelection ? presentation.current.facts : {};
-  const candidateKey = JSON.stringify([selectedBundleId, profileId, canonical(mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {})), canonical(response), configurationName.trim(), recipeOrigin]);
+  const candidateKey = JSON.stringify([selectedBundleId, profileId, canonical(mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {})), canonical(response), configurationName.trim(), recipeOrigin, canonical(agentSettings)]);
   const checkedHere = checkedSelection === presentationSelection;
   const startupReadout = (key: string) => {
     const fact = modelFacts[`startup.${key}`];
@@ -206,7 +212,7 @@ export function DeploymentsPanel({
   }
   function stashDraft() {
     if (!activeDraftKey.current || !dirty.current) return;
-    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current], presetApplied: presetApplied.current });
+    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, agent: { ...agentSettings }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current], presetApplied: presetApplied.current });
     publishDraftMarkers();
   }
   function restoreDraft(key: string): boolean {
@@ -216,11 +222,11 @@ export function DeploymentsPanel({
     dirty.current = true;
     presetApplied.current = draft.presetApplied;
     changedStartup.current = new Set(draft.changed);
-    setSettings({ ...draft.settings }); setResponse({ ...draft.response }); setRecipeOrigin(draft.origin); setConfigurationName(draft.name); setAdvancedStartup(draft.advanced);
+    setSettings({ ...draft.settings }); setResponse({ ...draft.response }); setAgentSettings({ ...draft.agent }); setRecipeOrigin(draft.origin); setConfigurationName(draft.name); setAdvancedStartup(draft.advanced);
     publishDraftMarkers();
     return true;
   }
-  useEffect(() => { publishDraftMarkers(); }, [settings, response, recipeOrigin, configurationName, advancedStartup, selectedBundleId, profileId]);
+  useEffect(() => { publishDraftMarkers(); }, [settings, response, agentSettings, recipeOrigin, configurationName, advancedStartup, selectedBundleId, profileId]);
 
   function applyConfiguration(report: BundleConfigurationOptions) {
     if (report.bundle_id !== selection.current) return;
@@ -258,7 +264,7 @@ export function DeploymentsPanel({
     dirty.current = false;
     presetApplied.current = false;
     changedStartup.current = new Set();
-    setConfigurationName(saved?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {}); setRecipeOrigin(saved?.recipe_origin ?? null);
+    setConfigurationName(saved?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {}); setAgentSettings(saved?.bags.agent.requested ?? {}); setRecipeOrigin(saved?.recipe_origin ?? null);
     const starting = { ...initialSettings };
     const extra: Record<string, unknown> = {};
     const formStartup = saved?.bags.startup.requested ?? {};
@@ -315,7 +321,7 @@ export function DeploymentsPanel({
     changedStartup.current = new Set();
     setProfileId(id);
     if (restoreDraft(key)) return;
-    setConfigurationName(profile?.display_name ?? "Default"); setResponse(profile?.bags.per_request.requested ?? {}); setRecipeOrigin(profile?.recipe_origin ?? null); setCreatingVariant(false);
+    setConfigurationName(profile?.display_name ?? "Default"); setResponse(profile?.bags.per_request.requested ?? {}); setAgentSettings(profile?.bags.agent.requested ?? {}); setRecipeOrigin(profile?.recipe_origin ?? null); setCreatingVariant(false);
     const next = { ...initialSettings }, extra: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(profile?.bags.startup.requested ?? {})) {
       if (key in next) next[key] = key === "reasoning_preserve" ? value === true ? "keep" : value === false ? "drop" : "" : String(value);
@@ -323,6 +329,13 @@ export function DeploymentsPanel({
     }
     setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "");
   }
+  useEffect(() => {
+    if (!active || !loaded || !openConfigurationId || !profiles.some(profile => profile.id === openConfigurationId && profile.bundle_id === selectedBundleId)) return;
+    const request = `${openRequest ?? 0}:${openConfigurationId}`;
+    if (openedRequest.current === request) return;
+    openedRequest.current = request;
+    selectProfile(openConfigurationId);
+  }, [active, loaded, openConfigurationId, openRequest, selectedBundleId, profiles]);
   async function action(key: string, operation: () => Promise<unknown>) {
     if (actionPending.current) return;
     actionPending.current = true;
@@ -344,8 +357,8 @@ export function DeploymentsPanel({
     return values;
   }
   async function preview(startupValues = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), responseValues = response, owner = selectionOwner.current) {
-    const checkedKey = JSON.stringify([owner.id, owner.profile, canonical(startupValues), canonical(responseValues), configurationName.trim(), recipeOrigin]);
-    const report = await api.previewSettings(startupValues, responseValues, {});
+    const checkedKey = JSON.stringify([owner.id, owner.profile, canonical(startupValues), canonical(responseValues), configurationName.trim(), recipeOrigin, canonical(agentSettings)]);
+    const report = await api.previewSettings(startupValues, responseValues, agentSettings);
     const result = { ...report, per_request: { ...report.per_request,
       unsupported: [...new Set([...report.per_request.unsupported, ...Object.keys(responseValues).filter(key => configuration?.per_request_defaults[key]?.supported === false)])] } };
     if (selectionOwner.current === owner) { setSettingsPreview(result); setSettingsPreviewKey(checkedKey); setCheckedSelection(`${owner.id}:${owner.profile}`); setCheckedName(configurationName); }
@@ -357,7 +370,7 @@ export function DeploymentsPanel({
     if (!name) throw new Error("Enter a configuration name.");
     return {
       display_name: name,
-      startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), per_request: response,
+      startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), per_request: response, agent: agentSettings,
       recipe_origin: recipeOrigin,
       ...(asVariant ? {} : { configuration_id: profileId || undefined, expected_revision: selectedProfile?.revision }),
     };
@@ -513,6 +526,7 @@ export function DeploymentsPanel({
         <div className="model-response-source"><span className="hint">{recipeOrigin ? `Based on ${recipeOrigin.name} preset` : "Model defaults and custom values"}</span><button type="button" disabled={Boolean(busy)} onClick={() => openPanel("presets")}>Use model-card preset</button></div>
         <ResponseSettingsEditor layout="models" presentationFacts={presentationFacts} part="thinking" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
         <ResponseSettingsEditor layout="models" presentationFacts={presentationFacts} part="sampling" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
+        <details className="technical-details"><summary>Optional model instructions</summary><SettingRow layout="models" stacked label="Model instructions" htmlFor="model-authored-instructions" help="Optional text supplied with this saved model setup. Agent instructions are managed in Agents; native model formatting is automatic." onReset={typeof agentSettings.system_prompt === "string" && agentSettings.system_prompt.length && !busy ? () => { const next = { ...agentSettings }; delete next.system_prompt; dirty.current = true; setAgentSettings(next); } : undefined} resetLabel="Reset" resetTitle="Supply no optional model instructions"><textarea id="model-authored-instructions" rows={4} value={typeof agentSettings.system_prompt === "string" ? agentSettings.system_prompt : ""} disabled={Boolean(busy)} onChange={event => { const next = { ...agentSettings }; if (event.target.value) next.system_prompt = event.target.value; else delete next.system_prompt; dirty.current = true; setAgentSettings(next); }} placeholder="No additional instructions" /></SettingRow><p className="hint">Save applies this text to future messages. Loaded, running and queued requests keep their accepted settings.</p></details>
       </SettingSection>
       <SettingSection title="Memory &amp; performance" description="Conversation capacity and where this model runs. Changes take effect when loaded.">
 

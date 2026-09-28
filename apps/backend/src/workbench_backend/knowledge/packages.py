@@ -8,6 +8,7 @@ import stat
 import unicodedata
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
 
@@ -38,10 +39,33 @@ def parse_skill_markdown(markdown: str) -> tuple[str, str]:
         raise KnowledgeError("SKILL.md needs a nonempty description of at most 1024 characters.", code="skill_frontmatter_invalid", status_code=400)
     if not markdown[match.end():].strip():
         raise KnowledgeError("SKILL.md needs instructions after its frontmatter.", code="skill_body_missing", status_code=400)
+    parse_skill_requirements(markdown)
     return name, description
 
 
-def guided_skill_source(markdown: str, fields: dict[str, str] | None = None) -> tuple[str, dict[str, str]]:
+def parse_skill_requirements(markdown: str) -> dict[str, Any]:
+    """Dependency declarations describe readiness; they never confer permissions."""
+    match = SKILL_FRONTMATTER.match(markdown)
+    try:
+        metadata = yaml.safe_load(match.group(1)) if match else None
+    except yaml.YAMLError as exc:
+        raise KnowledgeError("SKILL.md must have valid YAML frontmatter.", code="skill_frontmatter_invalid", status_code=400) from exc
+    if not isinstance(metadata, dict):
+        raise KnowledgeError("SKILL.md needs YAML frontmatter.", code="skill_frontmatter_invalid", status_code=400)
+    result: dict[str, Any] = {}
+    for native, field in (("required-tools", "required_tools"), ("required-connections", "required_connections")):
+        value = metadata.get(native, [])
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() or item != item.strip() for item in value):
+            raise KnowledgeError(f"{native} must be a list of nonempty tool names or connection IDs.", code="skill_requirements_invalid", status_code=400)
+        result[field] = list(dict.fromkeys(value))
+    project = metadata.get("requires-project", False)
+    if not isinstance(project, bool):
+        raise KnowledgeError("requires-project must be true or false.", code="skill_requirements_invalid", status_code=400)
+    result["requires_project"] = project
+    return result
+
+
+def guided_skill_source(markdown: str, fields: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
     """Patch native scalar spans; leave other YAML, comments and resources alone."""
     match = SKILL_FRONTMATTER.match(markdown)
     if match is None:
@@ -52,7 +76,7 @@ def guided_skill_source(markdown: str, fields: dict[str, str] | None = None) -> 
         raise KnowledgeError("Open Source and correct the YAML frontmatter.", code="skill_frontmatter_invalid", status_code=400) from exc
     if not isinstance(document, yaml.MappingNode):
         raise KnowledgeError("Open Source and use a YAML mapping for frontmatter.", code="skill_frontmatter_invalid", status_code=400)
-    pairs: dict[str, yaml.ScalarNode] = {}
+    pairs: dict[str, yaml.Node] = {}
     keys: set[str] = set()
     for key, value in document.value:
         if not isinstance(key, yaml.ScalarNode) or key.value in keys:
@@ -63,12 +87,18 @@ def guided_skill_source(markdown: str, fields: dict[str, str] | None = None) -> 
             if not isinstance(value, yaml.ScalarNode) or value.tag != "tag:yaml.org,2002:str" or value.start_mark.index < key.end_mark.index or raw.startswith(("&", "*")):
                 raise KnowledgeError("Name and description must be plain text fields; edit this source directly.", code="skill_guided_unavailable", status_code=400)
             pairs[key.value] = value
-    if set(pairs) != {"name", "description"}:
+        elif key.value in {"required-tools", "required-connections", "requires-project"}:
+            raw = match.group(1)[value.start_mark.index:value.end_mark.index]
+            if value.start_mark.index < key.end_mark.index or raw.startswith(("&", "*")):
+                raise KnowledgeError("Shared YAML dependency values require Source editing.", code="skill_guided_unavailable", status_code=400)
+            pairs[key.value] = value
+    if not {"name", "description"}.issubset(pairs):
         raise KnowledgeError("Open Source and add name and description fields.", code="skill_guided_unavailable", status_code=400)
-    current = {"name": pairs["name"].value, "description": pairs["description"].value, "instructions": markdown[match.end():]}
+    current = {"name": pairs["name"].value, "description": pairs["description"].value, "instructions": markdown[match.end():], **parse_skill_requirements(markdown)}
     if fields is None:
         return markdown, current
     patches = []
+    fields = {**current, **fields}
     offset = match.start(1)
     for key in ("name", "description"):
         if fields[key] != current[key]:
@@ -78,9 +108,24 @@ def guided_skill_source(markdown: str, fields: dict[str, str] | None = None) -> 
             patches.append((offset + node.start_mark.index, offset + node.end_mark.index, json.dumps(fields[key], ensure_ascii=False) + suffix))
     if fields["instructions"] != current["instructions"]:
         patches.append((match.end(), len(markdown), fields["instructions"]))
+    additions = []
+    for native, field in (("required-tools", "required_tools"), ("required-connections", "required_connections"), ("requires-project", "requires_project")):
+        if fields[field] == current[field]:
+            continue
+        rendered = json.dumps(fields[field], ensure_ascii=False)
+        if native in pairs:
+            node = pairs[native]
+            original = markdown[offset + node.start_mark.index:offset + node.end_mark.index]
+            suffix = "\r\n" if original.endswith("\r\n") else "\n" if original.endswith("\n") else ""
+            patches.append((offset + node.start_mark.index, offset + node.end_mark.index, rendered + suffix))
+        else:
+            additions.append(f"{native}: {rendered}")
+    if additions:
+        newline = "\r\n" if "\r\n" in markdown else "\n"
+        patches.append((match.end(1), match.end(1), newline + newline.join(additions)))
     for start, end, replacement in sorted(patches, reverse=True):
         markdown = markdown[:start] + replacement + markdown[end:]
-    return markdown, fields
+    return markdown, {**fields, **parse_skill_requirements(markdown)}
 
 
 def safe_resource_path(value: str) -> str:

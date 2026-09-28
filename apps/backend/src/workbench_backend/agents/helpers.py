@@ -106,7 +106,8 @@ def prepare_frozen_model(manager, configuration, settings, *, error_type=Harness
     return configuration.model_copy(update={"deployment_id": selected.id})
 
 
-def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=None, latest_knowledge=False):
+def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=None, latest_knowledge=False,
+        connection_snapshot=None):
     snapshots = []
     for ident in dict.fromkeys(agent_ids or []):
         view = service.get_setup(ident)
@@ -124,7 +125,20 @@ def freeze_helpers(service, agent_ids, *, project_id=None, parent_configuration=
         selected = service.resolve(project_id=project_id, agent_setup_version_id=version.id,
             overrides=SetupConfiguration.model_validate(inherited), helper_role=True,
             prepare_model=False, read_only=True, latest_knowledge=latest_knowledge)
+        connections = None
+        if connection_snapshot is not None:
+            config = selected.configuration
+            inherited_ids = (parent_configuration.connection_ids or []) if parent_configuration is not None else []
+            ids = config.connection_ids if config.connection_ids is not None else inherited_ids
+            if parent_configuration is not None:
+                ids = [ident for ident in ids if ident in inherited_ids]
+            tools_enabled = config.presented_tools != [] and (
+                parent_configuration is None or parent_configuration.presented_tools != [])
+            connections = connection_snapshot(ids, tools_enabled=tools_enabled,
+                allow_unready=bool(config.input_policy and config.input_policy.tool_loading == "when_needed"))
+            selected = selected.model_copy(update={"configuration": config.model_copy(
+                update={"connection_ids": list(ids) if tools_enabled else []})})
         snapshots.append(FrozenHelperSelection(agent_id=ident, version_id=version.id, name=version.name,
             role=version.role, configuration=selected.configuration, instruction_layers=selected.instruction_layers,
-            settings_snapshot=freeze_settings(service.manager, selected.configuration)))
+            settings_snapshot=freeze_settings(service.manager, selected.configuration), connection_snapshots=connections))
     return snapshots

@@ -17,7 +17,8 @@ from workbench_backend.agents.setup_schemas import ReviewConfiguration
 from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import SettingsBags
-from workbench_backend.agents.memory_skills import memory_selection_notice
+from workbench_backend.agents.memory_skills import memory_selection_notice, plan_knowledge_materialization, reference_context
+from workbench_backend.agents.input_sources import build_input_sources, reference_source_mode, skill_selection_error
 from workbench_backend.agents.helpers import require_accepted_model_identity
 
 
@@ -68,6 +69,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     if existing is not None:
         return existing
     config = snapshot.configuration
+    input_policy = config.input_policy
     if not config.deployment_id and (config.bundle_id or config.model_configuration_id):
         raise HarnessError(f"Helper {snapshot.name} has no saved model deployment.", code="helper_model_unavailable", status_code=409)
     # The parent has yielded its model call while this native Deep Agents
@@ -80,6 +82,8 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     require_accepted_model_identity(deployment, accepted)
     selected_tools = config.presented_tools if config.presented_tools is not None else parent.presented_tools
     presented = [name for name in selected_tools if name in parent.presented_tools and name != "task"]
+    if input_policy is not None:
+        presented = [name for name in presented if f"tool:{name}" not in input_policy.excluded_sources]
     work_mode = "plan" if parent.work_mode == "plan" or config.work_mode == "plan" else "work"
     if work_mode == "plan":
         presented = [name for name in presented if name in PLAN_TOOLS]
@@ -89,8 +93,23 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     desktop_rank = {"off": 0, "selected": 1, "all": 2}
     desktop_access = min((parent.desktop_access, config.desktop_access or parent.desktop_access), key=desktop_rank.__getitem__)
     selected_connections = [ident for ident in (config.connection_ids if config.connection_ids is not None else parent.connection_ids) if ident in parent.connection_ids]
+    if snapshot.connection_snapshots is None:
+        connection_snapshots = [item.model_copy(deep=True) for item in parent.connection_snapshots if item.id in selected_connections]
+    else:
+        accepted = {item.id: item for item in snapshot.connection_snapshots}
+        parent_accepted = {item.id: item for item in parent.connection_snapshots}
+        connection_snapshots = []
+        if presented:
+            for ident in selected_connections:
+                original = accepted.get(ident)
+                parent_original = parent_accepted.get(ident)
+                if original is None or parent_original is None or original != parent_original:
+                    raise HarnessError("The accepted helper connection differs from its parent's frozen selection. Start a new message with current connections.",
+                        code="connection_changed", status_code=409)
+                connection_snapshots.append(original.model_copy(deep=True))
     request = AgentStartRequest(deployment_id=deployment.id, task="Helper task",
         memory_version_refs=list(config.memory_version_refs or []), skill_version_refs=list(config.skill_version_refs or []),
+        input_policy=input_policy,
         protected_instruction_version_refs=list(dict.fromkeys([*parent.protected_instruction_version_refs, *(config.protected_instruction_version_refs or [])])))
     refs = owner._resolve_knowledge_refs(request, frozen=True)
     versions = owner._load_knowledge_versions(refs)
@@ -103,16 +122,37 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         inherit_deployment_settings=True if snapshot.settings_snapshot is not None else config.inherit_deployment_settings is not False,
         instruction_layers=snapshot.instruction_layers, selected_project_id=parent.project_id,
         selected_agent_setup_id=snapshot.agent_id, selected_agent_setup_version_id=snapshot.version_id,
-        selected_connection_ids=selected_connections)
+        selected_connection_ids=selected_connections, input_policy=input_policy)
     setup.selected_profile_id = config.profile_id
     if setup.startup_mismatches:
         raise HarnessError(f"Helper {snapshot.name} requires different model loading settings. Reload before starting this conversation's work.", code="helper_reload_required", status_code=409)
-    setup.system_prompt += "\n\n" + approval_mode_instructions(approval)
-    if work_mode == "plan":
-        setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
+    if input_policy is None:
+        setup.system_prompt += "\n\n" + approval_mode_instructions(approval)
+        if work_mode == "plan":
+            setup.system_prompt += "\n\n" + PLAN_INSTRUCTIONS
+    else:
+        knowledge = owner._knowledge_provider() if owner._knowledge_provider else None
+        plan = plan_knowledge_materialization(versions,
+            resource_loader=knowledge.resource_bytes if knowledge else None, input_policy=input_policy)
+        context = reference_context(plan)
+        if context:
+            setup.system_prompt += "\n\n" + context
+        if presented and any(reference.mode == "when_needed" for reference in plan.references) and "tool:read_reference" not in input_policy.excluded_sources and "read_reference" in parent.presented_tools and "read_reference" not in presented:
+            presented.append("read_reference")
+        if input_policy.tool_loading == "when_needed" and presented and "tool:find_tools" not in input_policy.excluded_sources and "find_tools" in parent.presented_tools and "find_tools" not in presented:
+            presented.append("find_tools")
+        setup.input_sources = build_input_sources(policy=input_policy, instruction_layers=snapshot.instruction_layers,
+            knowledge_versions=versions, profile=None, deployment=deployment.model_copy(update={"settings": setup.bags}), presented_tools=presented,
+            selected_agent=True, surface_text=snapshot.role, project_id=parent.project_id)
+    for version in versions:
+        if version.kind == "skill" and reference_source_mode(input_policy, version.entry_id, "skill") == "always":
+            error = skill_selection_error(version, tool_names=presented,
+                connection_ids=[item.id for item in connection_snapshots], project_bound=bool(parent.project_path))
+            if error is not None:
+                raise error
     messages = payload.get("messages", [])
     task = str(getattr(messages[-1], "content", "Delegated task")) if messages else "Delegated task"
-    model_content_blocks = [memory_selection_notice(refs.memory_version_refs)]
+    model_content_blocks = [memory_selection_notice(refs.memory_version_refs)] if input_policy is None else []
     setup.bags.per_request = bind_helper_output_budget(owner, parent, snapshot, deployment, setup.bags)
     observation = observe_context(deployment=deployment, per_request=setup.bags.per_request,
         system_prompt=setup.system_prompt, task=task, content_blocks=model_content_blocks, output_schema=None,
@@ -122,6 +162,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     # captures rather than inheriting or inspecting the parent's diagnostics.
     child = AgentRun.model_validate(parent.model_dump(exclude={"model_requests"})).model_copy(update=dict(id=child_id, parent_run_id=parent.id,
         deployment_id=deployment.id, task=task, input_message_id=None, content_blocks=None,
+        input_policy=input_policy, input_sources=setup.input_sources,
         agent_setup_id=snapshot.agent_id, agent_setup_version_id=snapshot.version_id,
         presented_tools=presented, enabled_tools=[name for name in parent.enabled_tools if name != "task"],
         denied_tools=[name for name in selected_tools if name not in presented], approval_mode=approval,
@@ -132,7 +173,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
         profile_id=setup.selected_profile_id, effective_setup=setup, system_prompt=setup.system_prompt,
         memory_version_refs=refs.memory_version_refs, skill_version_refs=refs.skill_version_refs,
         protected_instruction_version_refs=refs.protected_instruction_version_refs,
-        connection_ids=selected_connections, connection_snapshots=[item for item in parent.connection_snapshots if item.id in selected_connections],
+        connection_ids=selected_connections, connection_snapshots=connection_snapshots,
         embedding_deployment_id=config.embedding_deployment_id,
         events=[], model_requests=[], tool_invocations=[], related_files=[],
         completion=None, output_schema=None, structured_output=None, context_observation=observation,

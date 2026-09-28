@@ -326,16 +326,16 @@ class DesktopAutomationService:
             if not verified and (output.is_file() or output.is_symlink()):
                 output.unlink(missing_ok=True)
 
-    def tools_for_run(self, run: AgentRun) -> list[BaseTool]:
+    def tools_for_run(self, run: AgentRun, *, schema_only: bool = False) -> list[BaseTool]:
         """Build fixed tools for one Work-mode Chat run; each call rechecks scope."""
-        if run.work_mode != "work" or not run.thread_id or run.tool_mode is not ToolMode.live_tool:
+        if not schema_only and (run.work_mode != "work" or not run.thread_id or run.tool_mode is not ToolMode.live_tool):
             return []
         thread_id = run.thread_id
         try:
             run_scope = DesktopAccessScope(getattr(run, "desktop_access", "off"))
         except ValueError:
             return []
-        if run_scope is DesktopAccessScope.off:
+        if run_scope is DesktopAccessScope.off and not schema_only:
             return []
         selected_data = getattr(run, "desktop_window", None)
         selected_identity = None
@@ -348,15 +348,16 @@ class DesktopAutomationService:
                 )
             except (KeyError, TypeError, ValueError):
                 return []
-        if run_scope is DesktopAccessScope.selected and selected_identity is None:
+        if run_scope is DesktopAccessScope.selected and selected_identity is None and not schema_only:
             return []
         bound = _ScopeState(run_scope, selected_identity)
-        try:
-            effective_scope, _ = self._effective_scope(thread_id, bound)
-        except DesktopAutomationError:
-            return []
-        if effective_scope is DesktopAccessScope.off:
-            return []
+        if not schema_only:
+            try:
+                effective_scope, _ = self._effective_scope(thread_id, bound)
+            except DesktopAutomationError:
+                return []
+            if effective_scope is DesktopAccessScope.off:
+                return []
         service = self
 
         def result_of(action: Callable[[], Any]) -> str:

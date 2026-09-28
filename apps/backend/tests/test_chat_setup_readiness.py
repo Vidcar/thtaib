@@ -1,6 +1,7 @@
 """Canonical Chat setup ownership and live capability admission."""
 
 import tempfile
+import base64
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from langchain_core.messages import AIMessage
 from workbench_backend.app import create_app
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.setup_service import SetupService
+from workbench_backend.assets.schemas import RetainedUploadRequest
 from workbench_backend.agents.tools import resolve_presented_tools
 from workbench_backend.desktop_automation.service import DesktopAccessScope
 from workbench_backend.errors import ManagerError
@@ -127,9 +129,10 @@ class ChatSetupReadinessTests(unittest.TestCase):
 
     def test_readiness_resolves_latest_saved_agent_and_knowledge_by_record_identity(self):
         memory = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'memory', 'content': 'Original memory'}).json()
-        agent = self.client.post('/v1/agent-setups', json={'name': 'Selected', 'configuration': {'memory_entry_ids': [memory['id']], 'presented_tools': []}}).json()
+        policy = {'reference_loading': {memory['id']: 'always'}}
+        agent = self.client.post('/v1/agent-setups', json={'name': 'Selected', 'configuration': {'memory_entry_ids': [memory['id']], 'presented_tools': [], 'input_policy': policy}}).json()
         chat = self.client.post('/v1/chat/conversations', json={'deployment_id': self.first.id, 'agent_setup_id': agent['id']}).json()
-        updated = self.client.patch(f'/v1/agent-setups/{agent["id"]}', json={'name': 'Latest', 'base_version': agent['current_version_id'], 'configuration': {'instructions': 'Saved instructions', 'memory_entry_ids': [memory['id']], 'presented_tools': []}}).json()
+        updated = self.client.patch(f'/v1/agent-setups/{agent["id"]}', json={'name': 'Latest', 'base_version': agent['current_version_id'], 'configuration': {'instructions': 'Saved instructions', 'memory_entry_ids': [memory['id']], 'presented_tools': [], 'input_policy': policy}}).json()
         changed_memory = self.client.post(f'/v1/knowledge/entries/{memory["id"]}/edit', json={'content': 'Latest memory', 'base_version': memory['current_version_id']}).json()
         preview = self.client.post(f'/v1/chat/conversations/{chat["id"]}/readiness', json={})
         self.assertEqual(preview.status_code, 200, preview.text)
@@ -145,6 +148,7 @@ class ChatSetupReadinessTests(unittest.TestCase):
         self.assertNotIn("execute", presented)
         chat = self.client.post("/v1/chat/conversations", json={
             "deployment_id": self.first.id, "desktop_access": "all",
+            "input_policy": {"pinned_tools": ["desktop_list_windows"]},
             "presented_tools": ["desktop_list_windows"]}).json()
         url = f"/v1/chat/conversations/{chat['id']}/readiness"
         missing = self.client.post(url, json={})
@@ -166,6 +170,7 @@ class ChatSetupReadinessTests(unittest.TestCase):
         chat = self.client.post("/v1/chat/conversations", json={
             "deployment_id": self.first.id,
             "presented_tools": ["browser_snapshot", "browser_take_screenshot"],
+            "input_policy": {"tool_loading": "always"},
         }).json()
         readiness_url = f"/v1/chat/conversations/{chat['id']}/readiness"
         send_url = f"/v1/chat/conversations/{chat['id']}/start"
@@ -202,18 +207,127 @@ class ChatSetupReadinessTests(unittest.TestCase):
         }).json()
         chosen_tools = ["browser_snapshot"]
         preview = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={
-            "overrides": {"presented_tools": chosen_tools},
+            "overrides": {"presented_tools": chosen_tools, "input_policy": {"pinned_tools": chosen_tools}},
         })
         self.assertEqual(preview.status_code, 200, preview.text)
         self.assertEqual(preview.json()["issues"][0]["code"], "browser_worker_missing")
         rejected = self.client.post(f"/v1/chat/conversations/{chat['id']}/start", json={
             "task": "Inspect the page", "presented_tools": chosen_tools,
+            "input_policy": {"pinned_tools": chosen_tools},
         })
         self.assertEqual(rejected.status_code, 409, rejected.text)
         self.assertEqual(rejected.json()["code"], "browser_worker_missing")
         saved = self.client.get(f"/v1/chat/conversations/{chat['id']}").json()
         self.assertEqual(saved["transcript"], [])
         self.assertEqual(saved["presented_tools"], [])
+
+    def test_optional_capabilities_do_not_block_cold_preview_and_full_inspection_is_explicit(self):
+        chat = self.client.post("/v1/chat/conversations", json={
+            "deployment_id": self.first.id, "instructions": "Keep this exact authored text.",
+            "presented_tools": ["browser_snapshot", "desktop_list_windows"],
+        }).json()
+        self.assertIn("id", chat)
+        with patch.object(self.app.state.browser.runtime, "require_installed", side_effect=AssertionError("optional setup was eagerly checked")), \
+            patch.object(self.app.state.harness.desktop_automation, "snapshot_grant", side_effect=AssertionError("optional windows setup was eagerly checked")), \
+            patch.object(self.app.state.manager, "ensure_deployment_ready", side_effect=AssertionError("inspection loaded a model")):
+            preview = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={})
+            full = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness", json={"include_input_content": True})
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["can_send"])
+        self.assertEqual(preview.json()["input_preview"]["policy"]["tool_loading"], "when_needed")
+        self.assertTrue(all(row["content"] is None for row in preview.json()["input_preview"]["sources"]))
+        sources = {row["id"]: row for row in full.json()["input_preview"]["sources"]}
+        self.assertEqual(sources["conversation_instructions"]["content"], "Keep this exact authored text.")
+        self.assertEqual(sources["tool:browser_snapshot"]["mode"], "when_needed")
+        self.assertFalse(full.json()["input_preview"]["prepared"])
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()["transcript"], [])
+
+    def test_tools_off_reference_has_explicit_choices_without_silently_enabling_reading(self):
+        memory = self.client.post('/v1/knowledge/entries', json={
+            'scope': 'user', 'kind': 'memory', 'content': 'Selected frozen reference'}).json()
+        chat = self.client.post('/v1/chat/conversations', json={
+            'deployment_id': self.first.id, 'presented_tools': []}).json()
+        url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        blocked = self.client.post(url, json={'overrides': {'memory_entry_ids': [memory['id']]}})
+        self.assertFalse(blocked.json()['can_send'])
+        self.assertEqual(blocked.json()['issues'][0]['code'], 'deferred_reference_tools_off')
+        self.assertEqual(blocked.json()['issues'][0]['action'], 'Include now, Remove, or Enable reading')
+        included = self.client.post(url, json={'overrides': {'memory_entry_ids': [memory['id']],
+            'input_policy': {'reference_loading': {memory['id']: 'always'}}}})
+        self.assertTrue(included.json()['can_send'], included.text)
+        self.assertEqual(included.json()['selection']['configuration']['presented_tools'], [])
+        self.assertEqual(self.client.get(f"/v1/chat/conversations/{chat['id']}").json()['memory_version_refs'], [])
+
+    def test_selected_context_readiness_matches_send_and_skips_exclusions(self):
+        chat = self.client.post('/v1/chat/conversations', json={'deployment_id': self.first.id}).json()
+        url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        missing_project = self.client.post(url, json={'project_file_refs': ['notes.txt']}).json()
+        self.assertFalse(missing_project['can_send'])
+        self.assertEqual(missing_project['issues'][0]['code'], 'project_context_required')
+        omitted_path = self.client.post(url, json={'project_file_refs': ['notes.txt'], 'overrides': {
+            'input_policy': {'excluded_sources': ['project_file:notes.txt']}}}).json()
+        self.assertTrue(omitted_path['can_send'], omitted_path)
+        asset = self.app.state.chat.assets.retain_upload(RetainedUploadRequest(session_id=chat['id'],
+            filename='selected.md', content_type='text/markdown',
+            content_base64=base64.b64encode(b'Original selected content').decode('ascii')))
+        with patch.object(self.app.state.chat.assets, '_load_content',
+            side_effect=AssertionError('Cold readiness must not load attachment bytes')):
+            active = self.client.post(url, json={'attachment_ids': [asset.id]}).json()
+        self.assertTrue(active['can_send'], active)
+        self.app.state.chat.assets.store.put(asset.model_copy(update={'deleted_at': 'now'}), b'Original selected content')
+        deleted = self.client.post(url, json={'attachment_ids': [asset.id]}).json()
+        self.assertFalse(deleted['can_send'])
+        self.assertEqual(deleted['issues'][0]['code'], 'retained_asset_unavailable')
+        omitted = self.client.post(url, json={'attachment_ids': [asset.id], 'overrides': {
+            'input_policy': {'excluded_sources': [f'attachment:{asset.id}']}}}).json()
+        self.assertTrue(omitted['can_send'], omitted)
+
+    def test_always_skill_missing_requirements_blocks_before_send_and_keeps_controls(self):
+        skill = self.client.post('/v1/knowledge/entries', json={'scope': 'user', 'kind': 'skill',
+            'content': '---\nname: echo-check\ndescription: Verify a value.\nrequired-tools: [echo]\n---\nUse echo.\n'}).json()
+        self.assertIn('id', skill, skill)
+        chat = self.client.post('/v1/chat/conversations', json={
+            'deployment_id': self.first.id, 'presented_tools': []}).json()
+        choices = {'skill_entry_ids': [skill['id']],
+            'input_policy': {'reference_loading': {skill['id']: 'always'}}}
+        with patch.object(self.app.state.manager, 'ensure_deployment_ready',
+                side_effect=AssertionError('Missing requirements must block before model loading')):
+            readiness = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness",
+                json={'overrides': choices})
+            self.assertEqual(readiness.status_code, 200, readiness.text)
+            blocked = readiness.json()
+            self.assertEqual(blocked['status'], 'needs_action')
+            self.assertFalse(blocked['can_send'])
+            self.assertEqual(blocked['issues'][0]['code'], 'skill_selection_required')
+            self.assertEqual(blocked['issues'][0]['action'], 'Update selected tools, connections or project')
+            source = next(row for row in blocked['input_preview']['sources'] if row['id'] == f"skill:{skill['id']}")
+            self.assertEqual(source['required_tools'], ['echo'])
+            rejected = self.client.post(f"/v1/chat/conversations/{chat['id']}/start",
+                json={'task': 'Run the check', **choices})
+            self.assertEqual(rejected.status_code, 409, rejected.text)
+            self.assertEqual(rejected.json()['code'], 'skill_selection_required')
+        saved = self.client.get(f"/v1/chat/conversations/{chat['id']}").json()
+        self.assertEqual(saved['transcript'], [])
+        self.assertEqual(saved['run_ids'], [])
+        self.assertEqual(saved['presented_tools'], [])
+        removed = self.client.post(f"/v1/chat/conversations/{chat['id']}/readiness",
+            json={'overrides': {**choices, 'input_policy': {'reference_loading': {skill['id']: 'off'}}}})
+        self.assertTrue(removed.json()['can_send'], removed.text)
+
+    def test_project_file_readiness_validates_path_and_selected_reader_cold(self):
+        (self.folder / 'notes.txt').write_text('Read on demand', encoding='utf-8')
+        project = self.client.post('/v1/projects', json={'path': str(self.folder)}).json()
+        chat = self.client.post('/v1/chat/conversations', json={
+            'deployment_id': self.first.id, 'project_id': project['id'], 'presented_tools': ['read_file']}).json()
+        url = f"/v1/chat/conversations/{chat['id']}/readiness"
+        with patch.object(SetupService, 'read_project_file', side_effect=AssertionError('No file bodies in cold readiness')):
+            ready = self.client.post(url, json={'project_file_refs': ['notes.txt']}).json()
+        self.assertTrue(ready['can_send'], ready)
+        missing = self.client.post(url, json={'project_file_refs': ['missing.txt']}).json()
+        self.assertEqual(missing['issues'][0]['code'], 'project_file_missing')
+        denied = self.client.post(url, json={'project_file_refs': ['notes.txt'], 'overrides': {
+            'input_policy': {'excluded_sources': ['tool:read_file']}}}).json()
+        self.assertEqual(denied['issues'][0]['code'], 'context_file_tool_required')
 
     def test_known_history_incompatibility_rejects_send_before_saving_message(self):
         self.app.state.harness = HarnessService(

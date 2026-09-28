@@ -211,7 +211,7 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
   const originalFetch = globalThis.fetch;
   const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
   const model = { ...bundle("draft-model", "Draft model"), default_configuration_id: "draft-default" };
-  let profiles = [{ id: "draft-default", bundle_id: model.id, display_name: "Default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({ temperature: 0.5 }), agent: bag({}) } }];
+  let profiles = [{ id: "draft-default", bundle_id: model.id, display_name: "Default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({ temperature: 0.5 }), agent: bag({ system_prompt: "Saved model instructions" }) } }];
   let failure = "", catalogue = [model], renderer;
   const savedRequests = [];
   globalThis.fetch = async (url, init = {}) => {
@@ -232,12 +232,12 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     if (address.includes("/configuration-options")) return jsonResponse(configurationOptions());
     if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
     if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
-    if (address.endsWith("/v1/settings/preview")) return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
+    if (address.endsWith("/v1/settings/preview")) return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) });
     if (address.endsWith("/configurations")) {
       savedRequests.push(body);
       assert.equal(body.configuration_id, "draft-default");
       assert.equal(body.expected_revision, profiles[0].revision, "recovered save retains the current configuration revision");
-      profiles = [{ ...profiles[0], display_name: body.display_name, revision: profiles[0].revision + 1, bags: { startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) } }];
+      profiles = [{ ...profiles[0], display_name: body.display_name, revision: profiles[0].revision + 1, bags: { startup: bag(body.startup), per_request: bag(body.per_request), agent: bag(body.agent ?? {}) } }];
       return jsonResponse(profiles[0]);
     }
     throw new Error(`Unexpected model draft request: ${address}`);
@@ -248,10 +248,12 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
     assert.equal(context().props.value, "8192");
+    assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "Saved model instructions");
     await act(async () => {
       context().props.onChange({ target: { value: "16384" } });
       temperature().props.onChange({ target: { value: "0.7" } });
       renderer.root.findByProps({ id: "model-configuration-name" }).props.onChange({ target: { value: "My draft" } });
+      renderer.root.findByProps({ id: "model-authored-instructions" }).props.onChange({ target: { value: "Full edited model instructions\nKeep the user's wording." } });
       await tick();
     });
     await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: false })); await tick(); });
@@ -262,6 +264,7 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.equal(context().props.value, "16384", "failed refresh never unmounts the visited editor or discards its startup draft");
     assert.equal(temperature().props.value, 0.7, "response draft also survives failed re-entry");
     assert.equal(renderer.root.findByProps({ id: "model-configuration-name" }).props.value, "My draft");
+    assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "Full edited model instructions\nKeep the user's wording.", "optional model instruction edits survive failed editor re-entry");
     failure = "";
     await act(async () => { button("Retry").props.onClick(); await tick(); });
     assert.equal(button("Retry"), undefined, "successful retry clears the connection notice");
@@ -282,9 +285,17 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.equal(savedRequests[0].startup.ctx_size, 16384);
     assert.equal(savedRequests[0].per_request.temperature, 0.7);
     assert.equal(savedRequests[0].display_name, "My draft");
+    assert.equal(savedRequests[0].agent.system_prompt, "Full edited model instructions\nKeep the user's wording.", "saved text reaches only its model agent bag");
     assert.equal(button("Retry"), undefined, "save refresh clears the earlier catalogue error");
     assert.equal(renderer.root.findByProps({ className: "badge model-edit-state" }).props["data-dirty"], false);
     assert.ok(textOf(renderer.root).includes("Setup saved."));
+
+    await act(async () => renderer.root.findAllByType("button").find(node => String(node.props["aria-label"]).startsWith("Reset model instructions:")).props.onClick());
+    assert.equal(renderer.root.findByProps({ id: "model-authored-instructions" }).props.value, "");
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
+    assert.equal(savedRequests.length, 2);
+    assert.deepEqual(savedRequests[1].agent, {}, "Reset removes only optional model guidance");
+    assert.equal(savedRequests[1].startup.ctx_size, 16384); assert.equal(savedRequests[1].per_request.temperature, 0.7, "reset retains other saved settings");
 
     await act(async () => renderer.unmount());
     failure = "bundles";

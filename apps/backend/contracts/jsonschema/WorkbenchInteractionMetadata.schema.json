@@ -57,6 +57,67 @@
       "title": "AgentEvent",
       "type": "object"
     },
+    "AgentInputPolicy": {
+      "additionalProperties": false,
+      "description": "Frozen disclosure choices; these never grant execution authority.",
+      "properties": {
+        "excluded_sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Excluded Sources",
+          "type": "array"
+        },
+        "instruction_override": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instruction Override"
+        },
+        "pinned_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Pinned Tools",
+          "type": "array"
+        },
+        "reference_loading": {
+          "additionalProperties": {
+            "enum": [
+              "off",
+              "when_needed",
+              "always"
+            ],
+            "type": "string"
+          },
+          "title": "Reference Loading",
+          "type": "object"
+        },
+        "tool_loading": {
+          "default": "when_needed",
+          "enum": [
+            "when_needed",
+            "always"
+          ],
+          "title": "Tool Loading",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "title": "AgentInputPolicy",
+      "type": "object"
+    },
     "AgentRunOperational": {
       "additionalProperties": false,
       "properties": {
@@ -495,6 +556,24 @@
           "default": null,
           "title": "Input Message Id"
         },
+        "input_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentInputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_sources": {
+          "items": {
+            "$ref": "#/$defs/InputSourceRow"
+          },
+          "title": "Input Sources",
+          "type": "array"
+        },
         "knowledge": {
           "default": "none",
           "enum": [
@@ -885,6 +964,84 @@
       "title": "AgentRunOperational",
       "type": "object"
     },
+    "CapabilitySetupRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "capability": {
+          "title": "Capability",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "requires_new_input": {
+          "default": false,
+          "title": "Requires New Input",
+          "type": "boolean"
+        },
+        "target": {
+          "enum": [
+            "settings",
+            "browser",
+            "windows",
+            "agent",
+            "knowledge",
+            "project",
+            "context"
+          ],
+          "title": "Target",
+          "type": "string"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        },
+        "tool_names": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tool Names",
+          "type": "array"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability",
+        "id",
+        "code",
+        "message",
+        "action",
+        "target"
+      ],
+      "title": "CapabilitySetupRequest",
+      "type": "object"
+    },
     "ChildRunActivity": {
       "properties": {
         "agent_id": {
@@ -1184,6 +1341,24 @@
           "title": "Gaps",
           "type": "array"
         },
+        "input_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentInputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_sources": {
+          "items": {
+            "$ref": "#/$defs/InputSourceRow"
+          },
+          "title": "Input Sources",
+          "type": "array"
+        },
         "instruction_layers": {
           "items": {
             "$ref": "#/$defs/InstructionLayer"
@@ -1415,6 +1590,21 @@
         },
         "configuration": {
           "$ref": "#/$defs/SetupConfiguration"
+        },
+        "connection_snapshots": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ConnectionSnapshot"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connection Snapshots"
         },
         "instruction_layers": {
           "items": {
@@ -1747,6 +1937,184 @@
         "image_url"
       ],
       "title": "ImageContentBlock",
+      "type": "object"
+    },
+    "InputSourceRow": {
+      "properties": {
+        "available": {
+          "default": true,
+          "title": "Available",
+          "type": "boolean"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content"
+        },
+        "editable": {
+          "default": false,
+          "title": "Editable",
+          "type": "boolean"
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Id"
+        },
+        "estimated_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Tokens"
+        },
+        "history_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "History Hint"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "mode": {
+          "default": "always",
+          "enum": [
+            "off",
+            "when_needed",
+            "always"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "observed": {
+          "default": false,
+          "title": "Observed",
+          "type": "boolean"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "required_connections": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Connections",
+          "type": "array"
+        },
+        "required_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Tools",
+          "type": "array"
+        },
+        "requires_project": {
+          "default": false,
+          "title": "Requires Project",
+          "type": "boolean"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "token_counting_method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Counting Method"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name"
+        },
+        "version_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version Id"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "kind",
+        "origin",
+        "reason"
+      ],
+      "title": "InputSourceRow",
       "type": "object"
     },
     "InstructionLayer": {
@@ -2085,7 +2453,8 @@
             "windows_host_shell",
             "tool_actions",
             "user_input",
-            "browser_control"
+            "browser_control",
+            "capability_setup"
           ],
           "title": "Environment",
           "type": "string"
@@ -2112,7 +2481,8 @@
           "default": "deepagents_interrupt_on",
           "enum": [
             "deepagents_interrupt_on",
-            "browser_control"
+            "browser_control",
+            "capability_setup"
           ],
           "title": "Kind",
           "type": "string"
@@ -2167,6 +2537,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/UserQuestion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "setup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapabilitySetupRequest"
             },
             {
               "type": "null"
@@ -2703,6 +3084,17 @@
           ],
           "default": null,
           "title": "Inherit Deployment Settings"
+        },
+        "input_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentInputPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "instructions": {
           "anyOf": [

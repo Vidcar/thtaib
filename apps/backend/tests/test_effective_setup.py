@@ -500,6 +500,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
                 "presented_tools": ["echo"],
                 "memory_version_refs": [memory["current_version_id"]],
                 "skill_version_refs": [skill["current_version_id"]],
+                "input_policy": {"tool_loading": "always", "reference_loading": {memory["id"]: "always"}},
             },
         )
         self.assertEqual(started.status_code, 200, started.text)
@@ -525,11 +526,11 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         self.assertIn(MEMORY_TOKEN, instructions)
         self.assertIn("<agent_memory>", instructions)
         self.assertNotIn(SKILL_TOKEN, instructions)
-        self.assertIn("## Skills System", instructions)
+        self.assertIn("## Selected skills", instructions)
         outbound = json.dumps(_RecordingHandler.requests[0]["body"])
         self.assertIn(MEMORY_TOKEN, outbound)
         self.assertNotIn(SKILL_TOKEN, outbound)
-        self.assertIn("## Skills System", outbound)
+        self.assertIn("## Selected skills", outbound)
         gaps = " ".join(capture["capture_gaps"])
         self.assertIn("no retrieval", gaps)
         self.assertIn("memory edits are run-local", gaps)
@@ -556,6 +557,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
                 "deployment_id": self.deployment_id,
                 "profile_id": profile_id,
                 "project_path": str(self.project),
+                "instructions": "CHAT-AUTHORED-INSTRUCTIONS",
             },
         )
         self.assertEqual(created.status_code, 200, created.text)
@@ -567,9 +569,9 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
         body = wait_for_chat(self.client, created.json()["id"])
         prompt = body["current_run"]["effective_setup"]["system_prompt"]
         self.assertIn("PROFILE-IDENTITY-TOKEN", prompt)
-        self.assertIn(SURFACE_PROMPT_HEADING, prompt)
-        self.assertIn("Chat surface", prompt)
-        self.assertLess(prompt.index("PROFILE-IDENTITY-TOKEN"), prompt.index(SURFACE_PROMPT_HEADING))
+        self.assertIn("CHAT-AUTHORED-INSTRUCTIONS", prompt)
+        self.assertIn("Help the user using only the selected context", prompt)
+        self.assertLess(prompt.index("PROFILE-IDENTITY-TOKEN"), prompt.index("CHAT-AUTHORED-INSTRUCTIONS"))
 
     def test_chat_applies_profile_and_knowledge_and_preserves_write_policy(self) -> None:
         profile_id = self._profile()
@@ -583,6 +585,7 @@ class EffectiveSetupLiveAdapterTests(unittest.TestCase):
                 "project_path": str(self.project),
                 "memory_version_refs": [memory["current_version_id"]],
                 "protected_instruction_version_refs": [protected["current_version_id"]],
+                "input_policy": {"reference_loading": {memory["id"]: "always"}},
             },
         )
         self.assertEqual(created.status_code, 200, created.text)
@@ -685,6 +688,7 @@ class EffectiveSetupScriptedChatTests(unittest.TestCase):
                 "task": "Continue.",
                 "presented_tools": ["echo"],
                 "memory_version_refs": [memory["current_version_id"]],
+                "input_policy": {"reference_loading": {memory["id"]: "always"}},
             },
         )
         self.assertEqual(started.status_code, 200, started.text)

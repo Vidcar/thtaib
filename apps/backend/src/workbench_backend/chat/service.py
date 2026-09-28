@@ -7,13 +7,17 @@ from pathlib import Path
 import threading
 import hashlib
 import json
+from fastapi import HTTPException
 
 from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.harness_backend import roots_overlap, canonical_root
 from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, InterruptDecisionRequest
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
-from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
+from workbench_backend.agents.setup_schemas import AgentInputPolicy, AgentInputPreview, InputSourceRow, ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
+from workbench_backend.agents.input_sources import create_input_preview, merge_input_policy, HISTORY_HINT
+from workbench_backend.connections.schemas import ConnectionSnapshot
+from workbench_backend.knowledge.costs import content_token_estimate, TOKEN_ESTIMATE_METHOD
 from workbench_backend.agents.helpers import freeze_helpers, freeze_settings, prepare_frozen_model
 from contextlib import ExitStack, nullcontext
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin, RetainedAssetReuseRequest
@@ -196,6 +200,7 @@ class ChatService:
             memory_entry_ids=selection.configuration.memory_entry_ids,
             skill_entry_ids=selection.configuration.skill_entry_ids,
             protected_instruction_entry_ids=selection.configuration.protected_instruction_entry_ids,
+            input_policy=selection.configuration.input_policy,
             # Freeze Chat-owned choices at creation. Later application access
             # preferences and a newly chosen main agent cannot move this chat
             # to another model or silently change its authority.
@@ -285,14 +290,23 @@ class ChatService:
             candidate_values["agent_setup_version_id"] = request.agent_setup_version_id
         if "agent_setup_id" in request.model_fields_set:
             candidate_values["agent_setup_id"] = request.agent_setup_id
-        candidate = ChatStartRequest.model_validate({"task": "Preview", **candidate_values})
+        candidate = ChatStartRequest.model_validate({"task": "Preview", **candidate_values,
+            "shortcut_ids": request.shortcut_ids, "project_file_refs": request.project_file_refs,
+            "attachment_ids": request.attachment_ids, "document_asset_ids": request.document_asset_ids})
         selection = None
         try:
             if candidate.model_configuration_id and not candidate.deployment_id:
                 matching = self.manager.configuration_deployment(candidate.model_configuration_id)
                 if matching is None:
-                    pending = {**conversation.setup_overrides.model_dump(exclude_none=True),
-                        **request.overrides.model_dump(exclude_none=True)}
+                    self._apply_local_input_policy(conversation, candidate)
+                    pending = conversation.setup_overrides.model_dump(exclude_none=True)
+                    for key, value in request.overrides.model_dump(exclude_unset=True).items():
+                        if key == "input_policy":
+                            continue
+                        if value is None:
+                            pending.pop(key, None)
+                        else:
+                            pending[key] = value
                     pending.pop("deployment_id", None)
                     pending.pop("profile_id", None)
                     selection = self._setups().resolve(project_id=conversation.project_id,
@@ -302,32 +316,50 @@ class ChatService:
                         agent_setup_id=(request.agent_setup_id if "agent_setup_id" in request.model_fields_set else conversation.agent_setup_id),
                         overrides=SetupConfiguration.model_validate(pending), validate=True,
                         read_only=True, latest_knowledge=True)
+                    self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
                     return ChatReadiness(status="unverified", can_send=True, selection=selection,
+                        input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate),
                         issues=[ChatReadinessIssue(code="model_load_required",
                             message="This configuration will load when the message starts.")])
             selection = self._apply_start_configuration(conversation, candidate,
                 prepare_model=False, read_only=True)
             if selection is None:
-                effective = conversation.setup_overrides.model_dump(exclude_none=True)
-                effective.update(deployment_id=conversation.deployment_id,
-                    approval_mode=conversation.approval_mode, work_mode=conversation.work_mode,
-                    desktop_access=conversation.desktop_access)
+                effective = {key: value for key, value in self._prepared_config(conversation, candidate).items()
+                    if key in SetupConfiguration.model_fields}
                 selection = self._setups().resolve(project_id=conversation.project_id,
                     agent_setup_version_id=conversation.agent_setup_version_id,
                     agent_setup_id=conversation.agent_setup_id,
                     overrides=SetupConfiguration.model_validate(effective), validate=True, read_only=True, latest_knowledge=True)
-            history_uncertainty = self._preflight_start_request(conversation, candidate)
+            conversation.input_policy = selection.configuration.input_policy
+            self._validate_selected_context(conversation, candidate, selection.configuration, preview=True)
+            preview = self._input_preview(conversation, selection, request.include_input_content, candidate)
+            history_uncertainty = self._preflight_start_request(conversation, candidate,
+                frozen_configuration=selection.configuration)
             if not conversation.deployment_id:
-                return ChatReadiness(status="needs_action", can_send=False, selection=selection,
+                return ChatReadiness(status="needs_action", can_send=False, selection=selection, input_preview=preview,
                     issues=[ChatReadinessIssue(code="model_selection_required",
                         message="Choose a model for this chat.", action="Choose a model")])
             if history_uncertainty:
-                return ChatReadiness(status="unverified", can_send=True, selection=selection,
+                return ChatReadiness(status="unverified", can_send=True, selection=selection, input_preview=preview,
                     issues=[ChatReadinessIssue(code=history_uncertainty,
                         message="Conversation compatibility will be checked when the model loads.")])
-            return ChatReadiness(status="ready", can_send=True, selection=selection)
+            return ChatReadiness(status="ready", can_send=True, selection=selection, input_preview=preview)
         except (ChatError, HarnessError, ManagerError) as exc:
             code = getattr(exc, "code", "setup_unavailable")
+            if selection is None and code in {"setup_dependencies_missing", "deferred_reference_tools_off", "deferred_reference_reader_excluded", "skill_selection_required"}:
+                # Missing optional reference setup must leave its controls
+                # inspectable, without validating or executing it a second time.
+                selection = self._apply_start_configuration(conversation, candidate,
+                    prepare_model=False, read_only=True, validate_setup=False)
+                if selection is None:
+                    effective = {key: value for key, value in self._prepared_config(conversation, candidate).items()
+                        if key in SetupConfiguration.model_fields}
+                    selection = self._setups().resolve(project_id=conversation.project_id,
+                        agent_setup_version_id=conversation.agent_setup_version_id,
+                        agent_setup_id=conversation.agent_setup_id,
+                        overrides=SetupConfiguration.model_validate(effective),
+                        override_cleared_fields=conversation.setup_cleared_fields,
+                        validate=False, read_only=True, latest_knowledge=True)
             action = {
                 "browser_worker_missing": "Install browser worker",
                 "browser_worker_schema_changed": "Refresh browser worker",
@@ -340,12 +372,108 @@ class ChatService:
                 "desktop_window_changed": "Choose the window again",
                 "desktop_unavailable": "Set up Windows control",
                 "desktop_worker_error": "Try Windows control again",
+                "desktop_runtime_unavailable": "Set up Windows control",
+                "deferred_reference_tools_off": "Include now, Remove, or Enable reading",
+                "deferred_reference_reader_excluded": "Include now, Remove, or Enable reading",
+                "skill_selection_required": "Update selected tools, connections or project",
+                "project_context_required": "Choose a project",
+                "context_file_tool_required": "Enable project file reading or remove the file",
+                "project_file_missing": "Choose another project file",
+                "retained_asset_unavailable": "Remove or replace the file",
                 "deploy_missing": "Choose a model",
                 "deployment_missing": "Choose a model",
                 "setup_deployment_required": "Choose a model",
             }.get(code)
             return ChatReadiness(status="needs_action" if action else "incompatible", can_send=False,
-                selection=selection, issues=[ChatReadinessIssue(code=code, message=str(exc), action=action)])
+                selection=selection,
+                input_preview=self._input_preview(conversation, selection, request.include_input_content, candidate) if selection is not None else None,
+                issues=[ChatReadinessIssue(code=code, message=str(exc), action=action)])
+
+    def _input_preview(self, conversation: ChatConversation, selection: ResolvedSetupSelection,
+        include_content: bool = False, request: ChatStartRequest | None = None) -> AgentInputPreview:
+        conversation = conversation.model_copy(update={"input_policy": selection.configuration.input_policy,
+            "presented_tools": selection.configuration.presented_tools})
+        additional = self._context_input_sources(conversation, request or ChatStartRequest(task="Preview"),
+            selection.configuration.input_policy, include_content=include_content)
+        if conversation.transcript or conversation.source_checkpoint_id:
+            additional.append(InputSourceRow(id="history", title="Retained conversation", kind="history",
+                origin="Native conversation checkpoint", mode="always", required=True,
+                reason="Earlier messages, tool results and native summaries may contain previously supplied material. Exact retained input is captured at dispatch.",
+                content="\n\n".join(f"{message.role}: {message.content}" for message in conversation.transcript) if include_content else None,
+                available=not bool(conversation.source_checkpoint_id)))
+        return create_input_preview(selection, include_content=include_content, knowledge=self.knowledge,
+            manager=self.manager, additional_sources=additional,
+            connection_tool_definitions=self.harness.connections.tool_definitions)
+
+    def _context_input_sources(self, conversation: ChatConversation, request: ChatStartRequest,
+        policy: AgentInputPolicy | None, *, include_content: bool = False) -> list[InputSourceRow]:
+        rows = []
+        excluded = set(policy.excluded_sources) if policy else set()
+        for item in resolve_shortcuts(request.shortcut_ids):
+            source = f"task:{item['id']}"
+            off = source in excluded
+            rows.append(InputSourceRow(id=source, title=item['name'], kind="instructions",
+                origin="Selected task shortcut", mode="off" if off else "always",
+                reason="Excluded for future inputs." if off else "Frozen selected task instructions.",
+                version_id=item['version'], estimated_tokens=0 if off else content_token_estimate(item['prompt']),
+                token_counting_method=TOKEN_ESTIMATE_METHOD, content=item['prompt'] if include_content else None,
+                history_hint=HISTORY_HINT if off else None))
+        for path in dict.fromkeys(request.project_file_refs):
+            source = f"project_file:{path}"
+            off = source in excluded
+            rows.append(InputSourceRow(id=source, title=path, kind="project_file", path=path,
+                origin=conversation.project_id or "Selected project", mode="off" if off else "when_needed",
+                reason="Excluded for future inputs." if off else "Selected authorized path; original file is read when needed.",
+                content=path if include_content else None, history_hint=HISTORY_HINT if off else None))
+        selected = list(dict.fromkeys([*(conversation.document_asset_ids if request.document_asset_ids is None else request.document_asset_ids), *request.attachment_ids]))
+        metadata = {asset.id: asset for asset in self.assets.list_assets(RetainedAssetListFilters(
+            session_id=conversation.id, project_path=conversation.project_path))} if selected else {}
+        for asset_id in selected:
+            source = f"attachment:{asset_id}"
+            asset = metadata.get(asset_id)
+            if asset is None:
+                continue
+            off = source in excluded
+            direct = asset_id in request.attachment_ids and asset.content_kind.value == "image" or conversation.presented_tools == []
+            text = None
+            if include_content and not off and asset.content_kind.value in {"text", "code", "document"}:
+                from workbench_backend.assets.service import _asset_text
+                frozen_asset, content = self.assets._load_content(asset_id, session_id=conversation.id,
+                    project_path=conversation.project_path)
+                text = _asset_text(frozen_asset, content)
+            rows.append(InputSourceRow(id=source, title=asset.filename, kind="attachment",
+                origin="Immutable retained upload", mode="off" if off else "always" if direct else "when_needed",
+                reason="Excluded for future inputs." if off else "Selected retained content; exact original is available through the existing reader." if not direct else "Included in the current user content.",
+                version_id=asset.sha256, content=text, available=asset.content_kind.value != "image",
+                estimated_tokens=0 if off else content_token_estimate(text) if direct and text is not None else None,
+                token_counting_method=TOKEN_ESTIMATE_METHOD if off or direct and text is not None else None,
+                history_hint=HISTORY_HINT if off else None))
+        return rows
+
+    def _validate_selected_context(self, conversation: ChatConversation, request: ChatStartRequest,
+        configuration: SetupConfiguration, *, preview: bool = False) -> None:
+        policy = configuration.input_policy
+        conversation = conversation.model_copy(update={"input_policy": policy})
+        excluded = set(policy.excluded_sources) if policy else set()
+        paths = [path for path in dict.fromkeys(request.project_file_refs) if f"project_file:{path}" not in excluded]
+        if paths:
+            if not conversation.project_id:
+                raise ChatError("Choose a project before adding project files.", code="project_context_required", status_code=409)
+            tools = configuration.presented_tools
+            if "tool:read_file" in excluded or tools is not None and "read_file" not in tools:
+                raise ChatError("Enable project file reading in this agent to use selected files.", code="context_file_tool_required", status_code=409)
+            from workbench_backend.agents.project_files import project_file
+            project = self._setups().get_project(conversation.project_id, require_active=True)
+            for path in paths:
+                if not project_file(Path(project.path), path).is_file():
+                    raise HarnessError("This project file is unavailable.", code="project_file_missing", status_code=404)
+        try:
+            self.assets.require_active_assets(self._selected_document_ids(conversation, request),
+                session_id=conversation.id, project_path=conversation.project_path, metadata_only=True)
+        except HTTPException as exc:
+            if not preview:
+                raise
+            raise ChatError(str(exc.detail), code="retained_asset_unavailable", status_code=exc.status_code) from exc
 
     def start(self, conversation_id: str, request: ChatStartRequest) -> ChatConversationView:
         if not request.input_message_id:
@@ -780,6 +908,8 @@ class ChatService:
                 if key in type(next_conversation).model_fields:
                     if key == "review":
                         value = ReviewConfiguration.model_validate(value)
+                    elif key == "input_policy" and value is not None:
+                        value = AgentInputPolicy.model_validate(value)
                     setattr(next_conversation, key, value)
             frozen = self._prepare_frozen_model(frozen)
             next_conversation.deployment_id = frozen.selection.configuration.deployment_id or ""
@@ -787,7 +917,10 @@ class ChatService:
                 next_conversation.setup_overrides = frozen.conversation_overrides
                 next_conversation.setup_cleared_fields = list(frozen.cleared_fields)
             next_conversation.accepted_inputs.update(self._require(conversation.id).accepted_inputs)
-        self._preflight_start_request(next_conversation, request, frozen_helpers=frozen.helper_snapshots if frozen is not None else None)
+        self._preflight_start_request(next_conversation, request,
+            frozen_helpers=frozen.helper_snapshots if frozen is not None else None,
+            frozen_connections=frozen.connection_snapshots if frozen is not None else None,
+            frozen_configuration=frozen.selection.configuration if frozen is not None else None)
         self._ensure_thread(next_conversation)
         now = utc_now()
         next_conversation.history_replaced = False
@@ -859,6 +992,7 @@ class ChatService:
                         retained_asset_ids=selected_document_ids,
                         output_schema=request.output_schema,
                         presented_tools=next_conversation.presented_tools,
+                        input_policy=next_conversation.input_policy,
                         approval_mode=next_conversation.approval_mode,
                         work_mode=next_conversation.work_mode,
                         desktop_access=next_conversation.desktop_access,
@@ -867,7 +1001,7 @@ class ChatService:
                         model_configuration_id=next_conversation.model_configuration_id,
                         startup_overrides=next_conversation.startup_overrides,
                         system_prompt=(
-                            CHAT_SYSTEM_PROMPT
+                            None if next_conversation.input_policy is not None else CHAT_SYSTEM_PROMPT
                             if next_conversation.project_path
                             else CHAT_SYSTEM_PROMPT_WITHOUT_PROJECT
                         ),
@@ -1259,7 +1393,17 @@ class ChatService:
         conversation: ChatConversation,
         request: ChatStartRequest,
         *, frozen_helpers: list | None = None,
+        frozen_connections: list[ConnectionSnapshot] | None = None,
+        frozen_configuration: SetupConfiguration | None = None,
     ) -> str | None:
+        policy = frozen_configuration.input_policy if frozen_configuration is not None else conversation.input_policy
+        defer_optional = policy is not None and policy.tool_loading == "when_needed"
+        pinned = set(policy.pinned_tools) if defer_optional else None
+        required_tools, required_connections = self._setups().always_skill_requirements(frozen_configuration) if frozen_configuration is not None else (set(), set())
+        if pinned is not None:
+            # Required setup is checked before an Always-included skill body;
+            # this does not pin its tool schemas or expand selected capabilities.
+            pinned.update(required_tools)
         browser = getattr(self.harness, "browser", None)
         if browser is not None and conversation.thread_id and browser.status(conversation.thread_id).get("control", "agent") != "agent":
             raise ChatError("Return browser control to the agent before starting more work.", code="browser_control_active", status_code=409)
@@ -1275,7 +1419,18 @@ class ChatService:
                 status_code=409,
                 details={"deployment_id": conversation.deployment_id},
             ) from exc
-        connection_snapshots = self.harness.connections.snapshot(conversation.connection_ids, tools_enabled=conversation.presented_tools != [])
+        # Accepted connection schemas define this input's catalogue. Live
+        # readiness and identity are checked before disclosure/use; refreshing
+        # the catalogue here would silently change a queued selection.
+        connection_snapshots = frozen_connections if frozen_connections is not None else self.harness.connections.snapshot(
+            conversation.connection_ids, tools_enabled=conversation.presented_tools != [], allow_unready=defer_optional)
+        ready_connections = required_connections | {item.id for item in connection_snapshots
+            if set(pinned or []).intersection(tool.name for tool in item.tools)}
+        for item in connection_snapshots:
+            if item.id in ready_connections:
+                self.harness.connections.validate_snapshot(item)
+        if ready_connections:
+            self.harness.connections.snapshot(sorted(ready_connections))
         capture_routes = (
             any(name in {"browser_take_screenshot", "desktop_screenshot"} for name in (conversation.presented_tools or []))
             or "read_file" in (conversation.presented_tools or []) and bool(self.assets.list_assets(RetainedAssetListFilters(
@@ -1301,24 +1456,33 @@ class ChatService:
                 status_code=400,
                 details={"tools": denied},
             )
-        if filesystem_blocked:
+        if filesystem_blocked and (not defer_optional or pinned.intersection(filesystem_blocked)):
             raise ChatError(
                 "Filesystem tools require a bound project folder.",
                 code="filesystem_requires_project",
                 status_code=400,
                 details={"tools": filesystem_blocked},
             )
-        if shell_blocked:
+        if shell_blocked and (not defer_optional or pinned.intersection(shell_blocked)):
             raise ChatError(
                 "The host shell and project preview require a bound project folder. A home-directory default is not invented.",
                 code="shell_requires_project",
                 status_code=400,
                 details={"tools": shell_blocked},
             )
+        if frozen_configuration is not None:
+            if frozen_configuration.requires_project and not conversation.project_path:
+                raise ChatError("This agent requires a project folder. Start a chat in a project.",
+                    code="setup_project_required", status_code=409)
+            if frozen_configuration.requires_host_shell and (
+                not conversation.project_path or conversation.work_mode == "plan" or "execute" not in _presented
+            ):
+                raise ChatError("This agent requires Shell enabled in a project in Work mode.",
+                    code="setup_shell_required", status_code=409)
         if conversation.work_mode == "work":
             from workbench_backend.browser.service import BROWSER_TOOL_NAMES
 
-            if set(_presented).intersection(BROWSER_TOOL_NAMES):
+            if set(_presented).intersection(BROWSER_TOOL_NAMES).intersection(pinned if defer_optional else _presented):
                 browser = self.harness.browser
                 if browser is None:
                     raise ChatError("Browser control is unavailable.", code="browser_unavailable", status_code=409)
@@ -1331,12 +1495,18 @@ class ChatService:
         if conversation.work_mode == "work" and conversation.thread_id:
             from workbench_backend.desktop_automation.service import DESKTOP_TOOL_NAMES, DesktopAutomationError
 
-            if set(_presented).intersection(DESKTOP_TOOL_NAMES):
+            if set(_presented).intersection(DESKTOP_TOOL_NAMES).intersection(pinned if defer_optional else _presented):
                 desktop = self.harness.desktop_automation
                 if desktop is None:
                     raise ChatError("Windows control is unavailable.", code="desktop_unavailable", status_code=409)
                 try:
                     desktop.snapshot_grant(conversation.thread_id, conversation.desktop_access)
+                    if required_tools.intersection(DESKTOP_TOOL_NAMES):
+                        from workbench_backend.desktop_automation.runtime import WinAppRuntimeError
+                        try:
+                            desktop.runtime.command_path()
+                        except WinAppRuntimeError as exc:
+                            raise ChatError(str(exc), code="desktop_runtime_unavailable", status_code=409) from exc
                 except DesktopAutomationError as exc:
                     raise ChatError(str(exc), code=exc.code, status_code=409) from exc
         if conversation.helper_agent_ids:
@@ -1346,14 +1516,20 @@ class ChatService:
                     helper = next((item for item in frozen_helpers if item.agent_id == helper_id), None)
                     if helper is None:
                         raise ChatError("The frozen helper selection is missing.", code="helper_unavailable", status_code=409)
-                    missing = setups.dependencies(helper.configuration, frozen=True)
+                    missing = setups.dependencies(helper.configuration, frozen=True,
+                        connection_snapshots=helper.connection_snapshots,
+                        project_bound=bool(conversation.project_path))
                     active = True
                 else:
                     try:
                         helper = setups.get_setup(helper_id)
                     except HarnessError as exc:
                         raise ChatError(f"Selected helper {helper_id} is unavailable.", code="helper_unavailable", status_code=409) from exc
-                    missing = helper.helper_missing_dependencies
+                    helper_selection = setups.resolve(project_id=conversation.project_id,
+                        agent_setup_version_id=helper.current_version_id, validate=False,
+                        helper_role=True, read_only=True)
+                    missing = setups.dependencies(helper_selection.configuration,
+                        project_bound=bool(conversation.project_path))
                     active = helper.active
                 if not active or missing:
                     raise ChatError(f"Helper {helper.name} has unavailable settings.",
@@ -1509,6 +1685,8 @@ class ChatService:
             # available on demand across turns without repeated prompt copies.
             image_ids = []
             for asset_id in request.attachment_ids:
+                if asset_id not in selected_ids:
+                    continue
                 asset, _ = self.assets._load_content(asset_id, session_id=conversation.id, project_path=conversation.project_path)
                 if asset.content_kind.value == "image" or not reading_available:
                     image_ids.append(asset_id)
@@ -1539,9 +1717,38 @@ class ChatService:
     def _selected_document_ids(conversation: ChatConversation, request: ChatStartRequest) -> list[str]:
         selected = conversation.document_asset_ids if request.document_asset_ids is None else request.document_asset_ids
         result = list(dict.fromkeys([*selected, *request.attachment_ids]))
+        # The conversation carries the resolved selection. A request policy is
+        # only an authored partial override, and an explicit reset can still
+        # inherit exclusions from the selected agent.
+        policy = conversation.input_policy
+        if policy is not None:
+            result = [asset_id for asset_id in result if f"attachment:{asset_id}" not in policy.excluded_sources]
         if len(result) > 32:
             raise ChatError("Select at most 32 conversation files. Remove a document before attaching another.", code="document_selection_limit", status_code=413)
         return result
+
+    @staticmethod
+    def _apply_local_input_policy(conversation: ChatConversation, request: ChatStartRequest) -> None:
+        requested_policy = request.input_policy if "input_policy" in request.model_fields_set else None
+        if "input_policy" in request.model_fields_set:
+            authored = conversation.setup_overrides.model_dump(exclude_none=True)
+            if requested_policy is None:
+                authored.pop("input_policy", None)
+            else:
+                local = conversation.setup_overrides.input_policy
+                combined = local.model_dump(exclude_unset=True) if local is not None else {}
+                for key, value in requested_policy.model_dump(exclude_unset=True).items():
+                    combined[key] = {**combined.get(key, {}), **value} if key == "reference_loading" else value
+                authored["input_policy"] = combined
+            conversation.setup_overrides = SetupConfiguration.model_validate(authored)
+        previous_policy = conversation.input_policy
+        if (previous_policy is not None and requested_policy is not None
+                and "instruction_override" in requested_policy.model_fields_set
+                and requested_policy.instruction_override is None):
+            previous_policy = previous_policy.model_copy(update={"instruction_override": None})
+        conversation.input_policy = merge_input_policy(
+            None if "input_policy" in request.model_fields_set and requested_policy is None else previous_policy,
+            conversation.setup_overrides.input_policy)
 
     def _apply_start_configuration(
         self,
@@ -1550,8 +1757,12 @@ class ChatService:
         *,
         prepare_model: bool = True,
         read_only: bool = False,
+        validate_setup: bool = True,
     ) -> ResolvedSetupSelection | None:
         resolved_selection = None
+        # New submissions resolve the lean defaults. Only already admitted
+        # snapshots with no policy retain the historical eager path.
+        self._apply_local_input_policy(conversation, request)
         # Existing editable version selections are record selections now. An
         # explicitly empty list must clear the old Chat additions as well.
         aliases = {}
@@ -1574,7 +1785,6 @@ class ChatService:
         for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
             if key in request.model_fields_set:
                 setattr(conversation, key, getattr(request, key))
-        conversation.document_asset_ids = self._selected_document_ids(conversation, request)
         fields_set = request.model_fields_set
         if request.profile_id:
             self._bind_profile(request.profile_id)
@@ -1610,6 +1820,8 @@ class ChatService:
                     desktop_access=conversation.desktop_access)
                 conversation.setup_overrides = SetupConfiguration.model_validate(pinned)
             explicit = configuration_from_request(request).model_dump(exclude_none=True)
+            if "input_policy" in explicit:
+                explicit["input_policy"] = conversation.setup_overrides.input_policy.model_dump(exclude_unset=True)
             overrides = conversation.setup_overrides.model_dump(exclude_none=True) | explicit
             if request.model_configuration_id and "model_configuration_id" in fields_set and "deployment_id" not in fields_set:
                 overrides.pop("deployment_id", None)
@@ -1630,7 +1842,7 @@ class ChatService:
                     conversation.setup_cleared_fields = [field for field in conversation.setup_cleared_fields if field != key]
                     if getattr(request, key) is None:
                         conversation.setup_cleared_fields.append(key)
-            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, agent_setup_id=conversation.agent_setup_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=prepare_model, read_only=read_only, latest_knowledge=True)
+            selection = self._setups().resolve(project_id=conversation.project_id, agent_setup_version_id=conversation.agent_setup_version_id, agent_setup_id=conversation.agent_setup_id, overrides=conversation.setup_overrides, override_cleared_fields=conversation.setup_cleared_fields, prepare_model=prepare_model, read_only=read_only, validate=validate_setup, latest_knowledge=True)
             resolved_selection = selection
             conversation.agent_setup_id = selection.agent_setup_id
             conversation.agent_setup_version_id = selection.agent_setup_version_id
@@ -1655,6 +1867,7 @@ class ChatService:
             values.setdefault("desktop_access", "off")
             values.setdefault("helper_agent_ids", [])
             values["review"] = selection.configuration.review or ReviewConfiguration()
+            values["input_policy"] = selection.configuration.input_policy
             request = request.model_copy(update={key: value for key, value in values.items() if key in type(request).model_fields})
             fields_set = request.model_fields_set
         if "presented_tools" in fields_set:
@@ -1668,6 +1881,8 @@ class ChatService:
         for key in ("work_mode", "desktop_access", "helper_agent_ids", "review", "model_configuration_id", "startup_overrides"):
             if key in fields_set and (getattr(request, key) is not None or key in {"model_configuration_id", "startup_overrides"}):
                 setattr(conversation, key, getattr(request, key))
+        if resolved_selection is not None:
+            conversation.input_policy = resolved_selection.configuration.input_policy
         for key in ("memory_entry_ids", "skill_entry_ids", "protected_instruction_entry_ids"):
             if key in fields_set:
                 setattr(conversation, key, getattr(request, key))
@@ -1705,6 +1920,7 @@ class ChatService:
             conversation.embedding_deployment_id = request.embedding_deployment_id
         if "retrieval_project_paths" in fields_set:
             conversation.retrieval_project_paths = list(request.retrieval_project_paths or [])
+        conversation.document_asset_ids = self._selected_document_ids(conversation, request)
         return resolved_selection
 
     def _reject_session_area_change(
@@ -1761,6 +1977,7 @@ class ChatService:
             "project_path": conversation.project_path,
             "workspace_id": conversation.workspace_id,
             "presented_tools": conversation.presented_tools,
+            "input_policy": conversation.input_policy.model_dump(mode="json") if conversation.input_policy is not None else None,
             "approval_mode": conversation.approval_mode,
             "work_mode": conversation.work_mode,
             "desktop_access": conversation.desktop_access,
@@ -1784,7 +2001,10 @@ class ChatService:
         return conversation
 
     def _setups(self) -> SetupService:
-        return SetupService(self.app_store, self.manager, self._knowledge_provider() if self._knowledge_provider else None, connection_available=self.harness.connections.available, connection_tools=lambda ident: [tool.name for tool in self.harness.connections.get(ident).tools])
+        return SetupService(self.app_store, self.manager, self._knowledge_provider() if self._knowledge_provider else None,
+            connection_available=self.harness.connections.available, connection_exists=self.harness.connections.exists,
+            connection_tools=lambda ident: [tool.name for tool in self.harness.connections.tool_definitions(ident)],
+            connection_tool_definitions=self.harness.connections.tool_definitions)
 
     def _knowledge_admission_lock(self):
         return self.knowledge.admission_lock() if self._knowledge_provider is not None else nullcontext()
@@ -1805,8 +2025,6 @@ class ChatService:
                     if existing.request_fingerprint != fingerprint:
                         raise ChatError("This input identity belongs to different accepted work.", code="submission_identity_conflict", status_code=409)
                     return existing
-            self.assets.require_active_assets(self._selected_document_ids(current, request),
-                session_id=current.id, project_path=current.project_path)
             selected = current.model_copy(deep=True)
             if replace_overrides:
                 selected.setup_overrides = SetupConfiguration()
@@ -1823,32 +2041,44 @@ class ChatService:
                     if key in type(selected).model_fields:
                         if key == "review":
                             value = ReviewConfiguration.model_validate(value)
+                        elif key == "input_policy":
+                            value = AgentInputPolicy.model_validate(value)
                         setattr(selected, key, value)
+            self._validate_selected_context(selected, request, selection.configuration)
             helpers = freeze_helpers(self._setups(), selection.configuration.helper_agent_ids or [],
-                project_id=selected.project_id, parent_configuration=selection.configuration, latest_knowledge=True)
+                project_id=selected.project_id, parent_configuration=selection.configuration, latest_knowledge=True,
+                connection_snapshot=self.harness.connections.snapshot)
+            connection_snapshots = self.harness.connections.snapshot(selection.configuration.connection_ids,
+                tools_enabled=selection.configuration.presented_tools != [],
+                allow_unready=bool(selection.configuration.input_policy and selection.configuration.input_policy.tool_loading == "when_needed"))
             shortcuts = resolve_shortcuts(request.shortcut_ids)
+            excluded = set(selection.configuration.input_policy.excluded_sources) if selection.configuration.input_policy else set()
+            shortcuts = [item for item in shortcuts if f"task:{item['id']}" not in excluded]
             settings = freeze_settings(self.manager, selection.configuration)
             deployment = self.manager.store.get_deployment(selection.configuration.deployment_id or "")
             if not selection.configuration.profile_id and selection.configuration.inherit_deployment_settings is not False and deployment and deployment.profile_id:
                 selection = selection.model_copy(update={"configuration": selection.configuration.model_copy(update={"profile_id": deployment.profile_id})})
                 selected.profile_id = deployment.profile_id
             frozen = FrozenExecutionSelection(selection=selection, settings=settings,
-                shortcuts=shortcuts, helper_snapshots=helpers, intended_config=self._prepared_config(selected, request), request_fingerprint=fingerprint,
+                shortcuts=shortcuts, helper_snapshots=helpers, connection_snapshots=connection_snapshots,
+                intended_config=self._prepared_config(selected, request), request_fingerprint=fingerprint,
                 conversation_overrides=selected.setup_overrides, cleared_fields=list(selected.setup_cleared_fields))
             if shortcuts:
                 from workbench_backend.agents.setup_schemas import InstructionLayer
                 frozen.selection.instruction_layers.extend(InstructionLayer(name=f"Task: {item['name']}", source_id=f"{item['id']}:{item['version']}", content=item["prompt"]) for item in shortcuts)
             if request.project_file_refs:
                 from workbench_backend.agents.setup_schemas import InstructionLayer
-                if not selected.project_id:
+                paths = [path for path in dict.fromkeys(request.project_file_refs) if f"project_file:{path}" not in excluded]
+                if paths and not selected.project_id:
                     raise ChatError("Choose a project before adding project files.", code="project_context_required", status_code=409)
                 tools = selection.configuration.presented_tools
-                if tools is not None and "read_file" not in tools:
+                if paths and tools is not None and "read_file" not in tools:
                     raise ChatError("Enable project file reading in this agent to use selected files.", code="context_file_tool_required", status_code=409)
-                for path in dict.fromkeys(request.project_file_refs):
-                    self._setups().read_project_file(selected.project_id, path)
-                frozen.selection.instruction_layers.append(InstructionLayer(name="Selected project files", source_id=selected.project_id,
-                    content="The user selected these authorized project-relative files as context:\n" + "\n".join(request.project_file_refs)))
+                if paths:
+                    frozen.selection.instruction_layers.append(InstructionLayer(name="Selected project files", source_id=selected.project_id,
+                        content="The user selected these authorized project-relative files as context:\n" + "\n".join(paths)))
+            frozen.selection.input_sources.extend(self._context_input_sources(selected, request,
+                selection.configuration.input_policy))
             if persist and request.input_message_id:
                 current.accepted_inputs[request.input_message_id] = frozen
                 self.store.put(current)

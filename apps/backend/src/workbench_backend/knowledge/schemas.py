@@ -76,6 +76,9 @@ class SkillGuidedFields(BaseModel):
     name: str
     description: str
     instructions: str
+    required_tools: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    requires_project: bool = False
 
 
 class SkillPreviewRequest(BaseModel):
@@ -92,6 +95,9 @@ class SkillPreview(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
+    required_tools: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    requires_project: bool = False
     guided_available: bool = False
     valid: bool = False
     issues: list[str] = Field(default_factory=list)
@@ -126,6 +132,11 @@ class KnowledgeConfig(BaseModel):
 class KnowledgeVersion(BaseModel):
     resources: list[SkillResource] = Field(default_factory=list)
     package_source: str | None = None
+    display_name: str | None = None
+    description: str | None = None
+    required_tools: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    requires_project: bool = False
     id: str
     entry_id: str
     scope: KnowledgeScope
@@ -164,6 +175,10 @@ class KnowledgeEntry(BaseModel):
 class KnowledgeEntryView(KnowledgeEntry):
     resources: list[SkillResource] = Field(default_factory=list)
     package_source: str | None = None
+    description: str | None = None
+    required_tools: list[str] = Field(default_factory=list)
+    required_connections: list[str] = Field(default_factory=list)
+    requires_project: bool = False
     content: str
     provenance: KnowledgeProvenance
     previous_version_id: str | None = None
@@ -191,6 +206,7 @@ class KnowledgeCreateRequest(BaseModel):
     provenance: KnowledgeProvenance | None = None
     scope_id: str | None = None
     display_name: str | None = None
+    description: str | None = Field(default=None, max_length=1024)
     resource_changes: list[SkillResourceChange] = Field(default_factory=list, max_length=1024)
 
 
@@ -198,6 +214,7 @@ class KnowledgeEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str
     base_version: str
+    description: str | None = Field(default=None, max_length=1024)
     provenance: KnowledgeProvenance | None = None
     resource_changes: list[SkillResourceChange] = Field(default_factory=list, max_length=1024)
 

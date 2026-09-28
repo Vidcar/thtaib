@@ -103,7 +103,7 @@ class AgentCapabilitiesTests(unittest.TestCase):
         self.assertTrue(final['requires_host_shell'])
 
     def test_named_helper_uses_parent_scope_and_persists_child(self):
-        helper = self.setup(presented_tools=["echo", "write_file"], approval_mode="full_access")
+        helper = self.setup(presented_tools=["echo", "write_file"], approval_mode="full_access", input_policy={"tool_loading": "always"})
         main = ScriptedChatModel([call("task", {"subagent_type": helper["id"], "description": "Read and report"}, "delegate"), AIMessage(content="Parent done.")])
         child = ScriptedChatModel([call("echo", {"text": "child result"}, "echo"), AIMessage(content="Child done.")])
         self.harness(lambda run, _sink: child if run.parent_run_id else main)

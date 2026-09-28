@@ -1,0 +1,19 @@
+.compact-dialog:has(.agent-inputs) {width: min(56rem, calc(100vw - 2rem)); max-width: none; max-height: calc(100dvh - 2rem); overflow: auto;}
+.agent-inputs {display: grid; gap: var(--space-compact); min-width: 0;}
+.agent-inputs .hint {margin: 0;}
+.agent-inputs details {min-width: 0;}
+.agent-input-source {border-top: var(--line-hairline) solid var(--border); padding: var(--pad-compact) 0;}
+.agent-input-source > summary {display: flex; justify-content: space-between; gap: var(--space-compact); cursor: pointer;}
+.agent-input-source > summary::before {content: "›"; color: var(--muted);}
+.agent-input-source[open] > summary::before {transform: rotate(90deg);}
+.agent-input-source > summary strong {overflow-wrap: anywhere;}
+.agent-input-source > summary > span {display: grid; flex: 1; gap: var(--space-tight); min-width: 0;}
+.agent-input-source > summary small {color: var(--muted); font-size: var(--text-small);}
+.agent-input-source > summary > small {white-space: nowrap;}
+.agent-input-source[data-excluded] > summary {opacity: .65;}
+.agent-input-source[open] {display: grid; gap: var(--space-compact);}
+.agent-input-source-actions {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact);}
+.agent-input-source-text {white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 18rem; margin: 0; padding: var(--pad-compact); border: var(--line-hairline) solid var(--border); background: var(--bg-raised); border-radius: var(--radius-control); font-size: var(--text-small);}
+.agent-input-instructions[open], .agent-input-save {display: grid; gap: var(--space-compact);}
+.agent-input-instructions > button, .agent-input-save > button {justify-self: start;}
+@media (max-width: 560px) {.agent-input-source > summary {flex-wrap: wrap;} .compact-dialog:has(.agent-inputs) {width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem);}}
