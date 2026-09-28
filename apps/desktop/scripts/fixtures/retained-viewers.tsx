@@ -16,7 +16,13 @@ import "../../src/renderer/ChatPanel.css";
 
 const sha = "a".repeat(64);
 const sidebarChat = { id: "sidebar-chat", title: "Build a simple top-down 2D driving game", display_title: "Build a simple top-down 2D driving game", transcript: [], project_id: "project-game", project_path: "D:/Games", archived: false, updated_at: "2026-09-26T12:00:00Z" };
-const imageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9kAAAAASUVORK5CYII=";
+const imageCanvas = document.createElement("canvas");
+imageCanvas.width = 960; imageCanvas.height = 600;
+const imageContext = imageCanvas.getContext("2d")!;
+imageContext.fillStyle = "#232938"; imageContext.fillRect(0, 0, 960, 600);
+imageContext.fillStyle = "#b7a3ed"; imageContext.fillRect(100, 100, 360, 400);
+imageContext.fillStyle = "#82b4bf"; imageContext.fillRect(500, 100, 360, 400);
+const imageData = imageCanvas.toDataURL("image/png");
 Object.assign(window, { workbench: { backendUrl: "http://fixture.invalid", saveAsset: async () => { window.fixture.saved++; } }, fixture: { saved: 0, calls: [] } });
 window.fetch = async (url, init) => {
   const address = new URL(String(url));
@@ -44,7 +50,11 @@ window.fetch = async (url, init) => {
   if (address.pathname === "/v1/chat/conversations/search") return { ok: true, json: async () => address.searchParams.get("q") === "absent" ? [] : [{ conversation: sidebarChat }] } as Response;
   if (address.pathname === "/v1/projects") return { ok: true, json: async () => [{ id: "other-project", name: "Unrelated project", path: "D:/Other" }, { id: "project-game", name: "Game project", path: "D:/Games" }] } as Response;
   if (address.pathname === "/v1/desktop/attention") return { ok: true, json: async () => [] } as Response;
-  if (address.pathname === "/v1/assets") return { ok: true, json: async () => [{ id: "asset_image", filename: "Library image.png", session_id: "chat_fixture", content_kind: "image", content_type: "image/png", size_bytes: 90, origin: "upload", observed_at: "2026-09-22T12:00:00Z" }] } as Response;
+  if (address.pathname === "/v1/assets") {
+    window.fixture.libraryRequests ??= [];
+    window.fixture.libraryRequests.push({ sessionId: address.searchParams.get("session_id"), projectPath: address.searchParams.get("project_path") });
+    return { ok: true, json: async () => [{ id: "asset_image", filename: "Library image.png", session_id: sidebarChat.id, project_path: sidebarChat.project_path, content_kind: "image", content_type: "image/png", size_bytes: 90, origin: "upload", observed_at: "2026-09-22T12:00:00Z" }] } as Response;
+  }
   if (address.pathname === "/v1/assets/asset_image/preview") return { ok: true, json: async () => ({ id: "asset_image", filename: "Library image.png", size_bytes: 90, source_status: "retained_only", image_data_url: imageData }) } as Response;
   if (address.pathname === "/v1/assets/asset_image/content") return { ok: true, json: () => new Promise(resolve => { window.fixture.resolveOriginal = () => resolve({ content_type: "image/png", content_base64: imageData.split(",")[1] }); }) } as Response;
   if (address.pathname === "/v1/browser/runtime") return { ok: true, json: async () => ({ supported: true, installed: true, reason: null }) } as Response;

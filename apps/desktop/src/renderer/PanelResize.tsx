@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-export function usePanelWidth(key: string, initial: number, min: number, max: number) {
+export function usePanelWidth(key: string, initial: number, min: number, max: number, seedKey?: string) {
   const [width, setWidth] = useState(() => {
-    try { const saved = Number(window.localStorage?.getItem(key)); return saved > 0 ? Math.max(min, Math.min(max, saved)) : initial; } catch { return initial; }
+    try { const saved = Number(window.localStorage?.getItem(key) ?? (seedKey ? window.localStorage?.getItem(seedKey) : null)); return saved > 0 ? Math.max(min, Math.min(max, saved)) : initial; } catch { return initial; }
   });
   const update = (value: number) => setWidth(Math.max(min, Math.min(max, value)));
   useEffect(() => { try { window.localStorage?.setItem(key, String(width)); } catch { /* Layout persistence is optional. */ } }, [key, width]);

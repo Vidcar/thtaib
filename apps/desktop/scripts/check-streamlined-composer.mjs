@@ -195,7 +195,7 @@ try {
     await act(async () => button(renderer, "Target agent").props.onClick());
     await waitFor(() => assert.equal(checking, true), "agent compatibility held for original owner");
     await act(async () => button(renderer, "Conversation B").props.onClick());
-    await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "destination owner bound");
+    await waitFor(() => { assert.equal(textarea(renderer).props.disabled, false); assert.ok(renderer.root.findAll(node => node.type === "h2" && textOf(node) === "Conversation B").length); }, "destination owner bound");
     await act(async () => { choice.resolve(); await Promise.resolve(); });
     await waitFor(() => assert.equal(guarded.state.consumedResponses.some(item => item.path === "/v1/chat/conversations/conv_a/readiness" && item.method === "POST"), true), "old compatibility consumed");
     assert.doesNotMatch(textOf(control(renderer, "Main agent")), /Target agent/, "late agent selection cannot retarget the destination Chat");

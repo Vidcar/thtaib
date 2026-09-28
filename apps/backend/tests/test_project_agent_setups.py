@@ -13,11 +13,11 @@ from workbench_backend.agents.harness import HarnessService
 from workbench_backend.agents.setup_schemas import SetupConfiguration
 from workbench_backend.inference.schemas import (
     BundleSource, ConnectedDeploymentRequest, Deployment, DeploymentStatus,
-    ManagementScope, ModelBundle, RunProfile,
+    LocalImportRequest, ManagementScope, ModelBundle, ModelConfigurationWriteRequest, RunProfile,
 )
 from workbench_backend.inference.settings import resolve_bags
 from tests.scripted_model import ScriptedChatModel
-from tests.support import close_workbench_sqlite, offline_workbench_client
+from tests.support import close_workbench_sqlite, offline_workbench_client, write_tiny_gguf
 from tests.test_chat import wait_for_chat
 
 
@@ -210,6 +210,73 @@ class ProjectSetupTests(unittest.TestCase):
         resolved = self.post('/v1/setup-resolution', request)
         self.assertEqual(resolved['configuration']['deployment_id'], b.id)
         self.assertEqual(resolved['configuration']['profile_id'], second.id)
+
+    def test_model_editor_preview_uses_conversation_scope_and_keeps_defaults_unrequested(self):
+        manager = self.app.state.manager
+        file = write_tiny_gguf(self.root / 'model-preview.gguf')
+        bundle_id = manager.import_local(LocalImportRequest(source_path=str(file))).bundle_id
+        saved_startup = {'n_gpu_layers': 'all', 'fit': 'off', 'cache_type_k': 'q4_0', 'cache_type_v': 'q4_0'}
+        profile = manager.save_model_configuration(bundle_id, ModelConfigurationWriteRequest(
+            display_name='All GPU', startup=saved_startup))
+        deployments_before = [deployment.id for deployment in manager.list_deployments()]
+        options = manager.get_bundle_configuration_options(bundle_id)
+        self.assertIn('all', [option.value for option in options.gpu_layers.options])
+        self.assertEqual(options.startup_defaults['cache_type_k'].applied, 'f16')
+        self.assertEqual(options.startup_defaults['fit'].applied, 'on')
+
+        def preview(startup=None):
+            overrides = {'model_configuration_id': profile.id}
+            if startup is not None:
+                overrides['startup_overrides'] = startup
+            return self.post('/v1/setup-resolution', {'editing_layer': 'conversation', 'overrides': overrides})
+
+        saved = preview()
+        self.assertEqual(saved['configuration']['model_configuration_id'], profile.id)
+        self.assertEqual(saved['configuration']['profile_id'], profile.id)
+        self.assertEqual(saved['configuration']['bundle_id'], bundle_id)
+        for key, value in saved_startup.items():
+            with self.subTest(saved=key):
+                fact = saved['effective_values'][f'startup.{key}']
+                self.assertEqual(fact['value'], value)
+                self.assertEqual(fact['source'], 'Configuration: All GPU')
+                self.assertTrue(fact['inherited'])
+                self.assertIsNone(fact['requested_override'])
+
+        draft_startup = {'n_gpu_layers': 0, 'fit': 'on', 'cache_type_k': 'f16', 'cache_type_v': 'f16'}
+        draft = preview(draft_startup)
+        self.assertEqual(draft['configuration']['startup_overrides'], draft_startup)
+        for key, value in draft_startup.items():
+            with self.subTest(draft=key):
+                fact = draft['effective_values'][f'startup.{key}']
+                self.assertEqual(fact['value'], value)
+                self.assertEqual(fact['requested_override'], value)
+                self.assertEqual(fact['inherited_value'], saved_startup[key])
+                self.assertFalse(fact['inherited'])
+
+        reset = preview({})
+        self.assertEqual(reset['configuration']['startup_overrides'], {})
+        for key, value in saved_startup.items():
+            self.assertEqual(reset['effective_values'][f'startup.{key}']['value'], value)
+            self.assertIsNone(reset['effective_values'][f'startup.{key}']['requested_override'])
+        omitted = preview({'cache_type_k': None})
+        self.assertIsNone(omitted['configuration']['startup_overrides']['cache_type_k'])
+        self.assertEqual(omitted['effective_values']['startup.cache_type_k']['value'], 'f16')
+        self.assertEqual(omitted['effective_values']['startup.cache_type_k']['inherited_value'], 'q4_0')
+
+        for result in (saved, draft, reset, omitted):
+            default = result['effective_values']['startup.flash_attn']
+            self.assertEqual(default['value'], 'on')
+            self.assertIsNone(default['requested_override'])
+            self.assertNotIn('flash_attn', result['configuration']['startup_overrides'] or {})
+        application = self.post('/v1/setup-resolution', {'editing_layer': 'application', 'overrides': {
+            'approval_mode': 'full_access', 'model_configuration_id': profile.id,
+            'startup_overrides': draft_startup, 'per_request_overrides': {'temperature': 0.2}}})
+        self.assertEqual(application['configuration']['approval_mode'], 'full_access')
+        for key in ('model_configuration_id', 'profile_id', 'bundle_id', 'deployment_id', 'startup_overrides', 'per_request_overrides'):
+            self.assertIsNone(application['configuration'][key], key)
+        self.assertEqual(manager.store.get_profile(profile.id).bags.startup.requested, saved_startup)
+        self.assertEqual([deployment.id for deployment in manager.list_deployments()], deployments_before,
+            'editor previews never prepare or start an inference process')
 
     def test_assigned_agent_model_missing_blocks_main_and_helper_roles(self):
         setup = self.post('/v1/agent-setups', {'name': 'Writer',

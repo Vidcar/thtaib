@@ -19,8 +19,15 @@ export interface EffectiveSetting {
 }
 export type SetupPreview = ResolvedSetupSelection & { effective_values?: Record<string, EffectiveSetting> };
 
-export function settingValue(value: unknown): string {
+export function settingValue(value: unknown, key?: string): string {
   if (value == null) return "Not reported";
+  key = key?.split(".").at(-1);
+  if (key === "ctx_size" && typeof value === "number") return value === 0 ? "Automatic" : `${value.toLocaleString()} tokens`;
+  if (key === "n_gpu_layers") return value === -1 || value === "-1" || value === "auto" ? "Automatic" : value === "all" ? "All layers" : value === 0 || value === "0" ? "CPU only" : `${value} layers`;
+  if (key === "kv_offload" && typeof value === "boolean") return value ? "GPU" : "CPU / RAM";
+  if (key === "reasoning_preserve" && typeof value === "boolean") return value ? "Keep" : "Drop";
+  if (key === "spec_type" && value === "none") return "Off";
+  if (key === "reasoning_budget" && value === -1) return "No limit";
   if (Array.isArray(value)) return value.length ? `${value.length} selected` : "None";
   if (typeof value === "boolean") return value ? "On" : "Off";
   if (typeof value === "number" && Number.isFinite(value)) return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
@@ -34,8 +41,20 @@ export function settingSource(source?: string | null): string {
     loaded_template_settings: "Loaded template", loaded_startup: "Loaded settings", workbench_default: "Workbench default",
     pinned_runtime_default: "Runtime default", pinned_runtime_schema: "Runtime options", gguf_metadata: "Model metadata", gguf_tensor_directory: "Model metadata", runtime_observation: "Runtime reported",
     automatic_fit: "Automatic fit", backend_recommendation: "Recommended", unavailable: "Unavailable",
+    "Turn overrides": "Unsaved changes", "Application defaults": "Application default",
   };
+  if (source?.startsWith("Configuration:")) return "Configuration default";
   return source ? labels[source] ?? source : "Default not reported";
+}
+
+/** Parent configuration and template defaults have distinct resolver semantics. */
+export function defaultSettingDisplay(fact?: EffectiveSetting, target: "configuration" | "model" = "configuration", key?: string): { value: string; source: string; label: string; title: string } {
+  const rawSource = target === "model" ? fact?.default_source : fact?.inherited_source;
+  const rawValue = target === "model" ? fact?.default_value : fact?.inherited_value;
+  const source = rawSource ? settingSource(rawSource) : target === "model" ? "Model default" : "Configuration default";
+  const value = fact?.supported === false ? "Unavailable" : settingValue(rawValue, key);
+  const label = target === "model" ? "Use model default" : rawSource?.startsWith("Project:") ? "Use project default" : rawSource?.startsWith("Agent:") ? "Use agent default" : rawSource === "Application default" || rawSource === "Application defaults" ? "Use application default" : "Use configuration default";
+  return { value, source, label, title: `${value} · ${rawSource ?? source}` };
 }
 
 export function effectiveSettingDisplay(fact?: EffectiveSetting, loading = false): { value: string; source: string } {

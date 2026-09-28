@@ -48,6 +48,7 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type:'keyDown', keyCode:'ESC' }); win.webContents.sendInputEvent({ type:'keyUp', keyCode:'ESC' });
     await ready(`!document.querySelector('dialog')`);
     assert.equal(await js(`document.activeElement?.getAttribute('aria-label')`),'View image Retained image','Escape restores thumbnail focus');
+    assert.ok(await js(`document.querySelector('.image-preview-button img').getBoundingClientRect().width<=240`),'Chat image thumbnails keep their compact width');
     await js(`document.querySelector('button[aria-label="Test actions"]').click()`);
     await ready(`document.activeElement?.textContent === 'First action'`);
     win.webContents.sendInputEvent({ type:'keyDown', keyCode:'ESC' }); win.webContents.sendInputEvent({ type:'keyUp', keyCode:'ESC' });
@@ -57,6 +58,25 @@ app.whenReady().then(async () => {
     await ready(`document.querySelector('[aria-label="Preview Library image.png"]')`);
     await js(`document.querySelector('[aria-label="Preview Library image.png"]').click()`);
     await ready(`document.querySelector('[aria-label="View image Library image.png"]')`);
+    assert.match(await js(`document.querySelector('.file-preview-pane').textContent`), /Build a simple top-down 2D driving game.*Game project/s, 'Library shows readable chat and project source names');
+    assert.equal(await js(`Array.from(document.querySelectorAll('.file-browser button')).some(button=>button.textContent.includes('Use in Chat'))`), false, 'Library has no Chat handoff');
+    assert.equal(await js(`!!document.querySelector('.file-selection-bar')`), false, 'Library bulk actions are hidden before selection');
+    for (const theme of ['light', 'dark']) for (const width of [1280, 794, 600, 360]) {
+      win.setContentSize(width, 900);
+      await ready(`Math.abs(innerWidth-${width})<=1`);
+      await js(`document.documentElement.dataset.theme='${theme}';new Promise(resolve=>requestAnimationFrame(()=>{document.getAnimations().forEach(animation=>animation.finish());requestAnimationFrame(resolve)}))`);
+      const geometry = await js(`(()=>{const panel=document.querySelector('.file-browser'),pane=document.querySelector('.file-preview-pane'),image=pane.querySelector('img'),table=document.querySelector('.file-table-wrap'),name=table.querySelector('.file-name strong'),rect=pane.getBoundingClientRect(),imageRect=image.getBoundingClientRect(),tableRect=table.getBoundingClientRect();return {width:innerWidth,scroll:document.documentElement.scrollWidth,panelScroll:panel.scrollWidth,panelClient:panel.clientWidth,pane:{left:rect.left,right:rect.right,top:rect.top},table:{bottom:tableRect.bottom,nameWidth:name.getBoundingClientRect().width,nameColor:getComputedStyle(name).color},image:{width:imageRect.width,height:imageRect.height},background:getComputedStyle(pane.querySelector('.image-preview-button')).backgroundColor}})()`);
+      assert.ok(geometry.scroll<=geometry.width+1 && geometry.panelScroll<=geometry.panelClient+1, `Library has no horizontal overflow at ${width}px in ${theme}`);
+      assert.ok(geometry.pane.left>=0 && geometry.pane.right<=geometry.width+1, 'Library detail stays inside the viewport');
+      assert.ok(geometry.table.nameWidth>=50, 'Library preserves space for the filename');
+      if (width>=600) assert.ok(geometry.image.width>240 && geometry.image.height>150, 'Library images use more space than Chat thumbnails');
+      if (width<=600) assert.ok(geometry.pane.top>=geometry.table.bottom-1, 'narrow Library stacks its detail below the table');
+      assert.notEqual(geometry.background,'rgba(0, 0, 0, 0)','Library image surface follows the active theme');
+      if(width===794) fs.writeFileSync(path.join(scratch, `library-image-${theme}-794.png`),(await win.webContents.capturePage()).toPNG());
+      console.log(JSON.stringify({library:true,theme,...geometry}));
+    }
+    win.setContentSize(794, 900);
+    await ready(`Math.abs(innerWidth-794)<=1`);
     for (const method of ['escape', 'close']) {
       await js(`document.querySelector('[aria-label="View image Library image.png"]').click()`);
       await ready(`document.querySelector('dialog[open].image-viewer') && window.fixture.resolveOriginal`);
@@ -68,6 +88,21 @@ app.whenReady().then(async () => {
       await js(`window.fixture.resolveOriginal();delete window.fixture.resolveOriginal;new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
       assert.equal(await js(`document.activeElement?.getAttribute('aria-label')`),'View image Library image.png','late original completion cannot lose restored Library focus');
     }
+    await js(`document.querySelector('[aria-label="Select Library image.png"]').click()`);
+    await ready(`document.querySelector('.file-selection-bar')`);
+    await js(`Array.from(document.querySelectorAll('.file-selection-bar button')).find(button=>button.textContent==='Clear selection').click()`);
+    await ready(`!document.querySelector('.file-selection-bar')`);
+    await js(`(()=>{const select=document.querySelector('[aria-label="File location"]');select.value='project';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await ready(`document.querySelector('select[aria-label="Project"]')`);
+    assert.equal(await js(`window.fixture.libraryRequests.at(-1).projectPath`),null,'choosing a scope without a target makes no broad request');
+    await js(`(()=>{const select=document.querySelector('select[aria-label="Project"]');select.value='D:/Games';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await ready(`window.fixture.libraryRequests.at(-1).projectPath==='D:/Games'`);
+    assert.equal(await js(`window.fixture.libraryRequests.at(-1).sessionId`),null,'Project scope sends one target');
+    await js(`(()=>{const select=document.querySelector('[aria-label="File location"]');select.value='chat';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await ready(`document.querySelector('select[aria-label="Chat"]')`);
+    await js(`(()=>{const select=document.querySelector('select[aria-label="Chat"]');select.value='sidebar-chat';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await ready(`window.fixture.libraryRequests.at(-1).sessionId==='sidebar-chat'`);
+    assert.equal(await js(`window.fixture.libraryRequests.at(-1).projectPath`),null,'Chat scope sends one target');
     await js(`document.documentElement.dataset.theme='light';window.fixture.showToolMenu()`);
     for (const width of [360, 600]) {
       win.setContentSize(width, 750);

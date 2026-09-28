@@ -31,7 +31,8 @@ try {
   await checkComposerUploadStaleGuard(ComposerAttachments);
   await checkDropWaitsForSavedAttachments(ComposerAttachments);
   await checkLibraryStalePreviewAndScopedCalls(LibraryPanel);
-  await checkLibraryReuseKeepsItsConversation(LibraryPanel);
+  await checkLibraryScopeNamesAndStaleActions(LibraryPanel);
+  await checkLibrarySourceNamesDoNotBlockFiles(LibraryPanel);
   await checkChatHistoryActions(ChatHistoryActions, AnswerActions);
   await checkPanelResize(PanelResize, usePanelWidth);
   await checkHoverHelp(HoverHelp);
@@ -44,33 +45,114 @@ try {
 
 console.log("Packet03 component checks passed.");
 
-async function checkLibraryReuseKeepsItsConversation(LibraryPanel) {
+async function checkLibraryScopeNamesAndStaleActions(LibraryPanel) {
   const originalFetch = globalThis.fetch;
-  const held = createDeferred();
-  const reused = [], requests = [];
+  const heldDeletion = createDeferred();
+  const heldSave = createDeferred();
+  const originalSave = globalThis.window.workbench.saveAsset;
+  const requests = [], saves = [];
+  const files = [
+    asset("asset_a", "a.txt", "chat_a", { project_path: "D:\\ProjectA" }),
+    asset("asset_b", "b.txt", "chat_b", { project_path: "D:\\ProjectB" }),
+    asset("asset_orphan", "orphan.txt", "gone_chat", { project_path: "D:\\Gone" }),
+  ];
   let renderer;
+  globalThis.window.workbench.saveAsset = async value => { saves.push(value); return heldSave.promise; };
   globalThis.fetch = async (url, init = {}) => {
-    if (String(url).includes("/reuse")) {
-      const body = JSON.parse(init.body); requests.push(body);
-      return body.session_id === "chat_a" ? held.promise : jsonResponse({ asset_ids: body.asset_ids, session_id: body.session_id });
+    const address = new URL(String(url));
+    if (address.pathname === "/v1/projects") return jsonResponse([
+      { id: "project_a", name: "Writing project", path: "D:\\Writing", canonical_path: "D:\\ProjectA", active: true, missing: false },
+      { id: "project_b", name: "Research project", path: "D:\\ProjectB", active: true, missing: true },
+    ]);
+    if (address.pathname === "/v1/chat/conversations") return jsonResponse([
+      { id: "chat_a", title: "Writing chat", archived: false },
+      { id: "chat_b", display_title: "Research chat", archived: true },
+    ]);
+    if (address.pathname === "/v1/assets/delete-preview") return heldDeletion.promise;
+    if (address.pathname.endsWith("/preview")) {
+      const current = files.find(file => address.pathname.includes(file.id));
+      return jsonResponse({ ...current, preview: "Saved source text", truncated: false, source_status: "retained_only" });
     }
-    return jsonResponse([asset("asset_a", "a.txt", "chat_a")]);
+    if (address.pathname === "/v1/assets") {
+      requests.push(address);
+      const project = address.searchParams.get("project_path"), chat = address.searchParams.get("session_id");
+      assert.ok(!(project && chat), "Library never asks for two OR-combined scope targets");
+      return jsonResponse(files.filter(file => (!project || file.project_path === project) && (!chat || file.session_id === chat)));
+    }
+    throw new Error("Unexpected Library request " + address.pathname + " " + init.method);
   };
   try {
-    await act(async () => { renderer = create(React.createElement(LibraryPanel, { sessionId: "chat_a", onReuseAssets: (...value) => reused.push(value) })); await tick(); });
+    await act(async () => { renderer = create(React.createElement(LibraryPanel)); await tick(); });
+    assert.equal(requests[0].searchParams.has("session_id"), false, "All files has no hidden conversation filter");
+    assert.equal(requests[0].searchParams.has("project_path"), false, "All files has no hidden project filter");
+    assert.match(textOf(renderer.root), /Writing chat/);
+    assert.match(textOf(renderer.root), /Writing project/);
+    assert.match(textOf(renderer.root), /Research chat · Archived/);
+    assert.match(textOf(renderer.root), /Research project · Unavailable/);
+    assert.match(textOf(renderer.root), /Chat unavailable/);
+    assert.match(textOf(renderer.root), /Gone · Project unavailable/);
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "File actions" }).length, 0, "bulk actions stay hidden until files are selected");
+    assert.equal(renderer.root.findAllByType("button").filter(node => textOf(node).includes("Use in Chat")).length, 0, "Library has no Chat handoff");
+
+    await act(async () => renderer.root.findByProps({ "aria-label": "File location" }).props.onChange({ target: { value: "project" } }));
+    const beforeTarget = requests.length;
+    assert.match(textOf(renderer.root), /Select a project to see its saved files/);
+    assert.equal(renderer.root.findByProps({ "aria-label": "Project" }).findAllByType("option").filter(node => textOf(node) === "Writing project").length, 1, "canonical project paths share one readable option");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Project" }).props.onChange({ target: { value: "D:\\ProjectA" } }));
+    assert.equal(requests.length, beforeTarget + 1);
+    assert.equal(requests.at(-1).searchParams.get("project_path"), "D:\\ProjectA");
+    assert.equal(requests.at(-1).searchParams.has("session_id"), false);
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Preview b.txt" }).length, 0, "project scope actually filters its files");
     await act(async () => renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } }));
-    await act(async () => { button(renderer, "Use in Chat").props.onClick(); await tick(); });
-    assert.equal(requests[0].session_id, "chat_a");
-    await act(async () => { renderer.update(React.createElement(LibraryPanel, { sessionId: "chat_b", onReuseAssets: (...value) => reused.push(value) })); await tick(); });
-    await act(async () => { held.resolve(jsonResponse({ asset_ids: ["asset_a"], session_id: "chat_a" })); await tick(); });
-    assert.deepEqual(reused, [], "late reuse cannot append files to the newly selected conversation");
-    assert.doesNotMatch(textOf(renderer.root), /Ready to reuse in a draft/, "old reuse success cannot appear on another conversation");
-    await act(async () => renderer.root.findByProps({ "aria-label": "Select a.txt" }).props.onChange({ target: { checked: true } }));
-    assert.equal(button(renderer, "Use in Chat").props.disabled, false, "a stale completion cannot leave the new conversation busy");
-    await act(async () => { button(renderer, "Use in Chat").props.onClick(); await tick(); });
-    assert.equal(reused.length, 1);
-    assert.equal(reused[0][0].session_id, "chat_b", "a fresh reuse still publishes its own session result");
-  } finally { held.resolve(jsonResponse({ asset_ids: ["asset_a"] })); if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "File actions" }).length, 1);
+    await act(async () => { exactButton(renderer, "Delete").props.onClick(); await tick(); });
+    await act(async () => renderer.root.findByProps({ "aria-label": "File location" }).props.onChange({ target: { value: "chat" } }));
+    await act(async () => renderer.root.findByProps({ "aria-label": "Chat" }).props.onChange({ target: { value: "chat_b" } }));
+    assert.equal(requests.at(-1).searchParams.get("session_id"), "chat_b");
+    assert.equal(requests.at(-1).searchParams.has("project_path"), false);
+    await act(async () => { heldDeletion.resolve(jsonResponse({ affected_asset_ids: ["asset_a"], preserved_asset_ids: [], note: "Old scope" })); await tick(); });
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Review file deletion" }).length, 0, "old deletion review cannot appear after a scope change");
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "File actions" }).length, 0, "scope changes clear old selection");
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Preview b.txt" }).props.onClick(); await tick(); });
+    await act(async () => { button(renderer, "Save copy").props.onClick(); await tick(); });
+    assert.equal(saves[0].sessionId, "chat_b", "saving uses the retained item's source scope");
+    await act(async () => renderer.root.findByProps({ "aria-label": "File location" }).props.onChange({ target: { value: "all" } }));
+    await act(async () => { heldSave.resolve("D:\\saved-b.txt"); await tick(); });
+    assert.doesNotMatch(textOf(renderer.root), /Saved b.txt/, "late save status cannot appear in another scope");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Select orphan.txt" }).props.onChange({ target: { checked: true } }));
+    assert.equal(exactButton(renderer, "Delete").props.disabled, false, "stale actions cannot leave the new scope busy");
+    await act(async () => button(renderer, "Clear selection").props.onClick());
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "File actions" }).length, 0);
+  } finally {
+    heldDeletion.resolve(jsonResponse({ affected_asset_ids: [], preserved_asset_ids: [] })); heldSave.resolve(null);
+    if (renderer) await act(async () => renderer.unmount());
+    globalThis.fetch = originalFetch; globalThis.window.workbench.saveAsset = originalSave;
+  }
+}
+
+async function checkLibrarySourceNamesDoNotBlockFiles(LibraryPanel) {
+  const originalFetch = globalThis.fetch;
+  const heldChats = createDeferred();
+  let renderer;
+  globalThis.fetch = async url => {
+    const address = new URL(String(url));
+    if (address.pathname === "/v1/projects") throw new Error("Projects offline");
+    if (address.pathname === "/v1/chat/conversations") return heldChats.promise;
+    if (address.pathname === "/v1/assets") return jsonResponse([asset("asset_a", "a.txt", "chat_a", { project_path: "D:\\Writing" })]);
+    throw new Error("Unexpected request " + address.pathname);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(LibraryPanel)); await tick(); });
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Preview a.txt" }).length, 1, "retained files load while chat names are pending");
+    assert.match(textOf(renderer.root), /Saved files remain available/);
+    assert.match(textOf(renderer.root), /Writing · Name unavailable/);
+    await act(async () => { heldChats.resolve(jsonResponse([{ id: "chat_a", title: "Writing chat" }])); await tick(); });
+    assert.match(textOf(renderer.root), /Writing chat/, "successful source names appear independently of another catalogue's failure");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Search files" }).props.onChange({ target: { value: "Writing chat" } }));
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Preview a.txt" }).length, 1, "file search includes human source names");
+  } finally {
+    heldChats.resolve(jsonResponse([])); if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch;
+  }
 }
 
 async function checkBlockedAttentionNavigationPreservesItem(AttentionPanel) {
@@ -446,8 +528,10 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
   const previewCalls = [];
   const previewDefers = new Map();
   let deleteRequestedIds = null;
+  let renderer;
   globalThis.fetch = async (url, init) => {
     const address = String(url);
+    if (address.includes("/v1/projects") || address.includes("/v1/chat/conversations")) return jsonResponse([]);
     if (address.includes("/v1/assets/delete-preview")) {
       return jsonResponse({
         requested_asset_ids: ["asset_a", "asset_b"],
@@ -514,16 +598,15 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
   };
 
   try {
-    let renderer;
     await act(async () => {
-      renderer = create(React.createElement(LibraryPanel, { sessionId: "current_session", projectPath: null }));
+      renderer = create(React.createElement(LibraryPanel));
       await tick();
     });
     await act(async () => {
       await tick();
     });
 
-    assert.ok(button(renderer, "Use in Chat").props.disabled, "reuse must be disabled without a destination callback");
+    assert.equal(renderer.root.findAllByType("button").filter(node => textOf(node).includes("Use in Chat")).length, 0, "Library has no Chat handoff");
 
     await act(async () => {
       renderer.root.findByProps({ "aria-label": "Preview a.txt" }).props.onClick();
@@ -594,6 +677,7 @@ async function checkLibraryStalePreviewAndScopedCalls(LibraryPanel) {
     assert.ok(textOf(renderer.root).includes("1 shared item preserved"));
     assert.ok(!textOf(renderer.root).includes("full retained text"), "deleting the previewed retained asset must clear its content immediately");
   } finally {
+    if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
   }
 }

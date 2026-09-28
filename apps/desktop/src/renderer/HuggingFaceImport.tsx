@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, request } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
@@ -52,7 +52,7 @@ function recipeSummary(recipe: ResponseRecipe): string {
   return [recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`, ...values].join(" · ");
 }
 
-export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) => Promise<void> }) {
+export function HuggingFaceImport({ onStarted, active = true }: { onStarted: (job: ImportJob) => Promise<void>; active?: boolean }) {
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<0 | 1 | 2>(0);
   const [context, setContext] = useState("");
@@ -136,6 +136,9 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
   if (context && Number.isSafeInteger(Number(context)) && Number(context) > 0) startup.ctx_size = Number(context);
   const validContext = context === "" || (Number.isSafeInteger(Number(context)) && Number(context) > 0);
   const canReview = Boolean(selectedVariant?.complete && projector && validContext);
+  const contextMaximum = Math.max(1024, metadataContextMaximum ?? 262144);
+  const contextPosition = context && validContext ? Math.max(1024, Math.min(contextMaximum, Number(context))) : 1024;
+  const contextFill = context && validContext ? Math.max(0, Math.min(100, (contextPosition - 1024) / Math.max(1, contextMaximum - 1024) * 100)) : 0;
 
   function toggleRecipe(id: string, checked: boolean) {
     setRecipeIds(current => checked ? [...current, id] : current.filter(item => item !== id));
@@ -195,11 +198,11 @@ export function HuggingFaceImport({ onStarted }: { onStarted: (job: ImportJob) =
       {hub.auxiliary_ggufs?.length ? <details className="technical-details auxiliary-files"><summary>Auxiliary GGUF files <span>{hub.auxiliary_ggufs.length}</span></summary><p className="hint">MTP and imatrix files are separate from primary model weights. Listing an MTP file does not establish draft-head compatibility.</p><ul>{hub.auxiliary_ggufs.map(item => <li key={item.name}>{item.name} · {item.size_bytes == null ? "size unknown" : formatBytes(item.size_bytes)}{item.complete ? "" : " · missing shards"}</li>)}</ul></details> : null}
       {recipes.length ? <fieldset className="response-recipe-choices"><legend>Response recipes</legend><p className="hint">Optional model-card recommendations. Choose recipes to create saved Model configurations when the download completes.</p>{recipes.map(recipe => <label key={recipe.id}><input type="checkbox" checked={recipeIds.includes(recipe.id)} disabled={Boolean(busy)} onChange={event => toggleRecipe(recipe.id, event.target.checked)} /><span><strong>{recipe.name}</strong><small>{recipeSummary(recipe)}</small><small>From {recipe.source_repo_id} · {recipe.section} · revision {recipe.source_revision.slice(0, 8)}</small>{recipe.notes?.length ? <small>{recipe.notes.join(" · ")}</small> : null}</span></label>)}{selectedRecipes.length ? <fieldset><legend>Default Model configuration</legend><label><input type="radio" name="recipe-default" value="" checked={!defaultRecipeId} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId("")} />Keep the current default</label>{selectedRecipes.map(recipe => <label key={recipe.id}><input type="radio" name="recipe-default" value={recipe.id} checked={defaultRecipeId === recipe.id} disabled={Boolean(busy)} onChange={() => setDefaultRecipeId(recipe.id)} />{recipe.name}</label>)}</fieldset> : null}</fieldset> : null}
       {selectedVariant ? <fieldset className="model-import-settings"><legend>Initial settings</legend>
-        <label>Context<div className="field-group"><input type="range" aria-label="Import context slider" min={1024} max={metadataContextMaximum ?? 262144} step={1024} value={context ? Math.max(1024, Math.min(metadataContextMaximum ?? 262144, Number(context))) : Math.min(8192, metadataContextMaximum ?? 262144)} disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><input type="number" aria-label="Import context tokens" min={1} value={context} placeholder="Automatic" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><button type="button" onClick={() => setContext("")} disabled={Boolean(busy)}>Auto</button></div></label>
+        <label>Context <span className="hint">{context ? `${Number(context).toLocaleString()} tokens` : "Automatic · engine chooses on load"}</span><div className="field-group"><input type="range" aria-label="Import context slider" aria-valuetext={context || "Automatic"} data-unknown={!context || undefined} min={1024} max={contextMaximum} step={1024} value={contextPosition} style={{ "--range-fill": `${contextFill}%` } as CSSProperties} disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><input type="number" aria-label="Import context tokens" min={1} value={context} placeholder="Automatic" disabled={Boolean(busy)} onChange={event => setContext(event.target.value)} /><button type="button" onClick={() => setContext("")} disabled={Boolean(busy)}>Automatic</button></div></label>
         <div className="field-group"><label>K cache<select aria-label="Import key cache precision" value={keyPrecision} onChange={event => setKeyPrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
         <label>V cache<select aria-label="Import value cache precision" value={valuePrecision} onChange={event => setValuePrecision(event.target.value)} disabled={Boolean(busy)}>{["f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "bf16", "f32", "iq4_nl"].map(value => <option key={value}>{value}</option>)}</select></label>
         <label>Cache location<select aria-label="Import cache location" value={kvOffload ? "gpu" : "cpu"} onChange={event => setKvOffload(event.target.value === "gpu")} disabled={Boolean(busy)}><option value="gpu">GPU</option><option value="cpu">CPU / RAM</option></select></label></div>
-        {validContext && projector ? <ModelHardwareEstimate selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setMetadataContextMaximum(estimate.context_maximum ?? null)} /> : null}
+        {validContext && projector ? <ModelHardwareEstimate active={active && step === 1} selection={{ repo_id: hub.repo_id, revision: hub.resolved_revision, primary_files: selectedVariant.files, projector_files: selectedProjector?.files ?? [], startup }} onEstimate={estimate => setMetadataContextMaximum(estimate.context_maximum ?? null)} /> : null}
       </fieldset> : null}
       <div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !canReview} onClick={() => setStep(2)}>Review download</button></div>
       </> : null}

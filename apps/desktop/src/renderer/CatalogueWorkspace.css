@@ -1,0 +1,25 @@
+.catalogue-workspace {display: grid; grid-template-columns: minmax(180px, var(--layout-side)) minmax(0, 1fr); gap: var(--space-stack); min-width: 0; align-items: start;}
+.catalogue-navigation {display: grid; gap: var(--space-compact); min-width: 0; border-right: var(--line-hairline) solid var(--border); padding-right: var(--pad-card); position: sticky; top: 0;}
+.catalogue-search {display: flex; gap: var(--space-tight); align-items: center; color: var(--muted);}
+.catalogue-search input {min-width: 0; width: 100%; background-image: none; padding-left: var(--pad-compact);}
+.catalogue-search svg {flex: none;}
+.catalogue-actions {display: flex; flex-wrap: wrap; gap: var(--space-tight);}
+.catalogue-list {display: grid; align-content: start; gap: var(--space-tight); max-height: 68vh; overflow: auto; scrollbar-gutter: stable;}
+.catalogue-row {display: flex; width: 100%; min-width: 0; gap: var(--space-compact); align-items: flex-start; text-align: left; padding: var(--pad-compact); border: var(--line-hairline) solid transparent; background: transparent; border-radius: var(--radius-control);}
+.catalogue-row:hover {background: var(--bg-input);}
+.catalogue-row[aria-current="true"] {background: var(--bg-input); border-color: var(--accent);}
+.catalogue-row:focus-visible {outline: 2px solid var(--accent); outline-offset: -2px;}
+.catalogue-row svg {flex: none; margin-top: var(--space-tight);}
+.catalogue-row-text {display: grid; gap: var(--space-tight); min-width: 0; overflow-wrap: anywhere;}
+.catalogue-row-text strong {font-size: var(--text-body); font-weight: 600;}
+.catalogue-row-text small {font-size: var(--text-small); color: var(--muted); line-height: var(--leading-body);}
+.catalogue-row-text .catalogue-row-status {color: var(--warn);}
+.catalogue-editor {min-width: 0; display: grid; gap: var(--space-compact); max-width: 980px;}
+.catalogue-narrow {display: none;}
+@container workbench-surface (max-width: 720px) {
+  .catalogue-workspace {grid-template-columns: minmax(0, 1fr);}
+  .catalogue-navigation {position: static; border: 0; padding: 0;}
+  .catalogue-list {display: none;}
+  .catalogue-narrow {display: grid; gap: var(--space-tight);}
+  .catalogue-narrow label {font-size: var(--text-small); color: var(--muted);}
+}

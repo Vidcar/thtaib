@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api, streamBrowserEvents } from "./api";
 import { errorMessage } from "./errors";
+import { Icon } from "./Icon";
 import type { BrowserAction, BrowserActionRequest, BrowserFrame, BrowserSessionStatus, BrowserViewport } from "./types";
 import "./BrowserRail.css";
 
@@ -54,12 +55,12 @@ interface BrowserRailProps {
   attachments: Array<{ id: string; filename: string }>;
   onConfigure: () => void;
   onSettings?: () => void;
-  onOpenLibrary: () => void;
+  onOpenFiles: () => void;
   onDownloadsChanged?: () => void;
   onReadinessChange?: () => void;
 }
 
-export function BrowserRail({ threadId, visible, enabled, projectBound, attachments, onConfigure, onSettings = onConfigure, onOpenLibrary, onDownloadsChanged, onReadinessChange }: BrowserRailProps) {
+export function BrowserRail({ threadId, visible, enabled, projectBound, attachments, onConfigure, onSettings = onConfigure, onOpenFiles, onDownloadsChanged, onReadinessChange }: BrowserRailProps) {
   const [status, setStatus] = useState<BrowserSessionStatus | null>(null);
   const statusRef = useRef(status);
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
@@ -72,7 +73,7 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [connection, setConnection] = useState("Connecting…");
+  const [connection, setConnection] = useState("Idle");
   const [resetConfirm, setResetConfirm] = useState(false);
   const [custom, setCustom] = useState(false);
   const [width, setWidth] = useState(String(DESKTOP.width));
@@ -107,6 +108,7 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
     if (previous && (previous.state !== next.state || previous.control !== next.control || previous.worker.installed !== next.worker.installed || previous.worker.chrome_available !== next.worker.chrome_available)) readinessChanged.current?.();
     statusRef.current = next;
     setStatus(next);
+    if (next.state !== "active") setConnection(next.state === "lost" ? "Connection lost" : "Idle");
     const tab = next.tabs.find(item => item.page_id === next.active_page_id);
     if (previous?.session_id !== next.session_id || previous?.active_page_id !== next.active_page_id || previous?.tabs.find(item => item.page_id === previous.active_page_id)?.url !== tab?.url) setAddress(tab?.url ?? "");
     if (previous?.dialog?.message !== next.dialog?.message || previous?.dialog?.default_value !== next.dialog?.default_value) setPrompt(next.dialog?.default_value ?? "");
@@ -119,7 +121,7 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
     const currentGeneration = ++generation.current;
     statusRef.current = null; setStatus(null); clearFrame();
     actionQueue.current = []; setBusy(""); setError(""); setResetConfirm(false); setUploadAssets([]); setUploadPaths(""); setAddress(""); downloadSignature.current = "";
-    if (!threadId || !visible) return;
+    if (!threadId || !visible) { setConnection("Idle"); return; }
     const controller = new AbortController();
     let retryTimer: number | null = null;
     void api.browserSession(threadId).then(next => { if (generation.current === currentGeneration && !controller.signal.aborted) acceptStatus(next); }).catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)); });
@@ -128,8 +130,8 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
       try {
         await streamBrowserEvents(threadId!, event => {
           if (controller.signal.aborted || generation.current !== currentGeneration) return;
-          setConnection("Live");
           if (event.type === "state") { acceptStatus(event.data); return; }
+          setConnection("Live");
           const incoming = event.data;
           if (!browserFrameMatches(incoming, statusRef.current) || !/^[A-Za-z0-9+/=]+$/.test(incoming.data) || incoming.data.length > 4_000_000 || !Number.isFinite(incoming.timestamp) || incoming.timestamp <= lastFrameTimestamp.current) return;
           lastFrameTimestamp.current = incoming.timestamp;
@@ -142,9 +144,9 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
             if (latest && browserFrameMatches(latest, statusRef.current) && !controller.signal.aborted) setFrame(latest);
           });
         }, controller.signal);
-        if (!controller.signal.aborted) setConnection("Reconnecting…");
+        if (!controller.signal.aborted) setConnection(statusRef.current?.state === "active" ? "Reconnecting…" : "Idle");
       } catch (failure) {
-        if (!controller.signal.aborted) { setConnection("Reconnecting…"); setError(errorMessage(failure)); }
+        if (!controller.signal.aborted) { setConnection(statusRef.current?.state === "active" ? "Reconnecting…" : statusRef.current?.state === "lost" ? "Connection lost" : "Unavailable"); setError(errorMessage(failure)); }
       }
       if (!controller.signal.aborted) retryTimer = window.setTimeout(() => void connect(), 2000);
     }
@@ -232,8 +234,8 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
     {status?.state === "lost" ? <p className="hint">Close this session, then start Chrome again to keep this chat’s sign-ins. The new session opens fresh pages.</p> : null}
     {resetConfirm ? <div className="browser-confirm" role="alertdialog" aria-label="Reset this chat browser"><p>Reset closes Chrome and clears this chat’s sign-ins and browser data.</p><button type="button" disabled={Boolean(busy)} onClick={() => { setResetConfirm(false); if (threadId) void perform("reset", () => api.resetBrowserSession(threadId)); }}>Clear sign-ins and reset</button><button type="button" onClick={() => setResetConfirm(false)}>Cancel</button></div> : null}
     <div className="browser-navigation">
-      <button type="button" aria-label="Browser back" title="Back" disabled={!canControl} onClick={() => send({ type: "back" })}>←</button>
-      <button type="button" aria-label="Browser forward" title="Forward" disabled={!canControl} onClick={() => send({ type: "forward" })}>→</button>
+      <button type="button" aria-label="Browser back" title="Back" disabled={!canControl} onClick={() => send({ type: "back" })}><Icon name="back" size={14} /></button>
+      <button type="button" aria-label="Browser forward" title="Forward" disabled={!canControl} onClick={() => send({ type: "forward" })}><Icon name="forward" size={14} /></button>
       <button type="button" aria-label="Reload browser page" title="Reload" disabled={!canControl} onClick={() => send({ type: "reload" })}>↻</button>
       <form onSubmit={event => { event.preventDefault(); send({ type: "navigate", url: address }); }}><input aria-label="Browser address" value={address} spellCheck={false} disabled={!canControl} onChange={event => setAddress(event.target.value)} placeholder="https://" /><button type="submit" disabled={!canControl || !address.trim()}>Go</button></form>
     </div>
@@ -265,6 +267,6 @@ export function BrowserRail({ threadId, visible, enabled, projectBound, attachme
       {frame ? <img draggable={false} alt="Live Chrome page" src={`data:image/jpeg;base64,${frame.data}`} onLoad={() => { if (browserFrameMatches(frame, statusRef.current)) { displayedFrame.current = frame; setLoadedFrame(`${frame.session_id}:${frame.page_id}:${frame.revision}:${frame.timestamp}`); } }} /> : <span className="browser-empty">{active ? "Waiting for the live page…" : "Chrome will appear here."}</span>}
     </div>
     {active && status.control === "agent" ? <p className="browser-hint">Take control to click or type. The task and its helpers pause first.</p> : null}
-    {(status?.downloads ?? []).length ? <div className="browser-downloads"><span>Saved downloads: {(status?.downloads ?? []).map(item => item.name).join(", ")}</span><button type="button" onClick={onOpenLibrary}>Open Library</button></div> : null}
+    {(status?.downloads ?? []).length ? <div className="browser-downloads"><span>Saved downloads: {(status?.downloads ?? []).map(item => item.name).join(", ")}</span><button type="button" onClick={onOpenFiles}>Show in Files</button></div> : null}
   </div>;
 }

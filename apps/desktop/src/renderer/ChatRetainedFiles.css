@@ -95,6 +95,8 @@
 }
 .chat-retained-files.compact {border: 0; padding: 0; margin-top: var(--space-compact); background: transparent;}
 .chat-retained-files.compact .chat-retained-file-card {padding: var(--pad-compact) var(--pad-compact); gap: var(--space-tight);}
+.chat-retained-files.compact .chat-retained-file-meta {gap: 2px var(--space-compact); font-size: var(--text-small);}
+.chat-retained-files.compact .chat-retained-file-meta time {white-space: nowrap;}
 .retained-file-name {display: flex; align-items: center; gap: var(--space-compact); border: 0; background: transparent; padding: var(--pad-tight); text-align: left;}
 .retained-file-name span {overflow-wrap: anywhere;}
 .retained-file-name small {color: var(--muted); white-space: nowrap;}

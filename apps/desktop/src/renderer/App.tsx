@@ -16,7 +16,6 @@ import { LibraryPanel } from "./LibraryPanel";
 import { ModelsPanel } from "./ModelsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { WorkbenchSidebar, type ChatLaunch, type ConversationListActions, type HistoryNotice } from "./WorkbenchSidebar";
-import type { RetainedAsset } from "./packet03Api";
 import { loadAppearance, setAppearanceTheme } from "./appearanceStore";
 import type { PresentationSettings, WorkbenchSurface, WorkbenchTab } from "./types";
 
@@ -59,7 +58,9 @@ export function App() {
   const [presentation, setPresentation] = useState<PresentationSettings>(fallbackPresentation);
   const [attentionConversationId, setAttentionConversationId] = useState<string | null>(null);
   const [attentionRunId, setAttentionRunId] = useState<string | null>(null);
-  const [reuseAssetIds, setReuseAssetIds] = useState<string[]>([]);
+  const [visitedEditors, setVisitedEditors] = useState<Set<WorkbenchTab>>(new Set());
+  const [agentReview, setAgentReview] = useState<{ id?: string; request: number }>({ request: 0 });
+  useEffect(() => { if (["models", "agents", "knowledge"].includes(tab)) setVisitedEditors(current => new Set([...current, tab])); }, [tab]);
   const [workspaceLaunch, setWorkspaceLaunch] = useState<ChatWorkspaceLaunch | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [projectRevision, setProjectRevision] = useState(0);
@@ -196,11 +197,6 @@ export function App() {
     };
   }, [openAttentionTarget]);
 
-  function handleLibraryReuseMany(assets: RetainedAsset[]): void {
-    setReuseAssetIds([...new Set(assets.map((asset) => asset.id))]);
-    setTab("chat");
-  }
-
   function renderTab(current: WorkbenchTab) {
     switch (current) {
       case "chat":
@@ -224,10 +220,7 @@ export function App() {
             onAttentionHandled={clearAttentionConversation}
             navigationPreparationRef={prepareChatNavigation}
             onPresentationChange={setPresentation}
-            onNavigate={(next) => setTab(next)}
-            reuseAssetId={reuseAssetIds[0] ?? null}
-            reuseAssetIds={reuseAssetIds}
-            onReuseAssetHandled={() => setReuseAssetIds([])}
+            onNavigate={(next, recordId) => { if (next === "agents" && recordId) setAgentReview(previous => ({ id: recordId, request: previous.request + 1 })); setTab(next); }}
             presentation={presentation}
             productName={productName}
             onModelPhase={onModelPhase}
@@ -236,21 +229,17 @@ export function App() {
       case "projects":
         return <ProjectsPanel contextual projectRevision={projectRevision} onProjectChanged={() => setProjectRevision(value => value + 1)} focusProjectId={focusProjectId} onFocusHandled={clearFocusProject} onAddProject={() => setCreateProjectOpen(true)} onOpenChat={project => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), projectId: project.id }); setTab("chat"); }} />;
       case "agents":
-        return <AgentSetupsPanel onUse={setup => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
+        return <AgentSetupsPanel active={tab === "agents"} openAgentId={agentReview.id} openRequest={agentReview.request} onUse={setup => { pendingRestoration.current = null; setRestoringConversation(false); if (!activeConversationId) rememberConversation(null); setWorkspaceLaunch({ id: crypto.randomUUID(), agentSetupVersionId: setup.current_version_id }); setTab("chat"); }} />;
       case "models":
-        return <ModelsPanel />;
+        return <ModelsPanel active={tab === "models"} />;
       case "knowledge":
-        return <KnowledgePanel />;
+        return <KnowledgePanel active={tab === "knowledge"} />;
       case "agent-run":
         return <AgentRunPanel attentionRunId={attentionRunId} onAttentionHandled={clearAttentionRun} />;
       case "lab":
         return <LabPanel />;
       case "library":
-        return (
-          <LibraryPanel
-            onReuseSelectedAssets={handleLibraryReuseMany}
-          />
-        );
+        return <LibraryPanel />;
       case "attention":
         return <AttentionPanel onOpenItem={(item) => openAttentionTarget(item.conversation_id, item.run_id)} />;
       case "settings":
@@ -322,7 +311,8 @@ export function App() {
       />
       <main className="app-main">
         <div className="persistent-chat" data-active={tab === "chat"} aria-hidden={tab !== "chat"} inert={tab !== "chat"}>{renderTab("chat")}</div>
-        {tab !== "chat" ? renderTab(tab) : null}
+        {(["models", "agents", "knowledge"] as WorkbenchTab[]).map(editor => visitedEditors.has(editor) || tab === editor ? <div key={editor} className="persistent-editor" hidden={tab !== editor} inert={tab !== editor}>{renderTab(editor)}</div> : null)}
+        {tab !== "chat" && !["models", "agents", "knowledge"].includes(tab) ? renderTab(tab) : null}
       </main>
     </div>
   );

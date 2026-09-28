@@ -5,3 +5,6 @@
 .model-memory-estimate details { margin-top: var(--space-tight); }
 .model-memory-estimate details p { margin: var(--space-tight) 0; }
 .estimate-shortage { color: var(--warn); margin: var(--space-tight) 0; }
+.estimate-availability {display: grid; gap: var(--space-tight); margin-block: var(--space-compact); padding-block: var(--pad-tight); border-bottom: var(--line-hairline) solid var(--border);}
+.estimate-availability > span {display: flex; justify-content: space-between; gap: var(--space-compact);}
+.estimate-availability strong {font-variant-numeric: tabular-nums;}

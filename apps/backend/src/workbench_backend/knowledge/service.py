@@ -140,7 +140,10 @@ class KnowledgeService:
             current = self.store.read_config()
             payload = current.model_dump()
             if request.context_captures is not None:
-                payload["context_captures"] = request.context_captures.model_dump()
+                payload["context_captures"] = (
+                    current.context_captures.model_dump()
+                    | request.context_captures.model_dump(exclude_unset=True)
+                )
             if request.scope_policies is not None:
                 if any(scope != "user" and policy.automatic_agent_writes for scope, policy in request.scope_policies.items()):
                     raise KnowledgeError("Automatic saving requires one specific project or agent destination.", code="scope_identity_required", status_code=400)

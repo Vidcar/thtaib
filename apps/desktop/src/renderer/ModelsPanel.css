@@ -14,7 +14,12 @@
 /* Workspace and picker */
 .models-surface .models-workspace {display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-stack); align-items: start;}
 .models-surface :is(.model-detail, .model-configuration) {display: grid; gap: var(--space-stack); width: 100%; min-width: 0;}
-.models-surface :is(.model-detail, .model-picker) {max-width: var(--layout-form);}
+.models-surface .model-picker {max-width: var(--layout-form);}
+.models-surface .selected-model-name {font-size: var(--text-heading); margin: 0; overflow-wrap: anywhere;}
+.models-surface .model-detail [hidden] {display: none !important;}
+.models-surface .model-setup-head h3 {font-size: var(--text-body);}
+.models-surface .advanced-sampling {grid-column: 1 / -1;}
+.models-surface .model-facts-details {padding-block: var(--pad-compact);}
 .models-surface .model-picker {position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-compact); min-width: 0;}
 .models-surface .model-picker-label {font-size: var(--text-small); color: var(--muted); font-weight: var(--weight-medium);}
 .models-surface .model-picker-trigger {display: flex; align-items: center; gap: var(--space-compact); width: 100%; min-width: 0; text-align: left; background: var(--bg-input); padding: var(--pad-tight) var(--pad-compact);}

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Tree, type NodeRendererProps, type TreeApi } from "react-arborist";
+import type { editor as MonacoEditor, IDisposable } from "monaco-editor";
 import type { SchemaProjectFileContent, SchemaProjectFile } from "../generated/shared-contracts/openapi";
 import { request } from "./api";
 import { errorMessage } from "./errors";
@@ -12,6 +13,52 @@ import { editorFontSize, editorTheme, ensureMonaco } from "./monacoSetup";
 import "./ChatDock.css";
 
 export type DockPage = "files";
+export type ChatRailPage = DockPage | "browser" | "helpers";
+export interface ChatFileView {
+  state: MonacoEditor.ICodeEditorViewState | null;
+  scrollTop: number;
+  scrollLeft: number;
+}
+export interface ChatDockView {
+  open: boolean;
+  page: ChatRailPage;
+  helper: string;
+  projectId: string | null;
+  path: string;
+  filter: string;
+  folders: string[];
+  previewId: string;
+  previewOpen: boolean;
+  filesScroll: number;
+  helpersScroll: number;
+  treeScroll: number;
+  treeScrollLeft: number;
+  treeSelection: string;
+  fileViews: Record<string, ChatFileView>;
+}
+const emptyDockView: ChatDockView = { open: false, page: "files", helper: "", projectId: null, path: "", filter: "", folders: [], previewId: "", previewOpen: true, filesScroll: 0, helpersScroll: 0, treeScroll: 0, treeScrollLeft: 0, treeSelection: "", fileViews: {} };
+export function chatDockGeometry(preferredWidth: number, availableWidth: number) {
+  const max = Math.max(0, Math.min(1100, Math.floor(availableWidth * 0.48), Math.floor(availableWidth - 400)));
+  return { width: Math.min(preferredWidth, max), max, canOpen: availableWidth >= 680 };
+}
+/** Local presentation state only; file, helper and browser authority stays on the backend. */
+export function useConversationDockView(conversationId: string) {
+  const views = useRef(new Map<string, ChatDockView>());
+  const [, render] = useState(0);
+  const key = conversationId || "new";
+  if (!views.current.has(key)) {
+    let saved: Partial<ChatDockView> = {};
+    try { saved = JSON.parse(window.localStorage?.getItem(`workbench.chat.dock.view:${key}`) || "{}"); } catch { /* Use the closed default. */ }
+    views.current.set(key, { ...emptyDockView, ...saved, open: saved.open === true, page: ["files", "browser", "helpers"].includes(saved.page ?? "") ? saved.page! : "files", folders: Array.isArray(saved.folders) ? saved.folders.filter(item => typeof item === "string") : [] });
+  }
+  const update = useCallback((patch: Partial<ChatDockView>) => {
+    const next = { ...views.current.get(key)!, ...patch };
+    views.current.set(key, next);
+    try { window.localStorage?.setItem(`workbench.chat.dock.view:${key}`, JSON.stringify(next)); } catch { /* The open app still remembers this view. */ }
+    render(value => value + 1);
+  }, [key]);
+  return [views.current.get(key)!, update] as const;
+}
 
 interface FileNode {
   id: string;
@@ -39,13 +86,15 @@ export function ChatDock(props: {
   threadId?: string | null;
   previewEnabled?: boolean;
   fileRevision?: string;
+  view?: ChatDockView;
+  onViewChange?: (patch: Partial<ChatDockView>) => void;
 }) {
   return <div className="chat-dock">
     {props.showPages === false ? null : <div className="chat-dock-pages" role="tablist" aria-label="Dock pages">
       <button type="button" role="tab" aria-selected aria-pressed onClick={() => props.onPage("files")}>Files</button>
     </div>}
     <div className="chat-dock-body">
-      {props.page === "files" ? <FilesPage key={props.projectId ?? "no-project"} {...props} /> : null}
+      {props.page === "files" ? <FilesPage key={`${props.conversationId ?? "new"}:${props.projectId ?? "no-project"}`} {...props} /> : null}
     </div>
   </div>;
 }
@@ -64,17 +113,23 @@ function FilesPage(props: {
   onOpenKnowledge?: () => void;
   onUseMemoryVersion?: (versionId: string) => Promise<void> | void;
   onReuseAssets?: (assets: { id: string }[]) => void;
+  view?: ChatDockView;
+  onViewChange?: (patch: Partial<ChatDockView>) => void;
 }) {
   const [nodes, setNodes] = useState<FileNode[]>([]);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(props.view?.filter ?? "");
   const [treeError, setTreeError] = useState("");
   const [fileError, setFileError] = useState("");
   const [file, setFile] = useState<SchemaProjectFileContent | null>(null);
+  const [treeLoading, setTreeLoading] = useState(Boolean(props.projectId));
+  const [fileLoading, setFileLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const treeRef = useRef<HTMLDivElement>(null);
   const treeApi = useRef<TreeApi<FileNode> | null>(null);
+  const treeRestored = useRef(false);
+  const fileViews = useRef(props.view?.fileViews ?? {});
   const nodesRef = useRef<FileNode[]>([]);
-  const expandedPaths = useRef(new Set<string>());
+  const expandedPaths = useRef(new Set(props.view?.folders ?? []));
   const treeRevision = useRef(0);
   const directoryRequests = useRef(new Map<string, number>());
   const [treeHeight, setTreeHeight] = useState(240);
@@ -85,6 +140,7 @@ function FilesPage(props: {
   useEffect(() => {
     const revision = ++treeRevision.current;
     setTreeError("");
+    setTreeLoading(Boolean(props.projectId));
     if (!props.projectId) { updateNodes(() => []); return; }
     void (async () => {
       const listing = await request<{ entries: SchemaProjectFile[] }>(`/v1/projects/${encodeURIComponent(props.projectId!)}/files`);
@@ -97,7 +153,7 @@ function FilesPage(props: {
         if (revision !== treeRevision.current) return;
         if (findNode(nodesRef.current, path)?.kind === "directory") await openDirectory(path, revision);
       }
-    })().catch(failure => { if (revision === treeRevision.current) setTreeError(errorMessage(failure)); });
+    })().catch(failure => { if (revision === treeRevision.current) setTreeError(errorMessage(failure)); }).finally(() => { if (revision === treeRevision.current) setTreeLoading(false); });
     return () => { treeRevision.current += 1; };
   }, [props.projectId, props.currentRunId, props.currentRunStatus, props.fileRevision, refreshVersion]);
   useEffect(() => {
@@ -108,13 +164,23 @@ function FilesPage(props: {
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
+    const tree = treeApi.current;
+    if (treeLoading || !tree || treeRestored.current) return;
+    const selected = props.view?.treeSelection || props.selectedPath;
+    if (selected && tree.get(selected)) tree.setSelection({ ids: [selected], anchor: selected, mostRecent: selected });
+    tree.scrollToOffset(props.view?.treeScroll ?? 0);
+    if (tree.listEl.current) tree.listEl.current.scrollLeft = props.view?.treeScrollLeft ?? 0;
+    treeRestored.current = true;
+  }, [treeLoading, nodes, treeHeight]);
+  useEffect(() => {
     setFile(null);
     setFileError("");
+    setFileLoading(Boolean(props.projectId && props.selectedPath));
     if (!props.projectId || !props.selectedPath) return;
     let cancelled = false;
     void request<SchemaProjectFileContent>(`/v1/projects/${encodeURIComponent(props.projectId)}/file?path=${encodeURIComponent(props.selectedPath)}`).then(next => {
       if (!cancelled) setFile(next);
-    }).catch(failure => { if (!cancelled) setFileError(errorMessage(failure)); });
+    }).catch(failure => { if (!cancelled) setFileError(errorMessage(failure)); }).finally(() => { if (!cancelled) setFileLoading(false); });
     return () => { cancelled = true; };
   }, [props.projectId, props.selectedPath, props.currentRunId, props.currentRunStatus, props.fileRevision, refreshVersion]);
   async function openDirectory(id: string, revision = treeRevision.current) {
@@ -134,9 +200,13 @@ function FilesPage(props: {
     <div className="project-preview-actions"><span className="hint">Project files</span>{props.projectId ? <button type="button" onClick={() => setRefreshVersion(value => value + 1)}>Refresh</button> : null}</div>
     <ProjectPreview threadId={props.threadId} selectedPath={props.selectedPath} enabled={Boolean(props.previewEnabled)} revision={`${props.currentRunId}:${props.currentRunStatus}`} />
     {!props.projectId ? <p className="hint">This conversation has no project folder.</p> : <>
-      <label>Filter<input aria-label="Filter project files" value={filter} onChange={event => setFilter(event.target.value)} /></label>
+      <label>Filter<input aria-label="Filter project files" value={filter} onChange={event => { setFilter(event.target.value); props.onViewChange?.({ filter: event.target.value }); }} /></label>
+      {treeLoading ? <p className="hint" role="status">Loading project files…</p> : !nodes.length && !treeError ? <p className="hint">This project has no files.</p> : null}
       {treeError || fileError ? <Notice tone="error">{[treeError, fileError].filter(Boolean).join(" · ")}</Notice> : null}
-      <div className="project-file-tree" ref={treeRef}>
+      <div className="project-file-tree" ref={treeRef} onScrollCapture={event => {
+        const list = treeApi.current?.listEl.current;
+        if (treeRestored.current && event.target === list) props.onViewChange?.({ treeScrollLeft: list.scrollLeft });
+      }}>
         <Tree<FileNode>
           ref={treeApi}
           data={nodes}
@@ -148,13 +218,22 @@ function FilesPage(props: {
           disableDrop
           disableEdit
           openByDefault={false}
+          initialOpenState={Object.fromEntries((props.view?.folders ?? []).map(path => [path, true]))}
           searchTerm={filter}
           searchMatch={(node, term) => node.data.name.toLowerCase().includes(term.toLowerCase())}
           childrenAccessor={node => node.kind === "directory" ? node.children ?? [] : null}
           idAccessor="path"
+          aria-label="Project file tree"
+          onScroll={({ scrollOffset, scrollUpdateWasRequested }) => {
+            if (treeRestored.current && !scrollUpdateWasRequested) props.onViewChange?.({ treeScroll: scrollOffset });
+          }}
+          onSelect={selection => {
+            if (treeRestored.current) props.onViewChange?.({ treeSelection: selection[0]?.data.path ?? "" });
+          }}
           onToggle={id => {
-            if (!treeApi.current?.isOpen(id)) { expandedPaths.current.delete(id); return; }
+            if (!treeApi.current?.isOpen(id)) { expandedPaths.current.delete(id); props.onViewChange?.({ folders: [...expandedPaths.current] }); return; }
             expandedPaths.current.add(id);
+            props.onViewChange?.({ folders: [...expandedPaths.current] });
             const node = findNode(nodesRef.current, id);
             if (node?.kind === "directory") void openDirectory(id);
           }}
@@ -164,9 +243,14 @@ function FilesPage(props: {
         </Tree>
       </div>
     </>}
-    {file?.text != null ? <div className="chat-dock-editor" aria-label="Project file"><MonacoFile text={file.text} /></div> : file?.text_unavailable_reason ? <p className="hint">{file.text_unavailable_reason}</p> : null}
+    {fileLoading ? <p className="hint" role="status">Loading {props.selectedPath}…</p> : null}
+    {file?.text != null ? <div className="chat-dock-editor" aria-label="Project file" data-path={file.path}><MonacoFile key={`${props.projectId}:${file.path}`} text={file.text} view={props.view?.fileViews?.[`${props.projectId}:${file.path}`]} onViewChange={view => {
+      const next = { ...fileViews.current, [`${props.projectId}:${file.path}`]: view };
+      fileViews.current = next;
+      props.onViewChange?.({ fileViews: next });
+    }} /></div> : file?.text_unavailable_reason ? <p className="hint">{file.text_unavailable_reason}</p> : null}
     {image && file ? <ImagePreview src={image} name={file.path} /> : null}
-    {props.conversationId ? <section aria-label="Chat files and retained copies"><h3>Chat files</h3><ChatRetainedFiles compact conversationId={props.conversationId} runIds={props.runIds} currentRunId={props.currentRunId} currentRunStatus={props.currentRunStatus} onReuse={ids => props.onReuseAssets?.(ids.map(id => ({ id })))} /></section> : null}
+    {props.conversationId ? <section aria-label="Chat files and retained copies"><h3>Chat files</h3><ChatRetainedFiles compact showEmpty conversationId={props.conversationId} currentRunId={props.currentRunId} currentRunStatus={props.currentRunStatus} previewId={props.view?.previewId} previewOpen={props.view?.previewOpen} onPreviewOpen={previewOpen => props.onViewChange?.({ previewOpen })} onPreviewId={previewId => props.onViewChange?.({ previewId })} onReuse={ids => props.onReuseAssets?.(ids.map(id => ({ id })))} /></section> : null}
     {props.currentRunId && props.currentRunStatus && props.onOpenKnowledge ? <RunMemoryProposals runId={props.currentRunId} status={props.currentRunStatus} onOpenKnowledge={props.onOpenKnowledge} onUseMemoryVersion={props.onUseMemoryVersion} /> : null}
   </>;
 }
@@ -204,10 +288,38 @@ function replaceChildren(nodes: FileNode[], path: string, entries: SchemaProject
   return nodes.map(node => node.path === path ? { ...node, children: mergeEntries(entries, node.children ?? []) } : node.children ? { ...node, children: replaceChildren(node.children, path, entries) } : node);
 }
 
-function MonacoFile({ text }: { text: string }) {
+function MonacoFile({ text, view, onViewChange }: { text: string; view?: ChatFileView; onViewChange: (view: ChatFileView) => void }) {
   const Editor = useMonacoFile();
-  if (!Editor) return <pre className="plain-file-content">{text}</pre>;
-  return <Editor value={text} language="plaintext" theme={editorTheme()} height="100%" options={{ readOnly: true, domReadOnly: true, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
+  const plain = useRef<HTMLPreElement>(null);
+  const restoringPlain = useRef(true);
+  const saveView = useRef(onViewChange);
+  saveView.current = onViewChange;
+  const subscriptions = useRef<IDisposable[]>([]);
+  const lastView = useRef(view ?? null);
+  useLayoutEffect(() => {
+    if (!plain.current) return;
+    plain.current.scrollTop = view?.scrollTop ?? 0;
+    plain.current.scrollLeft = view?.scrollLeft ?? 0;
+  }, [Editor]);
+  useLayoutEffect(() => () => {
+    for (const subscription of subscriptions.current) subscription.dispose();
+    if (lastView.current) saveView.current(lastView.current);
+  }, []);
+  if (!Editor) return <pre ref={plain} className="plain-file-content" tabIndex={0} onWheel={() => { restoringPlain.current = false; }} onPointerDown={() => { restoringPlain.current = false; }} onKeyDown={() => { restoringPlain.current = false; }} onScroll={event => {
+    if (restoringPlain.current) return;
+    lastView.current = { state: null, scrollTop: event.currentTarget.scrollTop, scrollLeft: event.currentTarget.scrollLeft };
+    saveView.current(lastView.current);
+  }}>{text}</pre>;
+  return <Editor value={text} language="plaintext" theme={editorTheme()} height="100%" saveViewState={false} onMount={editor => {
+    if (view?.state) editor.restoreViewState(view.state);
+    else { editor.setScrollTop(view?.scrollTop ?? 0); editor.setScrollLeft(view?.scrollLeft ?? 0); }
+    const capture = () => {
+      lastView.current = { state: editor.saveViewState(), scrollTop: editor.getScrollTop(), scrollLeft: editor.getScrollLeft() };
+      saveView.current(lastView.current);
+    };
+    subscriptions.current = [editor.onDidScrollChange(capture), editor.onDidChangeCursorSelection(capture)];
+    lastView.current = { state: editor.saveViewState(), scrollTop: editor.getScrollTop(), scrollLeft: editor.getScrollLeft() };
+  }} options={{ readOnly: true, domReadOnly: true, scrollBeyondLastLine: false, fontSize: editorFontSize() }} />;
 }
 
 function useMonacoFile() {

@@ -1,0 +1,18 @@
+.surface.knowledge-surface {container: workbench-surface workspace-records / inline-size;}
+.knowledge-surface .knowledge-editor {padding: 0; display: grid; gap: var(--space-compact); min-width: 0; align-content: start;}
+.knowledge-editor > .entity-head {padding-bottom: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border);}
+.knowledge-create-editor {display: grid; gap: var(--space-compact); min-width: 0;}
+.knowledge-create-editor .compact-form {display: grid; gap: var(--space-compact); width: 100%; max-width: none;}
+.knowledge-surface :is(.knowledge-editor, .knowledge-create-editor) textarea {min-height: calc(var(--control-height) * 5); resize: vertical;}
+.knowledge-surface .skill-editor .setting-row-control textarea {min-height: unset;}
+.knowledge-save-actions {padding-top: var(--pad-card); border-top: var(--line-hairline) solid var(--border); margin-top: var(--space-compact);}
+.knowledge-rename {display: grid; gap: var(--space-tight);}
+.knowledge-secondary {width: 100%; max-width: var(--layout-reading); padding: var(--pad-compact) 0; border-top: var(--line-hairline) solid var(--border);}
+.knowledge-secondary > summary {display: flex; align-items: center; gap: var(--space-tight); min-height: var(--control-height); cursor: pointer; color: var(--text);}
+.knowledge-surface details > summary::before {content: "›"; color: var(--muted);}
+.knowledge-surface details[open] > summary::before {transform: rotate(90deg);}
+.knowledge-secondary > summary small {margin-left: auto; font-size: var(--text-small); color: var(--muted);}
+.knowledge-secondary > :not(summary) {margin-top: var(--space-compact);}
+.knowledge-secondary textarea {min-height: calc(var(--control-height) * 3);}
+.knowledge-surface .knowledge-editor > details {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.knowledge-surface .knowledge-editor > details > summary {color: var(--muted); cursor: pointer;}

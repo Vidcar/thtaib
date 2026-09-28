@@ -13,7 +13,7 @@ const retryable = (job: ImportJob) => ["stopped", "failed", "interrupted"].inclu
 const needsAttention = (job: ImportJob) => retryable(job) || (job.status === "complete" && Boolean(job.configuration_error));
 const stageNames: Record<string, string> = { queued: "Waiting", metadata: "Resolving files", transfer: "Downloading", verify: "Verifying", install: "Installing", repair: "Repairing", cleanup: "Cleaning up", done: "Complete" };
 
-export function useImportJobs(revision: number, onCompleted: () => Promise<void>) {
+export function useImportJobs(revision: number, onCompleted: () => Promise<void>, enabled = true) {
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -23,6 +23,7 @@ export function useImportJobs(revision: number, onCompleted: () => Promise<void>
   const onCompletedRef = useRef(onCompleted); onCompletedRef.current = onCompleted;
 
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false, timer: number | undefined;
     async function load() {
       try {
@@ -40,7 +41,7 @@ export function useImportJobs(revision: number, onCompleted: () => Promise<void>
     }
     void load();
     return () => { disposed = true; window.clearTimeout(timer); };
-  }, [revision, busy]);
+  }, [revision, busy, enabled]);
 
   async function action(job: ImportJob, operation: () => Promise<ImportJob>) {
     if (actionPending.current) return;

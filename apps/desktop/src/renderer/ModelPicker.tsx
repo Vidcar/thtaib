@@ -3,7 +3,7 @@ import { formatBytes } from "./display";
 import { presentVariant } from "./modelVariantPresentation";
 import type { ModelBundle } from "./types";
 
-function modelFileLabel(bundle: ModelBundle): string {
+export function modelFileLabel(bundle: ModelBundle): string {
   const primary = bundle.files.find(file => file.path === bundle.primary_path)
     ?? bundle.files.find(file => file.role === "primary_weights")
     ?? bundle.shards?.[0];

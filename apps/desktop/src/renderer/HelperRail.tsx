@@ -89,27 +89,28 @@ export function HelperRequest({ request }: { request: string }) {
     : <p className="helper-rail-request">{request}</p>;
 }
 
-function HelperRailContent({ stream, runs, currentRunId, selectedHelperKey, conversationId, detailedStreams }: { stream: WorkbenchStream; runs: AgentRun[]; currentRunId?: string; selectedHelperKey?: string; conversationId: string; detailedStreams: boolean }) {
+function HelperRailContent({ stream, runs, currentRunId, selectedHelperKey, onSelectHelper, conversationId, detailedStreams }: { stream: WorkbenchStream; runs: AgentRun[]; currentRunId?: string; selectedHelperKey?: string; onSelectHelper?: (key: string) => void; conversationId: string; detailedStreams: boolean }) {
   const [selectedId, setSelectedId] = useState(selectedHelperKey ?? "");
   useEffect(() => setSelectedId(selectedHelperKey ?? ""), [selectedHelperKey]);
+  const select = (key: string) => { setSelectedId(key); onSelectHelper?.(key); };
   const streamedRun = stream.values.workbench?.run;
   const visibleRuns = streamedRun ? [...runs.filter(run => run.id !== streamedRun.id), streamedRun] : runs;
   const children = helperEntries(visibleRuns, stream.subagents.values(), streamedRun?.id ?? currentRunId);
   const selected = children.find(child => child.key === selectedId);
   if (!children.length) return <p className="hint">Helpers used in this chat will appear here.</p>;
   if (selected) return <div className="helper-rail helper-rail-detail">
-    <button type="button" className="quiet-button helper-rail-back" onClick={() => setSelectedId("")}>← All helpers</button>
+    <button type="button" className="quiet-button helper-rail-back" onClick={() => select("")}>← All helpers</button>
     <div className="helper-rail-heading"><strong>{selected.name}</strong><span>{selected.status.replaceAll("_", " ")}</span></div>
     {selected.request ? <HelperRequest request={selected.request} /> : null}
     {selected.namespace.length && !(selected.namespace.length === 1 && selected.namespace[0] === "tools") ? <HelperTranscript key={`${selected.key}:${selected.namespace.join("|")}`} stream={stream} helper={selected} conversationId={conversationId} detailedStreams={detailedStreams} /> : <p className="hint">{helperIsActive(selected.status) ? "Waiting for helper output…" : "This earlier helper run has no recoverable public transcript."}</p>}
   </div>;
   const active = children.filter(child => helperIsActive(child.status));
   const done = children.filter(child => !helperIsActive(child.status));
-  const group = (label: string, entries: HelperEntry[]) => <section className="helper-rail-group" aria-label={`${label} helpers`}><h3>{label} · {entries.length}</h3>{entries.length ? entries.map(child => <button type="button" key={child.key} onClick={() => setSelectedId(child.key)}><strong>{child.name}</strong><span>{child.status.replaceAll("_", " ")}</span></button>) : <p className="hint">No {label.toLowerCase()} helpers</p>}</section>;
+  const group = (label: string, entries: HelperEntry[]) => <section className="helper-rail-group" aria-label={`${label} helpers`}><h3>{label} · {entries.length}</h3>{entries.length ? entries.map(child => <button type="button" key={child.key} onClick={() => select(child.key)}><strong>{child.name}</strong><span>{child.status.replaceAll("_", " ")}</span></button>) : <p className="hint">No {label.toLowerCase()} helpers</p>}</section>;
   return <div className="helper-rail helper-rail-list">{group("Active", active)}{group("Done", done)}</div>;
 }
 
-export function HelperRail({ runs, currentRunId, threadId, conversationId, selectedHelperKey, detailedStreams = false }: { runs: AgentRun[]; currentRunId?: string; threadId: string | null; conversationId: string; selectedHelperKey?: string; detailedStreams?: boolean }) {
+export function HelperRail({ runs, currentRunId, threadId, conversationId, selectedHelperKey, onSelectHelper, detailedStreams = false }: { runs: AgentRun[]; currentRunId?: string; threadId: string | null; conversationId: string; selectedHelperKey?: string; onSelectHelper?: (key: string) => void; detailedStreams?: boolean }) {
   if (!threadId) return <p className="hint">Helpers used in this chat will appear here.</p>;
-  return <InteractionStream threadId={threadId}>{stream => <HelperRailContent stream={stream} runs={runs} currentRunId={currentRunId} selectedHelperKey={selectedHelperKey} conversationId={conversationId} detailedStreams={detailedStreams} />}</InteractionStream>;
+  return <InteractionStream threadId={threadId}>{stream => <HelperRailContent stream={stream} runs={runs} currentRunId={currentRunId} selectedHelperKey={selectedHelperKey} onSelectHelper={onSelectHelper} conversationId={conversationId} detailedStreams={detailedStreams} />}</InteractionStream>;
 }

@@ -137,6 +137,8 @@
 .packet03-attention-button.is-collapsed .attention-count, .app-nav-collapsed .packet03-attention-button .attention-count {top: 1px; left: auto; right: 1px;}
 .app-main {position: relative;}
 .persistent-chat {height: 100%; min-height: 0;}
+.persistent-editor {min-height: 100%; min-width: 0;}
+.persistent-editor[hidden] {display: none !important;}
 .persistent-chat[data-active="false"] {position: absolute; inset: 0; visibility: hidden; opacity: 0; pointer-events: none;}
 .chat-groups > .hint, .chat-group > .hint, .sidebar-loose > .hint {margin: 0; padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small);}
 /* The destination rail stays available independently of Chat's list. */
@@ -156,6 +158,8 @@
 .chat-search[hidden] {display: none;}
 .chat-search .icon-button {flex: 0 0 auto;}
 .chat-list-reopen {display: none; position: absolute; top: 4px; left: 58px; z-index: 5; background: var(--bg-nav);}
+.app.app-chat {--chat-header-reopen-space: 0px;}
+.app.app-chat.app-nav-collapsed {--chat-header-reopen-space: var(--control-height);}
 .app-nav-collapsed .chat-list-reopen {display: flex;}
 .app-nav-collapsed .chat-navigation {display: none;}
 @media (max-width: 1100px) {
@@ -164,5 +168,7 @@
   .app.app-chat:has(.workbench-navigation:is(.search-active, .list-expanded)) {grid-template-columns: calc(54px + min(var(--navigation-width, 232px), 28vw)) minmax(0, 1fr);}
   .workbench-navigation:is(.search-active, .list-expanded) .chat-navigation:not([hidden]) {display: flex;}
   .chat-list-reopen {display: flex;}
+  .app.app-chat {--chat-header-reopen-space: var(--control-height);}
+  .app.app-chat:has(.workbench-navigation:is(.search-active, .list-expanded)) {--chat-header-reopen-space: 0px;}
   .workbench-navigation:is(.search-active, .list-expanded) .chat-list-reopen {display: none;}
 }

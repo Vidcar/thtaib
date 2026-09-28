@@ -55,7 +55,7 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
       </p>
       <div className="appearance-stage-frame" ref={frameRef}>
         <div className="appearance-stage-scene" aria-hidden="true">
-          <Hit active={aimed} tokens={["palette-bg-nav", "icon-md", "icon-stroke", "space-tight"]} className="appearance-stage-rail"><Icon name="search" size={16} /><Icon name="attention" size={16} /><Icon name="chat" size={16} /><Icon name="models" size={16} /><Icon name="sparkles" size={16} /><Icon name="knowledge" size={16} /><div className="appearance-rail-bottom"><Icon name="settings" size={16} /></div></Hit>
+          <Hit active={aimed} tokens={["palette-bg-nav", "icon-md", "icon-stroke", "space-tight"]} className="appearance-stage-rail"><Icon name="search" size={16} /><Icon name="attention" size={16} /><Icon name="chat" size={16} /><Icon name="models" size={16} /><Icon name="agents" size={16} /><Icon name="knowledge" size={16} /><div className="appearance-rail-bottom"><Icon name="settings" size={16} /></div></Hit>
           <Hit active={aimed} guide tokens={["palette-bg-nav", "layout-side", "space-section", "pad-compact", "palette-border", "line-hairline", "font-ui"]} className="appearance-stage-side">
             <Hit active={aimed} tokens={["text-body", "weight-semibold"]} className="appearance-stage-brand">Chats <Icon name="panel" size={16} /></Hit>
             <Hit active={aimed} tokens={["space-compact"]} className="appearance-stage-nav">
@@ -102,7 +102,7 @@ export function AppearancePreview({ active }: { active: { id: string; name: stri
                 <Hit active={aimed} tokens={["layout-control", "control-height", "radius-control"]} className="appearance-stage-setting-control"><i /><i /><i /></Hit>
               </Hit>
               <Hit active={aimed} guide tokens={["palette-bg-raised", "radius-composer", "pad-card", "shadow-soft", "space-tight"]} className="appearance-stage-composer">
-                <div className="appearance-composer-input">Message your model…</div><div className="appearance-composer-controls"><Icon name="plus" size={16} /><Icon name="shield" size={16} /><span>Model</span><Icon name="tune" size={16} /><Icon name="sparkles" size={16} /><small>12% · 32 t/s</small><Hit active={aimed} tokens={["palette-accent", "radius-circle", "control-height-lg", "weight-bold"]} className="appearance-stage-send"><Icon name="send" size={16} /></Hit></div>
+                <div className="appearance-composer-input">Message your model…</div><div className="appearance-composer-controls"><Icon name="plus" size={16} /><Icon name="shield" size={16} /><span>Model</span><Icon name="tune" size={16} /><Icon name="agents" size={16} /><small>12% · 32 t/s</small><Hit active={aimed} tokens={["palette-accent", "radius-circle", "control-height-lg", "weight-bold"]} className="appearance-stage-send"><Icon name="send" size={16} /></Hit></div>
               </Hit>
               <div hidden={!active} className="appearance-extra-samples"><Hit active={aimed} tokens={["layout-narrow", "layout-menu", "text-small"]} className="appearance-stage-menu">
                 <span>One</span><span>Two</span><span>Three</span><span>Four</span><span>Five</span>

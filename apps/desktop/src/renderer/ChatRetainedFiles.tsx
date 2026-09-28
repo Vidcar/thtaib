@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { formatBytes } from "./display";
+import { formatBytes, formatWhen } from "./display";
 import { Notice } from "./Notice";
 import {
   packet03Api,
@@ -20,6 +20,11 @@ export interface ChatRetainedFilesProps {
   currentRunStatus?: string | null;
   records?: RetainedAsset[];
   compact?: boolean;
+  showEmpty?: boolean;
+  previewId?: string;
+  previewOpen?: boolean;
+  onPreviewId?: (id: string) => void;
+  onPreviewOpen?: (open: boolean) => void;
   onReuse: (assetIds: string[]) => void;
   onOpenFiles?: (assetIds: string[]) => void;
 }
@@ -123,6 +128,11 @@ export function ChatRetainedFiles({
   currentRunStatus = null,
   records: providedRecords,
   compact = false,
+  showEmpty = false,
+  previewId,
+  previewOpen,
+  onPreviewId,
+  onPreviewOpen,
   onReuse,
   onOpenFiles,
 }: ChatRetainedFilesProps) {
@@ -136,7 +146,7 @@ export function ChatRetainedFiles({
   const terminalRefreshKey = useRef("");
   const runFilter = useMemo(() => new Set(runIds ?? []), [runIds]);
   const visible = useMemo(() => {
-    const filtered = records.filter((asset) => !asset.deleted_at && (runFilter.size === 0 || (asset.source_run_id && runFilter.has(asset.source_run_id))));
+    const filtered = records.filter((asset) => !asset.deleted_at && (runFilter.size === 0 || Boolean(asset.source_run_id && runFilter.has(asset.source_run_id))));
     return filtered.sort((left, right) => Date.parse(left.observed_at) - Date.parse(right.observed_at));
   }, [records, runFilter]);
   const grouped = useMemo(() => {
@@ -164,11 +174,23 @@ export function ChatRetainedFiles({
     refresh();
   }, [conversationId, currentRunId, currentRunStatus, providedRecords]);
 
-  if (!loading && !error && visible.length === 0) {
+  useEffect(() => {
+    if (!previewId || preview?.id === previewId || busy) return;
+    const asset = visible.find(item => item.id === previewId);
+    if (asset) void showPreview(asset, false, true);
+  }, [previewId, visible]);
+  useEffect(() => {
+    if (!loading && preview && !visible.some(asset => asset.id === preview.id)) { detailGeneration.current += 1; setPreview(null); setContent(null); setBusy(""); }
+  }, [visible, loading]);
+  useEffect(() => () => { detailGeneration.current += 1; }, [conversationId]);
+
+  if (!showEmpty && !loading && !error && visible.length === 0) {
     return null;
   }
 
-  async function showPreview(asset: RetainedAsset, full = false): Promise<void> {
+  async function showPreview(asset: RetainedAsset, full = false, restoring = false): Promise<void> {
+    onPreviewId?.(asset.id);
+    if (!restoring) onPreviewOpen?.(true);
     const request = ++detailGeneration.current;
     setBusy(asset.id);
     setMessage("");
@@ -239,7 +261,8 @@ export function ChatRetainedFiles({
           <button type="button" disabled={selectedIds.length === 0} onClick={() => onReuse(selectedIds)}>Reuse selected</button>
         </div>
       </div> : null}
-      {loading ? <p className="hint">Loading retained files...</p> : null}
+      {loading ? <p className="hint" role="status">Loading chat files…</p> : null}
+      {showEmpty && !loading && !error && !visible.length ? <p className="hint">Uploads and files created in this chat will appear here.</p> : null}
       {error ? <Notice tone="error" role="status">{error}</Notice> : null}
       {message ? <Notice role="status">{message}</Notice> : null}
       <div className="chat-retained-file-groups">
@@ -254,12 +277,12 @@ export function ChatRetainedFiles({
                     <input type="checkbox" disabled={(asset.content_kind as string) === "binary"} checked={selectedIds.includes(asset.id)} onChange={(event) => toggle(asset.id, event.target.checked)} />
                     <strong>{asset.filename}</strong>
                   </label>}
-                  {!compact ? <div className="chat-retained-file-meta">
-                    <span>{originLabel(asset)}</span>
-                    <span>{asset.scope === "project" ? "Project scoped" : "Conversation scoped"}</span>
-                    <span>{formatBytes(asset.size_bytes)}</span>
+                  <div className="chat-retained-file-meta">
+                    <span>{asset.session_id && asset.session_id !== conversationId ? "Reused file · " : ""}{originLabel(asset)}</span>
+                    {!compact ? <><span>{asset.scope === "project" ? "Project scoped" : "Conversation scoped"}</span><span>{formatBytes(asset.size_bytes)}</span></> : null}
+                    <time dateTime={asset.observed_at} title={formatWhen(asset.observed_at)}>{formatWhen(asset.observed_at)}</time>
                     <span>{sourceLabel(preview?.id === asset.id ? preview.source_status : null, asset)}</span>
-                  </div> : null}
+                  </div>
                   {asset.observation ? <p className="hint">{asset.observation}</p> : null}
                   <div className="chat-retained-files-actions">
                     {compact ? (asset.content_kind as string) !== "binary" ? <button type="button" onClick={() => onReuse([asset.id])}>Use again</button> : null : <button type="button" disabled={busy === asset.id} onClick={() => void showPreview(asset)}>Preview</button>}
@@ -275,7 +298,7 @@ export function ChatRetainedFiles({
         ))}
       </div>
       {preview ? (
-        <details className="chat-retained-preview" open>
+        <details className="chat-retained-preview" open={previewOpen ?? true} onToggle={event => onPreviewOpen?.(event.currentTarget.open)}>
           <summary>{content?.id === preview.id ? "Full retained text" : "Preview"}: {preview.filename}</summary>
           <div className="chat-retained-file-meta">
             <span>{formatBytes(preview.size_bytes)}</span>
