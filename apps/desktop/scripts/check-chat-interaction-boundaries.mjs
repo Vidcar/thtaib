@@ -3313,8 +3313,10 @@ async function testStoppedNamedConfigurationSurvivesNewChat(vite) {
     await act(async () => button(renderer, "Conversation A").props.onClick());
     await waitFor(() => assert.equal(pickerFor(renderer).props.selectedConfigurationId, profile.id), "saved named configuration restored");
     await act(async () => button(renderer, "New").props.onClick());
+    await waitFor(() => assertFreshConversation(renderer, "named configuration's new chat opened"), "new named chat finished opening");
     await waitFor(() => assert.equal(pickerFor(renderer).props.selectedConfigurationId, profile.id), "unloaded named configuration retained for New Chat");
     await act(async () => textarea(renderer).props.onChange({ target: { value: "Load the saved configuration on Send" } }));
+    await waitFor(() => assert.equal(buttonByAriaLabel(renderer, "Send").props.disabled, false), "cold named configuration ready to send");
     await act(async () => composeForm(renderer).props.onSubmit({ preventDefault() {}, currentTarget: { querySelectorAll: () => [] } }));
     await waitFor(() => assert.equal(harness.state.requests.creates.length, 1), "cold named chat created on Send");
     assert.equal(harness.state.requests.creates[0].model_configuration_id, profile.id);

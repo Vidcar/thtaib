@@ -10,6 +10,7 @@ import type {
   SchemaBrowserSessionStatus,
   SchemaBrowserTab,
   SchemaBrowserViewport,
+  SchemaProcessIdentity,
 } from "../generated/shared-contracts/openapi";
 
 export type WorkbenchSurface = "managed-inference";
@@ -98,6 +99,7 @@ export interface ModelBundle {
     template_compatible: boolean | null;
     generation_defaults: Record<string, unknown>;
     response_recipes?: ResponseRecipe[];
+    hidden_response_recipe_ids?: string[];
     metadata_refreshed_at?: string | null;
     unsupported: Record<string, string>;
   } | null;
@@ -192,6 +194,8 @@ export interface Deployment {
   display_name: string;
   scope: "managed" | "connected";
   status: string;
+  pid?: number | null;
+  process_identity?: SchemaProcessIdentity | null;
   bundle_id: string | null;
   profile_id?: string | null;
   endpoint: string | null;

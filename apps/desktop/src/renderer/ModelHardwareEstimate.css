@@ -21,3 +21,18 @@
 .estimate-context small {display: block; margin-top: var(--space-tight); font-size: var(--text-small);}
 .estimate-observed {display: flex; flex-wrap: wrap; gap: var(--space-compact); padding-block: var(--pad-compact); border-top: var(--line-hairline) solid var(--border); font-size: var(--text-small); color: var(--muted);}
 .estimate-observed > strong {font-weight: var(--weight-medium); color: var(--text);}
+.model-memory-estimate-compact {min-width: 0;}
+.model-memory-estimate-compact .estimate-heading {min-width: 0; min-height: var(--control-height); flex-wrap: nowrap;}
+.model-memory-estimate-compact .estimate-heading > strong {min-width: 0; overflow: hidden; white-space: nowrap;}
+.estimate-actions {display: flex; align-items: center; flex: 0 0 auto; gap: var(--space-compact);}
+.estimate-actions button {white-space: nowrap;}
+.estimate-compact-totals {display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--space-stack); margin: var(--space-compact) 0 0;}
+.estimate-compact-totals > div {min-width: 0;}
+.estimate-compact-totals dt, .estimate-compact-totals small {display: block; color: var(--muted); font-size: var(--text-small); line-height: var(--leading-body); height: calc(var(--text-small) * var(--leading-body)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.estimate-compact-totals dd {margin: var(--space-tight) 0; font-size: var(--text-heading); line-height: var(--leading-tight); height: calc(var(--text-heading) * var(--leading-tight)); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.estimate-compact-totals .estimate-compact-status dd {font-size: var(--text-body);}
+.estimate-compact-status[data-shortage="true"] dd {color: var(--warn);}
+.model-memory-estimate-details {margin: 0; border: 0; padding: 0; min-width: 0;}
+.model-memory-estimate-details p {overflow-wrap: anywhere;}
+.model-memory-estimate-details .estimate-availability > span {flex-wrap: wrap;}
+.estimate-error {color: var(--warn); overflow-wrap: anywhere;}

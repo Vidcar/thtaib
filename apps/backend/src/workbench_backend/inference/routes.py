@@ -21,6 +21,8 @@ from workbench_backend.inference.schemas import (
     DefaultConfigurationRequest,
     ResponseRecipeConfigurationRequest,
     ResponseRecipeConfigurationResult,
+    ResponseRecipeRefreshRequest,
+    ResponseRecipeVisibilityRequest,
     ReconfigureDeploymentRequest,
     SettingsPreviewRequest,
     RenameProfileRequest,
@@ -242,8 +244,18 @@ def model_configurations(request: Request, bundle_id: str):
 
 
 @router.post("/bundles/{bundle_id}/response-recipes/refresh", response_model=ModelBundle)
-def refresh_response_recipes(request: Request, bundle_id: str) -> ModelBundle:
-    return get_manager(request).refresh_response_recipes(bundle_id)
+def refresh_response_recipes(
+    request: Request, bundle_id: str, body: ResponseRecipeRefreshRequest | None = None,
+) -> ModelBundle:
+    return get_manager(request).refresh_response_recipes(bundle_id,
+        restore_hidden=body.restore_hidden if body is not None else False)
+
+
+@router.put("/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility", response_model=ModelBundle)
+def set_response_recipe_visibility(
+    request: Request, bundle_id: str, recipe_id: str, body: ResponseRecipeVisibilityRequest,
+) -> ModelBundle:
+    return get_manager(request).set_response_recipe_visibility(bundle_id, recipe_id, visible=body.visible)
 
 
 @router.post("/bundles/{bundle_id}/response-recipes/configurations", response_model=ResponseRecipeConfigurationResult)

@@ -8257,6 +8257,13 @@
             "title": "Generation Defaults",
             "type": "object"
           },
+          "hidden_response_recipe_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hidden Response Recipe Ids",
+            "type": "array"
+          },
           "metadata_refreshed_at": {
             "anyOf": [
               {
@@ -12729,6 +12736,30 @@
           "section"
         ],
         "title": "ResponseRecipeOrigin",
+        "type": "object"
+      },
+      "ResponseRecipeRefreshRequest": {
+        "properties": {
+          "restore_hidden": {
+            "default": false,
+            "title": "Restore Hidden",
+            "type": "boolean"
+          }
+        },
+        "title": "ResponseRecipeRefreshRequest",
+        "type": "object"
+      },
+      "ResponseRecipeVisibilityRequest": {
+        "properties": {
+          "visible": {
+            "title": "Visible",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "visible"
+        ],
+        "title": "ResponseRecipeVisibilityRequest",
         "type": "object"
       },
       "RetainedAsset": {
@@ -18367,6 +18398,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ResponseRecipeRefreshRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {
@@ -18390,6 +18438,64 @@
           }
         },
         "summary": "Refresh Response Recipes"
+      }
+    },
+    "/v1/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility": {
+      "put": {
+        "operationId": "set_response_recipe_visibility_v1_bundles__bundle_id__response_recipes__recipe_id__visibility_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponseRecipeVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Response Recipe Visibility"
       }
     },
     "/v1/chat/conversations": {

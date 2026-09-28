@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 import hashlib
+import re
 import time
 import httpx
 
@@ -372,7 +373,36 @@ class ModelManager:
         return {"bundle_id": bundle.id, "repo_id": card.repo_id, "revision": card.revision,
             "sha256": card.sha256, "markdown": card.markdown, "origin": card.origin}
 
-    def refresh_response_recipes(self, bundle_id: str) -> ModelBundle:
+    def set_response_recipe_visibility(self, bundle_id: str, recipe_id: str, *, visible: bool) -> ModelBundle:
+        """Hide only the list choice; its record remains usable by saved origins."""
+        with self.store.configuration_lock():
+            bundle = self.store.get_bundle(bundle_id)
+            if bundle is None:
+                raise ManagerError("Unknown model.", code="bundle_missing", status_code=404)
+            source = bundle.source
+            if source.kind.value != "huggingface" or not source.repo_id or not source.resolved_revision:
+                raise ManagerError("Response presets are available for revision-pinned Hugging Face models.",
+                    code="recipe_source", status_code=400)
+            if re.fullmatch(r"[0-9a-fA-F]{40}", source.resolved_revision) is None:
+                raise ManagerError("This model has no immutable Hugging Face card revision.",
+                    code="model_card_revision", status_code=409)
+            config = bundle.huggingface_configuration
+            recipe = next((item for item in config.response_recipes if item.id == recipe_id), None) if config else None
+            if recipe is None or recipe.source_repo_id != source.repo_id or recipe.source_revision != source.resolved_revision:
+                raise ManagerError("This preset no longer matches the pinned model card. Refresh the card and choose again.",
+                    code="recipe_stale", status_code=409)
+            assert config is not None
+            hidden = list(dict.fromkeys(config.hidden_response_recipe_ids))
+            if visible:
+                hidden = [item for item in hidden if item != recipe_id]
+            elif recipe_id not in hidden:
+                hidden.append(recipe_id)
+            if hidden == config.hidden_response_recipe_ids:
+                return bundle
+            updated = config.model_copy(update={"hidden_response_recipe_ids": hidden})
+            return self.store.put_bundle(bundle.model_copy(update={"huggingface_configuration": updated}))
+
+    def refresh_response_recipes(self, bundle_id: str, *, restore_hidden: bool = False) -> ModelBundle:
         """Refresh only a pinned model card; weights and saved setups stay untouched."""
         bundle = self.store.get_bundle(bundle_id)
         if bundle is None:
@@ -398,6 +428,7 @@ class ModelManager:
             else:
                 unsupported.pop("README.md", None)
             updated = config.model_copy(update={"response_recipes": [ResponseRecipe.model_validate(item) for item in recipes],
+                "hidden_response_recipe_ids": [] if restore_hidden else config.hidden_response_recipe_ids,
                 "metadata_refreshed_at": utc_now(), "unsupported": unsupported})
             return self.store.put_bundle(current.model_copy(update={"huggingface_configuration": updated}))
 
@@ -616,28 +647,50 @@ class ModelManager:
         return self.store.put_profile(duplicate)
 
     def profile_delete_preview(self, profile_id: str) -> DeletePreview:
-        profile = self.get_profile(profile_id)
-        consumers = self._profile_consumers(profile.id)
-        blockers = [consumer for consumer in consumers if consumer.live]
-        return DeletePreview(
-            target_kind="profile",
-            target_id=profile.id,
-            blockers=blockers,
-            consumers=consumers,
-            retained=[
-                "Historical deployments, Chat conversations, Lab cases and runs keep their saved profile id/configuration."
-            ],
-        )
+        with self.store.configuration_lock():
+            profile = self.get_profile(profile_id)
+            consumers = self._profile_consumers(profile.id)
+            blockers = [consumer for consumer in consumers if consumer.live]
+            bundles = self.store.list_bundles()
+            restrictions: list[LifecycleConsumer] = []
+            for bundle in bundles:
+                if bundle.default_configuration_id == profile.id:
+                    restrictions.append(LifecycleConsumer(kind="setup_defaults", id=bundle.id,
+                        label="Choose another model default before deleting this setup.",
+                        future_use=True, effect="default_configuration_required"))
+            if profile.bundle_id in {bundle.id for bundle in bundles} and not any(
+                other.bundle_id == profile.bundle_id and other.id != profile.id for other in self.store.list_profiles()
+            ):
+                restrictions.append(LifecycleConsumer(kind="profile", id=profile.id,
+                    label="Keep one saved setup for this model. Reset this setup instead.",
+                    future_use=True, effect="last_configuration_required"))
+            return DeletePreview(
+                target_kind="profile",
+                target_id=profile.id,
+                target_label=profile.display_name,
+                summary=restrictions[-1].label if restrictions else None,
+                blockers=[*blockers, *restrictions],
+                consumers=[*consumers, *restrictions],
+                retained=[
+                    "Historical deployments, Chat conversations, Lab cases and runs keep their saved profile id/configuration."
+                ],
+            )
 
     def delete_profile(self, profile_id: str) -> DeletePreview:
         with self.lifecycle.mutate("delete_profile", profile_ids={profile_id}):
-            preview = self.profile_delete_preview(profile_id)
-            if preview.blockers:
-                raise self._blocked_error("profile_delete_blocked", preview.blockers)
-            if any(bundle.default_configuration_id == profile_id for bundle in self.store.list_bundles()):
-                raise ManagerError("Choose another default before deleting this configuration.", code="default_configuration_required", status_code=409)
-            self.store.delete_profile(profile_id)
-            return preview
+            with self.store.configuration_lock():
+                preview = self.profile_delete_preview(profile_id)
+                if any(blocker.live for blocker in preview.blockers):
+                    raise self._blocked_error("profile_delete_blocked", preview.blockers)
+                for code in ("default_configuration_required", "last_configuration_required"):
+                    restriction = next((blocker for blocker in preview.blockers if blocker.effect == code), None)
+                    if restriction is not None:
+                        raise ManagerError(restriction.label or "Keep this saved setup.", code=code, status_code=409,
+                            details={"blockers": [blocker.model_dump(mode="json") for blocker in preview.blockers]})
+                if preview.blockers:
+                    raise self._blocked_error("profile_delete_blocked", preview.blockers)
+                self.store.delete_profile(profile_id)
+                return preview
 
     def resolve_preview(
         self,

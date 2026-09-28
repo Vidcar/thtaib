@@ -30,33 +30,33 @@ export function DiscreteSliderField({ id, label, value, resolved, values, format
 }
 
 /** The control half of a launch setting row. `""` always means inherited. */
-export function ChoiceControl({ id, label, value, options, onChange, custom = true, min = 0, max, step = 1, disabled = false, resolvedLabel, resolvedValue, segmented }: {
+export function ChoiceControl({ id, label, value, options, onChange, custom = true, min = 0, max, step = 1, disabled = false, resolvedLabel, resolvedValue, segmented, stable = false }: {
   id: string; label: string; value: string; options: Option[]; onChange: (value: string) => void;
-  custom?: boolean; min?: number; max?: number; step?: number; disabled?: boolean; resolvedLabel?: string; resolvedValue?: unknown; segmented?: boolean;
+  custom?: boolean; min?: number; max?: number; step?: number; disabled?: boolean; resolvedLabel?: string; resolvedValue?: unknown; segmented?: boolean; stable?: boolean;
 }) {
   const explicit = options.filter(option => option.value !== "");
   const defaultLabel = `${resolvedLabel ?? "Not reported"} · Model default`;
   const labelLength = explicit.reduce((total, option) => total + option.label.length, 0) + defaultLabel.length;
   const numeric = explicit.filter(option => Number.isFinite(Number(option.value)) && Number(option.value) >= min).map(option => Number(option.value));
   const inList = value === "" || options.some(option => option.value === value);
-  const useSegments = segmented ?? (explicit.length <= 4 && labelLength <= SEGMENT_LABEL_BUDGET && numeric.length < 3);
-  if (useSegments && inList) {
-    return <SegmentedChoice bare id={id} label={label} value={value} options={[{ value: "", label: defaultLabel }, ...explicit]} onChange={onChange} disabled={disabled} />;
+  const useSegments = segmented ?? (explicit.length <= 4 && (stable ? !custom && explicit.reduce((total, option) => total + option.label.length, 0) <= SEGMENT_LABEL_BUDGET : labelLength <= SEGMENT_LABEL_BUDGET) && numeric.length < 3);
+  if (useSegments && (stable || inList)) {
+    return <SegmentedChoice bare id={id} label={label} value={value} options={[{ value: "", label: stable ? "Default" : defaultLabel }, ...explicit, ...(stable && !inList ? [{ value, label: `${value} · saved` }] : [])]} onChange={onChange} disabled={disabled} />;
   }
-  if (custom && numeric.length >= 3 && (value === "" || value === "custom" || Number.isFinite(Number(value)))) {
+  if (custom && numeric.length >= 3 && (stable || value === "" || value === "custom" || Number.isFinite(Number(value)))) {
     const resolved = typeof resolvedValue === "number" ? resolvedValue : Number.isFinite(Number(resolvedValue)) && resolvedValue !== null && resolvedValue !== "" ? Number(resolvedValue) : null;
     const format = (number: number) => options.find(option => option.value === String(number))?.label ?? number.toLocaleString();
     return <DiscreteSliderField id={id} label={label} value={value} resolved={resolved} values={numeric} format={format} min={min} max={max} step={step} disabled={disabled} onChange={onChange} />;
   }
   const isCustom = value === "custom" || !inList;
-  return <div className="field-group">
+  return <div className={stable && custom ? "field-group choice-control-stable" : "field-group"}>
     <select id={id} value={isCustom ? "custom" : value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-      <option value="">{defaultLabel}</option>
+      <option value="">{stable ? "Default" : defaultLabel}</option>
       {!custom && isCustom ? <option value="custom">{value} · saved setting</option> : null}
       {explicit.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       {custom ? <option value="custom">Custom…</option> : null}
     </select>
-    {custom && isCustom ? <input aria-label={`Custom ${label.toLowerCase()}`} type="number" min={min} max={max} step={step} required disabled={disabled} value={value === "custom" ? "" : value} onChange={event => onChange(event.target.value || "custom")} /> : null}
+    {stable && custom ? <span className="choice-custom-slot" data-inactive={!isCustom || undefined}><input aria-label={`Custom ${label.toLowerCase()}`} type="number" min={min} max={max} step={step} required={isCustom} disabled={disabled || !isCustom} placeholder="Exact" value={isCustom && value !== "custom" ? value : ""} onChange={event => onChange(event.target.value || "custom")} /></span> : custom && isCustom ? <input aria-label={`Custom ${label.toLowerCase()}`} type="number" min={min} max={max} step={step} required disabled={disabled} value={value === "custom" ? "" : value} onChange={event => onChange(event.target.value || "custom")} /> : null}
   </div>;
 }
 

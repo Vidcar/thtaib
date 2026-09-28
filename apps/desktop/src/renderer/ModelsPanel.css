@@ -1,5 +1,5 @@
 /* Models: library, configuration form, downloads and imports. Foundation controls come from styles.css. */
-.models-surface {display: grid; align-content: start; gap: var(--space-stack); width: 100%; max-width: var(--layout-page); margin: 0 auto; padding: var(--pad-section) var(--pad-section) var(--pad-page);}
+.models-surface {display: grid; align-content: start; gap: var(--space-stack); width: 100%; max-width: none; margin: 0 auto; padding: var(--pad-section) var(--pad-section) var(--pad-page);}
 .models-surface :is(h2, h3, h4, p) {margin-top: 0;}
 .models-surface code {overflow-wrap: anywhere;}
 .models-surface :is(.models-tab-panel, .models-workspace)[hidden] {display: none !important;}

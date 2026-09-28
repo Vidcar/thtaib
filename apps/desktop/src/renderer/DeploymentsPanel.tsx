@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { ModelPresetPanel } from "./ModelPresetPanel";
+import { ModelDeletion } from "./ModelDeletion";
+import type { ModelInspectorConnection, ModelInspectorView } from "./ModelInspector";
 import { api } from "./api";
 import { formatBytes } from "./display";
 import { errorMessage } from "./errors";
 import { ChoiceControl, numberChoices, tokenLabel } from "./ModelControls";
-import { CompactSlider, CompactSwitch, NumberField, SettingRow, SettingSection } from "./CompactControls";
+import { CompactSlider, NumberField, SettingRow, SettingSection } from "./CompactControls";
 import { mergedStartup, startupPayload } from "./deploymentSettings";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
@@ -13,11 +17,13 @@ import { Icon } from "./Icon";
 import { ModelCapabilities } from "./ModelCapabilities";
 import { ResponseSettingsEditor } from "./ResponseSettingsEditor";
 import { defaultSettingDisplay, effectiveSettingDisplay, settingValue } from "./effectiveSettings";
+import type { EffectiveSetting } from "./effectiveSettings";
 import { useSetupPreview } from "./effectiveSettings";
 import { ModelProjectorControls } from "./ModelProjectorControls";
 import { ModelHardwareEstimate } from "./ModelHardwareEstimate";
-import { ModelResponseRecipePicker } from "./ModelResponseRecipes";
+
 import { MenuPopover } from "./MenuPopover";
+import { CompactDialog } from "./CompactDialog";
 import type { BundleConfigurationOptions, Deployment, DeploymentProfileChanges, ModelBundle, ResponseRecipeOrigin, RunProfile, RuntimeManifest, SettingsBags } from "./types";
 import "./deploymentReadouts.css";
 
@@ -27,7 +33,7 @@ const switches = [{ value: "on", label: "On" }, { value: "off", label: "Off" }];
 const initialSettings: Record<string, string> = { ctx_size: "", n_gpu_layers: "", flash_attn: "", fit: "", cache_type_k: "", cache_type_v: "", kv_offload: "", kv_unified: "", op_offload: "", mmproj_use_gpu: "", spec_draft_ngl: "", threads: "", threads_batch: "", load_mode: "", parallel: "", port: "", batch_size: "", ubatch_size: "", reasoning: "", reasoning_effort: "", reasoning_preserve: "", reasoning_format: "", reasoning_budget: "", embedding: "", pooling: "", spec_type: "", spec_draft_n_max: "" };
 const EMPTY_BUNDLES: ModelBundle[] = [];
 const EMPTY_PROFILES: RunProfile[] = [];
-type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[] };
+type ModelDraft = { settings: Record<string, string>; response: Record<string, unknown>; origin: ResponseRecipeOrigin | null; name: string; advanced: string; changed: string[]; presetApplied: boolean };
 const draftKey = (bundle: string, profile: string) => `${bundle}:${profile || "default"}`;
 
 function startupValueLabel(key: string, value: unknown): string {
@@ -65,6 +71,7 @@ export function DeploymentsPanel({
   onSelectBundle,
   onDirtyModelsChange,
   active = true,
+  inspector,
 }: {
   selectedBundleId?: string;
   bundlesVersion?: string;
@@ -74,11 +81,12 @@ export function DeploymentsPanel({
   onSelectBundle?: (id: string) => void;
   onDirtyModelsChange?: (ids: ReadonlySet<string>) => void;
   active?: boolean;
+  inspector?: ModelInspectorConnection;
 } = {}) {
   const formRef = useRef<HTMLFormElement>(null);
   const selection = useRef(selectedBundleId); selection.current = selectedBundleId;
-  const selectionOwner = useRef({ id: selectedBundleId, generation: 0 });
-  if (selectionOwner.current.id !== selectedBundleId) selectionOwner.current = { id: selectedBundleId, generation: selectionOwner.current.generation + 1 };
+  const selectionOwner = useRef({ id: selectedBundleId, profile: "", generation: 0 });
+
   const hydrated = useRef({ bundle: "", deployment: "", profile: "", revision: 0 });
   const dirty = useRef(false);
   const drafts = useRef(new Map<string, ModelDraft>());
@@ -88,6 +96,16 @@ export function DeploymentsPanel({
   const [runtime, setRuntime] = useState<RuntimeManifest | null>(null);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [profileId, setProfileId] = useState("");
+  if (selectionOwner.current.id !== selectedBundleId || selectionOwner.current.profile !== profileId) selectionOwner.current = { id: selectedBundleId, profile: profileId, generation: selectionOwner.current.generation + 1 };
+  const [localInspector, setLocalInspector] = useState<ModelInspectorView | null>(null);
+  const panelView = inspector?.view ?? localInspector;
+  const openPanel = (view: ModelInspectorView) => inspector ? inspector.open(view) : setLocalInspector(view);
+  const [replacementDefault, setReplacementDefault] = useState("");
+  const [settingsPreviewKey, setSettingsPreviewKey] = useState("");
+  const [checkedSelection, setCheckedSelection] = useState("");
+  const [checkedName, setCheckedName] = useState("");
+  const presetApplied = useRef(false);
+  const presentation = useRef<{ selection: string; facts: Record<string, EffectiveSetting> }>({ selection: "", facts: {} });
   const [configurationName, setConfigurationName] = useState("");
   const [variantName, setVariantName] = useState("");
   const [creatingVariant, setCreatingVariant] = useState(false);
@@ -110,6 +128,7 @@ export function DeploymentsPanel({
   const [messageTone, setMessageTone] = useState<"info" | "error" | "ok">("info");
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState("");
+  const [busySelection, setBusySelection] = useState("");
   const bundles = initialBundles;
   const profiles = initialProfiles;
   const selectedProfile = profiles.find(item => item.id === profileId);
@@ -131,6 +150,8 @@ export function DeploymentsPanel({
   const history = deployments.filter(d => d.status === "stopped" && d.bundle_id === selectedBundleId);
   const selectedRunning = selectedCurrent.find(d => d.status === "running" && d.health?.healthy);
   const selectedActive = selectedCurrent.find(d => d.scope === "managed" && d.status !== "failed");
+  const bundleActive = deployments.some(d => d.bundle_id === selectedBundleId && d.scope === "managed"
+    && (["starting", "running", "unhealthy"].includes(d.status) || d.pid != null || d.process_identity != null));
   const runtimeReady = loaded && runtime?.status === "ready";
   const thinkingAvailable = Boolean(configuration?.per_request_defaults?.reasoning?.supported || configuration?.per_request_defaults?.reasoning_effort?.supported);
   const descriptorOptions = (key: string) => (configuration?.startup_defaults[key]?.options ?? []).map(option => ({ value: String(option.value ?? ""), label: option.label }));
@@ -141,7 +162,7 @@ export function DeploymentsPanel({
   const optionsSelection = JSON.stringify({ configuration_id: optionsProfile?.id ?? null, startup: stagedStartup ?? {} });
   const canonical = (values: Record<string, unknown>) => JSON.stringify(Object.fromEntries(Object.keys(values).sort().map(key => [key, values[key]])));
   if (hydrated.current.bundle === selectedBundleId && hydrated.current.profile === profileId && selectedProfile) {
-    dirty.current = Boolean(stagedStartupError) || canonical(mergedStartup(selectedProfile.bags.startup.requested, stagedStartup ?? {})) !== canonical(selectedProfile.bags.startup.requested)
+    dirty.current = presetApplied.current || Boolean(stagedStartupError) || canonical(mergedStartup(selectedProfile.bags.startup.requested, stagedStartup ?? {})) !== canonical(selectedProfile.bags.startup.requested)
       || canonical(response) !== canonical(savedResponses) || JSON.stringify(recipeOrigin) !== JSON.stringify(selectedProfile.recipe_origin ?? null) || configurationName.trim() !== selectedProfile.display_name;
     if (!dirty.current) drafts.current.delete(activeDraftKey.current);
   }
@@ -156,6 +177,11 @@ export function DeploymentsPanel({
       : fact.source === "Turn overrides" && key.startsWith("startup.") && Object.hasOwn(stagedStartup ?? {}, key.slice(8))
         ? { ...fact, source: "This editor" } : fact]));
   const responseFacts = modelFacts;
+  const presentationSelection = `${selectedBundleId}:${profileId}`;
+  if (setupPreview.data) presentation.current = { selection: presentationSelection, facts: modelFacts };
+  const presentationFacts = presentation.current.selection === presentationSelection ? presentation.current.facts : {};
+  const candidateKey = JSON.stringify([selectedBundleId, profileId, canonical(mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {})), canonical(response), configurationName.trim(), recipeOrigin]);
+  const checkedHere = checkedSelection === presentationSelection;
   const startupReadout = (key: string) => {
     const fact = modelFacts[`startup.${key}`];
     const display = stagedStartupError ? { value: "Check settings", source: stagedStartupError } : effectiveSettingDisplay(fact, setupPreview.loading);
@@ -166,7 +192,7 @@ export function DeploymentsPanel({
     return <span className="model-effective-readout" title={fact?.source} data-state={saved || edited ? "set" : "following"}><strong>{display.value}</strong>{[display.source, !setupPreview.loading && !stagedStartupError ? state : ""].filter(Boolean).map(part => ` · ${part}`).join("")}</span>;
   };
   const startupResolved = (key: string) => {
-    const fact = modelFacts[`startup.${key}`];
+    const fact = modelFacts[`startup.${key}`] ?? presentationFacts[`startup.${key}`];
     return fact?.known && fact.supported !== false ? fact.value : null;
   };
   const canResetStartup = (key: string) => (Object.hasOwn(stagedStartup ?? {}, key) && stagedStartup?.[key] !== null)
@@ -180,7 +206,7 @@ export function DeploymentsPanel({
   }
   function stashDraft() {
     if (!activeDraftKey.current || !dirty.current) return;
-    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current] });
+    drafts.current.set(activeDraftKey.current, { settings: { ...settings }, response: { ...response }, origin: recipeOrigin, name: configurationName, advanced: advancedStartup, changed: [...changedStartup.current], presetApplied: presetApplied.current });
     publishDraftMarkers();
   }
   function restoreDraft(key: string): boolean {
@@ -188,8 +214,9 @@ export function DeploymentsPanel({
     if (!draft) return false;
     activeDraftKey.current = key;
     dirty.current = true;
+    presetApplied.current = draft.presetApplied;
     changedStartup.current = new Set(draft.changed);
-    setSettings({ ...draft.settings }); setResponse({ ...draft.response }); setRecipeOrigin(draft.origin); setConfigurationName(draft.name); setAdvancedStartup(draft.advanced); setSettingsPreview(null);
+    setSettings({ ...draft.settings }); setResponse({ ...draft.response }); setRecipeOrigin(draft.origin); setConfigurationName(draft.name); setAdvancedStartup(draft.advanced);
     publishDraftMarkers();
     return true;
   }
@@ -229,6 +256,7 @@ export function DeploymentsPanel({
     } else {
     activeDraftKey.current = nextKey;
     dirty.current = false;
+    presetApplied.current = false;
     changedStartup.current = new Set();
     setConfigurationName(saved?.display_name ?? "Default"); setResponse(saved?.bags.per_request.requested ?? {}); setRecipeOrigin(saved?.recipe_origin ?? null);
     const starting = { ...initialSettings };
@@ -238,7 +266,7 @@ export function DeploymentsPanel({
       if (key in starting) starting[key] = key === "reasoning_preserve" ? value === true ? "keep" : value === false ? "drop" : "" : String(value);
       else if (key !== "host") extra[key] = value;
     }
-    setSettings(starting); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
+    setSettings(starting); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "");
     }
     }
   // Load existing settings once per selection; stopping a model must not erase edits.
@@ -246,7 +274,8 @@ export function DeploymentsPanel({
   useEffect(() => {
     if (!active || !loaded || !selectedBundleId || stagedStartupError) return;
     let cancelled = false;
-    setConfiguration(null); setModelInfo("Checking model details…");
+    // Keep descriptor-owned controls mounted while the same model is checked.
+    setModelInfo("Checking model details…");
     void api.modelConfiguration(selectedBundleId, selectedRunning?.id, false, JSON.parse(optionsSelection) as { configuration_id: string | null; startup: Record<string, unknown> }).then(report => {
       if (!cancelled) applyConfiguration(report);
     }).catch(() => { if (!cancelled) setModelInfo("Model details unavailable · refresh to retry"); });
@@ -266,21 +295,23 @@ export function DeploymentsPanel({
     }, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [deployments, active]);
-  function change(key: string, value: string) { dirty.current = true; changedStartup.current.add(key); setSettings(previous => ({ ...previous, [key]: value })); setSettingsPreview(null); setMessage(""); }
+  function change(key: string, value: string) { dirty.current = true; changedStartup.current.add(key); setSettings(previous => ({ ...previous, [key]: value })); setMessage(""); }
   function changePlacement(mode: string) {
     const next = mode === "inherit" ? "" : mode === "all" ? "all" : mode === "cpu" ? "0" : mode === "exact" ? String(Math.max(1, Math.floor((layers ?? 32) / 2))) : "auto";
-    const companions = { kv_offload: mode === "cpu" ? "false" : "", op_offload: mode === "cpu" ? "false" : "", mmproj_use_gpu: mode === "cpu" ? "false" : "", spec_draft_ngl: mode === "cpu" ? "0" : "" };
+    const companions = { kv_offload: mode === "cpu" ? "false" : "", op_offload: mode === "cpu" ? "false" : "", mmproj_use_gpu: mode === "cpu" ? "false" : "", spec_draft_ngl: mode === "cpu" ? "0" : "", ...(mode === "auto" ? { fit: "on" } : {}) };
     dirty.current = true;
     for (const key of ["n_gpu_layers", ...Object.keys(companions)]) changedStartup.current.add(key);
-    setSettings(previous => ({ ...previous, n_gpu_layers: next, ...companions })); setSettingsPreview(null); setMessage("");
+    setSettings(previous => ({ ...previous, n_gpu_layers: next, ...companions })); setMessage("");
   }
   function selectProfile(id: string) {
     stashDraft();
+    setMessage(""); setReplacementDefault("");
     const key = draftKey(selectedBundleId, id);
     const profile = profiles.find(item => item.id === id);
     hydrated.current = { ...hydrated.current, profile: id, revision: profile?.revision ?? 0 };
     activeDraftKey.current = key;
     dirty.current = false;
+    presetApplied.current = false;
     changedStartup.current = new Set();
     setProfileId(id);
     if (restoreDraft(key)) return;
@@ -290,13 +321,13 @@ export function DeploymentsPanel({
       if (key in next) next[key] = key === "reasoning_preserve" ? value === true ? "keep" : value === false ? "drop" : "" : String(value);
       else extra[key] = value;
     }
-    setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ""); setSettingsPreview(null);
+    setSettings(next); setAdvancedStartup(Object.keys(extra).length ? JSON.stringify(extra, null, 2) : "");
   }
   async function action(key: string, operation: () => Promise<unknown>) {
     if (actionPending.current) return;
     actionPending.current = true;
     const owner = selectionOwner.current;
-    setBusy(key); setMessage("");
+    setBusy(key); setBusySelection(`${owner.id}:${owner.profile}`); setMessage("");
     try { await operation(); } catch (error) { if (selectionOwner.current === owner) { setMessage(errorMessage(error)); setMessageTone("error"); } } finally { actionPending.current = false; setBusy(""); }
   }
   function startup(): Record<string, unknown> {
@@ -313,9 +344,12 @@ export function DeploymentsPanel({
     return values;
   }
   async function preview(startupValues = mergedStartup(selectedProfile?.bags.startup.requested ?? {}, startup()), responseValues = response, owner = selectionOwner.current) {
-    const result = await api.previewSettings(startupValues, responseValues, {});
-    if (selectionOwner.current === owner) setSettingsPreview(result);
-    if (result.startup.unsupported.length || result.startup.retired.length || result.per_request.unsupported.length || result.per_request.retired.length) throw new Error("Some settings need attention. See the details below.");
+    const checkedKey = JSON.stringify([owner.id, owner.profile, canonical(startupValues), canonical(responseValues), configurationName.trim(), recipeOrigin]);
+    const report = await api.previewSettings(startupValues, responseValues, {});
+    const result = { ...report, per_request: { ...report.per_request,
+      unsupported: [...new Set([...report.per_request.unsupported, ...Object.keys(responseValues).filter(key => configuration?.per_request_defaults[key]?.supported === false)])] } };
+    if (selectionOwner.current === owner) { setSettingsPreview(result); setSettingsPreviewKey(checkedKey); setCheckedSelection(`${owner.id}:${owner.profile}`); setCheckedName(configurationName); }
+    if (result.startup.unsupported.length || result.startup.retired.length || result.per_request.unsupported.length || result.per_request.retired.length) { if (selectionOwner.current === owner) openPanel("checks"); throw new Error("Some settings need attention. See Checked setup."); }
     return result;
   }
   function configurationPayload(asVariant = false) {
@@ -333,7 +367,7 @@ export function DeploymentsPanel({
     if (selectionOwner.current === owner) {
       drafts.current.delete(activeDraftKey.current);
       activeDraftKey.current = draftKey(owner.id, saved.id);
-      setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false;
+      setProfileId(saved.id); setConfigurationName(saved.display_name); changedStartup.current.clear(); dirty.current = false; presetApplied.current = false;
       publishDraftMarkers();
       setCreatingVariant(false); setVariantName("");
     }
@@ -355,7 +389,7 @@ export function DeploymentsPanel({
       if (selectionOwner.current === owner) { setMessageTone("ok"); setMessage(result.health?.healthy ? "Saved setup loaded." : "Loading saved setup…"); }
     } finally { await refresh(); }
   }
-  const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number) => {
+  const field = (key: string, label: string, help: string, options: Array<{ value: string; label: string }>, custom = false, min = 0, max?: number, inactive = false) => {
     const requested = settings[key];
     const observed = key === "ctx_size" ? selectedRunning?.server_props?.n_ctx : configuration?.startup_defaults[key]?.observed;
     const loadedValue = observed ?? selectedRunning?.applied_startup[key];
@@ -368,16 +402,11 @@ export function DeploymentsPanel({
     const normalizedDefault = key === "reasoning_preserve" ? defaultValue === true ? "keep" : defaultValue === false ? "drop" : defaultValue : defaultValue;
     const resolvedLabel = normalizedDefault == null ? "Not reported" : options.find(option => option.value === String(normalizedDefault))?.label ?? startupValueLabel(key, defaultValue);
     const descriptor = configuration?.startup_defaults[key];
-    const blocked = Boolean(busy) || descriptor?.supported === false;
-    const explicit = options.filter(option => option.value !== "");
-    const binary = explicit.length === 2 && (explicit.every(option => ["true", "false"].includes(option.value)) || explicit.every(option => ["on", "off"].includes(option.value)));
-    const enabledValue = explicit.some(option => option.value === "true") ? "true" : "on";
-    const disabledValue = enabledValue === "true" ? "false" : "off";
-    const shown = requested || (normalizedResolved == null ? "" : String(normalizedResolved));
-    return <SettingRow key={key} label={label} htmlFor={`model-${key}`} help={<>{help}<code>{`--${key.replaceAll("_", "-")}`}</code></>} provenance={startupReadout(key)}
+    const blocked = Boolean(busy) || descriptor?.supported === false || inactive;
+    return <SettingRow layout="models" key={key} label={label} htmlFor={`model-${key}`} help={<>{help}<code>{`--${key.replaceAll("_", "-")}`}</code></>} provenance={startupReadout(key)}
       onReset={canResetStartup(key) && !busy ? () => change(key, "") : undefined} {...startupReset(key)}
       hint={descriptor?.supported === false ? descriptor.description : showLoaded ? <span className="model-loaded-difference">Loaded: {key === "ctx_size" ? `${tokenLabel(Number(loadedValue))} tokens` : settingValue(normalizedLoaded, key)}</span> : undefined}>
-      {binary && shown ? <CompactSwitch bare label={label} checked={shown === enabledValue} disabled={blocked} onChange={enabled => change(key, enabled ? enabledValue : disabledValue)} /> : <ChoiceControl id={`model-${key}`} label={label} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={descriptor?.minimum ?? min} max={descriptor?.maximum ?? max} step={descriptor?.step ?? 1} disabled={blocked} resolvedLabel={resolvedLabel} resolvedValue={normalizedResolved} />}
+      <ChoiceControl stable id={`model-${key}`} label={label} value={requested} options={options} onChange={value => change(key, value)} custom={custom} min={descriptor?.minimum ?? min} max={descriptor?.maximum ?? max} step={descriptor?.step ?? 1} disabled={blocked} resolvedLabel={resolvedLabel} resolvedValue={normalizedResolved} />
     </SettingRow>;
   };
   const gpuMode = settings.n_gpu_layers === "" ? "inherit" : ["auto", "-1"].includes(settings.n_gpu_layers) ? "auto" : settings.n_gpu_layers === "all" ? "all" : settings.n_gpu_layers === "0" ? "cpu" : "exact";
@@ -420,7 +449,7 @@ export function DeploymentsPanel({
       <details className="technical-details"><summary>Details &amp; applied settings</summary>
         <dl className="model-facts"><div><dt>Connection</dt><dd>{d.endpoint}</dd></div><div><dt>Deployment ID</dt><dd><code>{d.id}</code></dd></div><div><dt>Context reported by server</dt><dd>{ctx ? `${ctx.toLocaleString()} tokens` : "Not reported"}</dd></div><div><dt>Concurrent requests reported by server</dt><dd>{d.server_props?.total_slots ?? "Not reported"}</dd></div><div><dt>Engine version</dt><dd>{d.server_props?.build_info ?? "Not reported"}</dd></div><div><dt>Settings last reported</dt><dd>{d.server_props?.fetched ? new Date(d.server_props.fetched).toLocaleString() : "Not reported"}</dd></div></dl>
         <h4>Launch settings</h4><p className="hint">Values sent when this model was started. Automatic choices may be adjusted by the engine.</p>{readout(d.applied_startup)}
-        {Object.keys(sampling).length ? <><h4>Response settings reported by server</h4>{readout(sampling)}</> : null}
+        {Object.keys(sampling).length ? <><h4>Engine-reported response defaults</h4>{readout(sampling)}</> : null}
         <SettingsNotes unsupported={d.settings?.startup.unsupported} retired={d.settings?.startup.retired} />
         {d.profile_id ? <><button type="button" disabled={Boolean(busy)} onClick={() => void action(`profile-${d.id}`, async () => { const result = await api.deploymentProfileChanges(d.id); setProfileChanges(previous => ({ ...previous, [d.id]: result })); })}>Compare with saved configuration</button>
           {profileChanges[d.id] ? <p className="hint">{profileChanges[d.id].has_pending_startup_changes ? "The saved configuration has different startup settings. This deployment keeps its original configuration; unload and start a new setup to apply the edited settings." : "No pending startup differences."}{profileChanges[d.id].has_pending_per_request_changes ? " Response settings have changed for future work." : ""}</p> : null}</> : null}
@@ -430,29 +459,64 @@ export function DeploymentsPanel({
       </details>
     </li>;
   }
+  let panelContent: ReactNode = null;
+  if (panelView === "presets" && selected) panelContent = <ModelPresetPanel key={selected.id} bundle={selected} value={response} origin={recipeOrigin} options={configuration} disabled={Boolean(busy)} onChanged={onBundlesChanged}
+    onApply={(next, origin) => { presetApplied.current = true; dirty.current = true; setResponse(next); setRecipeOrigin(origin); }} />;
+  else if (panelView === "checks") panelContent = <section className="model-check-results">
+    <p className="hint">{checkedHere && settingsPreview ? checkedName : configurationName} · checked setup</p>
+    {checkedHere && settingsPreview && settingsPreviewKey !== candidateKey ? <Notice tone="warn">Out of date — check the current draft again.</Notice> : null}
+    {busySelection === presentationSelection && (busy === "preview" || busy === "save") ? <p role="status">Checking this setup…</p> : null}
+    {checkedHere && settingsPreview ? (["startup", "per_request"] as const).map(section => <section key={section}>
+      <h4>{section === "startup" ? "Loading settings" : "Response settings"}</h4>{readout(settingsPreview[section].applied)}
+      <SettingsNotes category={section === "per_request" ? "response" : "startup"} unsupported={settingsPreview[section].unsupported} retired={settingsPreview[section].retired} />
+    </section>) : <p className="hint">{messageTone === "error" && message ? message : "Run Check settings to validate this draft."}</p>}
+  </section>;
+  else if (panelView === "runtime") panelContent = <>
+    <h4>Selected model loads</h4>
+    {selectedCurrent.length ? <ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul> : <p className="hint">This saved setup is not loaded.</p>}
+    {otherVariants.length ? <details open><summary>Other saved setups loaded for this model</summary><ul className="plain-list">{otherVariants.map(renderDeployment)}</ul></details> : null}
+    {otherCurrent.length ? <details><summary>Other loaded models</summary>{otherCurrent.map(item => <button type="button" key={item.id} onClick={() => onSelectBundle?.(item.bundle_id ?? "")}>{bundles.find(bundle => bundle.id === item.bundle_id)?.display_name ?? item.display_name}</button>)}<ul className="plain-list">{otherCurrent.map(renderDeployment)}</ul></details> : null}
+    {selectedConnections.length ? <ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul> : null}
+    {externalCurrent.length ? <details><summary>Other model servers</summary><ul className="plain-list">{externalCurrent.map(renderDeployment)}</ul></details> : null}
+    {history.length ? <details><summary>Runtime history</summary><ul className="plain-list">{history.map(renderDeployment)}</ul></details> : null}
+  </>;
+  else if (panelView === "setup" && selectedProfile) panelContent = <section>
+    <h4>{selectedProfile.display_name}</h4>
+    {profiles.filter(item => item.bundle_id === selectedBundleId).length <= 1 ? <p className="hint">Keep one saved setup for this model. Revert edits or reset its controls instead.</p>
+      : selected?.default_configuration_id === profileId ? <>
+        <p>Choose another model default before deleting this setup.</p>
+        <select aria-label="Replacement model default" value={replacementDefault} onChange={event => setReplacementDefault(event.target.value)}><option value="">Choose saved setup</option>{profiles.filter(item => item.bundle_id === selectedBundleId && item.id !== profileId).map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select>
+        <button type="button" disabled={Boolean(busy) || !replacementDefault} onClick={() => void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, replacementDefault); await onBundlesChanged?.(); })}>Make model default</button>
+      </> : <ModelDeletion key={profileId} kind="profile" id={profileId} name={selectedProfile.display_name} initialOpen onDeleted={async () => {
+        drafts.current.delete(draftKey(selectedBundleId, profileId)); dirty.current = false; presetApplied.current = false;
+        hydrated.current = { ...hydrated.current, profile: "", revision: 0 }; setProfileId(""); inspector?.close(); setLocalInspector(null); await onBundlesChanged?.();
+      }} />}
+  </section>;
+  else if (panelView === "files" && selected) panelContent = <ModelProjectorControls key={selected.id} bundleId={selected.id} active={bundleActive} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} />;
   return <section className="model-configuration">
     {loadError ? <Notice tone="error">{loadError}<button type="button" onClick={() => void refresh().catch(error => setLoadError(errorMessage(error)))}>Try again</button></Notice> : null}
-    {otherCurrent.length ? <aside className="other-active-models" aria-label="Other active models"><span className="hint">Also active</span>{otherCurrent.map(d => <button type="button" key={d.id} disabled={!onSelectBundle} onClick={() => onSelectBundle?.(d.bundle_id!)}><span>{bundles.find(bundle => bundle.id === d.bundle_id)?.display_name}</span><StatusBadge {...stateOf(d)} /></button>)}</aside> : null}
-    {otherVariants.length ? <aside className="other-active-models" aria-label="Other loaded configurations"><span className="hint">Other model loads</span>{otherVariants.map(d => <div key={d.id}><span>{profiles.find(profile => profile.id === d.profile_id)?.display_name ?? d.display_name}{d.server_props?.n_ctx ? ` · ${tokenLabel(d.server_props.n_ctx)} per request` : ""}</span><StatusBadge {...stateOf(d)} />{d.scope === "managed" && d.status !== "failed" ? <button type="button" disabled={Boolean(busy)} onClick={() => void action(d.id, async () => { await api.stop(d.id); await refresh(); })}>Unload this load</button> : null}</div>)}</aside> : null}
 
-    {selected ? <section className="model-setup"><form ref={formRef} className="model-settings" onSubmit={event => { event.preventDefault(); if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration(creatingVariant)); }}>
+    {selected ? <section className="model-setup"><form id="model-settings-form" ref={formRef} className="model-settings" onSubmit={event => { event.preventDefault(); if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration(creatingVariant)); }}>
       <header className="model-setup-head">
-        <div className="model-setup-selector"><label htmlFor="model-configuration">Saved setup</label><select id="model-configuration" value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">New setup</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id ? " · default" : ""}</option>)}</select><span className="hint model-capacity"><span>{modelInfo}</span><span className="model-setup-readiness"><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: "Not loaded", tone: "neutral" as const })} />{selectedRunning?.server_props?.n_ctx ? <span>{tokenLabel(selectedRunning.server_props.n_ctx)} per request</span> : null}</span></span></div>
+        <div className="model-setup-selector"><label htmlFor="model-configuration">Saved setup</label><select id="model-configuration" value={profileId} disabled={Boolean(busy)} onChange={event => selectProfile(event.target.value)}>{!profileId ? <option value="">New setup</option> : null}{profiles.filter(profile => profile.bundle_id === selectedBundleId).map(profile => <option key={profile.id} value={profile.id}>{profile.display_name}{profile.id === selected.default_configuration_id ? " · model default" : ""}</option>)}</select><span className="hint model-capacity"><span>{modelInfo}</span><button type="button" className="text-button model-setup-readiness" aria-label="Loaded model details" onClick={() => openPanel("runtime")}><StatusBadge {...(selectedCurrent.length ? stateOf(selectedCurrent[0]) : { label: "Not loaded", tone: "neutral" as const })} />{selectedRunning?.server_props?.n_ctx ? <span>{tokenLabel(selectedRunning.server_props.n_ctx)} per request</span> : null}</button></span></div>
+        <button type="submit" className="primary-button" disabled={Boolean(busy) || !(creatingVariant ? variantName : configurationName).trim()}>{busy === "save" ? "Saving…" : "Save"}</button>
+        <button type="button" disabled={Boolean(busy)} onClick={() => { openPanel("checks"); void action("preview", async () => { await preview(); }); }}>Check settings</button>
         <span className="badge model-edit-state" data-dirty={dirty.current || creatingVariant}>{creatingVariant ? "New copy" : dirty.current ? "Unsaved" : "Saved"}</span>
         <MenuPopover label="Setup actions" className="model-setup-menu" placement="below" align="end" trigger={<Icon name="more" size={16} />} disabled={Boolean(busy)}>
-          {close => <div className="model-setup-actions"><label htmlFor="model-configuration-name">Setup name<input id="model-configuration-name" value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label><button type="button" disabled={Boolean(busy)} onClick={() => { setCreatingVariant(true); setVariantName(`${configurationName} copy`); close(); }}><Icon name="copy" size={14} />Save a copy</button>{selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); }); }}>Make model default</button> : null}<button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true, { configuration_id: selectedProfile?.id ?? null, startup: startup() })); }); }}><Icon name="refresh" size={14} />Refresh model details</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); if (formRef.current?.reportValidity()) void action("preview", async () => { await preview(); }); }}>Check settings</button></div>}
+          {close => <div className="model-setup-actions"><label htmlFor="model-configuration-name">Rename setup<input id="model-configuration-name" value={configurationName} disabled={Boolean(busy)} onChange={event => { dirty.current = true; setConfigurationName(event.target.value); }} /></label><button type="button" disabled={Boolean(busy)} onClick={() => { setCreatingVariant(true); setVariantName(`${configurationName} copy`); close(); }}><Icon name="copy" size={14} />Save a copy</button>{selectedProfile && selected.default_configuration_id !== selectedProfile.id ? <button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("default", async () => { await api.setDefaultConfiguration(selectedBundleId, selectedProfile.id); await onBundlesChanged?.(); }); }}>Make model default</button> : null}<button type="button" disabled={Boolean(busy)} onClick={() => { close(); void action("metadata", async () => { applyConfiguration(await api.modelConfiguration(selectedBundleId, selectedRunning?.id, true, { configuration_id: selectedProfile?.id ?? null, startup: startup() })); }); }}><Icon name="refresh" size={14} />Refresh model details</button><button type="button" disabled={Boolean(busy)} onClick={() => { drafts.current.delete(activeDraftKey.current); dirty.current = false; presetApplied.current = false; selectProfile(profileId); close(); }}>Revert edits</button><button type="button" disabled={Boolean(busy)} onClick={() => { close(); openPanel("setup"); }}>Delete setup</button></div>}
         </MenuPopover>
-        <div className="model-lifecycle-actions">{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => void action("unload", async () => { await api.stop(selectedActive.id); await refresh(); })}>{busy === "unload" ? "Unloading…" : "Unload"}</button> : null}<button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use the pending values." : "Load the saved setup using its exact loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : selectedActive ? "Reload saved" : "Load"}</button></div>
+        <div className="model-lifecycle-actions">{selectedActive ? <button type="button" disabled={Boolean(busy)} onClick={() => void action("unload", async () => { await api.stop(selectedActive.id); await refresh(); })}>{busy === "unload" ? "Unloading…" : "Unload"}</button> : null}<button type="button" disabled={Boolean(busy) || !profileId || !runtimeReady || !selected.disk_matches || Boolean(selectedActive && !selectedRunning)} title={dirty.current ? "Load the saved setup. Save edits first to use the pending values." : "Load the saved setup using its exact loading settings."} onClick={() => void action("load", loadSavedSetup)}>{busy === "load" ? "Loading…" : dirty.current ? "Load saved" : selectedActive ? "Reload saved" : "Load"}</button></div>
+      <div className="model-toolbar-status" role="status"><span>{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Set up the local engine in Settings"}</span><span>{stagedStartupError || setupPreview.error || message}</span></div>
       </header>
-      {creatingVariant ? <div className="model-variant-form"><label htmlFor="model-variant-name">New setup name</label><input id="model-variant-name" value={variantName} onChange={event => setVariantName(event.target.value)} /><button type="button" className="quiet-button" onClick={() => setCreatingVariant(false)}>Cancel copy</button></div> : null}
+      {creatingVariant ? <CompactDialog title="Save a setup copy" labelledBy="setup-copy-title" busy={Boolean(busy)} onClose={() => setCreatingVariant(false)}><label htmlFor="model-variant-name">New setup name</label><input autoFocus id="model-variant-name" value={variantName} onChange={event => setVariantName(event.target.value)} /><button type="button" className="primary-button" disabled={Boolean(busy) || !variantName.trim()} onClick={() => void action("save", () => saveConfiguration(true))}>Save copy</button></CompactDialog> : null}
       <SettingSection title="Response" description="Saved defaults for future messages. Chat can adjust Thinking locally.">
-        <ModelResponseRecipePicker bundle={selected} value={response} origin={recipeOrigin} options={configuration} disabled={Boolean(busy)} onChange={(next, origin) => { dirty.current = true; setResponse(next); setRecipeOrigin(origin); }} />
-        <ResponseSettingsEditor part="thinking" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
-        <ResponseSettingsEditor part="sampling" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
+        <div className="model-response-source"><span className="hint">{recipeOrigin ? `Based on ${recipeOrigin.name} preset` : "Model defaults and custom values"}</span><button type="button" disabled={Boolean(busy)} onClick={() => openPanel("presets")}>Use model-card preset</button></div>
+        <ResponseSettingsEditor layout="models" presentationFacts={presentationFacts} part="thinking" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
+        <ResponseSettingsEditor layout="models" presentationFacts={presentationFacts} part="sampling" value={response} onChange={next => { dirty.current = true; setResponse(next); }} facts={responseFacts} options={configuration} disabled={Boolean(busy)} inheritance="model" loading={setupPreview.loading} />
       </SettingSection>
       <SettingSection title="Memory &amp; performance" description="Conversation capacity and where this model runs. Changes take effect when loaded.">
 
-        <SettingRow label="Conversation capacity" htmlFor="model-ctx-size" help={<>Total shared conversation capacity in tokens. Auto lets native fitting choose it. Full requests the model's supported maximum. Simultaneous requests share this pool.<code>--ctx-size</code></>} provenance={startupReadout("ctx_size")}
+        <SettingRow layout="models" label="Conversation capacity" htmlFor="model-ctx-size" help={<>Total shared conversation capacity in tokens. Auto lets native fitting choose it. Full requests the model's supported maximum. Simultaneous requests share this pool.<code>--ctx-size</code></>} provenance={startupReadout("ctx_size")}
           onReset={canResetStartup("ctx_size") && !busy ? () => change("ctx_size", "") : undefined} {...startupReset("ctx_size")}
           hint={contextLoaded != null && (!modelFacts["startup.ctx_size"]?.known || Number(modelFacts["startup.ctx_size"].value) !== contextLoaded) ? <span className="model-loaded-difference">Loaded: {tokenLabel(contextLoaded)} tokens</span> : undefined}>
           <div className="model-context-control"><select aria-label="Conversation capacity mode" value={settings.ctx_size === "" ? "auto" : settings.ctx_size === "0" ? "full" : "custom"} disabled={Boolean(busy)} onChange={event => change("ctx_size", event.target.value === "auto" ? "" : event.target.value === "full" ? "0" : String(contextShown ?? 32768))}><option value="auto">Auto · native fitting</option><option value="full" disabled={!maximumContext}>Full · {maximumContext ? `${tokenLabel(maximumContext)} tokens` : "unavailable"}</option><option value="custom">Custom</option></select><div className="slider-field">
@@ -460,14 +524,14 @@ export function DeploymentsPanel({
             <span className="number-field"><input id="model-ctx-size" type="number" min={1} max={maximumContext ?? undefined} step={1} value={settings.ctx_size === "0" ? maximumContext ?? "" : settings.ctx_size} placeholder={contextResolved == null ? "Auto" : contextResolved === 0 ? "Full" : String(contextResolved)} disabled={Boolean(busy)} onChange={event => change("ctx_size", event.target.value)} /><span className="field-unit">tokens</span></span>
           </div></div>
         </SettingRow>
-        <SettingRow label="Placement" labelId="model-gpu-label" help="Auto GPU fits available memory. All requests full offload. CPU places weights, cache, vision and draft companions in RAM. Custom requests an exact layer count." provenance={startupReadout("n_gpu_layers")}
+        <SettingRow layout="models" label="Placement" labelId="model-gpu-label" help="Auto GPU fits available memory. All requests full offload. CPU places weights, cache, vision and draft companions in RAM. Custom requests an exact layer count." provenance={startupReadout("n_gpu_layers")}
           onReset={canResetStartup("n_gpu_layers") && !busy ? () => change("n_gpu_layers", "") : undefined} {...startupReset("n_gpu_layers")}
           hint={gpuLoaded != null && (!modelFacts["startup.n_gpu_layers"]?.known || startupValueLabel("n_gpu_layers", modelFacts["startup.n_gpu_layers"].value) !== startupValueLabel("n_gpu_layers", gpuLoaded)) ? <span className="model-loaded-difference">Loaded request: {startupValueLabel("n_gpu_layers", gpuLoaded)}</span> : undefined}>
-          <select aria-label="GPU layers" value={gpuMode} disabled={Boolean(busy)} onChange={event => changePlacement(event.target.value)}><option value="inherit">{defaultSettingDisplay(modelFacts["startup.n_gpu_layers"], "model", "n_gpu_layers").value} · Model default</option><option value="auto">Automatic</option><option value="all">All layers</option><option value="cpu">CPU only</option><option value="exact">Custom…</option></select>
-          {gpuMode === "exact" ? <div className="slider-field">
-            <input type="range" aria-label="GPU layers slider" min={1} max={layers ?? 128} step={1} value={Number(settings.n_gpu_layers) || 1} disabled={Boolean(busy)} style={{ "--range-fill": `${((Number(settings.n_gpu_layers) || 1) - 1) / Math.max(1, (layers ?? 128) - 1) * 100}%` } as CSSProperties} onChange={event => change("n_gpu_layers", event.target.value)} />
-            <span className="number-field"><input type="number" aria-label="Exact GPU layers" min={1} max={layers ?? undefined} value={settings.n_gpu_layers} disabled={Boolean(busy)} onChange={event => change("n_gpu_layers", event.target.value || "custom")} /><span className="field-unit">{layers ? `of ${layers}` : "layers"}</span></span>
-          </div> : null}
+          <div className="model-placement-control"><select aria-label="GPU layers" value={gpuMode} disabled={Boolean(busy)} onChange={event => changePlacement(event.target.value)}><option value="inherit">{defaultSettingDisplay(modelFacts["startup.n_gpu_layers"], "model", "n_gpu_layers").value} · Model default</option><option value="auto">Automatic</option><option value="all">All layers</option><option value="cpu">CPU only</option><option value="exact">Custom…</option></select>
+          {<div className="slider-field model-gpu-exact" data-active={gpuMode === "exact"}>
+            <input type="range" aria-label="GPU layers slider" disabled={Boolean(busy) || gpuMode !== "exact"} min={1} max={layers ?? 128} step={1} value={Number(settings.n_gpu_layers) || 1} style={{ "--range-fill": `${((Number(settings.n_gpu_layers) || 1) - 1) / Math.max(1, (layers ?? 128) - 1) * 100}%` } as CSSProperties} onChange={event => change("n_gpu_layers", event.target.value)} />
+            <span className="number-field"><input type="number" aria-label="Exact GPU layers" min={1} max={layers ?? undefined} value={gpuMode === "exact" ? settings.n_gpu_layers : ""} placeholder="Custom layers" disabled={Boolean(busy) || gpuMode !== "exact"} onChange={event => change("n_gpu_layers", event.target.value || "custom")} /><span className="field-unit">{layers ? `of ${layers}` : "layers"}</span></span>
+          </div>}</div>
         </SettingRow>
         <details className="technical-details memory-advanced"><summary>Cache &amp; processing</summary><div className="setting-rows">
           {field("cache_type_k", "Key cache precision", "Stores attention keys. Lower precision saves memory with a possible quality trade-off.", choices(cacheTypes))}
@@ -478,9 +542,8 @@ export function DeploymentsPanel({
           {field("parallel", "Concurrent requests", "Four slots are the default. Simultaneous requests share the total context pool; these are not four separately reserved full contexts.", numberChoices([1, 2, 4, 8]), true, 1)}
           {field("kv_unified", "Shared context pool", "Unified KV shares cache storage across slots. Turning it off reserves per-slot capacity.", [{ value: "true", label: "On" }, { value: "false", label: "Off" }])}
         </div></details>
-        <ModelHardwareEstimate active={active} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {}) }} />
-      </SettingSection>
-      <details className="settings-group technical-settings"><summary>Advanced <span>Memory, processing and model behaviour</span></summary>
+        <ModelHardwareEstimate compact onDetails={() => openPanel("memory")} detailsTarget={panelView === "memory" ? inspector?.target : null} active={active} selection={{ bundle_id: selectedBundleId, startup: mergedStartup(selectedProfile?.bags.startup.requested ?? {}, stagedStartup ?? {}) }} />
+      <details className="settings-group technical-settings"><summary>Advanced loading settings</summary>
       <SettingSection title="Memory &amp; processing">
         {field("threads", "CPU threads", "CPU threads used to generate responses. For a new model, the suggested count uses your physical CPU cores. Automatic lets the engine decide; it may not report the resolved count.", threadChoices, true, 1)}
         {field("threads_batch", "Prompt processing threads", "CPU threads used to process your prompt. When linked, uses the same count as generation.", threadChoices, true, 1)}
@@ -490,27 +553,20 @@ export function DeploymentsPanel({
       </SettingSection>
       <SettingSection title="Model behaviour">
         {field("spec_type", "Speculative mode", configuration?.startup_defaults.spec_type?.description ?? "Drafts ahead to accelerate generation where supported.", descriptorOptions("spec_type").length ? descriptorOptions("spec_type") : [{ value: "none", label: "Off" }])}
-        {settings.spec_type.startsWith("draft-") ? field("spec_draft_n_max", "Draft tokens", "Maximum tokens drafted per step.", descriptorOptions("spec_draft_n_max"), true, 1) : null}
-        {thinkingAvailable ? field("reasoning_budget", "Thinking budget", "Maximum thinking tokens when the template supports a budget. Unrestricted lets the model decide.", [{ value: "-1", label: "Unrestricted" }, ...numberChoices([0, 512, 1024, 2048, 4096, 8192, 16384])], true, -1) : null}
-        {thinkingAvailable ? field("reasoning_format", "Thinking format", "How thinking is separated from the answer. No separation keeps raw output; it does not disable thinking.", [{ value: "auto", label: "Automatic" }, { value: "none", label: "No separation" }, { value: "deepseek", label: "DeepSeek" }, { value: "deepseek-legacy", label: "DeepSeek legacy" }]) : null}
+        {field("spec_draft_n_max", "Draft tokens", "Maximum tokens drafted per step. Available with a draft speculative mode.", descriptorOptions("spec_draft_n_max"), true, 1, undefined, !settings.spec_type.startsWith("draft-"))}
         {field("embedding", "Model purpose", "Chat generates responses. Embeddings turn text into vectors for document search and require an embedding model.", [{ value: "off", label: "Chat" }, { value: "on", label: "Document search (embeddings)" }])}
-        {settings.embedding === "on" ? field("pooling", "Embedding pooling", "Combines tokens into one vector. Choose the method recommended by the model publisher.", choices(["last", "mean", "cls"])) : null}
+        {field("pooling", "Embedding pooling", "Combines tokens into one vector for document search. Choose the method recommended by the model publisher.", choices(["last", "mean", "cls"]), false, 0, undefined, settings.embedding !== "on")}
       </SettingSection>
       <SettingSection title="Advanced settings">
-        <SettingRow label="Server port" htmlFor="model-port" help={<>Automatic chooses a free port when the model loads. Fixed ports are checked before starting.<code>--port</code></>} provenance={startupReadout("port")} onReset={canResetStartup("port") && !busy ? () => change("port", "") : undefined} {...startupReset("port")}>
+        <SettingRow layout="models" label="Server port" htmlFor="model-port" help={<>Automatic chooses a free port when the model loads. Fixed ports are checked before starting.<code>--port</code></>} provenance={startupReadout("port")} onReset={canResetStartup("port") && !busy ? () => change("port", "") : undefined} {...startupReset("port")}>
           <NumberField id="model-port" label="Server port" value={settings.port} placeholder={typeof portResolved === "number" ? String(portResolved) : "Automatic"} min={1} max={65535} step={1} disabled={Boolean(busy)} onChange={value => change("port", value == null ? "" : String(value))} />
         </SettingRow>
-        <SettingRow stacked label="Additional settings" htmlFor="additional-startup" help="JSON for supported template and draft-model controls. Use the named controls above for settings already shown.">
-          <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setSettingsPreview(null); setMessage(""); }} placeholder="{}" />
+        <SettingRow layout="models" stacked label="Additional settings" htmlFor="additional-startup" help="JSON for supported template and draft-model controls. Use the named controls above for settings already shown.">
+          <textarea id="additional-startup" spellCheck={false} value={advancedStartup} onChange={event => { dirty.current = true; setAdvancedStartup(event.target.value); setMessage(""); }} placeholder="{}" />
         </SettingRow>
-      </SettingSection>{selected ? <ModelProjectorControls key={selected.id} bundleId={selected.id} active={Boolean(selectedActive)} disabled={Boolean(busy)} action={action} onSaved={async () => { await onBundlesChanged?.(); await refresh(); }} /> : null}</details>
-      {selectedCurrent.length ? <details className="technical-details model-loaded-diagnostics"><summary>Loaded model diagnostics</summary><ul className="plain-list">{selectedCurrent.map(renderDeployment)}</ul>{selectedConnections.length ? <ul className="plain-list">{selectedConnections.map(renderDeployment)}</ul> : null}</details> : null}
-      <footer className="model-start-footer"><div className="runtime-indicator"><span className={runtimeReady ? "status-dot ready" : "status-dot"} />{!loaded ? "Checking local engine…" : runtimeReady ? "Local engine ready" : "Set up the local engine in Settings"}</div><div className="actions"><button type="button" className="primary-button" disabled={Boolean(busy) || !(creatingVariant ? variantName : configurationName).trim()} onClick={() => { if (formRef.current?.reportValidity()) void action("save", () => saveConfiguration(creatingVariant)); }}><Icon name="check" size={14} />{busy === "save" ? "Saving…" : "Save"}</button></div></footer>
-      {stagedStartupError || setupPreview.error ? <Notice tone="error">{stagedStartupError || setupPreview.error}</Notice> : null}
-      {settingsPreview ? <details className="technical-details" open><summary>Checked launch settings</summary><p className="hint">Applies on the next start. Final context and memory use are reported after loading.</p>{readout(settingsPreview.startup.applied)}<SettingsNotes unsupported={settingsPreview.startup.unsupported} retired={settingsPreview.startup.retired} /></details> : null}
+      </SettingSection></details></SettingSection>
+
     </form></section> : <EmptyState title="Choose a model to get started">Select one from your library, or add a new model.</EmptyState>}
-    {message ? <Notice tone={messageTone}>{message}</Notice> : null}
-    {externalCurrent.length ? <details className="card"><summary>Other model servers <span>{externalCurrent.length}</span></summary><ul className="plain-list">{externalCurrent.map(renderDeployment)}</ul></details> : null}
-    {history.length ? <details className="card"><summary>Runtime history <span>{history.length}</span></summary><ul className="plain-list">{history.map(renderDeployment)}</ul></details> : null}
+    {inspector ? inspector.target && panelContent ? createPortal(panelContent, inspector.target) : null : panelContent ? <section className="model-inspector-inline">{panelContent}</section> : null}
   </section>;
 }

@@ -7,23 +7,28 @@ import json
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, current_thread
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from gguf import GGUFWriter
 
-from workbench_backend.errors import ManagerError
+from workbench_backend.errors import ManagerError, manager_error_handler
 from workbench_backend.inference.hashes import sha256_file
 from workbench_backend.inference.hf_recipes import parse_model_card_recipes
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.import_jobs import ImportJobRunner
+from workbench_backend.inference.routes import router
 from workbench_backend.inference.schemas import (
     BundleFile, BundleSource, BundleSourceKind, Deployment, DeploymentStatus,
     FileRole, HuggingFaceConfiguration, HuggingFaceImportRequest, ImportJob,
     ImportStatus, ManagementScope,
-    ModelBundle, RunProfile,
+    ModelBundle, ModelConfigurationWriteRequest, RunProfile,
 )
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.settings import resolve_bags
@@ -309,6 +314,211 @@ class RecipeWorkflowTests(unittest.TestCase):
         general = next(item for item in refreshed.huggingface_configuration.response_recipes
             if item.name == "General thinking")
         self.assertEqual(general.per_request["temperature"], 1.0)
+
+    def test_preset_visibility_survives_restart_without_mutating_recipe_or_setup(self) -> None:
+        recipe_id = self.recipes[0]["id"]
+        config = self.bundle.huggingface_configuration.model_copy(update={
+            "generation_defaults": {"temperature": 0.8}, "template_origin": "gguf",
+            "unsupported": {"custom": "Keep this note."}, "source_note": "Recorded source."})
+        initial = self.bundle.model_copy(update={"huggingface_configuration": config})
+        self.manager.store.put_bundle(initial)
+        self.assertEqual(config.hidden_response_recipe_ids, [])
+        # Removing a list choice must still work when its model cannot load.
+        self.weight.unlink()
+        hidden = self.manager.set_response_recipe_visibility(initial.id, recipe_id, visible=False)
+        expected = initial.model_copy(update={"huggingface_configuration": config.model_copy(update={
+            "hidden_response_recipe_ids": [recipe_id]})})
+        self.assertEqual(hidden, expected)
+        self.assertEqual(self.manager.store.get_profile(self.base.id), self.base)
+        restarted = ModelManager(self.paths)
+        self.assertEqual(restarted.store.get_bundle(initial.id), expected)
+        self.assertEqual(restarted.set_response_recipe_visibility(initial.id, recipe_id, visible=False), expected)
+        self.assertEqual(restarted.set_response_recipe_visibility(initial.id, recipe_id, visible=True), initial)
+
+    def test_hidden_preset_origin_remains_savable(self) -> None:
+        recipe_id = self.recipes[0]["id"]
+        created = self.manager.create_response_recipe_configurations(self.bundle.id, [recipe_id]).configurations[0]
+        self.manager.set_response_recipe_visibility(self.bundle.id, recipe_id, visible=False)
+        saved = self.manager.save_model_configuration(self.bundle.id, ModelConfigurationWriteRequest(
+            configuration_id=created.id, display_name=created.display_name,
+            startup=created.bags.startup.requested, per_request={**created.bags.per_request.requested,
+                "temperature": 0.42}, recipe_origin=created.recipe_origin))
+        self.assertEqual(saved.recipe_origin, created.recipe_origin)
+        self.assertEqual(saved.bags.per_request.requested["temperature"], 0.42)
+        self.assertEqual(self.manager.store.get_bundle(self.bundle.id).huggingface_configuration.hidden_response_recipe_ids,
+            [recipe_id])
+
+    def test_visibility_rejects_unknown_or_unpinned_recipes_without_writes(self) -> None:
+        recipe_id = self.recipes[0]["id"]
+        for source, requested_id, code, status in (
+            (self.bundle.source, "unknown-preset", "recipe_stale", 409),
+            (BundleSource(kind=BundleSourceKind.local), recipe_id, "recipe_source", 400),
+            (self.bundle.source.model_copy(update={"resolved_revision": None}), recipe_id, "recipe_source", 400),
+            (self.bundle.source.model_copy(update={"resolved_revision": "main"}), recipe_id, "model_card_revision", 409),
+            (self.bundle.source.model_copy(update={"repo_id": "other/model"}), recipe_id, "recipe_stale", 409),
+            (self.bundle.source.model_copy(update={"resolved_revision": "b" * 40}), recipe_id, "recipe_stale", 409),
+        ):
+            with self.subTest(code=code, source=source):
+                initial = self.bundle.model_copy(update={"source": source})
+                self.manager.store.put_bundle(initial)
+                with self.assertRaises(ManagerError) as raised:
+                    self.manager.set_response_recipe_visibility(initial.id, requested_id, visible=False)
+                self.assertEqual((raised.exception.code, raised.exception.status_code), (code, status))
+                self.assertEqual(self.manager.store.get_bundle(initial.id), initial)
+        with self.assertRaises(ManagerError) as raised:
+            self.manager.set_response_recipe_visibility("unknown-model", recipe_id, visible=False)
+        self.assertEqual((raised.exception.code, raised.exception.status_code), ("bundle_missing", 404))
+
+    def test_refresh_preserves_visibility_and_restore_does_not_recreate_setups(self) -> None:
+        ids = [item["id"] for item in self.recipes]
+        created = self.manager.create_response_recipe_configurations(self.bundle.id, [ids[0]]).configurations[0]
+        self.manager.store.delete_profile(created.id)
+        self.manager.set_response_recipe_visibility(self.bundle.id, ids[0], visible=False)
+        self.manager.set_response_recipe_visibility(self.bundle.id, ids[1], visible=False)
+        refreshed = self.manager.refresh_response_recipes(self.bundle.id)
+        self.assertEqual(refreshed.huggingface_configuration.hidden_response_recipe_ids, ids[:2])
+        before_profiles = self.manager.store.list_profiles()
+        before_weights = sha256_file(self.weight)
+        with patch.object(self.manager.bundles.hf, "download", side_effect=AssertionError("weights downloaded")):
+            restored = self.manager.refresh_response_recipes(self.bundle.id, restore_hidden=True)
+        self.assertEqual(restored.huggingface_configuration.hidden_response_recipe_ids, [])
+        self.assertEqual(restored.huggingface_configuration.response_recipes, self.bundle.huggingface_configuration.response_recipes)
+        self.assertEqual(restored.default_configuration_id, self.base.id)
+        self.assertEqual(restored.files, self.bundle.files)
+        self.assertEqual(self.manager.store.list_profiles(), before_profiles)
+        self.assertEqual(sha256_file(self.weight), before_weights)
+        self.assertEqual(ModelManager(self.paths).store.get_bundle(self.bundle.id), restored)
+
+    def test_failed_restore_retains_presets_visibility_and_all_other_records(self) -> None:
+        initial = self.manager.set_response_recipe_visibility(self.bundle.id, self.recipes[0]["id"], visible=False)
+        self.card.write_text("damaged", encoding="utf-8")
+        with patch.object(self.manager.bundles.hf, "read_pinned_card", side_effect=ManagerError(
+            "Pinned model card unavailable.", code="hf_offline", status_code=503)), self.assertRaises(ManagerError) as raised:
+            self.manager.refresh_response_recipes(initial.id, restore_hidden=True)
+        self.assertEqual(raised.exception.code, "hf_offline")
+        self.assertEqual(self.manager.store.get_bundle(initial.id), initial)
+        self.assertEqual(self.manager.store.list_profiles(), [self.base])
+
+    def test_concurrent_visibility_changes_preserve_both_choices(self) -> None:
+        first_read = Event()
+        second_started = Event()
+        second_read = Event()
+        release = Event()
+        original_get = self.manager.store.get_bundle
+        first_thread = []
+        second_thread = []
+
+        def get(bundle_id):
+            bundle = original_get(bundle_id)
+            if current_thread().ident in first_thread and not first_read.is_set():
+                first_read.set()
+                if not release.wait(5):
+                    raise RuntimeError("Visibility test worker was not released")
+            if current_thread().ident in second_thread:
+                second_read.set()
+            return bundle
+
+        def hide(index):
+            (first_thread if index == 0 else second_thread).append(current_thread().ident)
+            if index == 1:
+                second_started.set()
+            return self.manager.set_response_recipe_visibility(self.bundle.id, self.recipes[index]["id"], visible=False)
+
+        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(self.manager.store, "get_bundle", side_effect=get):
+            first = pool.submit(hide, 0)
+            try:
+                self.assertTrue(first_read.wait(5))
+                second = pool.submit(hide, 1)
+                self.assertTrue(second_started.wait(5))
+                self.assertFalse(second_read.wait(0.1), "Second writer read stale metadata before the first completed")
+            finally:
+                release.set()
+            first.result(timeout=5)
+            second.result(timeout=5)
+        self.assertEqual(self.manager.store.get_bundle(self.bundle.id).huggingface_configuration.hidden_response_recipe_ids,
+            [self.recipes[0]["id"], self.recipes[1]["id"]])
+
+    def test_refresh_merges_concurrent_visibility_and_unrelated_current_metadata(self) -> None:
+        from workbench_backend.inference.hf_configuration import read_bundle_model_card
+
+        for restore_hidden in (False, True):
+            with self.subTest(restore_hidden=restore_hidden):
+                self.manager.store.put_bundle(self.bundle)
+                reading = Event()
+                release = Event()
+
+                def read(bundle, hf):
+                    reading.set()
+                    if not release.wait(5):
+                        raise RuntimeError("Refresh test worker was not released")
+                    return read_bundle_model_card(bundle, hf)
+
+                with ThreadPoolExecutor(max_workers=1) as pool, patch(
+                    "workbench_backend.inference.hf_configuration.read_bundle_model_card", side_effect=read):
+                    pending = pool.submit(self.manager.refresh_response_recipes, self.bundle.id, restore_hidden=restore_hidden)
+                    try:
+                        self.assertTrue(reading.wait(5))
+                        current = self.manager.set_response_recipe_visibility(self.bundle.id, self.recipes[0]["id"], visible=False)
+                        config = current.huggingface_configuration.model_copy(update={
+                            "generation_defaults": {"temperature": 0.81}, "source_note": "Changed while reading.",
+                            "unsupported": {"custom": "Still current."}, "template_origin": "gguf"})
+                        current = self.manager.store.put_bundle(current.model_copy(update={
+                            "display_name": "Renamed while reading", "huggingface_configuration": config}))
+                    finally:
+                        release.set()
+                    refreshed = pending.result(timeout=5)
+                expected_config = current.huggingface_configuration.model_copy(update={
+                    "metadata_refreshed_at": refreshed.huggingface_configuration.metadata_refreshed_at,
+                    "hidden_response_recipe_ids": [] if restore_hidden else [self.recipes[0]["id"]]})
+                self.assertEqual(refreshed, current.model_copy(update={"huggingface_configuration": expected_config}))
+
+    def test_restore_rejects_source_change_or_deletion_during_card_read(self) -> None:
+        from workbench_backend.inference.hf_configuration import read_bundle_model_card
+
+        for deleted in (False, True):
+            with self.subTest(deleted=deleted):
+                self.manager.store.put_bundle(self.bundle)
+                initial = self.manager.set_response_recipe_visibility(self.bundle.id, self.recipes[0]["id"], visible=False)
+                changed = initial.model_copy(update={"source": initial.source.model_copy(update={"resolved_revision": "b" * 40})})
+
+                def read(bundle, hf):
+                    result = read_bundle_model_card(bundle, hf)
+                    if deleted:
+                        self.manager.store.delete_bundle(bundle.id)
+                    else:
+                        self.manager.store.put_bundle(changed)
+                    return result
+
+                with patch("workbench_backend.inference.hf_configuration.read_bundle_model_card", side_effect=read), self.assertRaises(
+                    ManagerError) as raised:
+                    self.manager.refresh_response_recipes(initial.id, restore_hidden=True)
+                self.assertEqual((raised.exception.code, raised.exception.status_code), ("recipe_source_changed", 409))
+                self.assertEqual(self.manager.store.get_bundle(initial.id), None if deleted else changed)
+
+    def test_visibility_and_optional_restore_http_contracts(self) -> None:
+        app = FastAPI()
+        app.state.manager = self.manager
+        app.include_router(router)
+        app.add_exception_handler(ManagerError, manager_error_handler)
+        recipe_id = self.recipes[0]["id"]
+        refresh_url = f"/v1/bundles/{self.bundle.id}/response-recipes/refresh"
+        visibility_url = f"/v1/bundles/{self.bundle.id}/response-recipes/{recipe_id}/visibility"
+        with TestClient(app) as client:
+            response = client.put(visibility_url, json={"visible": False})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["huggingface_configuration"]["hidden_response_recipe_ids"], [recipe_id])
+            for body in (None, {}, {"restore_hidden": False}):
+                response = client.post(refresh_url) if body is None else client.post(refresh_url, json=body)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["huggingface_configuration"]["hidden_response_recipe_ids"], [recipe_id])
+            response = client.post(refresh_url, json={"restore_hidden": True})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["huggingface_configuration"]["hidden_response_recipe_ids"], [])
+            self.assertEqual(client.put(visibility_url, json={}).status_code, 422)
+            schema = client.get("/openapi.json").json()
+            self.assertFalse(schema["paths"]["/v1/bundles/{bundle_id}/response-recipes/refresh"]["post"]
+                ["requestBody"].get("required", False))
+            self.assertIn("/v1/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility", schema["paths"])
 
     def test_selected_recipe_ids_and_default_survive_durable_retry(self) -> None:
         inspect = SimpleNamespace(repo_id=REPO, resolved_revision=REVISION,

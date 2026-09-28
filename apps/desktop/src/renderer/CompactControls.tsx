@@ -6,6 +6,8 @@ function aboutTitle(label: ReactNode, helpTitle?: string) {
   return helpTitle ?? (typeof label === "string" ? `About ${label.toLowerCase()}` : "About this setting");
 }
 
+export type SettingLayout = "default" | "models";
+
 export function SettingSection({ title, description, actions, children, className }: {
   title: string; description?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string;
 }) {
@@ -15,36 +17,39 @@ export function SettingSection({ title, description, actions, children, classNam
   </section>;
 }
 
-export function SettingRow({ label, labelId, htmlFor, help, helpTitle, provenance, onReset, resetLabel = "Use configuration default", resetTitle, hint, inline = false, stacked = false, className, children }: {
+export function SettingRow({ label, labelId, htmlFor, help, helpTitle, provenance, onReset, resetLabel = "Use configuration default", resetTitle, hint, status, layout = "default", inline = false, stacked = false, className, children }: {
   label: ReactNode; labelId?: string; htmlFor?: string; help?: ReactNode; helpTitle?: string; provenance?: ReactNode;
-  onReset?: () => void; resetLabel?: string; resetTitle?: string; hint?: ReactNode; inline?: boolean; stacked?: boolean; className?: string; children: ReactNode;
+  onReset?: () => void; resetLabel?: string; resetTitle?: string; hint?: ReactNode; status?: ReactNode; layout?: SettingLayout; inline?: boolean; stacked?: boolean; className?: string; children: ReactNode;
 }) {
-  const classes = ["setting-row", inline ? "setting-row-inline" : "", stacked ? "setting-row-stacked" : "", className ?? ""].filter(Boolean).join(" ");
+  const models = layout === "models";
+  const details = models && hint ? <>{help}{help ? <br /> : null}{hint}</> : help;
+  const classes = ["setting-row", models ? "setting-row-models" : "", inline ? "setting-row-inline" : "", stacked ? "setting-row-stacked" : "", className ?? ""].filter(Boolean).join(" ");
   return <div className={classes}>
     <div className="setting-row-label">
       <div className="setting-row-title">
         {htmlFor ? <label id={labelId} htmlFor={htmlFor}>{label}</label> : <span id={labelId} className="setting-row-name">{label}</span>}
-        {help ? <HoverHelp title={aboutTitle(label, helpTitle)}>{help}</HoverHelp> : null}
-        {onReset ? <button type="button" className="text-button setting-reset" title={resetTitle} aria-label={resetTitle ? `${resetLabel}: ${resetTitle}` : undefined} onClick={onReset}>{resetLabel}</button> : null}
+        {details ? <HoverHelp title={aboutTitle(label, helpTitle)}>{details}</HoverHelp> : null}
+        {!models && onReset ? <button type="button" className="text-button setting-reset" title={resetTitle} aria-label={resetTitle ? `${resetLabel}: ${resetTitle}` : undefined} onClick={onReset}>{resetLabel}</button> : null}
       </div>
-      {provenance ? <small className="control-provenance">{provenance}</small> : null}
+      {!models && provenance ? <small className="control-provenance">{provenance}</small> : null}
     </div>
     <div className="setting-row-control">
-      {children}
-      {hint ? <small className="setting-row-hint">{hint}</small> : null}
+      {models ? <><div className="setting-row-control-content">{children}</div><button type="button" className="text-button setting-reset" disabled={!onReset} title={resetTitle} aria-label={resetTitle ? `Reset ${typeof label === "string" ? label.toLowerCase() : "setting"}: ${resetTitle}` : `Reset ${typeof label === "string" ? label.toLowerCase() : "setting"}`} onClick={onReset}>Reset</button></> : children}
+      {!models && hint ? <small className="setting-row-hint">{hint}</small> : null}
     </div>
+    {models ? <div className="setting-row-readout"><small className="control-provenance">{provenance ?? "\u00a0"}</small><small className="setting-row-status">{status ?? "\u00a0"}</small></div> : null}
   </div>;
 }
 
-export function CompactSwitch(props: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; description?: ReactNode; meta?: ReactNode; bare?: boolean; hint?: ReactNode }) {
+export function CompactSwitch(props: { label: string; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean; description?: ReactNode; meta?: ReactNode; bare?: boolean; hint?: ReactNode; status?: ReactNode; layout?: SettingLayout; onReset?: () => void; resetLabel?: string; resetTitle?: string }) {
   const control = <button type="button" className="compact-switch" role="switch" aria-label={props.label} aria-checked={props.checked} disabled={props.disabled} onClick={() => props.onChange(!props.checked)}><span /></button>;
   if (props.bare) return control;
-  return <SettingRow inline label={props.label} help={props.description} provenance={props.meta} hint={props.hint}>{control}</SettingRow>;
+  return <SettingRow inline label={props.label} help={props.description} provenance={props.meta} hint={props.hint} status={props.status} layout={props.layout} onReset={props.onReset} resetLabel={props.resetLabel} resetTitle={props.resetTitle}>{control}</SettingRow>;
 }
 
-export function SegmentedChoice({ id: groupId, label, value, options, onChange, disabled = false, description, meta, bare = false, onReset, resetLabel, resetTitle, hint, inheritedValue }: {
+export function SegmentedChoice({ id: groupId, label, value, options, onChange, disabled = false, description, meta, bare = false, onReset, resetLabel, resetTitle, hint, status, layout, inheritedValue }: {
   id?: string; label: string; value: string; options: Array<{ value: string; label: string; disabled?: boolean }>;
-  onChange: (value: string) => void; disabled?: boolean; description?: ReactNode; meta?: ReactNode; bare?: boolean; onReset?: () => void; resetLabel?: string; resetTitle?: string; hint?: ReactNode;
+  onChange: (value: string) => void; disabled?: boolean; description?: ReactNode; meta?: ReactNode; bare?: boolean; onReset?: () => void; resetLabel?: string; resetTitle?: string; hint?: ReactNode; status?: ReactNode; layout?: SettingLayout;
   /** Marks the option an empty value resolves to, without selecting it. */
   inheritedValue?: string;
 }) {
@@ -53,7 +58,7 @@ export function SegmentedChoice({ id: groupId, label, value, options, onChange, 
     {options.map(option => <label key={option.value} data-inherited={value === "" && option.value === inheritedValue ? "" : undefined}><input type="radio" name={id} value={option.value} checked={value === option.value} disabled={disabled || option.disabled} onChange={() => onChange(option.value)} /><span>{option.label}</span></label>)}
   </div>;
   if (bare) return group;
-  return <SettingRow className="segmented-setting" label={label} labelId={`${id}-label`} help={description} provenance={meta} onReset={onReset} resetLabel={resetLabel} resetTitle={resetTitle} hint={hint}>{group}</SettingRow>;
+  return <SettingRow className="segmented-setting" label={label} labelId={`${id}-label`} help={description} provenance={meta} onReset={onReset} resetLabel={resetLabel} resetTitle={resetTitle} hint={hint} status={status} layout={layout}>{group}</SettingRow>;
 }
 
 function fillPercent(value: number, min: number, max: number) {

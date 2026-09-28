@@ -103,6 +103,7 @@ class HuggingFaceConfiguration(BaseModel):
     template_compatible: bool | None = None
     generation_defaults: dict[str, Any] = Field(default_factory=dict)
     response_recipes: list[ResponseRecipe] = Field(default_factory=list)
+    hidden_response_recipe_ids: list[str] = Field(default_factory=list)
     metadata_refreshed_at: str | None = None
     unsupported: dict[str, str] = Field(default_factory=dict)
 
@@ -419,6 +420,14 @@ class DefaultConfigurationRequest(BaseModel):
 class ResponseRecipeConfigurationRequest(BaseModel):
     recipe_ids: list[str] = Field(default_factory=list)
     default_recipe_id: str | None = None
+
+
+class ResponseRecipeVisibilityRequest(BaseModel):
+    visible: bool
+
+
+class ResponseRecipeRefreshRequest(BaseModel):
+    restore_hidden: bool = False
 
 
 class ResponseRecipeConfigurationResult(BaseModel):

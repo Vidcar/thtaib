@@ -21,11 +21,57 @@ try {
   await configurationNavigationOwnership(DeploymentsPanel);
   await configurationNavigationOwnership(DeploymentsPanel, true);
   await failedReloadFacts(DeploymentsPanel);
+  await draftCheckOwnership(DeploymentsPanel);
   await projectKnowledgeOwnership(SetupConfigurationEditor);
   await agentOwnedSettings(SetupConfigurationEditor);
   await toolGroupSelection(SetupConfigurationEditor);
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
 console.log("Unified settings save, revision, inheritance and explicit-none checks passed.");
+
+async function draftCheckOwnership(Panel) {
+  const models = ["first", "second"].map(id => ({ id, display_name: id, default_configuration_id: `${id}-default`, disk_matches: true, files: [], companions: [] }));
+  const profiles = ["first", "second"].map(id => ({ id: `${id}-default`, bundle_id: id, display_name: `${id} setup`, revision: 1, bags: { startup: bag({ ctx_size: 8192, fit: "off" }), per_request: bag({ temperature: 0.4 }), agent: bag({}) } }));
+  let selected = "first", renderer, release, delay = false, rejectResponse = false;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null; calls.push({ address, body });
+    if (address.endsWith("/v1/runtime")) return response({ status: "ready" });
+    if (address.endsWith("/v1/deployments")) return response([]);
+    if (address.endsWith("/v1/setup-resolution")) return response({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
+    if (address.includes("/configuration-options")) return response({ bundle_id: address.includes("/first/") ? "first" : "second", context_size: { maximum: 32768, options: [] }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: { temperature: { supported: true } }, metadata: {} });
+    if (address.endsWith("/v1/settings/preview")) {
+      const result = { startup: bag(body.startup), per_request: { ...bag(body.per_request), unsupported: rejectResponse ? ["invalid-response-marker"] : [] }, agent: bag({}) };
+      if (delay) return await new Promise(resolve => { release = () => resolve(response(result)); });
+      return response(result);
+    }
+    if (address.endsWith("/v1/hardware/estimate")) return response({ completeness: "unavailable", reasons: [], unknown_costs: [], gpu: {}, ram: {}, components: [], devices: [] });
+    throw new Error(`Unexpected check request ${address}`);
+  };
+  const props = () => ({ selectedBundleId: selected, initialBundles: models, initialProfiles: profiles });
+  const button = label => renderer.root.findAllByType("button").find(node => text(node) === label);
+  const results = () => renderer.root.findByProps({ className: "model-check-results" });
+  try {
+    await act(async () => { renderer = create(React.createElement(Panel, props())); await tick(); });
+    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    assert.match(text(results()), /first setup.*Loading settings.*Response settings/);
+    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "off");
+    await act(async () => { renderer.root.findByProps({ "aria-label": "GPU layers" }).props.onChange({ target: { value: "auto" } }); await tick(); });
+    await act(async () => { renderer.root.findByProps({ id: "model-response-temperature" }).props.onChange(0.7); await tick(); });
+    assert.match(text(results()), /Out of date/, "editing marks the exact checked draft obsolete");
+    rejectResponse = true;
+    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    assert.match(text(results()), /Unsupported response: invalid-response-marker/, "response validation is visible beside loading validation");
+    assert.equal(calls.findLast(call => call.address.endsWith("/settings/preview")).body.startup.fit, "on", "Automatic GPU enables required fitting even after a saved Off setting");
+    delay = true;
+    await act(async () => { button("Check settings").props.onClick(); await tick(); });
+    assert.match(text(results()), /Checking this setup/);
+    await act(async () => { selected = "second"; renderer.update(React.createElement(Panel, props())); await tick(); });
+    assert.ok(!text(results()).includes("invalid-response-marker"), "another setup cannot inherit the previous check result");
+    await act(async () => { release(); await tick(); });
+    assert.ok(!text(results()).includes("invalid-response-marker"), "a late response cannot publish into the newly selected setup");
+    assert.equal(calls.some(call => call.address.endsWith("/configurations") || call.address.endsWith("/deployments/managed")), false, "checking never saves or loads");
+  } finally { if (release) release(); if (renderer) await act(async () => renderer.unmount()); }
+}
 
 async function configurations(Panel) {
   const calls = [];
@@ -120,7 +166,7 @@ async function configurations(Panel) {
     assert.notEqual(choice('off').props.disabled, true, 'cold Auto Thinking remains editable when its template default is unknown');
     await act(async () => { choice('off').props.onChange(); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.reasoning, 'off', 'explicit Off reaches the authoritative preview');
-    const thinkingSwitch = renderer.root.findByProps({ role: 'switch', 'aria-label': 'Thinking' });
+    const thinkingSwitch = choice('off');
     const thinkingReset = settingRow(thinkingSwitch).findAllByType('button').find(node => text(node) === 'Reset');
     await act(async () => { thinkingReset.props.onClick(); await tick(); });
     assert.equal(Object.hasOwn(lastPreview().overrides.per_request_overrides, 'reasoning'), false, 'Default restores native omission');
@@ -128,18 +174,18 @@ async function configurations(Panel) {
     assert.notEqual(choice('drop').props.disabled, true, 'unknown thinking-history default does not block an explicit supported choice');
     await act(async () => { choice('drop').props.onChange(); await tick(); });
     assert.ok(button("Save"), "save is available without a running deployment");
-    await act(async () => { button("Save").props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
     assert.equal(profiles[0].bags.per_request.requested.max_tokens, undefined);
     assert.equal(profiles[0].bags.per_request.requested.reasoning, 'off', 'Models saves the explicit cold Thinking choice');
     assert.equal(profiles[0].bags.per_request.requested.reasoning_preserve, false, 'Models saves a false history choice without treating it as omission');
-    await act(async () => { button("Save").props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(profiles.length, 1, "ordinary repeated saving does not create another configuration");
     assert.equal(profiles[0].revision, 6);
     assert.equal(profiles[0].bags.startup.requested.port, undefined, "automatic port is not frozen into a saved configuration");
     assert.equal(calls.some(call => call.path.includes("/deployments/managed")), false, "saving never creates a deployment");
     await act(async () => { button("Save a copy").props.onClick(); });
-    await act(async () => { button("Save").props.onClick(); await tick(); });
+    await act(async () => { button("Save copy").props.onClick(); await tick(); });
     assert.equal(profiles.length, 2, "only explicit Save a copy creates another configuration");
     assert.equal(profiles[1].display_name, "Example model copy");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
@@ -228,7 +274,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     await act(async () => { renderer = create(React.createElement(Panel, props()), { createNodeMock: element => element.type === 'form' ? { reportValidity: () => true } : null }); await tick(); });
     const button = label => renderer.root.findAllByType('button').find(node => text(node) === label);
     await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
-    await act(async () => { button('Save').props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.ok(releasePreview, 'save waits at the actual preview receiver');
     await act(async () => { selected = 'second'; renderer.update(React.createElement(Panel, props())); await tick(); });
     if (navigateBack) await act(async () => { selected = 'first'; renderer.update(React.createElement(Panel, props())); await tick(); });
@@ -268,7 +314,7 @@ async function failedReloadFacts(Panel) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: 'model', initialBundles: [bundle], initialProfiles: [profile] })); await tick(); });
     await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
-    await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Reload saved').props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Load saved').props.onClick(); await tick(); });
     assert.ok(reads > 1, 'failed Apply refreshes the receiver state instead of retaining a stale healthy deployment');
     const badges = renderer.root.findAll(node => node.type === 'span' && String(node.props.className).startsWith('badge '));
     assert.equal(badges.some(node => text(node) === 'Ready'), false, 'a failed receiver is no longer labeled Ready');
