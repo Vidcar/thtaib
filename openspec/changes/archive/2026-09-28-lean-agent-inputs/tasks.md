@@ -25,4 +25,4 @@
 
 - [x] 4.1 Generate shared contracts and run relevant backend default/integration, full desktop build, OpenSpec and whitespace checks; repair failures and record honest skips.
 - [x] 4.2 Compare actual native input/total task tokens, discovery calls, prefill/cache and latency for eager versus lean ordinary/file/browser/skill/memory/helper tasks in isolated product data; verify native Windows UI/functionality and permissions.
-- [ ] 4.3 Synchronize affected product contracts, archive the completed change, refresh handover, complete protected Git/PR/merge workflow and update the established local deployment; verify launcher/assets/health/authenticated catalogue and preserve unrelated work/data/weights.
+- [x] 4.3 Synchronize affected product contracts, archive the completed change, refresh handover, complete protected Git/PR/merge workflow and update the established local deployment; verify launcher/assets/health/authenticated catalogue and preserve unrelated work/data/weights.
