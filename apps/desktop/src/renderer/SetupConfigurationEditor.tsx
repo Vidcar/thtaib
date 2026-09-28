@@ -74,6 +74,24 @@ function KnowledgeChoices({ title, values, options, disabled, onChange }: { titl
   </div>;
 }
 
+function ToolGroupChoices({ name, tools, selected, disabled, onChange }: { name: string; tools: SelectionOption[]; selected: string[]; disabled: boolean; onChange: (names: string[], enabled: boolean) => void }) {
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const count = tools.filter(tool => selected.includes(tool.id)).length;
+  return <div className="setup-tool-group">
+    <div className="setup-tool-group-head">
+      <button type="button" className="setup-tool-group-expand" aria-expanded={expanded} aria-controls={`${id}-tools`} onClick={() => setExpanded(current => !current)}>
+        <span className="setup-tool-group-name" id={`${id}-name`}>{name}</span>
+        <small className="setup-tool-group-count">{count} of {tools.length} selected</small>
+      </button>
+      <CompactSwitch bare label={name} checked={count === tools.length} disabled={disabled} onChange={enabled => onChange(tools.map(tool => tool.id), enabled)} />
+    </div>
+    <div className="setup-tool-choices" id={`${id}-tools`} role="group" aria-labelledby={`${id}-name`} hidden={!expanded}>
+      {tools.map(tool => <CompactSwitch key={tool.id} label={tool.name} checked={selected.includes(tool.id)} disabled={disabled} onChange={enabled => onChange([tool.id], enabled)} description={tool.description} meta={tool.available === false ? tool.unavailable_reason ?? "Needs setup in Settings" : undefined} />)}
+    </div>
+  </div>;
+}
+
 export function SetupConfigurationEditor({ value, onChange, catalogue, disabled = false, requirements = false, scope = "agent", projectId = null, agentOptions = [], currentAgentId = null, sections, active = true }: { value: SetupConfiguration; onChange: (value: SetupConfiguration) => void; catalogue: SetupCatalogue; disabled?: boolean; requirements?: boolean; scope?: "application" | "project" | "agent"; projectId?: string | null; agentOptions?: AgentSetup[]; currentAgentId?: string | null; sections?: Array<"instructions" | "model" | "tools" | "knowledge" | "helpers" | "review" | "requirements">; active?: boolean }) {
   const id = useId();
   const [helperQuery, setHelperQuery] = useState("");
@@ -115,11 +133,7 @@ export function SetupConfigurationEditor({ value, onChange, catalogue, disabled 
         {grouped.map(group => {
           const options = catalogue.tools.filter(tool => group.names.includes(tool.id));
           if (!options.length) return null;
-          const all = options.every(tool => selectedTools.includes(tool.id));
-          const count = options.filter(tool => selectedTools.includes(tool.id)).length;
-          return <div className="setup-tool-group" key={group.name}><CompactSwitch label={group.name} checked={all} disabled={disabled} onChange={checked => selectTools(options.map(tool => tool.id), checked)} meta={`${count} of ${options.length} selected`} />
-            <details><summary>Individual {group.name.toLowerCase()} tools <small>{count} selected</small></summary>{options.map(tool => <CompactSwitch key={tool.id} label={tool.name} checked={selectedTools.includes(tool.id)} disabled={disabled} onChange={checked => selectTools([tool.id], checked)} description={tool.description} meta={tool.available === false ? tool.unavailable_reason ?? "Needs setup in Settings" : undefined} />)}</details>
-          </div>;
+          return <ToolGroupChoices key={group.name} name={group.name} tools={options} selected={selectedTools} disabled={disabled} onChange={selectTools} />;
         })}
         {unavailableTools.length ? <details className="setup-unavailable-selections" open><summary>Unavailable tools <small>{unavailableTools.length} selected</small></summary>{unavailableTools.map(name => <CompactSwitch key={name} label={name} checked disabled={disabled} meta="Remove this choice or restore its connection in Settings." onChange={() => selectTools([name], false)} />)}</details> : null}
         <details><summary>Connections <small>{selectedConnections.length ? `${selectedConnections.length} selected` : "None selected"}</small></summary>{connectionOptions.map(connection => <CompactSwitch key={connection.id} label={connection.name} checked={selectedConnections.includes(connection.id)} disabled={disabled} onChange={checked => patch({ connection_ids: checked ? [...new Set([...selectedConnections, connection.id])] : selectedConnections.filter(id => id !== connection.id) })} meta={connection.available === false ? "Needs a successful test in Settings" : undefined} />)}{!connectionOptions.length ? <p className="hint">Add connections in Settings.</p> : null}</details>

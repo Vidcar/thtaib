@@ -23,6 +23,7 @@ try {
   await failedReloadFacts(DeploymentsPanel);
   await projectKnowledgeOwnership(SetupConfigurationEditor);
   await agentOwnedSettings(SetupConfigurationEditor);
+  await toolGroupSelection(SetupConfigurationEditor);
 } finally { globalThis.fetch = originalFetch; await vite.close(); }
 console.log("Unified settings save, revision, inheritance and explicit-none checks passed.");
 
@@ -311,5 +312,98 @@ async function agentOwnedSettings(Editor) {
     assert.equal(edits.at(-1).desktop_access, undefined);
     await act(async () => renderer.root.findAllByType("select").find(node => text(node).includes("Use Chat model")).props.onChange({ target: { value: "configuration:fixed-config" } }));
     assert.equal(edits.at(-1).model_configuration_id, "fixed-config", "assigned model is agent-owned");
+  } finally { if (renderer) await act(async () => renderer.unmount()); }
+}
+
+async function toolGroupSelection(Editor) {
+  const edits = [];
+  const catalogue = {
+    bundles: [], profiles: [], deployments: [], connections: [], knowledge: [], toolCatalogueStatus: "ready",
+    tools: [
+      { id: "ls", name: "List files", description: "List authorized project files." },
+      { id: "read_file", name: "Read files", description: "Read authorized project files." },
+      { id: "execute", name: "Run shell" },
+      { id: "browser_navigate", name: "Navigate" },
+      { id: "echo", name: "Echo", available: false, unavailable_reason: "Restore its connection in Settings." },
+    ],
+  };
+  globalThis.fetch = async (url, init) => {
+    assert.ok(String(url).endsWith("/v1/setup-resolution"));
+    return response({ configuration: JSON.parse(init.body).overrides, effective_values: {}, instruction_layers: [] });
+  };
+  let current, renderer;
+  function Host(props) {
+    const [value, setValue] = React.useState({ instructions: "Keep this draft", presented_tools: ["read_file", "execute", "missing_tool"] });
+    current = value;
+    return React.createElement(Editor, { ...props, value, sections: ["tools"], onChange: next => { edits.push(next); setValue(next); } });
+  }
+  const disclosure = name => renderer.root.findAllByType("button").find(node => node.props.className === "setup-tool-group-expand" && text(node).startsWith(name));
+  const choice = name => renderer.root.findByProps({ role: "switch", "aria-label": name });
+  const panel = name => renderer.root.findByProps({ id: disclosure(name).props["aria-controls"] });
+  const action = label => renderer.root.findAllByType("button").find(node => text(node) === label);
+  const click = async node => { await act(async () => { node.props.onClick(); await tick(); }); };
+  const domParent = node => { let parent = node.parent; while (parent && typeof parent.type !== "string") parent = parent.parent; return parent; };
+  try {
+    await act(async () => { renderer = create(React.createElement(Host, { catalogue })); await tick(); });
+    assert.equal(disclosure("Project files").props["aria-expanded"], false, "groups start collapsed");
+    assert.equal(panel("Project files").props.hidden, true, "collapsed choices are hidden from keyboard and accessibility navigation");
+    assert.match(text(disclosure("Project files")), /1 of 2 selected/, "a single selected/total count explains a partial group");
+    assert.equal(choice("Project files").props["aria-checked"], false, "partial groups are on only when complete");
+    assert.equal(disclosure("Project files").props.type, "button", "disclosure never submits the agent form");
+    assert.ok(domParent(disclosure("Project files")) === domParent(choice("Project files")), "disclosure and group toggle are sibling controls");
+    assert.equal(disclosure("Project files").parent.props.onClick, undefined, "the group does not intercept toggle clicks");
+    assert.doesNotMatch(text(renderer.root), /Individual .* tools/, "there is no duplicate individual-tools heading");
+    assert.equal(renderer.root.findAllByProps({ className: "setup-tool-group-count" }).length, 4, "each populated group has exactly one count");
+
+    await click(disclosure("Project files"));
+    await click(disclosure("Browser"));
+    assert.equal(edits.length, 0, "expanding groups does not write configuration");
+    assert.equal(panel("Project files").props.hidden, false);
+    assert.equal(panel("Browser").props.hidden, false, "groups can stay open independently");
+    await click(choice("Project files"));
+    assert.deepEqual(new Set(current.presented_tools), new Set(["ls", "read_file", "execute", "missing_tool"]), "the partial switch completes its group and retains other choices");
+    assert.equal(choice("Project files").props["aria-checked"], true);
+    assert.equal(disclosure("Project files").props["aria-expanded"], true, "selection does not collapse a group");
+    await click(choice("Read files"));
+    assert.equal(choice("Project files").props["aria-checked"], false, "individual selection updates the group's state");
+    assert.match(text(disclosure("Project files")), /1 of 2 selected/);
+    assert.equal(panel("Project files").props.hidden, false);
+    await click(choice("Project files"));
+    await click(choice("Project files"));
+    assert.deepEqual(current.presented_tools, ["execute", "missing_tool"], "a complete group switches off without clearing other groups or missing tools");
+    await click(disclosure("Project files"));
+    await click(choice("Project files"));
+    assert.equal(panel("Project files").props.hidden, true, "a collapsed group toggle does not expand it");
+    assert.equal(panel("Browser").props.hidden, false);
+    assert.ok(text(renderer.root).includes("Restore its connection in Settings."), "unavailable individual tools retain corrective information");
+    await click(choice("missing_tool"));
+    assert.ok(!current.presented_tools.includes("missing_tool"), "missing saved choices remain removable");
+
+    await click(action("Turn all off"));
+    assert.deepEqual(current.presented_tools, [], "the bulk off action stays an explicit empty selection");
+    assert.equal(panel("Browser").props.hidden, false);
+    await click(action("Standard tools"));
+    assert.equal(current.presented_tools, null, "the standard action retains canonical default-following semantics");
+    assert.equal(choice("Project files").props["aria-checked"], true);
+    assert.equal(choice("Host shell").props["aria-checked"], false);
+    assert.equal(current.instructions, "Keep this draft", "tool editing retains unrelated draft fields");
+    assert.equal(current.approval_mode, undefined, "selecting tools does not assign access");
+    assert.equal(current.desktop_access, undefined);
+
+    await act(async () => renderer.update(React.createElement(Host, { catalogue, disabled: true })));
+    assert.equal(choice("Project files").props.disabled, true);
+    assert.equal(choice("Read files").props.disabled, true);
+    assert.equal(action("Standard tools").props.disabled, true);
+    const beforeDisabled = edits.length;
+    await click(disclosure("Project files"));
+    assert.equal(panel("Project files").props.hidden, false, "disabled editing still permits inspecting choices");
+    assert.equal(edits.length, beforeDisabled);
+
+    await act(async () => renderer.update(React.createElement(Host, { catalogue: { ...catalogue, tools: [], toolCatalogueStatus: "loading" } })));
+    assert.match(text(renderer.root), /Loading tool choices/, "loading is distinct from an empty catalogue");
+    assert.equal(renderer.root.findAllByProps({ className: "setup-tool-group-expand" }).length, 0, "empty groups have no toggle");
+    await act(async () => renderer.update(React.createElement(Host, { catalogue: { ...catalogue, tools: [], toolCatalogueStatus: "error" } })));
+    assert.match(text(renderer.root), /Tool choices unavailable/, "catalogue failures retain the corrective state");
+    assert.equal(current.instructions, "Keep this draft", "loading/error transitions retain the draft");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
