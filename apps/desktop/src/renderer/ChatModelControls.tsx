@@ -25,11 +25,31 @@ export function chatTuningCandidate(configuration: SetupConfiguration, thinking:
   const requests = Object.fromEntries(Object.entries(configuration.per_request_overrides ?? {}).filter(([key]) => !thinkingFields.has(key)));
   return { ...configuration, startup_overrides: startup, per_request_overrides: { ...requests, ...thinking } };
 }
+function modelFilename(bundle?: ModelBundle): string {
+  return bundle?.primary_path?.split(/[\\/]/).at(-1) ?? bundle?.files?.find(file => file.role === "primary_weights")?.path.split(/[\\/]/).at(-1) ?? "";
+}
 function modelDescription(bundle?: ModelBundle): string {
   if (!bundle) return "";
-  const filename = bundle.primary_path?.split(/[\\/]/).at(-1) ?? bundle.files?.find(file => file.role === "primary_weights")?.path.split(/[\\/]/).at(-1) ?? "";
+  const filename = modelFilename(bundle);
   const variant = /low[-_]mtp/i.test(filename) ? "LOW-MTP" : /(?:^|[-_.])mtp(?:[-_.]|$)/i.test(filename) ? "MTP" : "";
-  return [bundle.quantization, variant, filename].filter(Boolean).join(" · ");
+  return [bundle.quantization, variant].filter(Boolean).join(" · ");
+}
+function modelName(bundle: ModelBundle): string {
+  const repositoryName = bundle.display_name === bundle.source?.repo_id;
+  if (!repositoryName && !/\.gguf$/i.test(bundle.display_name)) return bundle.display_name;
+  const name = repositoryName ? bundle.display_name.split("/").at(-1)! : bundle.display_name;
+  return name.replace(/[._ -]gguf$/i, "").replace(/[-_]+/g, " ").replace(/\b[a-z]/g, letter => letter.toUpperCase());
+}
+function modelLabel(bundle: ModelBundle, bundles: ModelBundle[]): string {
+  const name = modelName(bundle);
+  const siblings = bundles.filter(item => modelName(item) === name && modelDescription(item) === modelDescription(bundle));
+  if (siblings.length < 2) return name;
+  const publisher = bundle.source?.repo_id?.split("/")[0];
+  const uniquePublisher = publisher && siblings.filter(item => item.source?.repo_id?.split("/")[0] === publisher).length === 1;
+  return `${name} · ${uniquePublisher ? publisher : `Install ${siblings.indexOf(bundle) + 1}`}`;
+}
+function modelDetails(bundle?: ModelBundle): string {
+  return bundle ? [bundle.display_name, modelDescription(bundle), modelFilename(bundle)].filter(Boolean).join(" · ") : "";
 }
 function modelChoiceConfiguration(configuration: SetupConfiguration, profile: RunProfile | null, connected: Deployment | null): SetupConfiguration {
   const key = profile?.bundle_id ?? connected?.id ?? "";
@@ -66,7 +86,6 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const [pickerOpen, setPickerOpen] = useState(false);
   const [tuningOpen, setTuningOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [highlighted, setHighlighted] = useState(0);
   const choicesRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -96,7 +115,7 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const selectedDeployment = deployments.find(item => item.id === selectedDeploymentId);
   const selectedBundleId = selectedProfile?.bundle_id ?? selectedDeployment?.bundle_id;
   const selectedBundle = availableBundles.find(item => item.id === selectedBundleId);
-  const selectedName = selectedBundle?.display_name ?? selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
+  const selectedName = selectedBundle ? modelLabel(selectedBundle, availableBundles) : selectedDeployment?.display_name.replace(/^(managed|connected):/, "") ?? "Choose model";
   const runtimeRevision = JSON.stringify(deployments.map(item => [item.id, item.profile_id, item.status, item.health?.healthy, item.settings?.startup?.requested]));
   const residency = useSetupPreview(configuration, projectId, agentSetupVersionId, "conversation", runtimeRevision, Boolean(selectedProfile || selectedDeployment));
   function observed(profile: RunProfile | null, connected: Deployment | null) {
@@ -209,12 +228,20 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
     finally { pending.current = false; setBusy(false); }
   }
 
-  function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "") {
+  function choiceRow(profile: RunProfile | null, connected: Deployment | null, label: string, close: () => void, className = "chat-model-choice", description = "", details = description) {
     const key = profile?.id ?? connected?.id ?? label;
     const state = observed(profile, connected);
     const reason = incompatibleChoices[key];
-    const index = visibleKeys.indexOf(className.includes("chat-model-variant") ? `${key}:variant` : key);
-    return <button id={`chat-model-option-${index}`} type="button" role="option" aria-selected={profile ? selectedProfile?.id === profile.id : connected?.id === selectedDeploymentId} data-highlighted={index === highlighted} className={className} key={key} disabled={busy || fixedModel || Boolean(reason) || (!profile && !connected)} aria-pressed={profile ? selectedProfile?.id === profile.id : connected?.id === selectedDeploymentId} title={[label, description, reason || state.label].filter(Boolean).join(" · ")} onPointerMove={() => setHighlighted(index)} onClick={() => void applyChoice(profile, connected, close)}><span className="chat-model-choice-name"><strong>{label}</strong>{description ? <small>{description}</small> : null}</span><span className={"model-state-dot is-" + (reason ? "attention" : state.tone)} aria-label={reason || state.label} /></button>;
+    const variant = className.includes("chat-model-variant");
+    const selected = profile ? selectedProfile?.id === profile.id : connected?.id === selectedDeploymentId;
+    const index = visibleKeys.indexOf(variant ? `${key}:variant` : key);
+    const status = <span className={"model-state-dot is-" + (reason ? "attention" : state.tone)} aria-label={reason || state.label} />;
+    return <button id={`chat-model-option-${index}`} type="button" role="option" aria-selected={selected} data-highlighted={index === highlighted} className={className} key={key} disabled={busy || fixedModel || Boolean(reason) || (!profile && !connected)} aria-pressed={selected} title={[label, details, reason || state.label].filter(Boolean).join(" · ")} onPointerMove={() => setHighlighted(index)} onClick={() => void applyChoice(profile, connected, close)}>
+      {!variant ? status : null}
+      <span className="chat-model-choice-name"><strong>{label}</strong></span>
+      {description ? <span className="chat-model-quantization">{description}</span> : null}
+      {variant && (reason || state.tone === "loading" || state.tone === "attention") ? status : variant && selected ? <Icon name="check" size={14} /> : null}
+    </button>;
   }
   const baseContext = facts["startup.ctx_size"]?.inherited_value;
   const contextSupported = Boolean(selectedProfile?.bundle_id) && options?.context_size.supported !== false;
@@ -224,18 +251,18 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
   const defaults = (key: string, target: "configuration" | "model" = "configuration") => defaultSettingDisplay(facts["per_request." + key], target, key);
   const contextDefault = defaultSettingDisplay(facts["startup.ctx_size"], "configuration", "ctx_size");
   const term = search.trim().toLocaleLowerCase();
-  const visibleBundles = availableBundles.filter(item => (item.status === "ready" || item.disk_matches) && [item.display_name, modelDescription(item), ...profiles.filter(profile => profile.bundle_id === item.id).map(profile => profile.display_name)].join(" ").toLocaleLowerCase().includes(term));
+  const visibleBundles = availableBundles.filter(item => (item.status === "ready" || item.disk_matches) && [modelLabel(item, availableBundles), modelDetails(item), ...profiles.filter(profile => profile.bundle_id === item.id).map(profile => profile.display_name)].join(" ").toLocaleLowerCase().includes(term));
   const visibleConnected = connectedChoices.filter(item => item.display_name.toLocaleLowerCase().includes(term));
-  const visibleKeys = [...visibleBundles.flatMap(bundle => [preferredConfiguration(bundle)?.id ?? bundle.id, ...(expanded === bundle.id ? profiles.filter(profile => profile.bundle_id === bundle.id).map(profile => `${profile.id}:variant`) : [])]), ...visibleConnected.map(item => item.id)];
+  const visibleKeys = [...visibleBundles.flatMap(bundle => [preferredConfiguration(bundle)?.id ?? bundle.id, ...profiles.filter(profile => profile.bundle_id === bundle.id).map(profile => `${profile.id}:variant`)]), ...visibleConnected.map(item => item.id)];
   const visibleKeySignature = visibleKeys.join("|");
   useEffect(() => {
     if (!pickerOpen) return;
     const selected = visibleKeys.indexOf(selectedProfile?.id ?? selectedDeployment?.id ?? "");
     setHighlighted(selected >= 0 ? selected : 0);
-  }, [pickerOpen, search, expanded, visibleKeySignature]);
-  useEffect(() => { choicesRef.current?.querySelector<HTMLElement>(`#chat-model-option-${highlighted}`)?.scrollIntoView?.({ block: "nearest" }); }, [highlighted, search, expanded, pickerOpen]);
+  }, [pickerOpen, search, visibleKeySignature]);
+  useEffect(() => { choicesRef.current?.querySelector<HTMLElement>(`#chat-model-option-${highlighted}`)?.scrollIntoView?.({ block: "nearest" }); }, [highlighted, search, pickerOpen]);
   return <>
-    <MenuPopover label={"Chat model: " + selectedName} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model" title={[selectedName, modelDescription(selectedBundle), selectedProfile?.display_name].filter(Boolean).join(" · ")}>{selectedName}{selectedProfile ? <small> · {selectedProfile.display_name}</small> : null}</span><span className={"model-state-dot is-" + selectedState.tone} title={selectedState.label} /><span className="sr-only chat-model-status">{selectedState.label}</span></>} disabled={disabled} openRequest={openRequest} onOpenChange={setPickerOpen}>
+    <MenuPopover label={"Chat model: " + selectedName} className="chat-model-controls" panelClassName="chat-model-controls-panel" trigger={<><Icon name="models" size={16} /><span className="chat-model-controls-model" title={[modelDetails(selectedBundle) || selectedName, selectedProfile?.display_name].filter(Boolean).join(" · ")}>{selectedName}</span>{modelDescription(selectedBundle) ? <span className="chat-model-quantization">{modelDescription(selectedBundle)}</span> : null}<span className={"model-state-dot is-" + selectedState.tone} title={selectedState.label} /><span className="sr-only chat-model-status">{selectedState.label}</span></>} disabled={disabled} openRequest={openRequest} onOpenChange={setPickerOpen}>
       {close => <>
         {fixedModel ? <div className="actions"><span>Assigned by agent</span><button type="button" onClick={onManageAgent}>Change in Agents</button></div> : null}
         <input aria-label="Search models" placeholder="Search models" value={search} aria-controls="chat-model-choices" aria-activedescendant={visibleKeys.length ? `chat-model-option-${Math.min(highlighted, visibleKeys.length - 1)}` : undefined} onChange={event => setSearch(event.target.value)} onKeyDown={event => {
@@ -249,7 +276,10 @@ export function ChatModelControls({ bundles, deployments, profiles, selectedDepl
           {visibleBundles.map(bundle => {
             const profile = preferredConfiguration(bundle);
             const variants = profiles.filter(item => item.bundle_id === bundle.id);
-            return <div key={bundle.id} className="chat-model-row"><div className="chat-model-primary">{choiceRow(profile ?? null, null, bundle.display_name, close, "chat-model-choice", [modelDescription(bundle), profile?.display_name].filter(Boolean).join(" · "))}{variants.length > 1 ? <button type="button" className="icon-button" aria-label={"Configurations for " + bundle.display_name} aria-expanded={expanded === bundle.id} title="Configurations" onClick={() => setExpanded(value => value === bundle.id ? null : bundle.id)}>{expanded === bundle.id ? "▾" : "▸"}</button> : null}</div>{expanded === bundle.id ? <div className="chat-model-variants">{variants.map(item => choiceRow(item, null, item.display_name, close, "chat-model-choice chat-model-variant", modelDescription(bundle)))}</div> : null}</div>;
+            return <div key={bundle.id} className="chat-model-row">
+              <div className="chat-model-primary">{choiceRow(profile ?? null, null, modelLabel(bundle, availableBundles), close, "chat-model-choice", modelDescription(bundle), [modelDetails(bundle), profile?.display_name].filter(Boolean).join(" · "))}</div>
+              {variants.length ? <div className="chat-model-variants" role="group" aria-label={"Settings for " + modelLabel(bundle, availableBundles)}>{variants.map(item => choiceRow(item, null, item.display_name, close, "chat-model-choice chat-model-variant", "", modelDetails(bundle)))}</div> : null}
+            </div>;
           })}
           {visibleConnected.map(item => choiceRow(null, item, item.display_name.replace(/^connected:/, ""), close, "chat-model-choice", "Connected server"))}
           {!visibleKeys.length && (availableBundles.length || connectedChoices.length) ? <p className="hint">No models match this search.</p> : null}

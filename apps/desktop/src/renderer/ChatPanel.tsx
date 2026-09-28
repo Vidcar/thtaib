@@ -21,7 +21,7 @@ import { BrowserRail, useBrowserRailActivity } from "./BrowserRail";
 
 type RailPage = ChatRailPage;
 import { ChatDockContext } from "./chatDockContext";
-import { packet03Request } from "./packet03Api";
+import { packet03Api, packet03Request } from "./packet03Api";
 import { ChatModelControls } from "./ChatModelControls";
 import { HelperRail, helperEntries, helperIsActive } from "./HelperRail";
 import { ChatMeasurements, publishLiveMeasurement } from "./ChatMeasurements";
@@ -716,6 +716,16 @@ export function ChatPanel(props: ChatPanelProps = {}) {
   const [selectedTools, setSelectedTools] = useState<string[] | null>(null);
   const [toolMenuOpen, setToolMenuOpen] = useState(false);
   const [toolMenuRequest, setToolMenuRequest] = useState(0);
+  const [hasSavedPermissions, setHasSavedPermissions] = useState(false);
+  useEffect(() => {
+    setHasSavedPermissions(false);
+    if (!toolMenuOpen) return;
+    let cancelled = false;
+    void packet03Api.grants().then(grants => {
+      if (!cancelled) setHasSavedPermissions(grants.length > 0);
+    }).catch(() => { /* Permission management remains available in Settings. */ });
+    return () => { cancelled = true; };
+  }, [toolMenuOpen]);
 
   const [helperAgentIds, setHelperAgentIds] = useState<string[]>([]);
   const [review, setReview] = useState({ enabled: false, criteria: "", max_revisions: 2 as const });
@@ -2162,9 +2172,9 @@ export function ChatPanel(props: ChatPanelProps = {}) {
               <button type="button" className="menu-action" onClick={() => { markSetupEdited("work_mode"); setWorkMode("plan"); close(); }} disabled={workMode === "plan"}><Icon name="knowledge" />Plan</button>
             </>}</MenuPopover>
             <MenuPopover label="Approval mode" panelClassName="chat-access-panel" trigger={<><Icon name="shield" /><span>{approvalModeLabel(approvalMode)}</span></>} disabled={selectionBusy || sending} openRequest={toolMenuRequest} onOpenChange={setToolMenuOpen}>
+                <div className="chat-access-heading"><span>Access</span><HoverHelp title="When access changes">Changes apply to your next message. Running and queued messages keep their access. Plan stays read-only; disabled tools stay off.</HoverHelp></div>
                 <ApprovalModeControl value={approvalMode} disabled={selectionBusy || sending} onChange={mode => { markSetupEdited("approval_mode"); setApprovalMode(mode); }} />
-                <div className="menu-section"><HoverHelp title="When access changes">Applies to your next message. Running and queued messages keep their chosen access. Tools that are off stay off. Plan mode stays read-only at every access level.</HoverHelp></div>
-                <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button>
+                {hasSavedPermissions ? <button type="button" className="chat-tools-permissions" onClick={openPermissions}><Icon name="settings" size={14} /> Saved permissions</button> : null}
                 {toolMenuOpen ? <VisualTestingControls windowsOnly conversationId={conversation?.id ?? null} threadId={conversation?.thread_id ?? null} browserEnabled={browserEnabled} onBrowserEnabled={() => {}} desktopAccess={desktopAccess} workMode={workMode} focusSection="windows" focusNonce={toolMenuRequest} disabled={selectionBusy || sending} canPrepareConversation={hasModelChoice} onSettings={() => { try { sessionStorage.setItem("workbench.settings.category", "Connections"); } catch {} navigateAway("settings"); }} onReadinessChange={() => setReadinessEpoch(value => value + 1)} onPrepareConversation={async () => { const created = await persistBeforeLeaving() ?? await createDraftConversation(); cacheConversation(created); selectConversation(created); }} onDesktopAccess={scope => { setDesktopAccess(scope); markSetupEdited("desktop_access"); setReadinessEpoch(value => value + 1); }} /> : null}
             </MenuPopover>
             {workMode === "plan" ? <button type="button" className="chat-plan-pill" aria-label="Turn off Plan mode" title="Turn off Plan mode" onClick={() => { markSetupEdited("work_mode"); setWorkMode("work"); }} disabled={selectionBusy || sending}><Icon name="close" size={12} /> Plan</button> : null}

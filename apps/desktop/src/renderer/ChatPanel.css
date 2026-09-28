@@ -366,7 +366,9 @@
 .chat-access-panel .approval-mode {gap: 2px;}
 .chat-access-panel .approval-mode button {padding: var(--pad-tight) var(--pad-compact);}
 .chat-access-panel .approval-mode small {font-size: var(--text-small); margin-top: 2px;}
-.chat-access-panel .menu-section {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.chat-access-heading {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); padding: var(--pad-tight) var(--pad-compact); color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-medium);}
+.chat-access-panel .chat-tools-permissions {display: flex; align-items: center; gap: var(--space-compact); width: 100%; padding: var(--pad-tight) var(--pad-compact); border: 0; background: transparent; color: var(--muted); text-align: left;}
+.chat-access-panel .chat-tools-permissions:hover {background: var(--hover); color: var(--text);}
 .chat-agent-option {display: grid; gap: var(--space-tight); min-width: 0;}
 .chat-agent-option > small {padding-inline: var(--pad-compact); overflow-wrap: anywhere;}
 .chat-agent-option .text-button {justify-self: start; margin-inline: var(--pad-compact);}
