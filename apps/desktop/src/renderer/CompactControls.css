@@ -76,3 +76,5 @@
 .setting-title {display: flex; align-items: center; gap: var(--space-tight); margin-bottom: var(--space-tight);}
 .setting-title label {margin: 0; font-size: var(--text-body);}
 .segmented-options label[data-inherited] span {color: var(--text); box-shadow: inset 0 0 0 var(--line-hairline) color-mix(in srgb, var(--muted) var(--tint-half), transparent);}
+.slider-field input[data-unknown], .compact-slider input[data-unknown] {--range-fill: 0%; opacity: var(--fade-quiet);}
+.slider-field input[data-unknown]::-webkit-slider-thumb, .compact-slider input[data-unknown]::-webkit-slider-thumb {background: var(--muted);}

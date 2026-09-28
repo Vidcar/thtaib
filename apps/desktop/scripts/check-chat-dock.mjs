@@ -16,7 +16,7 @@ const css = readFileSync(path.join(desktopRoot, "src/renderer/ChatPanel.css"), "
 const dockSource = readFileSync(path.join(desktopRoot, "src/renderer/ChatDock.tsx"), "utf8");
 const monacoSource = readFileSync(path.join(desktopRoot, "src/renderer/monacoSetup.ts"), "utf8");
 
-assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, min\(var\(--inspector-width, 380px\), 48%\)\)/, "the dock stays within half the available width so fixed column minimums cannot overflow a narrow conversation");
+assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, min\(var\(--inspector-width, 380px\), 48%, calc\(100% - 400px\)\)\)/, "the dock preserves a readable conversation while observed resize geometry catches up");
 assert.doesNotMatch(css, /files-expanded[\s\S]*display:\s*none/, "widening the dock does not hide the conversation");
 assert.match(css, /grid-area: 1 \/ 2 \/ 3 \/ 3/, "the rail stays a full-height column beside the transcript and composer");
 assert.doesNotMatch(css, /max-width: 1120px/, "a narrower window does not move the rail above the composer");
@@ -28,6 +28,36 @@ assert.doesNotMatch(`${dockSource}\n${monacoSource}`, /cdn\.|jsdelivr|unpkg/, "t
 
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
+  const { useConversationDockView, chatDockGeometry } = await vite.ssrLoadModule("/src/renderer/ChatDock.tsx");
+  assert.deepEqual(chatDockGeometry(320, 706), { width: 306, max: 306, canOpen: true }, "the half-width Chat pane retains a 400px readable conversation");
+  assert.deepEqual(chatDockGeometry(620, 680), { width: 280, max: 280, canOpen: true }, "the minimum dock and readable conversation fit at 680px");
+  assert.equal(chatDockGeometry(620, 679).canOpen, false, "below 680px the dock waits for a wider pane");
+  assert.equal(chatDockGeometry(620, 1400).width, 620, "widening restores the preferred dock width");
+  const { usePanelWidth } = await vite.ssrLoadModule("/src/renderer/PanelResize.tsx");
+  const oldWindow = globalThis.window;
+  const storage = new Map([["workbench.inspector.width", "560"], ["workbench.browser.rail.width", "900"]]);
+  globalThis.window = { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) } };
+  function DockView({ conversationId }) {
+    const [view, update] = useConversationDockView(conversationId);
+    const [width, resize] = usePanelWidth("workbench.chat.dock.width", 320, 280, 1100, "workbench.inspector.width");
+    return React.createElement("output", { view, update, width, resize });
+  }
+  let dock;
+  try {
+    await act(async () => { dock = create(React.createElement(DockView, { conversationId: "a" })); });
+    const read = () => dock.root.findByType("output").props;
+    assert.equal(read().width, 560, "the one dock preference is seeded from Files rather than Browser");
+    const remembered = { open: true, page: "browser", helper: "parent:helper", projectId: "project", path: "src/file.txt", filter: "file", folders: ["src"], previewId: "upload", filesScroll: 420, helpersScroll: 80, treeScroll: 560, treeScrollLeft: 20, treeSelection: "src/file.txt", fileViews: { "project:src/file.txt": { state: null, scrollTop: 1200, scrollLeft: 50 } } };
+    await act(async () => { read().update(remembered); read().resize(620); });
+    await act(async () => dock.update(React.createElement(DockView, { conversationId: "b" })));
+    assert.equal(read().view.open, false); assert.equal(read().view.filter, "", "another conversation does not inherit file filters"); assert.equal(read().width, 620, "tabs and chats use the same preferred width");
+    await act(async () => read().update({ open: true, page: "helpers", helper: "other" }));
+    await act(async () => dock.update(React.createElement(DockView, { conversationId: "a" })));
+    for (const [key, value] of Object.entries(remembered)) assert.deepEqual(read().view[key], value, `A to B to A restores ${key}`);
+    await act(async () => dock.unmount()); dock = null;
+    await act(async () => { dock = create(React.createElement(DockView, { conversationId: "a" })); });
+    assert.equal(read().width, 620); assert.equal(read().view.previewId, "upload"); assert.equal(read().view.filesScroll, 420, "restart restores only local presentation state");
+  } finally { if (dock) await act(async () => dock.unmount()); globalThis.window = oldWindow; }
   const { AgentMessageFeed } = await vite.ssrLoadModule("/src/renderer/AgentMessageFeed.tsx");
   const { ChatDockContext } = await vite.ssrLoadModule("/src/renderer/chatDockContext.tsx");
   const opened = [];

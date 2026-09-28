@@ -9,13 +9,17 @@ const scratch = path.join(repo, ".scratch/browser-rail-native");
 fs.mkdirSync(scratch, { recursive: true });
 const main = path.join(scratch, "browser-rail-main.cjs");
 fs.copyFileSync(path.join(desktop, "scripts/fixtures/check-browser-rail.cjs"), main);
+const dockMain = path.join(scratch, "chat-dock-main.cjs");
+fs.copyFileSync(path.join(desktop, "scripts/fixtures/check-chat-dock.cjs"), dockMain);
 const require = createRequire(path.join(desktop, "package.json"));
 const { createServer } = require("vite");
 const vite = await createServer({ configFile: false, root: path.join(desktop, "scripts/fixtures"), server: { host: "127.0.0.1", port: 0, watch: null, fs: { allow: [repo] } }, resolve: { dedupe: ["react", "react-dom"], alias: { react: path.join(desktop, "node_modules/react"), "react-dom": path.join(desktop, "node_modules/react-dom") } }, esbuild: { jsx: "automatic" }, logLevel: "error" });
 try {
   await vite.listen();
-  const child = spawn(require("electron"), [main, `${vite.resolvedUrls.local[0]}browser-rail.html`], { cwd: scratch, env: { ...process.env, WORKBENCH_BROWSER_RAIL_SCRATCH: scratch }, stdio: "inherit", windowsHide: true });
-  const timeout = setTimeout(() => child.kill(), 60000);
-  try { process.exitCode = await new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", code => resolve(code ?? 1)); }); }
-  finally { clearTimeout(timeout); }
+  for (const [entry, html] of [[main, "browser-rail.html"], [dockMain, "chat-dock.html"]]) {
+    const child = spawn(require("electron"), [entry, `${vite.resolvedUrls.local[0]}${html}`], { cwd: scratch, env: { ...process.env, WORKBENCH_BROWSER_RAIL_SCRATCH: scratch }, stdio: "inherit", windowsHide: true });
+    const timeout = setTimeout(() => child.kill(), 60000);
+    try { const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", code => resolve(code ?? 1)); }); if (code !== 0) { process.exitCode = code; break; } }
+    finally { clearTimeout(timeout); }
+  }
 } finally { await vite.close(); }

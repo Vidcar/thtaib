@@ -7,6 +7,11 @@
 .chat-model-choice-list {display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--space-tight); max-height: 34vh; overflow-y: auto; overflow-x: hidden;}
 .chat-model-choice {display: flex; justify-content: space-between; align-items: center; gap: var(--space-compact); min-width: 0; width: 100%; min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text); text-align: left;}
 .chat-model-choice:hover, .chat-model-choice[aria-pressed="true"] {background: var(--bg-raised);}
+.chat-model-choice[data-highlighted="true"] {background: var(--bg-raised); outline: var(--line-hairline) solid var(--accent); outline-offset: -1px;}
+.chat-model-choice .chat-model-choice-name {display: grid; gap: 2px; min-width: 0; flex: 1;}
+.chat-model-choice-name small {display: block; color: var(--muted); font-size: var(--text-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-regular);}
+.chat-model-controls-model small {color: var(--muted); font-weight: var(--weight-regular);}
+.chat-tuning-panel label > small {color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular);}
 .chat-model-choice strong {min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: var(--weight-medium);}
 .chat-model-choice span {flex: none; font-size: var(--text-small); color: var(--muted);}
 .chat-variant-choice {display: grid; gap: var(--space-tight); padding-top: var(--pad-compact); border-top: var(--line-hairline) solid var(--border); font-size: var(--text-small); color: var(--muted);}

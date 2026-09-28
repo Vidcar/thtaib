@@ -53,6 +53,8 @@ function Fixture() {
   const [thread, setThread] = useState("one");
   fixture.toggle = next => { fixture.visible = next; setVisible(next); };
   fixture.switchChat = setThread;
-  return <section className="chat-layout" style={{ height: "100vh", width: "100vw", "--inspector-width": "640px" } as React.CSSProperties}><div className={`chat-workspace${visible ? " files-open browser-open" : ""}`}><div className="chat-main"><p>Conversation stays open.</p></div><aside className="chat-files-panel chat-rail" hidden={!visible}><div className="chat-rail-tabs"><span>Browser</span></div><div className="chat-rail-body"><BrowserRail key={thread} threadId={thread} visible={visible} enabled projectBound attachments={[]} onConfigure={() => {}} onOpenLibrary={() => {}} /></div></aside></div></section>;
+  // This fixture exercises Browser rendering and scaled input at a narrow rail
+  // width. Mounted Chat tests own the minimum width needed to open its dock.
+  return <section className="chat-layout" style={{ height: "100vh", width: "100vw" }}><aside className="chat-rail" hidden={!visible} style={{ width: "min(640px, 100%)", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}><div className="chat-rail-tabs"><span>Browser</span></div><div className="chat-rail-body" style={{ flex: 1, overflow: "hidden" }}><BrowserRail key={thread} threadId={thread} visible={visible} enabled projectBound attachments={[]} onConfigure={() => {}} onOpenFiles={() => {}} /></div></aside></section>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

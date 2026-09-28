@@ -199,6 +199,7 @@ function makeHarness(options = {}) {
     browserInstalled: options.browserInstalled ?? true,
     browserSessionState: options.browserSessionState ?? "active",
     testIntervals: new Map(),
+    testAnimationFrames: new Map(),
     requests: {
       commands: [],
       creates: [],
@@ -783,11 +784,34 @@ async function renderChat(vite, harness, props = {}) {
     };
     return response;
   };
+  const previousFrames = { request: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
+  let frameId = 0;
+  const requestFrame = callback => {
+    const id = ++frameId;
+    const timer = setTimeout(() => {
+      harness.state.testAnimationFrames.delete(id);
+      callback(performance.now());
+    }, 0);
+    harness.state.testAnimationFrames.set(id, timer);
+    return id;
+  };
+  const cancelFrame = id => {
+    clearTimeout(harness.state.testAnimationFrames.get(id));
+    harness.state.testAnimationFrames.delete(id);
+  };
+  harness.state.restoreAnimationFrames = () => {
+    for (const timer of harness.state.testAnimationFrames.values()) clearTimeout(timer);
+    harness.state.testAnimationFrames.clear();
+    if (previousFrames.request) globalThis.requestAnimationFrame = previousFrames.request; else delete globalThis.requestAnimationFrame;
+    if (previousFrames.cancel) globalThis.cancelAnimationFrame = previousFrames.cancel; else delete globalThis.cancelAnimationFrame;
+  };
+  globalThis.requestAnimationFrame = requestFrame;
+  globalThis.cancelAnimationFrame = cancelFrame;
   globalThis.window = Object.assign(new EventTarget(), {
     workbench: { backendUrl: `http://127.0.0.1:${port}` },
     setInterval: (callback, delay) => { const id = setInterval(callback, delay); harness.state.testIntervals.set(id, callback); return id; },
     clearInterval: id => { clearInterval(id); harness.state.testIntervals.delete(id); },
-    setTimeout, clearTimeout, requestAnimationFrame: callback => setTimeout(callback, 0), cancelAnimationFrame: clearTimeout,
+    setTimeout, clearTimeout, requestAnimationFrame: requestFrame, cancelAnimationFrame: cancelFrame,
   });
   const { ChatPanel } = await vite.ssrLoadModule("/src/renderer/ChatPanel.tsx");
   const { WorkbenchSidebar } = await vite.ssrLoadModule("/src/renderer/WorkbenchSidebar.tsx");
@@ -806,6 +830,7 @@ async function closeHarness(renderer, harness) {
   await act(async () => {
     renderer.unmount();
   });
+  harness.state.restoreAnimationFrames?.();
   for (const stream of harness.state.allStreams.keys()) {
     stream.end();
   }
@@ -1432,7 +1457,7 @@ async function testSelectedFileBelongsToProject(vite) {
     await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_a", path: "index.html" }), "selected file loaded");
     await act(async () => button(renderer, "Same project chat").props.onClick());
     await waitFor(() => assert.equal(dock()?.props.conversationId, "conv_same"), "same project conversation selected");
-    assert.equal(dock().props.selectedPath, "index.html", "same project keeps the user's selected file");
+    assert.equal(dock().props.selectedPath, "", "another chat in the same project starts with its own file view");
     await act(async () => button(renderer, "Conversation B").props.onClick());
     await waitFor(() => assert.equal(dock()?.props.projectId, "project_b"), "second project displayed");
     assert.equal(dock().props.selectedPath, "", "different project starts with no selected file");
@@ -1442,7 +1467,11 @@ async function testSelectedFileBelongsToProject(vite) {
     await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_b", path: "hold.py" }), "new project file opens normally");
     await act(async () => button(renderer, "Conversation A").props.onClick());
     await waitFor(() => assert.equal(dock()?.props.projectId, "project_a"), "original project selected again");
-    assert.equal(dock().props.selectedPath, "", "returning to another project cannot retain its previous selection");
+    assert.equal(dock().props.selectedPath, "index.html", "returning to the original chat restores only its own project file");
+    await waitFor(() => assert.deepEqual(harness.state.requests.projectFiles.at(-1), { projectId: "project_a", path: "index.html" }), "original chat file reopened within its project");
+    await act(async () => button(renderer, "Conversation B").props.onClick());
+    await waitFor(() => assert.equal(dock()?.props.projectId, "project_b"), "second chat selected again");
+    assert.equal(dock().props.selectedPath, "hold.py", "each chat retains its own file selection");
   } finally { await closeHarness(renderer, harness); }
 }
 
@@ -2644,12 +2673,17 @@ async function testModelChangeClearsOnlyModelSpecificOverrides(vite) {
 }
 
 async function selectFixtureModel(renderer) {
+  await waitFor(() => {
+    const picker = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
+    assert.equal(picker.props.disabled, false, "the model picker waits for initial Chat settings");
+  }, "fixture model picker enabled");
   const choice = renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice" && textOf(node).includes("test"))[0];
   assert.ok(choice, "fixture model is available to select explicitly");
   await act(async () => choice.props.onClick());
   await waitFor(() => {
     const picker = renderer.root.findAll(node => typeof node.type === "function" && node.type.name === "ChatModelControls")[0];
     assert.equal(picker.props.selectedDeploymentId, "dep_1");
+    assert.equal(picker.props.disabled, false, "model application finishes before the next choice");
   }, "fixture model applied to Chat");
 }
 

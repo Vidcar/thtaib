@@ -1,0 +1,23 @@
+.surface.agents-surface {container: workbench-surface workspace-records / inline-size;}
+.agents-surface .agent-editor {padding: 0; display: grid; gap: var(--space-compact); min-width: 0;}
+.agent-editor > .section-heading {align-items: center; padding-bottom: var(--pad-compact); border-bottom: var(--line-hairline) solid var(--border);}
+.agent-editor .model-tabs {margin: 0;}
+.agent-role-fields {display: grid;}
+.agent-steps {display: flex; gap: var(--space-compact); flex-wrap: wrap; color: var(--muted);}
+.agent-steps span {padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-small);}
+.agent-steps [aria-current="step"] {color: var(--text); background: var(--bg-raised); border-radius: var(--radius-control);}
+.agent-editor-actions {padding-top: var(--pad-card); margin-top: var(--space-compact); border-top: var(--line-hairline) solid var(--border);}
+.agent-review {margin: 0; display: grid; font-size: var(--text-body);}
+.agent-review > div {display: grid; grid-template-columns: minmax(8rem, 30%) minmax(0, 1fr); gap: var(--space-compact); padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
+.agent-review dt {color: var(--muted);}
+.agent-review dd {margin: 0; min-width: 0; overflow-wrap: anywhere;}
+.agent-review dd ul {margin: 0; padding-left: var(--pad-card);}
+.agent-review dd small {display: block; color: var(--muted); font-size: var(--text-small); margin-top: var(--space-tight);}
+.agent-review dd.workspace-text {max-height: var(--layout-menu); overflow: auto;}
+.agents-surface .workspace-versions {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.agents-surface .workspace-versions > summary {display: flex; align-items: center; gap: var(--space-tight); color: var(--muted); cursor: pointer;}
+.agents-surface details > summary::before {content: "›"; color: var(--muted);}
+.agents-surface details[open] > summary::before {transform: rotate(90deg);}
+.agents-surface .workspace-versions > summary small {margin-left: auto;}
+.agent-lifecycle-actions {padding-top: var(--pad-compact);}
+@container workbench-surface (max-width: 450px) {.agent-review > div {grid-template-columns: minmax(0, 1fr); gap: var(--space-tight);}}

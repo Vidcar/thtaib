@@ -1,0 +1,19 @@
+.setup-configuration-editor .setup-options > summary {display: flex; align-items: center; gap: var(--space-tight); min-height: var(--control-height); cursor: pointer;}
+.setup-configuration-editor details > summary::before {content: "›"; color: var(--muted); transition: transform .12s ease;}
+.setup-configuration-editor details[open] > summary::before {transform: rotate(90deg);}
+.setup-configuration-editor summary small {color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular); margin-left: auto;}
+.setup-configuration-editor .setup-options > summary {list-style: none;}
+.setup-tool-group {border-bottom: var(--line-hairline) solid var(--border); padding-bottom: var(--pad-tight);}
+.setup-tool-group > details {padding: 0 var(--pad-compact) var(--pad-tight);}
+.setup-tool-group > details > summary {font-size: var(--text-small); color: var(--muted); cursor: pointer;}
+.setup-helper-list {list-style: none; padding: 0; margin: var(--space-compact) 0; display: grid; gap: var(--space-tight);}
+.setup-helper-list li {display: flex; align-items: start; gap: var(--space-compact); padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
+.setup-helper-list li > svg {flex-shrink: 0; margin-top: var(--pad-tight);}
+.setup-helper-list li > div {display: grid; gap: var(--space-tight); flex: 1; min-width: 0; overflow-wrap: anywhere;}
+.setup-helper-list small {color: var(--muted); font-size: var(--text-small);}
+.setup-helper-list li > button {flex-shrink: 0;}
+.setup-helper-add {display: grid; gap: var(--space-tight); margin-top: var(--space-compact);}
+.setup-helper-add .actions {display: flex; flex-wrap: nowrap;}
+.setup-helper-add .actions > select {min-width: 0; flex: 1;}
+.setup-helper-add .actions > button {white-space: nowrap; flex-shrink: 0;}
+@media (prefers-reduced-motion: reduce) {.setup-configuration-editor .setup-options > summary::before {transition: none;}}

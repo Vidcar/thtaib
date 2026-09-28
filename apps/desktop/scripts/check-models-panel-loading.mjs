@@ -27,6 +27,7 @@ try {
   const { settingValue } = await vite.ssrLoadModule("/src/renderer/effectiveSettings.ts");
   assert.equal(settingValue(0.949999988079071), "0.95", "server float noise should not leak into the settings readout");
   await checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPanel);
+  await checkRefreshFailureKeepsModelDraft(ModelsPanel);
   await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkPinnedCardViewer((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkSelectedModelOwnsDetails(ModelsPanel);
@@ -172,17 +173,108 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
-    const speculation = renderer.root.find(node => node.type === "div" && node.props.id === "model-spec_type" && node.props.role === "radiogroup");
-    const speculationChoices = speculation.findAll(node => node.type === "input" && node.props.type === "radio");
-    assert.deepEqual(speculationChoices.map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct inherited choice");
-    assert.equal(speculationChoices.find(option => option.props.checked)?.props.value, "", "an unset startup control shows its inherited choice");
-    await act(async () => { speculationChoices.find(option => option.props.value === "draft-mtp").props.onChange(); });
+    const speculation = renderer.root.find(node => node.type === "select" && node.props.id === "model-spec_type");
+    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct default-following choice");
+    assert.equal(speculation.props.value, "", "an unset startup control follows the default");
+    await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
     assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "", "MTP draft count stays inherited until explicitly selected");
     const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
     assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");
     assert.equal(renderer.root.findAll(node => node.type === "label" && textOf(node).startsWith("Saved preset")).length, 0, "Models has one configuration editor instead of a second preset selection");
     await act(async () => renderer.unmount());
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
+  const originalFetch = globalThis.fetch;
+  const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
+  const model = { ...bundle("draft-model", "Draft model"), default_configuration_id: "draft-default" };
+  let profiles = [{ id: "draft-default", bundle_id: model.id, display_name: "Default", revision: 1, bags: { startup: bag({ ctx_size: 8192 }), per_request: bag({ temperature: 0.5 }), agent: bag({}) } }];
+  let failure = "", catalogue = [model], renderer;
+  const savedRequests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
+    if (address.endsWith("/v1/bundles")) {
+      if (failure === "bundles") throw new Error("Model refresh connection failed");
+      return jsonResponse(catalogue);
+    }
+    if (address.endsWith("/v1/profiles")) {
+      if (failure === "profiles") throw new Error("Model configurations temporarily unavailable");
+      return jsonResponse(profiles);
+    }
+    if (address.endsWith("/v1/runtime")) return jsonResponse(runtimeReady());
+    if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
+    if (["/v1/deployments", "/v1/imports"].some(suffix => address.endsWith(suffix))) return jsonResponse([]);
+    if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
+    if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
+    if (address.includes("/configuration-options")) return jsonResponse(configurationOptions());
+    if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
+    if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: body.overrides, effective_values: {}, instruction_layers: [] });
+    if (address.endsWith("/v1/settings/preview")) return jsonResponse({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
+    if (address.endsWith("/configurations")) {
+      savedRequests.push(body);
+      assert.equal(body.configuration_id, "draft-default");
+      assert.equal(body.expected_revision, profiles[0].revision, "recovered save retains the current configuration revision");
+      profiles = [{ ...profiles[0], display_name: body.display_name, revision: profiles[0].revision + 1, bags: { startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) } }];
+      return jsonResponse(profiles[0]);
+    }
+    throw new Error(`Unexpected model draft request: ${address}`);
+  };
+  const context = () => renderer.root.findByProps({ id: "model-ctx-size" });
+  const temperature = () => renderer.root.findAllByType("input").find(node => node.props.id === "model-response-temperature");
+  const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelsPanel), { createNodeMock: element => element.type === "form" ? { reportValidity: () => true } : null }); await tick(); });
+    assert.equal(context().props.value, "8192");
+    await act(async () => {
+      context().props.onChange({ target: { value: "16384" } });
+      temperature().props.onChange({ target: { value: "0.7" } });
+      renderer.root.findByProps({ id: "model-configuration-name" }).props.onChange({ target: { value: "My draft" } });
+      await tick();
+    });
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: false })); await tick(); });
+    failure = "bundles";
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: true })); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Model refresh connection failed"));
+    assert.ok(button("Retry"), "a refresh failure offers an explicit retry beside the retained editor");
+    assert.equal(context().props.value, "16384", "failed refresh never unmounts the visited editor or discards its startup draft");
+    assert.equal(temperature().props.value, 0.7, "response draft also survives failed re-entry");
+    assert.equal(renderer.root.findByProps({ id: "model-configuration-name" }).props.value, "My draft");
+    failure = "";
+    await act(async () => { button("Retry").props.onClick(); await tick(); });
+    assert.equal(button("Retry"), undefined, "successful retry clears the connection notice");
+    assert.equal(context().props.value, "16384", "successful retry keeps the unsaved edit rather than restoring saved values");
+
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: false })); await tick(); });
+    failure = "profiles";
+    catalogue = [bundle("partial-replacement", "Incomplete refresh")];
+    await act(async () => { renderer.update(React.createElement(ModelsPanel, { active: true })); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Model configurations temporarily unavailable"));
+    assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Draft model"), "partial refresh failure retains the last complete catalogue and selection");
+    assert.equal(context().props.value, "16384");
+    failure = "";
+    catalogue = [model];
+    await act(async () => { button("Save changes").props.onClick(); await tick(); });
+    assert.equal(savedRequests.length, 1, "a retained editor can save as soon as the connection recovers");
+    assert.equal(savedRequests[0].startup.ctx_size, 16384);
+    assert.equal(savedRequests[0].per_request.temperature, 0.7);
+    assert.equal(savedRequests[0].display_name, "My draft");
+    assert.equal(button("Retry"), undefined, "save refresh clears the earlier catalogue error");
+    assert.equal(renderer.root.findByProps({ className: "badge model-edit-state" }).props["data-dirty"], false);
+    assert.ok(textOf(renderer.root).includes("Configuration saved."));
+
+    await act(async () => renderer.unmount());
+    failure = "bundles";
+    await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Model refresh connection failed"), "initial failure still exposes its retry notice");
+    assert.ok(!textOf(renderer.root).includes("Your first model starts here"), "failed loading does not imply the user's model catalogue is empty");
+    failure = "";
+    await act(async () => { button("Retry").props.onClick(); await tick(); });
+    assert.equal(context().props.value, "16384", "initial-error recovery loads the saved configuration");
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
     globalThis.fetch = originalFetch;
   }
 }

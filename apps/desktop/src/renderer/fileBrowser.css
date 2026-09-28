@@ -1,15 +1,16 @@
 .file-browser {min-width: 0; display: flex; flex-direction: column; gap: var(--space-stack);}
 .file-count {color: var(--muted); font-size: var(--text-body); font-weight: var(--weight-regular);}
 .file-browser-toolbar {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact);}
-.file-browser-toolbar select {width: auto; min-width: var(--layout-narrow); max-width: 180px; padding: var(--pad-compact) var(--pad-section) var(--pad-compact) var(--pad-compact); font-size: var(--text-body);}
+.file-browser-toolbar select {width: auto; min-width: var(--layout-narrow); max-width: var(--layout-control); padding: var(--pad-compact) var(--pad-section) var(--pad-compact) var(--pad-compact); font-size: var(--text-body);}
 .file-search {display: flex; align-items: center; gap: var(--space-compact); flex: 1 1 160px; min-width: 130px; padding: 0 var(--pad-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); color: var(--muted);}
 .file-search input {min-width: 0; padding: var(--pad-compact) 0; background: transparent; border: 0; font-size: var(--text-body); box-shadow: none;}
 .file-deleted-toggle {font-size: var(--text-body); white-space: nowrap;}
-.file-selection-bar {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact); min-height: var(--control-height); font-size: var(--text-body);}
+.file-selection-bar {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact); min-height: var(--control-height); padding: var(--pad-compact); border-radius: var(--radius-control); background: var(--bg-input); font-size: var(--text-body);}
 .file-selection-bar > span {color: var(--muted); margin-right: auto;}
 .file-selection-bar button, .file-preview-actions button {padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-body);}
 .file-browser-body {display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; border-top: var(--line-hairline) solid var(--border);}
 .file-browser-body.has-preview {grid-template-columns: minmax(var(--layout-column), 1fr) minmax(var(--layout-column), 38%);}
+.file-browser-body.has-image-preview {grid-template-columns: minmax(var(--layout-column), .8fr) minmax(0, 1.2fr);}
 .file-table-wrap {min-width: 0; overflow-x: auto;}
 .file-table {width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left;}
 .file-table th {padding: var(--pad-compact) var(--pad-compact); font-size: var(--text-small); font-weight: var(--weight-medium); color: var(--muted); border-bottom: var(--line-hairline) solid var(--border);}
@@ -17,8 +18,9 @@
 .file-table th.file-check, .file-table td.file-check {width: 32px; padding: var(--pad-tight); text-align: center;}
 .file-table input[type="checkbox"] {width: var(--icon-md); height: var(--icon-md); margin: 0;}
 .file-table th:nth-last-child(2) {width: 72px;}
-.file-table .file-location {width: 16%; color: var(--muted);}
+.file-table .file-location {width: 28%; color: var(--muted);}
 .file-table .file-location > span {display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.file-table .file-location > small {display: block; margin-top: var(--space-tight); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
 .file-table .file-date {width: var(--layout-narrow); color: var(--muted);}
 .file-table .file-size {white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums;}
 .file-table tr:hover, .file-table tr.is-active {background: var(--bg-raised);}
@@ -28,6 +30,7 @@
 .file-name > span {min-width: 0;}
 .file-name strong {display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-body); font-weight: var(--weight-medium);}
 .file-name small {display: block; margin-top: var(--space-tight); color: var(--muted); font-size: var(--text-small);}
+.file-name .file-inline-source {display: none;}
 .file-preview-pane {min-width: 0; border-left: var(--line-hairline) solid var(--border); padding: var(--pad-card); display: flex; flex-direction: column; gap: var(--space-compact);}
 .file-preview-pane > header {display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-compact);}
 .file-preview-pane > header > div {min-width: 0;}
@@ -35,17 +38,23 @@
 .file-preview-pane header span {display: block; margin-top: var(--space-tight); color: var(--muted); font-size: var(--text-small);}
 .file-preview-actions {display: flex; flex-wrap: wrap; gap: var(--space-compact);}
 .file-preview-content {padding: var(--pad-compact); border-radius: var(--radius-control); background: var(--bg-raised); font-size: var(--text-body); line-height: var(--leading-body); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 65vh; margin: 0;}
+.file-preview-pane .retained-image {width: 100%; min-width: 0;}
+.file-preview-pane .image-preview-button {display: flex; align-items: center; justify-content: center; width: 100%; min-height: var(--layout-column); background: var(--bg-input);}
+.file-preview-pane .image-preview-button img {max-width: 100%; max-height: 62vh;}
+.file-preview-pane .image-preview-button > span {color: var(--text); background: var(--bg-raised);}
 .file-browser-empty {min-height: 190px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: var(--space-compact); color: var(--muted); text-align: center; padding: var(--pad-section);}
 .file-browser-empty strong {color: var(--text); font-size: var(--text-ui); font-weight: var(--weight-medium);}
 .file-browser-empty span {font-size: var(--text-body);}
 .file-delete-review p {margin: var(--space-tight) 0 var(--space-compact);}
 .file-browser-body.has-preview .file-date {display: none;}
 @container workbench-surface (max-width: 720px) {
-  .file-browser-body.has-preview {grid-template-columns: minmax(0, 1fr);}
+  .file-browser-body:is(.has-preview, .has-image-preview) {grid-template-columns: minmax(0, 1fr);}
   .file-preview-pane {border-left: 0; border-top: var(--line-hairline) solid var(--border); padding: var(--pad-card) 0;}
   .file-table .file-date {display: none;}
 }
 @container workbench-surface (max-width: 460px) {
   .file-search {flex-basis: 100%;}
   .file-table .file-location {display: none;}
+  .file-name .file-inline-source {display: block; overflow-wrap: anywhere;}
+  .file-browser-toolbar select {max-width: 100%;}
 }

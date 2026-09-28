@@ -81,7 +81,7 @@ function fixtureFrame(thread, patch = {}) {
 }
 const viewportNode = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 640, height: 500 }), focus() {}, setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
 function pointer(renderer, name, patch = {}) { return renderer.root.findByProps({ "aria-label": "Live browser page" }).props[name]({ currentTarget: viewportNode, clientX: 330, clientY: 270, pointerId: 1, button: 0, preventDefault() {}, ...patch }); }
-const props = { threadId: "one", visible: true, enabled: true, projectBound: true, attachments: [{ id: "asset_file", filename: "selected.txt" }], onConfigure() {}, onOpenLibrary() {} };
+const props = { threadId: "one", visible: true, enabled: true, projectBound: true, attachments: [{ id: "asset_file", filename: "selected.txt" }], onConfigure() {}, onOpenFiles() { calls.push({ openFiles: true }); } };
 const vite = await createViteServer({ root: desktop, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 let renderer;
 try {
@@ -96,6 +96,7 @@ try {
   assert.equal(visiblePendingInterrupt({ pending_interrupt: pending, events: [] }), null, "takeover has no generic approval buttons");
   assert.equal(visibleApprovalInterrupt({ interrupts: [{ id: "native", value: pending }], values: {} }, { status: "running", pending_interrupt: pending }), null, "native handoff cannot be resumed as a tool approval");
   await act(async () => { renderer = create(React.createElement(BrowserRail, props), { createNodeMock: element => element.props["aria-label"] === "Live browser page" ? viewportNode : null }); await tick(); });
+  assert.match(text(renderer.root.findByProps({ className: "browser-resolution" })), /Idle/, "closed browser is idle rather than connecting");
   await act(async () => { button(renderer, "Start browser").props.onClick(); await tick(); });
   assert.equal(states.get("one").state, "active");
   assert.equal(renderer.root.findByProps({ "aria-label": "Browser back" }).props.disabled, true, "agent ownership disables manual actions");
@@ -131,8 +132,9 @@ try {
   assert.ok(Math.abs(calls.at(-1).body.action.x - 195) < 0.001); assert.ok(Math.abs(calls.at(-1).body.action.y - 422) < 0.001, "portrait input accounts for horizontal letterboxing");
   await act(async () => { renderer.root.findAll(node => node.type === "button" && node.props.role === "tab")[1].props.onClick(); await tick(); });
   assert.equal(calls.at(-1).body.action.page_id, "page_b", "tab switching uses stable identity even with identical URLs");
-  states.set("one", { ...states.get("one"), file_chooser: { multiple: true }, dialog: { type: "prompt", message: "Enter fixture", default_value: "initial" } });
+  states.set("one", { ...states.get("one"), downloads: [{ asset_id: "download", name: "download.txt" }], file_chooser: { multiple: true }, dialog: { type: "prompt", message: "Enter fixture", default_value: "initial" } });
   await emit("one", "state", states.get("one"));
+  await act(async () => button(renderer, "Show in Files").props.onClick()); assert.ok(calls.some(call => call.openFiles), "download shortcut opens Files");
   await act(async () => { renderer.root.findByProps({ "aria-label": "Page dialog response" }).props.onChange({ target: { value: "typed" } }); await tick(); });
   await act(async () => { button(renderer, "Accept").props.onClick(); await tick(); });
   assert.deepEqual(calls.at(-1).body.action, { type: "dialog", accept: true, prompt_text: "typed" });

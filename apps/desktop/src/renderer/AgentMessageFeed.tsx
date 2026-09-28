@@ -694,7 +694,7 @@ function ToolBlockList({
       const args = typeof tool.args === "string" ? (() => { try { return JSON.parse(tool.args) as Record<string, unknown>; } catch { return {}; } })() : tool.args && typeof tool.args === "object" ? tool.args as Record<string, unknown> : {};
       const request = typeof args.description === "string" ? args.description : "Preparing request…";
       return <button type="button" className="helper-delegation" key={id} onClick={() => tool.id && helperRunId && onHelperOpen(helperRunId, tool.id)} disabled={!tool.id || !helperRunId} aria-label={`Open helper ${helperName?.(tool, helperRunId) ?? String(args.subagent_type ?? "helper")}`}>
-        <span className="helper-delegation-head"><Icon name="sparkles" size={14} /><strong>{helperName?.(tool, helperRunId) ?? String(args.subagent_type ?? "Helper")}</strong><span>{helperStatus?.(tool, helperRunId) ?? (incomplete ? "Working" : error ? "Failed" : "Done")}</span></span>
+        <span className="helper-delegation-head"><Icon name="agents" size={14} /><strong>{helperName?.(tool, helperRunId) ?? String(args.subagent_type ?? "Helper")}</strong><span>{helperStatus?.(tool, helperRunId) ?? (incomplete ? "Working" : error ? "Failed" : "Done")}</span></span>
         <span className="helper-delegation-request">{request}</span>
       </button>;
     }

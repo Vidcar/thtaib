@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { knowledgeApi, type SkillGuidedFields, type SkillPreview, type SkillResourceChange } from "./knowledgeApi";
 import { errorMessage } from "./errors";
 import { Notice } from "./Notice";
+import { SettingRow } from "./CompactControls";
 import { SkillResourceEditor } from "./SkillPackageControls";
 import type { KnowledgeScope } from "./types";
 import type { SchemaSkillResource } from "../generated/shared-contracts/openapi";
@@ -11,6 +12,7 @@ export function SkillEditor({ content, onChange, disabled = false, scope, scopeI
   entryId?: string; versionId?: string; resources?: SchemaSkillResource[]; resourceChanges: SkillResourceChange[];
   onResourceChanges: (changes: SkillResourceChange[]) => void; onStateChange: (valid: boolean) => void;
 }) {
+  const id = useId();
   const [tab, setTab] = useState<"guided" | "source">("guided");
   const [preview, setPreview] = useState<SkillPreview | null>(null);
   const [fields, setFields] = useState<SkillGuidedFields | null>(null);
@@ -51,10 +53,10 @@ export function SkillEditor({ content, onChange, disabled = false, scope, scopeI
 
   return <div className="skill-editor workspace-editor">
     <nav className="model-tabs" aria-label="Skill editor"><button type="button" aria-current={tab === "guided" ? "page" : undefined} disabled={disabled || pending || Boolean(unresolvedFields.current)} onClick={() => setTab("guided")}>Guided</button><button type="button" aria-current={tab === "source" ? "page" : undefined} disabled={disabled || Boolean(unresolvedFields.current)} onClick={() => setTab("source")}>Source</button></nav>
-    {tab === "source" ? <label>SKILL.md<textarea rows={14} disabled={disabled} value={content} onChange={event => onChange(event.target.value)} spellCheck={false} /></label> : fields ? <>
-      <label>Name<input value={fields.name} maxLength={64} disabled={disabled} onChange={event => patch({ ...fields, name: event.target.value })} /></label>
-      <label>When to use<textarea rows={2} value={fields.description} maxLength={1024} disabled={disabled} onChange={event => patch({ ...fields, description: event.target.value })} /></label>
-      <label>Instructions<textarea rows={7} value={fields.instructions} disabled={disabled} onChange={event => patch({ ...fields, instructions: event.target.value })} /></label>
+    {tab === "source" ? <SettingRow stacked label="SKILL.md" htmlFor={`${id}-source`}><textarea id={`${id}-source`} rows={14} disabled={disabled} value={content} onChange={event => onChange(event.target.value)} spellCheck={false} /></SettingRow> : fields ? <>
+      <SettingRow label="Skill name" htmlFor={`${id}-name`} help="The native name in SKILL.md. Knowledge's display name is a separate label."><input id={`${id}-name`} value={fields.name} maxLength={64} disabled={disabled} onChange={event => patch({ ...fields, name: event.target.value })} /></SettingRow>
+      <SettingRow stacked label="When to use" htmlFor={`${id}-description`}><textarea id={`${id}-description`} rows={2} value={fields.description} maxLength={1024} disabled={disabled} onChange={event => patch({ ...fields, description: event.target.value })} /></SettingRow>
+      <SettingRow stacked label="Instructions" htmlFor={`${id}-instructions`}><textarea id={`${id}-instructions`} rows={7} value={fields.instructions} disabled={disabled} onChange={event => patch({ ...fields, instructions: event.target.value })} /></SettingRow>
     </> : pending ? <p className="hint" role="status">Reading skill…</p> : <p className="hint">Use Source to correct this skill.</p>}
     {preview?.issues.map((issue, index) => <Notice key={`${index}:${issue}`} tone="warn">{issue}</Notice>)}
     {error ? <Notice tone="error" action={unresolvedFields.current ? <button type="button" disabled={disabled || pending} onClick={() => patch(unresolvedFields.current!)}>Retry</button> : undefined}>{error}</Notice> : null}

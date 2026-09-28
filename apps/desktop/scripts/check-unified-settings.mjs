@@ -46,11 +46,11 @@ async function configurations(Panel) {
         const specified = Object.hasOwn(changes, key);
         const requested = specified ? changes[key] : profiles.find(item => item.id === body.overrides.model_configuration_id)?.bags.per_request.requested[key];
         const value = requested ?? (key === 'temperature' ? 0.8 : null);
-        return [`per_request.${key}`, { value, known: value != null, source: requested == null ? 'Model default' : specified ? 'Application defaults' : 'Configuration: Example model' }];
+        return [`per_request.${key}`, { value, known: value != null, source: requested == null ? 'Model default' : specified ? 'Turn overrides' : 'Configuration: Example model', default_value: key === 'temperature' ? 0.8 : null, default_source: 'Model default' }];
       }));
       const startupChanges = body.overrides.startup_overrides ?? {};
       const ctxSize = startupChanges.ctx_size ?? profiles.find(item => item.id === body.overrides.model_configuration_id)?.bags.startup.requested.ctx_size;
-      facts['startup.ctx_size'] = { value: ctxSize, known: ctxSize != null, source: Object.hasOwn(startupChanges, 'ctx_size') ? 'Application defaults' : 'Configuration: Example model' };
+      facts['startup.ctx_size'] = { value: ctxSize, known: ctxSize != null, source: Object.hasOwn(startupChanges, 'ctx_size') ? 'Turn overrides' : 'Configuration: Example model' };
       return response({ configuration: body.overrides, effective_values: facts, instruction_layers: [] });
     }
     if (path.endsWith("/v1/settings/preview")) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
@@ -70,12 +70,20 @@ async function configurations(Panel) {
     const lastPreview = () => calls.findLast(call => call.path.endsWith('/v1/setup-resolution')).body;
     assert.deepEqual(lastPreview().overrides.per_request_overrides, {}, 'unchanged saved response settings retain named configuration provenance');
     assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'unchanged startup settings remain inherited from the saved configuration');
-    assert.equal(lastPreview().editing_layer, 'application', 'Models replacement preview excludes application and Chat overrides');
+    assert.equal(lastPreview().editing_layer, 'conversation', 'Models preview uses the existing model-capable resolver boundary');
+    assert.equal(lastPreview().project_id, null, 'Models preview excludes project selection');
+    assert.equal(lastPreview().agent_setup_version_id, null, 'Models preview excludes agent selection');
     assert.ok(text(renderer.root).includes('512'), 'the saved reply limit is displayed as its resolved value');
-    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration: Example model.*Set in configuration/, 'startup control displays its resolved value and saved source');
+    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration default/, 'startup control displays its resolved value and saved source');
     await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 16384, 'staged launch changes reach the shared setup preview');
-    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /16,384 tokens.*This editor.*Selected for next load/, 'edited launch value and status replace stale saved readout');
+    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /16,384 tokens.*This editor.*Unsaved change/, 'edited launch value and status replace stale saved readout');
+    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '8192' } }); await tick(); });
+    assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'returning to the saved startup value removes the preview override');
+    assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration default/, 'a reverted field follows the saved configuration again');
+    assert.ok(!text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))).includes('Unsaved change'), 'reverted field clears its dirty provenance');
+    assert.equal(renderer.root.findByProps({ className: 'badge model-edit-state' }).props['data-dirty'], false, 'reverted editor clears its dirty indicator');
+    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
     const numeric = label => {
       const ids = { Temperature: 'model-response-temperature', 'Reply limit': 'model-response-max_tokens' };
       return renderer.root.findAllByType('input').find(node => node.props.id === ids[label]);
@@ -86,10 +94,11 @@ async function configurations(Panel) {
     assert.equal(numeric('Temperature').props.placeholder, '0.8', 'the empty field previews the inherited value it will use');
     assert.equal(numeric('Temperature').props.max, undefined, 'exact entry is not capped by the slider range');
     assert.equal(numeric('Temperature').props.step, 'any', 'exact entry accepts any precision');
-    assert.match(text(settingRow(numeric('Temperature'))), /0\.8.*Model default.*Inherited/, 'resolved model default and its source are the visible readout');
+    assert.match(text(settingRow(numeric('Temperature'))), /0\.8.*Model default/, 'resolved model default and its source are the visible readout');
+    assert.ok(!text(settingRow(numeric('Temperature'))).includes('Inherited'), 'default following is described by its actual value and source');
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
-    assert.match(text(settingRow(numeric('Reply limit'))), /Not reported.*Inherited/, 'unknown default is not invented from the saved value');
+    assert.match(text(settingRow(numeric('Reply limit'))), /Not reported/, 'unknown default is not invented from the saved value');
     assert.ok(button("Save changes"), "save is available without a running deployment");
     await act(async () => { button("Save changes").props.onClick(); await tick(); });
     assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
@@ -264,7 +273,7 @@ async function sameBundleVariantsLoadSeparately(Panel) {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: "model", initialBundles: [bundle], initialProfiles: profiles })); await tick(); });
     await act(async () => renderer.root.findByProps({ id: "model-configuration" }).props.onChange({ target: { value: "variant-b" } }));
     const submit = () => renderer.root.findByProps({ className: "model-settings" });
-    assert.ok(renderer.root.findAllByType("button").some(item => text(item) === "Load model"), "variant B is offered a separate load while A is running");
+    assert.ok(renderer.root.findAllByType("button").some(item => text(item) === "Load"), "variant B is offered a separate load while A is running");
     await act(async () => { submit().props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.ok(calls.some(call => call.path.endsWith("/v1/deployments/managed") && call.body.profile_id === "variant-b"), "Models loads exact variant B");
     assert.equal(calls.some(call => call.path.endsWith("/reconfigure")), false, "Models does not reconfigure variant A when selecting B");
@@ -285,8 +294,10 @@ async function agentOwnedSettings(Editor) {
     const helper = { id: "helper", name: "Research helper", configuration: {}, missing_dependencies: [{ kind: "main", id: "main", reason: "Main role unavailable" }], helper_missing_dependencies: [] };
     await act(async () => { renderer = create(React.createElement(Editor, { value: { approval_mode: "full_access", presented_tools: ["execute"] }, scope: "agent", catalogue, agentOptions: [helper], onChange: value => edits.push(value) })); await tick(); });
     assert.doesNotMatch(text(renderer.root), /Default access for new chats/, "agent editor cannot assign main Chat access");
-    assert.equal(renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.disabled, false, "helper eligibility uses helper dependencies, not main role dependencies");
-    await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Research helper" }).props.onClick());
+    await act(async () => renderer.root.findByProps({ "aria-label": "Add helper" }).props.onChange({ target: { value: "helper" } }));
+    const addHelper = renderer.root.findAllByType("button").find(node => text(node).trim() === "Add helper");
+    assert.equal(addHelper.props.disabled, false, "helper eligibility uses helper dependencies, not main role dependencies");
+    await act(async () => addHelper.props.onClick());
     assert.deepEqual(edits.at(-1).helper_agent_ids, ["helper"], "agent can select named helpers");
     assert.equal(edits.at(-1).approval_mode, undefined, "agent edit drops stale access");
     assert.deepEqual(edits.at(-1).presented_tools, ["execute"], "agent edit retains agent-owned tools");
@@ -298,7 +309,7 @@ async function agentOwnedSettings(Editor) {
     await act(async () => renderer.root.findByProps({ role: "switch", "aria-label": "Browser" }).props.onClick());
     assert.deepEqual(edits.at(-1).presented_tools, ["execute", "browser_navigate"], "group selection updates canonical individual tools");
     assert.equal(edits.at(-1).desktop_access, undefined);
-    await act(async () => renderer.root.findByType("select").props.onChange({ target: { value: "configuration:fixed-config" } }));
+    await act(async () => renderer.root.findAllByType("select").find(node => text(node).includes("Use Chat model")).props.onChange({ target: { value: "configuration:fixed-config" } }));
     assert.equal(edits.at(-1).model_configuration_id, "fixed-config", "assigned model is agent-owned");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }

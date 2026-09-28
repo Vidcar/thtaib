@@ -20,16 +20,34 @@ globalThis.window = {
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { ChatRetainedFiles } = await vite.ssrLoadModule("/src/renderer/ChatRetainedFiles.tsx");
-  const { LibraryPanel } = await vite.ssrLoadModule("/src/renderer/LibraryPanel.tsx");
   await checkInlineRunFilteringAndReuse(ChatRetainedFiles);
+  await checkFilesKeepsUnownedUploads(ChatRetainedFiles);
   await checkPreviewRaceKeepsLatestSelection(ChatRetainedFiles);
   await checkTerminalStatusRefreshesSelfFetchedAssets(ChatRetainedFiles);
-  await checkLibraryMultiSelectReuse(LibraryPanel);
 } finally {
   await vite.close();
 }
 
 console.log("Chat retained files checks passed.");
+
+async function checkFilesKeepsUnownedUploads(ChatRetainedFiles) {
+  let renderer;
+  const reused = [], seen = [];
+  const restore = mockFetch(async url => { seen.push(String(url)); return preview("upload", "retained upload", "retained_only"); });
+  try {
+    const props = { conversationId: "chat_1", compact: true, showEmpty: true, currentRunId: "response", currentRunStatus: "completed", records: [asset("upload", "input.txt", null), asset("reuse", "reused.txt", null, { session_id: "earlier_chat" }), asset("output", "output.txt", "response", { origin: "verified_output" })], onReuse: ids => reused.push(ids) };
+    await act(async () => { renderer = create(React.createElement(ChatRetainedFiles, props)); });
+    assert.match(textOf(renderer.toJSON()), /input.txt/); assert.match(textOf(renderer.toJSON()), /reused.txt/); assert.match(textOf(renderer.toJSON()), /output.txt/);
+    assert.match(textOf(renderer.toJSON()), /Uploaded file/); assert.match(textOf(renderer.toJSON()), /Verified output/);
+    assert.equal(renderer.root.findAllByType("time").length, 3, "compact Files preserves capture times");
+    await act(async () => button(renderer, "Use again").props.onClick()); assert.deepEqual(reused.at(-1), ["upload"]);
+    await act(async () => renderer.update(React.createElement(ChatRetainedFiles, { ...props, previewId: "upload" }))); await act(async () => { await Promise.resolve(); });
+    assert.match(textOf(renderer.toJSON()), /retained upload/, "reopening restores the selected scoped preview");
+    assert.match(seen.at(-1), /session_id=chat_1/);
+    await act(async () => renderer.update(React.createElement(ChatRetainedFiles, { ...props, records: [], previewId: "" })));
+    assert.match(textOf(renderer.toJSON()), /Uploads and files created in this chat/);
+  } finally { restore(); if (renderer) await act(async () => renderer.unmount()); }
+}
 
 async function checkInlineRunFilteringAndReuse(ChatRetainedFiles) {
   const reused = [];
@@ -128,43 +146,6 @@ async function checkPreviewRaceKeepsLatestSelection(ChatRetainedFiles) {
   }
 }
 
-async function checkLibraryMultiSelectReuse(LibraryPanel) {
-  const reused = [];
-  const restore = mockFetch(async (url) => {
-    assert.match(String(url), /\/v1\/assets(?:\?|$)/);
-    return [
-      asset("asset_one", "one.txt", null),
-      asset("asset_two", "two.txt", null),
-    ];
-  });
-  let renderer;
-  try {
-    await act(async () => {
-      renderer = create(React.createElement(LibraryPanel, {
-        onReuseSelectedAssets: (assets) => reused.push(assets.map((asset) => asset.id)),
-      }));
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    const checks = assetCheckboxes(renderer);
-    assert.ok(checks.length >= 2, "library should render selectable retained assets");
-    await act(async () => {
-      checks[0].props.onChange({ target: { checked: true } });
-    });
-    const updatedChecks = assetCheckboxes(renderer);
-    await act(async () => {
-      updatedChecks[1].props.onChange({ target: { checked: true } });
-    });
-    await act(async () => {
-      button(renderer, "Use in Chat").props.onClick();
-    });
-    assert.deepEqual(reused.at(-1), ["asset_one", "asset_two"], "library reuse should preserve the full multi-selection");
-  } finally {
-    restore();
-  }
-}
-
 async function checkTerminalStatusRefreshesSelfFetchedAssets(ChatRetainedFiles) {
   let calls = 0;
   const restore = mockFetch(async (url) => {
@@ -202,15 +183,6 @@ async function checkTerminalStatusRefreshesSelfFetchedAssets(ChatRetainedFiles) 
   } finally {
     restore();
   }
-}
-
-function assetCheckboxes(renderer) {
-  return renderer.root.findAll((node) => (
-    node.type === "input" &&
-    node.props.type === "checkbox" &&
-    !node.props.disabled &&
-    (String(node.props["aria-label"] ?? "").startsWith("Select ") && node.props["aria-label"] !== "Select all visible files" || node.parent?.findAllByType("strong").length > 0)
-  ));
 }
 
 function asset(id, filename, runId, overrides = {}) {

@@ -275,6 +275,28 @@ class KnowledgeApiTests(unittest.TestCase):
         match = next(item for item in listed if item["id"] == expired["id"])
         self.assertTrue(match["expired"])
 
+    def test_partial_context_capture_settings_preserve_omitted_fields(self) -> None:
+        initial = self.client.put(
+            "/v1/knowledge/config",
+            json={"context_captures": {"retention_seconds": 3600, "redaction_mode": "retain"}},
+        )
+        self.assertEqual(initial.status_code, 200, initial.text)
+        redaction = self.client.put(
+            "/v1/knowledge/config", json={"context_captures": {"redaction_mode": "discard"}}
+        )
+        self.assertEqual(redaction.status_code, 200, redaction.text)
+        self.assertEqual(redaction.json()["context_captures"], {"retention_seconds": 3600, "redaction_mode": "discard"})
+        retention = self.client.put(
+            "/v1/knowledge/config", json={"context_captures": {"retention_seconds": 7200}}
+        )
+        self.assertEqual(retention.status_code, 200, retention.text)
+        self.assertEqual(retention.json()["context_captures"], {"retention_seconds": 7200, "redaction_mode": "discard"})
+        cleared = self.client.put(
+            "/v1/knowledge/config", json={"context_captures": {"retention_seconds": None}}
+        )
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(cleared.json()["context_captures"], {"retention_seconds": None, "redaction_mode": "discard"})
+
 
 class KnowledgeLabHarnessTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -8,10 +8,11 @@ const failure = message => ({ ok: false, status: 409, json: async () => ({ error
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const settle = async work => { await act(async () => { await work?.(); await tick(); }); };
 function button(root, label) { const node = root.findAllByType("button").find(item => text(item).trim() === label); assert.ok(node, `button ${label}`); return node; }
-function field(root, label, type) { const row = root.findAllByType("label").find(item => text(item).startsWith(label)); assert.ok(row, `field ${label}`); return row.props.htmlFor ? root.find(node => node.type === type && node.props.id === row.props.htmlFor) : row.findByType(type); }
+function field(root, label, type) { const labels = root.findAllByType("label").filter(item => text(item).startsWith(label)); for (const row of labels) { const fields = row.props.htmlFor ? root.findAll(node => node.type === type && node.props.id === row.props.htmlFor) : row.findAllByType(type); if (fields.length) return fields[0]; } assert.fail(`expected ${type} field ${label}`); }
 const change = (root, label, type, value) => settle(() => field(root, label, type).props.onChange({ target: { value } }));
 const click = (root, label) => settle(() => button(root, label).props.onClick());
 const submit = root => settle(() => root.findByType("form").props.onSubmit({ preventDefault() {} }));
+function segmented(root, label, value) { const group = root.findAll(node => node.props.role === "radiogroup").find(node => root.findAll(item => item.props.id === node.props["aria-labelledby"]).some(item => text(item) === label)); assert.ok(group, `segmented choice ${label}`); return group.findAllByType("input").find(node => node.props.value === value); }
 const preview = id => ({ target_id: id, consumers: [], retained: ["Historical versions"], blockers: [] });
 const when = "2026-09-23T12:00:00Z";
 
@@ -52,6 +53,10 @@ export async function checkAgentSavedActions(Component) {
     assert.equal(calls.some(call => call.path === "/v1/agent-setups" && call.method === "POST"), false, "Role advances without saving");
     await submit(renderer.root);
     assert.equal(calls.some(call => call.path === "/v1/agent-setups" && call.method === "POST"), false, "Setup advances without saving");
+    assert.match(text(renderer.root), /InstructionsRead precisely\./);
+    assert.match(text(renderer.root), /ConnectionsNone selected/);
+    assert.match(text(renderer.root), /HelpersNone selected/);
+    assert.match(text(renderer.root), /RequirementsNo additional requirements/, "Review includes requirements as well as model and knowledge");
     await submit(renderer.root);
     assert.match(text(renderer.root), /Agent save failed/);
     await click(renderer.root, "Back"); await click(renderer.root, "Back");
@@ -130,7 +135,7 @@ export async function checkKnowledgeSavedActions(Component) {
   try {
     await settle(() => { renderer = create(React.createElement(Component)); });
     await click(renderer.root, "Enable"); assert.equal(records[0].enabled, true);
-    await click(renderer.root, "Rename"); await change(renderer.root, "Name", "input", "Named fact"); await submit(renderer.root);
+    await click(renderer.root, "Rename"); await change(renderer.root, "Display name", "input", "Named fact"); await submit(renderer.root);
     assert.equal(records[0].display_name, "Named fact");
     await change(renderer.root, "Content", "textarea", "Updated fact"); await click(renderer.root, "Save");
     assert.equal(records[0].content, "Updated fact"); assert.equal(history.get("memory").length, 2);
@@ -140,7 +145,7 @@ export async function checkKnowledgeSavedActions(Component) {
     await change(renderer.root, "Content", "textarea", "Unsaved fact"); await click(renderer.root, "Discard edits and reload");
     assert.equal(field(renderer.root, "Content", "textarea").props.value, "Original fact");
     await click(renderer.root, "Reject"); assert.equal(proposals[0].status, "rejected");
-    await change(renderer.root, "Redaction", "select", "discard"); await click(renderer.root, "Save setting");
+    await settle(() => segmented(renderer.root, "Redaction", "discard").props.onChange()); await click(renderer.root, "Save setting");
     await change(renderer.root, "Text to capture", "textarea", "Fixture request text"); await click(renderer.root, "Capture");
     assert.deepEqual(calls.find(call => call.path.endsWith("/captures")).body, { content: "Fixture request text", source: "desktop" });
     assert.match(text(renderer.root), /Capture discarded by the current setting/);

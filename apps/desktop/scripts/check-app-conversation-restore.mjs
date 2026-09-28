@@ -16,6 +16,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const children = new Set(["AgentRunPanel", "AttentionPanel", "CreateProjectDialog", "ProjectsPanel", "AgentSetupsPanel", "KnowledgePanel", "LabPanel", "LibraryPanel", "ModelsPanel", "SettingsPanel"]);
 const vite = await createServer({ root, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error", plugins: [{ name: "app-selection-boundaries", enforce: "pre", load(id) {
   const name = path.basename(id).replace(/\.tsx?$/, "");
+  if (["ModelsPanel", "AgentSetupsPanel", "KnowledgePanel"].includes(name)) return `import React, {useState} from 'react'; export function ${name}(props) { const [draft,setDraft] = useState('saved'); globalThis.appFixture.${name} = props; return React.createElement('input', {'aria-label':'${name} draft',value:draft,onChange:e=>setDraft(e.target.value)}); }`;
   if (children.has(name)) return `export function ${name}() { return null; }`;
   if (name === "appearanceStore") return "export async function loadAppearance() {} export function setAppearanceTheme() {}";
   if (name === "PanelResize") return "export function usePanelWidth() { return [232, () => {}]; }";
@@ -48,6 +49,23 @@ try {
   const unmount = async () => { await settle(() => renderer.unmount()); renderer = null; };
   const selected = () => renderer.root.findByProps({ "aria-label": "Selected conversation" }).children.join("");
   await mount();
+  for (const [tab, name] of [["models", "ModelsPanel"], ["agents", "AgentSetupsPanel"], ["knowledge", "KnowledgePanel"]]) {
+    await settle(() => globalThis.appFixture.sidebar.onNavigate(tab));
+    const input = () => renderer.root.findByProps({ "aria-label": `${name} draft` });
+    await settle(() => input().props.onChange({ target: { value: `unsaved ${tab}` } }));
+    await settle(() => globalThis.appFixture.sidebar.onNavigate("chat"));
+    assert.equal(globalThis.appFixture[name].active, false, "hidden editors can suspend active work");
+    await settle(() => globalThis.appFixture.sidebar.onNavigate(tab));
+    assert.equal(input().props.value, `unsaved ${tab}`, "saved-record draft survives destination navigation");
+    assert.equal(globalThis.appFixture[name].active, true);
+  }
+  await settle(() => globalThis.appFixture.chat.onNavigate("agents", "agent-broken"));
+  assert.equal(globalThis.appFixture.AgentSetupsPanel.openAgentId, "agent-broken", "Chat can open the specific agent for repair");
+  const repairToken = globalThis.appFixture.AgentSetupsPanel.openRequest;
+  await settle(() => globalThis.appFixture.chat.onNavigate("agents", "agent-broken"));
+  assert.ok(globalThis.appFixture.AgentSetupsPanel.openRequest > repairToken, "repeated repair navigation remains actionable");
+  assert.equal("reuseAssetIds" in globalThis.appFixture.chat, false, "global Library reuse plumbing is removed");
+  await settle(() => globalThis.appFixture.sidebar.onNavigate("chat"));
   await settle(() => globalThis.appFixture.sidebar.onOpenConversation(catalog[0]));
   assert.equal(selected(), "chat-a");
   assert.equal(stored.get(storageKey), "chat-a", "confirmed selection must survive a renderer restart");

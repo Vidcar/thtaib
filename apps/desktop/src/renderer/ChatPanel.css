@@ -329,15 +329,12 @@
 .chat-workspace {display: grid; flex: 1; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto;}
 .chat-conversation {grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;}
 .chat-workspace > .compose {grid-area: 2 / 1; min-width: 0;}
-.chat-workspace.files-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 380px), 48%));}
-.chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 640px), 48%));}
-@container chat-workspace (max-width: 760px) {
-  .chat-workspace.files-open, .chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(40%, calc(100% - 400px)));}
-}
+.chat-workspace.files-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 380px), 48%, calc(100% - 400px)));}
+.chat-workspace.files-open.browser-open {grid-template-columns: minmax(0, 1fr) minmax(0, min(var(--inspector-width, 380px), 48%, calc(100% - 400px)));}
 .chat-workspace.browser-open > .chat-rail {display: flex; flex-direction: column; overflow: hidden;}
 .chat-workspace.browser-open .chat-rail-body {flex: 1; overflow: hidden;}
 .chat-workspace.browser-open .chat-rail-tabs {flex: 0 0 auto;}
-.chat-workspace > .chat-files-panel {position: relative; inset: auto; grid-area: 1 / 2 / 3 / 3; width: auto; min-width: 0; min-height: 0; border-width: 0 0 0 var(--line-hairline); border-radius: 0; box-shadow: none; z-index: auto; overscroll-behavior: contain; background: var(--bg-nav);}
+.chat-workspace > .chat-files-panel {position: relative; inset: auto; grid-area: 1 / 2 / 3 / 3; width: auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-width: 0 0 0 var(--line-hairline); border-radius: 0; box-shadow: none; z-index: auto; overscroll-behavior: contain; background: var(--bg-nav);}
 .chat-conversation > .notice {margin: var(--space-tight) var(--space-section); flex-shrink: 0;}
 .chat-conversation > .chat-queue-panel {max-height: 30vh; overflow: auto; flex-shrink: 0; margin: var(--space-tight) var(--space-section);}
 .chat-rail[hidden] {display: none !important;}
@@ -345,6 +342,9 @@
 .chat-rail-tabs button[role="tab"] {border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); min-height: var(--control-height); padding: var(--pad-tight) var(--pad-compact); font-size: var(--text-body);}
 .chat-rail-tabs button[aria-selected="true"] {background: var(--bg-raised); color: var(--text);}
 .chat-rail-close {margin-left: auto;}
+.chat-rail-tabs {flex: 0 0 auto;}
+.chat-rail-body {flex: 1;}
+.chat-workspace > .chat-files-panel > .panel-resize {display: block;}
 .chat-rail-body {min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-compact);}
 .chat-rail .setup-panel {display: grid; gap: var(--space-compact);}
 .chat-rail .chat-history-actions {position: static;}
@@ -362,6 +362,14 @@
 .approval-mode button > svg {flex-shrink: 0; margin-top: 2px;}
 .approval-mode button[aria-checked="false"] > svg:last-child {visibility: hidden;}
 .approval-mode button[aria-checked="true"] {background: var(--bg-raised);}
+.menu-popover-panel.chat-access-panel {width: min(370px, calc(100vw - 24px)); padding: var(--pad-compact); gap: var(--space-tight);}
+.chat-access-panel .approval-mode {gap: 2px;}
+.chat-access-panel .approval-mode button {padding: var(--pad-tight) var(--pad-compact);}
+.chat-access-panel .approval-mode small {font-size: var(--text-small); margin-top: 2px;}
+.chat-access-panel .menu-section {border-top: var(--line-hairline) solid var(--border); padding-top: var(--pad-compact);}
+.chat-agent-option {display: grid; gap: var(--space-tight); min-width: 0;}
+.chat-agent-option > small {padding-inline: var(--pad-compact); overflow-wrap: anywhere;}
+.chat-agent-option .text-button {justify-self: start; margin-inline: var(--pad-compact);}
 .compact-attachments:empty {display: none;}
 .compact-attachments .packet03-list {display: flex; flex-wrap: wrap; gap: var(--space-tight); margin: 0 0 var(--space-compact); padding: 0;}
 .compact-attachments .packet03-item {padding: var(--pad-tight) var(--pad-compact); max-width: 260px; background: var(--bg-panel); border-radius: var(--radius-control);}
@@ -370,7 +378,7 @@
 .compact-attachments .packet03-row > .hint {display: none;}
 .compact-attachments .packet03-row > .icon-button {height: 22px; width: 22px; min-width: 22px; min-height: 22px;}
 .chat-header-actions {display: flex; align-items: center; gap: var(--space-tight);}
-.chat-header > div:first-child {min-width: 0; margin-right: auto;}
+.chat-header > div:first-child {min-width: 0; margin-right: auto; margin-inline-start: var(--chat-header-reopen-space, 0px);}
 .chat-mode-options {display: grid; gap: var(--space-tight);}
 .chat-mode-options button[aria-checked="true"] {background: var(--bg-raised);}
 .chat-mode-options .menu-action > span {display: grid; gap: 2px;}
