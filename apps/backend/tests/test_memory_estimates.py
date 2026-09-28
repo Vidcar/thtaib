@@ -1,5 +1,6 @@
 """Estimates remain advisory, bounded and separate from runtime authority."""
 import tempfile
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -14,6 +15,9 @@ from workbench_backend.inference.hardware import HardwareObserver
 from workbench_backend.inference.memory_estimates import MemoryEstimator, IncompleteMetadata, parse_gguf_directory, dense_kv_bytes
 from workbench_backend.inference.schemas import (HardwareDeviceMemory, HardwareMemoryObservation,
     LocalImportRequest, ModelEstimateRequest, HuggingFaceImportRequest, ImportJob, BundleSourceKind, ImportStatus)
+from workbench_backend.inference.schemas import RuntimeManifest
+from workbench_backend.inference.schemas import Deployment, HealthReport
+from workbench_backend.inference.configurations import loaded_model_identity
 from workbench_backend.inference.service import ModelManager
 from workbench_backend.inference.settings import resolve_bags, startup_cli_args
 from workbench_backend.paths import WorkbenchPaths
@@ -22,6 +26,26 @@ from workbench_backend.paths import WorkbenchPaths
 def dense_fields():
     return {"general.architecture": "llama", "llama.block_count": 2, "llama.context_length": 16384,
         "llama.embedding_length": 256, "llama.attention.head_count": 8, "llama.attention.head_count_kv": 2}
+
+
+def native_result(*, context=4096, parallel=4, unified=True, projector="not_selected", speculation="not_selected"):
+    unit = 1024**2
+    return json.dumps({"protocol": 1, "native_build": 11045, "native_commit": "2b1847030",
+        "native_fingerprint": "native", "completeness": "partial" if "unavailable" in (projector, speculation) else "complete",
+        "components": {"target": "measured", "projector": projector, "speculation": speculation},
+        "unknown_reasons": ["Projector allocation is unknown."] if projector == "unavailable" else [],
+        "devices": [
+            {"id": "CUDA0", "weights_bytes": unit, "kv_bytes": 0, "runtime_overhead_bytes": 2*unit,
+             "projector_bytes": None if projector == "unavailable" else unit if projector == "measured" else 0,
+             "speculation_bytes": None if speculation == "unavailable" else 0,
+             "total_bytes": None if "unavailable" in (projector, speculation) else (4 if projector == "measured" else 3)*unit},
+            {"id": "Host", "weights_bytes": 3*unit, "kv_bytes": 4*unit, "runtime_overhead_bytes": unit,
+             "projector_bytes": None if projector == "unavailable" else 0,
+             "speculation_bytes": None if speculation == "unavailable" else 0,
+             "total_bytes": None if "unavailable" in (projector, speculation) else 8*unit}],
+        "evaluated_startup": {"ctx_size": context, "n_gpu_layers": 4, "parallel": parallel, "kv_unified": unified},
+        "effective_context": context, "effective_context_per_slot": context if unified else context//parallel,
+        "effective_parallel": parallel, "kv_unified": unified, "context_maximum": 16384})
 
 
 class MemoryEstimateTests(unittest.TestCase):
@@ -34,6 +58,12 @@ class MemoryEstimateTests(unittest.TestCase):
             gpu_devices=[HardwareDeviceMemory(id="GPU-1", name="GPU", total_bytes=8*1024**3, available_bytes=1024**3)],
             ram_total_bytes=16*1024**3, ram_available_bytes=8*1024**3)
         self.manager.memory_estimator.hardware.observe = lambda **kwargs: self.hardware
+
+    def native_manifest(self):
+        return RuntimeManifest(platform="win-x64", flavor="cuda-13.4", release_tag="b11045",
+            install_dir=str(self.root), executable=str(self.root/"llama-server.exe"), sha256="runtime",
+            memory_planner_path=str(self.root/"workbench-memory-planner.exe"), memory_planner_sha256="helper",
+            memory_planner_protocol=1, memory_planner_native_fingerprint="native")
 
     def model(self, *, extra_array_key=None):
         path = self.root / "model.gguf"
@@ -91,12 +121,11 @@ class MemoryEstimateTests(unittest.TestCase):
     def test_native_prediction_preserves_requested_and_never_creates_deployment(self):
         path = self.model()
         bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(path))).bundle_id
-        executable = self.root / "llama-server.exe"
-        helper = self.root / "llama-fit-params.exe"
-        helper.touch()
-        manifest = SimpleNamespace(status="ready", release_tag="b11045", executable=str(executable), sha256="runtime")
+        manifest = self.native_manifest()
         startup = {"ctx_size":4096, "n_gpu_layers":4, "kv_offload":False}
-        with patch.object(self.manager.runtime, "current", return_value=manifest), patch("workbench_backend.inference.memory_estimates._bounded_native", return_value="CUDA0 1 0 2\nHost 3 4 1\n") as native:
+        with patch.object(self.manager.runtime, "current", return_value=manifest), \
+             patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
+             patch("workbench_backend.inference.memory_estimates._bounded_native", return_value=native_result()) as native:
             with patch("workbench_backend.inference.memory_estimates.utc_now", return_value="2026-09-27T12:00:00Z"):
                 first = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup))
             with patch("workbench_backend.inference.memory_estimates.utc_now", return_value="2026-09-27T12:00:10Z"):
@@ -107,30 +136,32 @@ class MemoryEstimateTests(unittest.TestCase):
         self.assertEqual(first.gpu_bytes, 3 * 1024**2)
         self.assertEqual(native.call_count, 1)
         self.assertIn("--no-kv-offload", native.call_args.args[0])
-        self.assertEqual(first.evaluated_startup["parallel"], 1)
-        self.assertIn("automatic slot allocation", " ".join(first.unknown_reasons))
+        self.assertEqual(first.evaluated_startup["parallel"], 4)
+        self.assertTrue(first.kv_unified)
+        self.assertEqual(first.completeness, "complete")
+        self.assertIn("Simultaneous requests share", " ".join(first.assumptions))
+        self.assertIn("Dynamic driver", " ".join(first.unknown_reasons))
         self.assertEqual(second.devices, first.devices)
         self.assertEqual(second.estimated_at, first.estimated_at, "A cached prediction must retain its original time")
         self.assertFalse(self.manager.list_deployments())
 
-    def test_native_explicit_parallel_is_evaluated_and_auto_slots_do_not_supply_context_marker(self):
+    def test_native_explicit_and_automatic_parallel_return_actual_pool_and_per_chat_capacity(self):
         bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
-        (self.root / "llama-fit-params.exe").touch()
-        manifest = SimpleNamespace(status="ready", release_tag="b11045",
-            executable=str(self.root / "llama-server.exe"), sha256="runtime")
+        manifest = self.native_manifest()
         with patch.object(self.manager.runtime, "current", return_value=manifest), \
+             patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
              patch("workbench_backend.inference.memory_estimates._bounded_native",
-                side_effect=["-c 16384 -ngl 4", "CUDA0 1 2 3\nHost 4 5 6\n",
-                    "-c 8192 -ngl 4", "CUDA0 1 2 3\nHost 4 5 6\n"]) as native:
+                side_effect=[native_result(context=16384, parallel=2, unified=False),
+                             native_result(context=16384)]) as native:
             explicit = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,
-                startup={"parallel": 4}))
+                startup={"parallel": 2, "kv_unified": False}))
             automatic = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,
                 startup={}))
-        self.assertEqual(explicit.evaluated_startup["parallel"], 4)
-        self.assertEqual(explicit.context_marker, 16384)
-        self.assertFalse(any("automatic slot allocation" in reason for reason in explicit.unknown_reasons))
-        self.assertEqual(automatic.evaluated_startup["parallel"], 1)
-        self.assertIsNone(automatic.context_marker)
+        self.assertEqual(explicit.evaluated_startup["parallel"], 2)
+        self.assertEqual(explicit.effective_context, 16384)
+        self.assertEqual(explicit.context_marker, 8192)
+        self.assertEqual(automatic.evaluated_startup["parallel"], 4)
+        self.assertEqual(automatic.context_marker, 16384)
         self.assertEqual(automatic.selected_startup, {})
         self.assertIn("--parallel", native.call_args_list[0].args[0])
 
@@ -148,22 +179,94 @@ class MemoryEstimateTests(unittest.TestCase):
 
     def test_native_predictor_survives_metadata_budget_and_omitted_layers_remain_auto(self):
         bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
-        helper = self.root / "llama-fit-params.exe"
-        helper.touch()
-        manifest = SimpleNamespace(status="ready", release_tag="b11045",
-            executable=str(self.root / "llama-server.exe"), sha256="runtime")
+        manifest = self.native_manifest()
         startup = {"ctx_size": 4096, "kv_offload": False}
         with patch.object(self.manager.runtime, "current", return_value=manifest), \
+             patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
              patch.object(self.manager.memory_estimator, "_local_directory", side_effect=ValueError("Metadata budget exceeded")), \
              patch("workbench_backend.inference.memory_estimates._bounded_native",
-                 side_effect=["-c 4096 -ngl 4", "CUDA0 1 0 2\nHost 3 4 1\n"]) as native:
+                 return_value=native_result()) as native:
             result = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup))
         self.assertEqual(result.source, "native_prediction")
         self.assertEqual(result.selected_startup, startup)
         self.assertEqual(result.evaluated_startup["n_gpu_layers"], 4)
-        self.assertEqual(native.call_count, 2)
-        self.assertNotIn("--n-gpu-layers", native.call_args_list[0].args[0])
+        self.assertEqual(native.call_count, 1)
+        argv = native.call_args.args[0]
+        self.assertEqual(argv[argv.index("--n-gpu-layers") + 1], "auto")
         self.assertFalse(self.manager.list_deployments())
+
+    def test_complete_projector_is_added_once_and_unknown_component_never_becomes_a_total(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        manifest = self.native_manifest()
+        with patch.object(self.manager.runtime, "current", return_value=manifest), \
+             patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
+             patch("workbench_backend.inference.memory_estimates._bounded_native", side_effect=[
+                 native_result(projector="measured"), native_result(projector="unavailable")]):
+            complete = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id))
+            partial = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, refresh=True))
+        self.assertEqual(complete.projector_bytes, 1024**2)
+        self.assertEqual(complete.gpu_bytes, 4*1024**2)
+        self.assertEqual(partial.completeness, "partial")
+        self.assertIsNone(partial.projector_bytes)
+        self.assertIsNone(partial.gpu_bytes)
+        self.assertIsNone(partial.ram_bytes)
+        self.assertIsNone(partial.context_marker)
+
+    def test_runtime_identity_mismatch_is_unavailable_and_keeps_the_selected_draft(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        manifest = self.native_manifest()
+        bad = json.loads(native_result())
+        bad["native_fingerprint"] = "different-runtime"
+        startup = {"ctx_size":4096}
+        with patch.object(self.manager.runtime, "current", return_value=manifest), \
+             patch("workbench_backend.inference.memory_estimates.require_planner", return_value=Path(manifest.memory_planner_path)), \
+             patch("workbench_backend.inference.memory_estimates._bounded_native", return_value=json.dumps(bad)):
+            result = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup))
+        self.assertEqual(result.completeness, "unavailable")
+        self.assertEqual(result.selected_startup, startup)
+        self.assertEqual(result.source, "metadata")
+        self.assertFalse(self.manager.list_deployments())
+
+    def test_observation_matches_exact_loading_identity_and_ignores_response_choice(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        bundle = self.manager.get_bundle(bundle_id)
+        startup = {"ctx_size":4096}
+        bags = resolve_bags(startup=startup,per_request={"temperature":0.3})
+        deployment = Deployment(id="live",display_name="Fixture",scope="managed",status="running",
+            bundle_id=bundle_id,created_at="now",updated_at="observed",settings=bags,applied_startup=bags.startup.applied,
+            health=HealthReport(healthy=True,checked="observed"),
+            loaded_model_identity=loaded_model_identity(None,bundle,bags))
+        self.manager.store.put_deployment(deployment)
+        with patch.object(self.manager.memory_estimator,"_native_prediction",side_effect=ValueError("fixture")):
+            exact = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,startup=startup))
+            other = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id,startup={"ctx_size":8192}))
+        self.assertEqual(exact.observed_runtime["deployment_id"],"live")
+        self.assertEqual(exact.observed_runtime["observed_at"],"observed")
+        self.assertEqual(exact.observed_runtime["plan_identity"],exact.plan_identity)
+        self.assertIsNone(other.observed_runtime)
+
+    def test_current_runtime_cannot_prove_an_unbound_or_previous_runtime_observation(self):
+        bundle_id = self.manager.import_local(LocalImportRequest(source_path=str(self.model()))).bundle_id
+        bundle = self.manager.get_bundle(bundle_id)
+        startup = {"ctx_size": 4096}
+        bags = resolve_bags(startup=startup)
+        previous = self.native_manifest()
+        current = previous.model_copy(update={"sha256": "replaced-runtime"})
+        previous_identity = loaded_model_identity(previous, bundle, bags)
+        candidate_identity = loaded_model_identity(current, bundle, bags)
+        self.assertNotEqual(previous_identity, candidate_identity)
+        for recorded_identity in (None, previous_identity):
+            with self.subTest(recorded_identity=recorded_identity):
+                self.manager.store.put_deployment(Deployment(id="live", display_name="Previous runtime",
+                    scope="managed", status="running", bundle_id=bundle_id, created_at="before",
+                    updated_at="observed", settings=bags, applied_startup=bags.startup.applied,
+                    health=HealthReport(healthy=True, checked="observed"),
+                    loaded_model_identity=recorded_identity))
+                with patch.object(self.manager.runtime, "current", return_value=current), \
+                        patch.object(self.manager.memory_estimator, "_native_prediction", side_effect=ValueError("fixture")):
+                    result = self.manager.memory_estimator.estimate(ModelEstimateRequest(bundle_id=bundle_id, startup=startup))
+                self.assertEqual(result.plan_identity, candidate_identity)
+                self.assertIsNone(result.observed_runtime)
 
     def test_remote_success_is_cached_at_immutable_file_identity(self):
         payload = self.model().read_bytes()

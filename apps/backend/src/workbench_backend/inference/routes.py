@@ -36,6 +36,7 @@ from workbench_backend.inference.schemas import (
     Deployment,
     InspectReport,
     BundleConfigurationOptions,
+    BundleConfigurationOptionsRequest,
     SettingsBags,
     RuntimeManifest,
     SmokeResult,
@@ -202,13 +203,26 @@ def bundle_configuration_options(
     request: Request,
     bundle_id: str,
     deployment_id: str | None = None,
+    configuration_id: str | None = None,
     refresh: bool = False,
 ) -> object:
     return get_manager(request).get_bundle_configuration_options(
         bundle_id,
         deployment_id=deployment_id,
+        configuration_id=configuration_id,
         refresh=refresh,
     )
+
+
+@router.post("/bundles/{bundle_id}/configuration-options", response_model=BundleConfigurationOptions)
+def preview_bundle_configuration_options(
+    request: Request,
+    bundle_id: str,
+    body: BundleConfigurationOptionsRequest,
+) -> object:
+    return get_manager(request).get_bundle_configuration_options(bundle_id,
+        configuration_id=body.configuration_id, deployment_id=body.deployment_id,
+        startup=body.startup, refresh=body.refresh)
 
 
 @router.get("/bundles/{bundle_id}/compatibility")

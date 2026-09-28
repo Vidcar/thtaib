@@ -111,7 +111,7 @@ function makeHarness() {
         state.managedDeployment = { id: "dep_managed", bundle_id: "bundle-one", profile_id: "configuration-one", display_name: "managed:Configured model", endpoint: "http://127.0.0.1:9", status: "running", scope: "managed", health: { healthy: true }, settings: null, created_at: now(), updated_at: now() };
         json(res, 200, state.managedDeployment); return;
       }
-      if (req.method === "GET" && url.pathname.endsWith("/configuration-options")) { json(res, 200, { context_size: { maximum: 32768, options: [] }, per_request_defaults: {} }); return; }
+      if (["GET", "POST"].includes(req.method) && url.pathname.endsWith("/configuration-options")) { json(res, 200, { context_size: { maximum: 32768, options: [] }, per_request_defaults: {} }); return; }
       if (req.method === "GET" && url.pathname === "/v1/deployments") {
         json(res, 200, [{
           id: "dep_1",

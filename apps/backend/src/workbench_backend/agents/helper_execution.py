@@ -18,6 +18,7 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.ids import utc_now
 from workbench_backend.inference.schemas import SettingsBags
 from workbench_backend.agents.memory_skills import memory_selection_notice
+from workbench_backend.agents.helpers import require_accepted_model_identity
 
 
 def _child_run_id(parent, snapshot, call_id):
@@ -35,6 +36,32 @@ def _saved_child_message_identities(child):
     return seen
 
 
+def bind_helper_output_budget(owner, parent, snapshot, deployment, settings):
+    """Save a role's first numeric binding before any of its provider calls."""
+    from workbench_backend.inference.response_budget import bind_output_budget
+
+    with owner._lock:
+        role = next((item for item in parent.helper_snapshots
+            if item.agent_id == snapshot.agent_id and item.version_id == snapshot.version_id), snapshot)
+        frozen = SettingsBags.model_validate(role.settings_snapshot) if role.settings_snapshot is not None else settings.model_copy(deep=True)
+        response = frozen.per_request
+        # A restarted older child may already own the first verified allowance
+        # even if its parent's role has not recorded that late binding yet.
+        if response.output_budget_binding is None and settings.per_request.output_budget_binding is not None:
+            response = settings.per_request
+        bound = bind_output_budget(deployment, response)
+        if bound != frozen.per_request or role.settings_snapshot is None:
+            frozen.per_request = bound
+            role.settings_snapshot = frozen.model_dump(mode="json")
+            snapshot.settings_snapshot = role.settings_snapshot
+            if any(item is role for item in parent.helper_snapshots):
+                parent.updated_at = utc_now()
+                # The role is durable before child/provider calls. Repeated or
+                # parallel calls, restarted parents and Lab reuse this result.
+                owner._persist_and_notify(parent)
+        return bound
+
+
 def _child_run(owner, parent, snapshot, call_id, payload):
     child_id = _child_run_id(parent, snapshot, call_id)
     existing = owner.store.get_execution_run(child_id)
@@ -46,7 +73,11 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     # The parent has yielded its model call while this native Deep Agents
     # helper runs. The managed llama.cpp router may hand the sole model slot to
     # this helper and reload the parent model for its continuation.
-    deployment = owner.manager.ensure_deployment_ready(config.deployment_id or parent.deployment_id)
+    accepted = SettingsBags.model_validate(snapshot.settings_snapshot) if snapshot.settings_snapshot is not None else None
+    deployment_id = config.deployment_id or parent.deployment_id
+    require_accepted_model_identity(owner.manager.get_deployment(deployment_id), accepted)
+    deployment = owner.manager.ensure_deployment_ready(deployment_id)
+    require_accepted_model_identity(deployment, accepted)
     selected_tools = config.presented_tools if config.presented_tools is not None else parent.presented_tools
     presented = [name for name in selected_tools if name in parent.presented_tools and name != "task"]
     work_mode = "plan" if parent.work_mode == "plan" or config.work_mode == "plan" else "work"
@@ -82,6 +113,7 @@ def _child_run(owner, parent, snapshot, call_id, payload):
     messages = payload.get("messages", [])
     task = str(getattr(messages[-1], "content", "Delegated task")) if messages else "Delegated task"
     model_content_blocks = [memory_selection_notice(refs.memory_version_refs)]
+    setup.bags.per_request = bind_helper_output_budget(owner, parent, snapshot, deployment, setup.bags)
     observation = observe_context(deployment=deployment, per_request=setup.bags.per_request,
         system_prompt=setup.system_prompt, task=task, content_blocks=model_content_blocks, output_schema=None,
         tool_count=len(presented), continuing_thread=False)

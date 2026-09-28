@@ -69,8 +69,9 @@ export async function checkAgentSavedActions(Component) {
     await change(renderer.root, "Instructions", "textarea", "Read and cite evidence.");
     await submit(renderer.root);
     const savedVersion = records[0].current_version_id;
-    await click(renderer.root, "Use in Chat");
-    assert.equal(used[0].current_version_id, savedVersion); assert.equal(used[0].configuration.instructions, "Read and cite evidence.");
+    assert.equal(records[0].configuration.instructions, "Read and cite evidence.");
+    assert.equal(used.length, 0, "saving an agent remains in Agents");
+    assert.equal(renderer.root.findAllByType("button").some(node => text(node).trim() === "Use in Chat"), false, "model and agent selection belongs to Chat");
     await settle(() => renderer.unmount());
     await settle(() => { renderer = create(React.createElement(Component, { onUse: item => used.push(item) })); });
     assert.equal(field(renderer.root, "Instructions", "textarea").props.value, "Read and cite evidence.", "reopening reads saved content");

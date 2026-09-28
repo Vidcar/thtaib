@@ -15,6 +15,7 @@ from workbench_backend.inference.settings import (
     RETIRED_STARTUP_KEYS,
     STARTUP_ENUMS,
     STARTUP_KEYS,
+    STARTUP_BOOL_FLAGS,
     resolve_bags,
     resolve_declared_startup,
     startup_cli_args,
@@ -78,11 +79,51 @@ class SettingsBagTests(unittest.TestCase):
     def test_default_gpu_profile_does_not_override_model_context(self) -> None:
         bags = resolve_bags(startup={})
         self.assertNotIn("ctx_size", bags.startup.applied)
-        self.assertEqual(bags.startup.applied["n_gpu_layers"], -1)
-        self.assertEqual(bags.startup.applied["flash_attn"], "on")
+        self.assertEqual(bags.startup.applied["n_gpu_layers"], "auto")
+        self.assertEqual(bags.startup.applied["flash_attn"], "auto")
+        self.assertEqual(bags.startup.applied["fit"], "on")
+        self.assertEqual(bags.startup.applied["parallel"], 4)
+        self.assertTrue(bags.startup.applied["kv_unified"])
         self.assertNotIn("ctx_size", DEFAULT_GPU_PROFILE)
-        self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], -1)
+        self.assertEqual(DEFAULT_GPU_PROFILE["n_gpu_layers"], "auto")
         self.assertIn(DEFAULT_GPU_PROFILE["flash_attn"], {"on", "off", "auto"})
+
+    def test_auto_omits_context_and_cpu_includes_native_companion_placement(self) -> None:
+        automatic = resolve_bags(startup={"ctx_size": None})
+        self.assertNotIn("--ctx-size", startup_cli_args(automatic.startup.applied))
+        full = resolve_bags(startup={"ctx_size": 0})
+        self.assertEqual(full.startup.applied["ctx_size"], 0)
+        cpu = resolve_bags(startup={"n_gpu_layers": 0})
+        args = startup_cli_args(cpu.startup.applied)
+        self.assertIn("--no-op-offload", args)
+        self.assertIn("--no-mmproj-offload", args)
+        self.assertIn("--no-kv-offload", args)
+        self.assertEqual(args[args.index("--spec-draft-ngl") + 1], "0")
+
+    def test_known_request_values_reject_nonfinite_and_fractional_counts(self) -> None:
+        for requested in ({"temperature": float("inf")}, {"min_p": float("nan")},
+                          {"max_tokens": 3.5}, {"top_k": True}, {"seed": -2}):
+            with self.subTest(requested=requested):
+                bag = resolve_bags(per_request=requested).per_request
+                self.assertEqual(bag.unsupported, list(requested))
+                self.assertEqual(bag.requested, requested)
+                self.assertEqual(bag.applied, {})
+
+    def test_native_logit_bias_pairs_and_token_bans_survive_resolution(self) -> None:
+        for requested in ([[17, False], ["suffix", -2.5]], {"17": False, "suffix": 1.5}):
+            with self.subTest(requested=requested):
+                bag = resolve_bags(per_request={"logit_bias": requested}).per_request
+                self.assertEqual(bag.unsupported, [])
+                self.assertEqual(bag.applied["logit_bias"], requested)
+        self.assertEqual(resolve_bags(per_request={"logit_bias": [[17, float("nan")]]}).per_request.unsupported, ["logit_bias"])
+
+    def test_startup_dependencies_fail_before_loading(self) -> None:
+        for startup, invalid in (({"n_gpu_layers": "auto", "fit": "off"}, "fit"),
+                                 ({"flash_attn": "off", "cache_type_v": "q8_0"}, "cache_type_v"),
+                                 ({"batch_size": 64, "ubatch_size": 128}, "ubatch_size"),
+                                 ({"spec_draft_n_max": 3, "spec_draft_n_min": 4}, "spec_draft_n_min")):
+            with self.subTest(startup=startup):
+                self.assertIn(invalid, resolve_bags(startup=startup).startup.unsupported)
 
     def test_explicit_all_gpu_layers_reaches_llama_server(self) -> None:
         for value in ("all", "auto", -1):
@@ -128,7 +169,6 @@ class SettingsBagTests(unittest.TestCase):
                 "pooling",
                 "reasoning",
                 "reasoning_format",
-                "reasoning_effort",
                 "spec_draft_cache_type_k",
                 "spec_draft_cache_type_v",
             },
@@ -140,10 +180,7 @@ class SettingsBagTests(unittest.TestCase):
             STARTUP_ENUMS["reasoning_format"],
             frozenset({"auto", "none", "deepseek", "deepseek-legacy"}),
         )
-        self.assertEqual(
-            STARTUP_ENUMS["reasoning_effort"],
-            frozenset({"default", "minimal", "low", "medium", "high", "xhigh", "max"}),
-        )
+        self.assertNotIn("reasoning_effort", STARTUP_ENUMS)  # Native levels are template-defined strings.
         self.assertEqual(
             STARTUP_ENUMS["load_mode"],
             frozenset({"auto", "none", "mmap", "mlock", "mmap+mlock", "dio"}),
@@ -151,19 +188,15 @@ class SettingsBagTests(unittest.TestCase):
         for key in STARTUP_KEYS:
             if key in STARTUP_ENUMS:
                 continue
-            if key == "reasoning_preserve":
-                self.assertEqual(startup_cli_args({key: True}), ["--reasoning-preserve"])
-                self.assertEqual(startup_cli_args({key: False}), ["--no-reasoning-preserve"])
-                continue
-            if key == "kv_offload":
-                self.assertEqual(startup_cli_args({key: True}), ["--kv-offload"])
-                self.assertEqual(startup_cli_args({key: False}), ["--no-kv-offload"])
+            if key in STARTUP_BOOL_FLAGS:
+                self.assertEqual(startup_cli_args({key: True}), [STARTUP_BOOL_FLAGS[key][0]])
+                self.assertEqual(startup_cli_args({key: False}), [STARTUP_BOOL_FLAGS[key][1]])
                 continue
             args = startup_cli_args({key: "sample"})
             self.assertEqual(args, [STARTUP_KEYS[key], "sample"])
         invalid = resolve_bags(startup={"flash_attn": "maybe"})
         self.assertIn("flash_attn", invalid.startup.unsupported)
-        self.assertEqual(invalid.startup.applied["flash_attn"], "on")
+        self.assertEqual(invalid.startup.applied["flash_attn"], "auto")
 
     def test_b11045_startup_flags_are_normalized_and_serialized(self) -> None:
         bags = resolve_bags(
@@ -173,6 +206,7 @@ class SettingsBagTests(unittest.TestCase):
                 "cache_type_k": "Q8_0",
                 "cache_type_v": "f16",
                 "fit": "off",
+                "n_gpu_layers": "all",
                 "reasoning": "auto",
                 "reasoning_format": "deepseek-legacy",
                 "reasoning_effort": "xhigh",
@@ -194,8 +228,9 @@ class SettingsBagTests(unittest.TestCase):
         self.assertEqual(bags.startup.applied["ctx_size"], 8192)
         self.assertEqual(bags.startup.applied["threads_batch"], 12)
         self.assertEqual(bags.startup.applied["cache_type_k"], "q8_0")
-        self.assertEqual(bags.startup.applied["reasoning_budget"], -1)
-        self.assertTrue(bags.startup.applied["reasoning_preserve"])
+        self.assertEqual(bags.per_request.applied["reasoning_budget_tokens"], -1)
+        self.assertTrue(bags.per_request.applied["reasoning_preserve"])
+        self.assertEqual(bags.per_request.applied["reasoning_effort"], "xhigh")
         self.assertEqual(bags.startup.applied["spec_draft_p_min"], 0.1)
         self.assertEqual(bags.startup.applied["spec_draft_ngl"], "all")
 
@@ -204,11 +239,8 @@ class SettingsBagTests(unittest.TestCase):
         self.assertEqual(args[args.index("--threads-batch") + 1], "12")
         self.assertEqual(args[args.index("--cache-type-k") + 1], "q8_0")
         self.assertEqual(args[args.index("--fit") + 1], "off")
-        self.assertEqual(args[args.index("--reasoning") + 1], "auto")
-        self.assertEqual(args[args.index("--reasoning-format") + 1], "deepseek-legacy")
-        self.assertEqual(args[args.index("--reasoning-effort") + 1], "xhigh")
-        self.assertEqual(args[args.index("--reasoning-budget") + 1], "-1")
-        self.assertIn("--reasoning-preserve", args)
+        for flag in ("--reasoning", "--reasoning-format", "--reasoning-effort", "--reasoning-budget", "--reasoning-preserve"):
+            self.assertNotIn(flag, args)
         self.assertEqual(args[args.index("--chat-template-file") + 1], "template.jinja")
         self.assertEqual(args[args.index("--spec-type") + 1], "draft-mtp")
         self.assertEqual(args[args.index("--spec-draft-model") + 1], "draft.gguf")
@@ -220,7 +252,7 @@ class SettingsBagTests(unittest.TestCase):
         for effort in ("default", "minimal", "low", "medium", "high", "xhigh", "max"):
             with self.subTest(reasoning_effort=effort):
                 resolved = resolve_bags(startup={"reasoning_effort": effort})
-                self.assertEqual(resolved.startup.applied["reasoning_effort"], effort)
+                self.assertEqual(resolved.per_request.applied["reasoning_effort"], effort)
 
     def test_invalid_supported_startup_values_are_not_emitted(self) -> None:
         for startup in ({"fit": "auto"}, {"port": 65536}, {"port": 0}):
@@ -246,11 +278,6 @@ class SettingsBagTests(unittest.TestCase):
             "ctx_size",
             "threads_batch",
             "cache_type_k",
-            "fit",
-            "reasoning",
-            "reasoning_format",
-            "reasoning_effort",
-            "reasoning_preserve",
             "spec_draft_p_min",
             "spec_draft_ngl",
             "chat_template_kwargs",
@@ -258,11 +285,17 @@ class SettingsBagTests(unittest.TestCase):
         ):
             self.assertIn(key, bags.startup.unsupported)
             self.assertNotIn(key, bags.startup.applied)
+        self.assertIn("fit", bags.startup.unsupported)
+        self.assertEqual(bags.startup.applied["fit"], "on")
+        for key in ("reasoning", "reasoning_format", "reasoning_preserve"):
+            self.assertIn(key, bags.per_request.unsupported)
+            self.assertNotIn(key, bags.per_request.applied)
+        self.assertEqual(bags.per_request.applied["reasoning_effort"], "none")  # Native special Off value.
         args = startup_cli_args(bags.startup.applied)
         self.assertNotIn("--ctx-size", args)
         self.assertNotIn("--threads-batch", args)
         self.assertNotIn("--cache-type-k", args)
-        self.assertNotIn("--fit", args)
+        self.assertEqual(args[args.index("--fit") + 1], "on")
         self.assertNotIn("--reasoning", args)
         self.assertNotIn("--reasoning-preserve", args)
 

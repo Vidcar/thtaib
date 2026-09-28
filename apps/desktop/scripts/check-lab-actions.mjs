@@ -22,7 +22,8 @@ try {
   let failSave = true;
   const patch = (object, key, fn) => { originals.set([object, key], object[key]); object[key] = fn; };
   patch(api, "deployments", async () => []);
-  patch(api, "profiles", async () => [{ id: "configuration_a", name: "Model A", bundle_id: "bundle_a", is_default: true }]);
+  const bag = requested => ({ requested, applied: requested, unsupported: [], retired: [], overridden: [], unverified: [] });
+  patch(api, "profiles", async () => [{ id: "configuration_a", display_name: "Model A", bundle_id: "bundle_a", revision: 1, bags: { startup: bag({}), per_request: bag({}), agent: bag({}) } }]);
   patch(api, "modelConfiguration", async () => ({ per_request_defaults: {}, context_size: { options: [], supported: false } }));
   patch(workspaceApi, "resolveSetup", async (_project, _agent, configuration) => ({ configuration, effective_values: [], provenance: {}, problems: [] }));
   patch(api, "createWorkspace", async (_name, files) => { calls.push(["create", files]); return { id: `workspace_${++workspaceCount}`, path: `isolated/${workspaceCount}`, origin: "lab" }; });

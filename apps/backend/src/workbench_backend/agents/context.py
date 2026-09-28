@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from typing import Any, Literal
 
 from langchain_core.exceptions import ContextOverflowError
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, get_buffer_string
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from deepagents.middleware.summarization import SummarizationMiddleware
 
@@ -18,10 +18,10 @@ from workbench_backend.errors import HarnessError
 from workbench_backend.inference.schemas import Deployment, SettingsBag
 from workbench_backend.inference.request_projection import project_context_payload
 from workbench_backend.inference.telemetry import request_purpose, current_request_purpose
+from workbench_backend.inference.response_budget import TOKEN_MARGIN_RATIO, bind_output_budget, output_reservation
 from workbench_backend.inference.user_content import UserContentBlock, user_message_content
 
-TOKEN_MARGIN_RATIO = 0.08
-DEFAULT_OUTPUT_RESERVATION = 512
+DEFAULT_OUTPUT_RESERVATION = 0
 
 
 class BudgetedSummarizationMiddleware(SummarizationMiddleware):
@@ -78,12 +78,31 @@ class BudgetedSummarizationMiddleware(SummarizationMiddleware):
     def _create_summary(self, messages_to_summarize: list[Any]) -> str:
         dispatch = self.execution_control.model_dispatch(self.run, purpose="summary") if self.execution_control is not None else nullcontext()
         with dispatch, request_purpose("summary"):
+            self._validate_summary_request(messages_to_summarize)
             return super()._create_summary(messages_to_summarize)
 
     async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
         dispatch = self.execution_control.model_dispatch(self.run, purpose="summary") if self.execution_control is not None else nullcontext()
         with dispatch, request_purpose("summary"):
+            self._validate_summary_request(messages_to_summarize)
             return await super()._acreate_summary(messages_to_summarize)
+
+    def _validate_summary_request(self, messages: list[Any]) -> None:
+        """Guard the installed SDK's actual summary prompt before any model.
+
+        The SDK still owns cutoff, history storage and summary generation. This
+        also protects connected/custom models that lack our transport guard.
+        """
+        observation = self.run.context_observation if self.run is not None else None
+        if observation is None or not messages:
+            return
+        trimmed = self._lc_helper._trim_messages_for_summary(messages)
+        if not trimmed:
+            return
+        prompt = self._lc_helper.summary_prompt.format(messages=get_buffer_string(trimmed, format="xml")).rstrip()
+        observed = observe_payload(observation, project_context_payload([HumanMessage(content=prompt)]))
+        self.run.housekeeping_context["summary"] = observed
+        require_context_fit(observed)
 
     def _check_reduction(self, original: Any, reduced: Any, error: Exception | None) -> None:
         try:
@@ -133,12 +152,13 @@ def observe_context(
     tools: list[Any] | None = None,
 ) -> ContextObservation:
     capacity, source = _capacity(deployment)
-    reservation = _output_reservation(per_request)
+    resolved = bind_output_budget(deployment, per_request or SettingsBag())
+    reservation = output_reservation(resolved)
     from workbench_backend.inference.adapter import _reasoning_replay_scope
     messages = [*([SystemMessage(content=system_prompt)] if system_prompt else []),
                 *(history or []), HumanMessage(content=user_message_content(task, content_blocks))]
     payload = project_context_payload(messages, tools=tools, response_format=output_schema,
-                                      reasoning_scope=_reasoning_replay_scope(deployment))
+                                      reasoning_scope=_reasoning_replay_scope(deployment, resolved))
     estimated = estimate_payload(payload)
     margin = int(capacity * TOKEN_MARGIN_RATIO) if capacity else 0
     fits = None if capacity is None else estimated + reservation + margin <= capacity
@@ -177,12 +197,7 @@ def _capacity(deployment: Deployment) -> tuple[int | None, Literal["server_props
 
 
 def _output_reservation(per_request: SettingsBag | None) -> int:
-    value: Any = None
-    if per_request is not None:
-        value = per_request.applied.get("max_completion_tokens", per_request.applied.get("max_tokens"))
-    if isinstance(value, int) and value > 0:
-        return value
-    return DEFAULT_OUTPUT_RESERVATION
+    return output_reservation(per_request)
 
 
 def _estimate_tokens(text: str) -> int:

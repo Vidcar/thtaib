@@ -25,6 +25,7 @@ from workbench_backend.inference.configuration_options import reasoning_history_
 from workbench_backend.inference.capabilities import capability_support
 from workbench_backend.inference.schemas import Deployment, GgufRuntimeMetadata, SettingsBag
 from workbench_backend.inference.settings import normalize_on_off_auto
+from workbench_backend.inference.response_budget import TOKEN_MARGIN_RATIO, bind_output_budget, output_reservation
 from workbench_backend.inference.telemetry import LatestGenerationPublisher, RequestTelemetry, current_request_purpose
 from workbench_backend.inference.request_projection import project_outbound_payload, project_context_payload, ReasoningReplayScope
 
@@ -32,8 +33,6 @@ from workbench_backend.inference.request_projection import project_outbound_payl
 DEFAULT_ADAPTER_TIMEOUT = 120.0
 CAPTURE_TEXT_LIMIT = 240
 CAPTURE_EVENT_LIMIT = 64
-DEFAULT_OUTPUT_RESERVATION = 512
-TOKEN_MARGIN_RATIO = 0.08
 _stream_chunk_count: contextvars.ContextVar[int] = contextvars.ContextVar("adapter_stream_chunk_count", default=0)
 _request_telemetry: contextvars.ContextVar[RequestTelemetry | None] = contextvars.ContextVar("adapter_request_telemetry", default=None)
 _SECRET_TEXT_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b")
@@ -59,6 +58,7 @@ EXTRA_BODY_KEYS = (
     "repeat_penalty",
     "reasoning_format",
     "reasoning_budget_tokens",
+    "reasoning_budget_message",
     "logit_bias",
 )
 
@@ -361,6 +361,7 @@ def chat_model_for_deployment(
         )
 
     per_request = per_request if per_request is not None else deployment.settings.per_request
+    per_request = bind_output_budget(deployment, per_request)
     validate_model_reasoning(deployment, per_request)
     kwargs = _direct_kwargs(per_request)
     extra_body = _extra_body(per_request)
@@ -393,7 +394,7 @@ def chat_model_for_deployment(
         owned_async_client = async_client
     try:
         model_name = _resolve_model_name(deployment, endpoint, client)
-        reasoning_replay_scope = _reasoning_replay_scope(deployment)
+        reasoning_replay_scope = _reasoning_replay_scope(deployment, per_request)
         profile = _model_profile(deployment, per_request)
 
         model = WorkbenchChatOpenAI(
@@ -436,8 +437,8 @@ def adapter_target(deployment: Deployment) -> dict[str, Any]:
         "adapter": "langchain-openai ChatOpenAI chat-completions",
         "model": _model_name_from_props(deployment),
         "max_input_tokens": (_model_profile(deployment, deployment.settings.per_request) or {}).get("max_input_tokens"),
-        "reasoning_replay_supported": _reasoning_replay_scope(deployment) != "none",
-        "reasoning_replay_scope": _reasoning_replay_scope(deployment),
+        "reasoning_replay_supported": _reasoning_replay_scope(deployment, deployment.settings.per_request) != "none",
+        "reasoning_replay_scope": _reasoning_replay_scope(deployment, deployment.settings.per_request),
         "unsupported": list(deployment.settings.per_request.unsupported),
         "unverified": list(deployment.settings.per_request.unverified),
     }
@@ -463,6 +464,8 @@ def _extra_body(bag: SettingsBag) -> dict[str, Any]:
             # llama.cpp merges these per-request keys into its startup template
             # defaults. Send only the override so tool/template defaults survive.
             body["chat_template_kwargs"] = {"enable_thinking": thinking == "on"}
+    if "reasoning_preserve" in bag.applied:
+        body.setdefault("chat_template_kwargs", {})["preserve_reasoning"] = bag.applied["reasoning_preserve"]
     return body
 
 
@@ -547,13 +550,15 @@ def _model_identities(payload: Any) -> list[str]:
     return identities
 
 
-def _reasoning_replay_scope(deployment: Deployment) -> ReasoningReplayScope:
+def _reasoning_replay_scope(deployment: Deployment, per_request: SettingsBag | None = None) -> ReasoningReplayScope:
     """Respect native history policy without removing current-cycle reasoning."""
     props = deployment.server_props
     caps = props.chat_template_caps if props is not None else {}
     if caps.get("supports_preserve_reasoning") is not True:
         return "none"
-    explicit = deployment.applied_startup.get("reasoning_preserve")
+    explicit = per_request.applied.get("reasoning_preserve") if per_request is not None else None
+    if type(explicit) is not bool:
+        explicit = deployment.applied_startup.get("reasoning_preserve")
     if type(explicit) is bool:
         return "full_history" if explicit else "current_turn"
     template_kwargs = props.default_generation_settings.get("chat_template_kwargs", {}) if props else {}
@@ -584,9 +589,7 @@ def _model_profile(deployment: Deployment, per_request: SettingsBag) -> ModelPro
     capacity = deployment.server_props.n_ctx if deployment.server_props is not None else None
     if not isinstance(capacity, int) or capacity <= 0:
         return profile
-    reservation = per_request.applied.get("max_completion_tokens", per_request.applied.get("max_tokens"))
-    if not isinstance(reservation, int) or reservation <= 0:
-        reservation = DEFAULT_OUTPUT_RESERVATION
+    reservation = output_reservation(bind_output_budget(deployment, per_request))
     margin = int(capacity * TOKEN_MARGIN_RATIO)
     max_input_tokens = max(0, capacity - reservation - margin)
     profile["max_input_tokens"] = max_input_tokens

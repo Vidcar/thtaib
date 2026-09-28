@@ -2763,6 +2763,52 @@
         "title": "BundleConfigurationOptions",
         "type": "object"
       },
+      "BundleConfigurationOptionsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configuration Id"
+          },
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Id"
+          },
+          "refresh": {
+            "default": false,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "startup": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startup"
+          }
+        },
+        "title": "BundleConfigurationOptionsRequest",
+        "type": "object"
+      },
       "BundleFile": {
         "properties": {
           "name": {
@@ -6498,7 +6544,7 @@
             "type": "array"
           },
           "output_reservation_tokens": {
-            "default": 512,
+            "default": 0,
             "title": "Output Reservation Tokens",
             "type": "integer"
           },
@@ -6787,6 +6833,17 @@
               }
             ],
             "title": "Loaded Chat Template Origin"
+          },
+          "loaded_model_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loaded Model Identity"
           },
           "pid": {
             "anyOf": [
@@ -8343,6 +8400,22 @@
             ],
             "title": "Display Name"
           },
+          "initial_per_request": {
+            "additionalProperties": true,
+            "title": "Initial Per Request",
+            "type": "object"
+          },
+          "initial_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Recipe Id"
+          },
           "initial_startup": {
             "additionalProperties": true,
             "title": "Initial Startup",
@@ -8566,6 +8639,22 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "initial_per_request": {
+            "additionalProperties": true,
+            "title": "Initial Per Request",
+            "type": "object"
+          },
+          "initial_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Recipe Id"
           },
           "initial_startup": {
             "additionalProperties": true,
@@ -10157,6 +10246,27 @@
             ],
             "title": "Display Name"
           },
+          "initial_per_request": {
+            "additionalProperties": true,
+            "title": "Initial Per Request",
+            "type": "object"
+          },
+          "initial_recipe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Recipe Id"
+          },
+          "initial_startup": {
+            "additionalProperties": true,
+            "title": "Initial Startup",
+            "type": "object"
+          },
           "source_path": {
             "title": "Source Path",
             "type": "string"
@@ -10631,6 +10741,16 @@
             "title": "Per Request",
             "type": "object"
           },
+          "recipe_origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseRecipeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "startup": {
             "additionalProperties": true,
             "title": "Startup",
@@ -10754,6 +10874,16 @@
             "title": "Assumptions",
             "type": "array"
           },
+          "completeness": {
+            "default": "partial",
+            "enum": [
+              "complete",
+              "partial",
+              "unavailable"
+            ],
+            "title": "Completeness",
+            "type": "string"
+          },
           "context_marker": {
             "anyOf": [
               {
@@ -10799,6 +10929,50 @@
             "title": "Devices",
             "type": "array"
           },
+          "dynamic_overhead_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dynamic Overhead Bytes"
+          },
+          "effective_context": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Context"
+          },
+          "effective_context_per_slot": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Context Per Slot"
+          },
+          "effective_parallel": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Parallel"
+          },
           "estimated_at": {
             "title": "Estimated At",
             "type": "string"
@@ -10833,6 +11007,17 @@
             ],
             "title": "Kv Bytes"
           },
+          "kv_unified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kv Unified"
+          },
           "model_disk_bytes": {
             "anyOf": [
               {
@@ -10855,6 +11040,28 @@
               }
             ],
             "title": "Observed Runtime"
+          },
+          "plan_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Identity"
+          },
+          "projector_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projector Bytes"
           },
           "projector_disk_bytes": {
             "anyOf": [
@@ -10906,6 +11113,17 @@
           "source_identity": {
             "title": "Source Identity",
             "type": "string"
+          },
+          "speculation_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speculation Bytes"
           },
           "unknown_reasons": {
             "items": {
@@ -12223,6 +12441,97 @@
         "title": "ResourceUsage",
         "type": "object"
       },
+      "ResponseBudgetBinding": {
+        "properties": {
+          "bound_at": {
+            "title": "Bound At",
+            "type": "string"
+          },
+          "capacity_tokens": {
+            "title": "Capacity Tokens",
+            "type": "integer"
+          },
+          "margin_tokens": {
+            "title": "Margin Tokens",
+            "type": "integer"
+          },
+          "model_identity": {
+            "title": "Model Identity",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_tokens",
+          "capacity_tokens",
+          "margin_tokens",
+          "source",
+          "model_identity",
+          "bound_at"
+        ],
+        "title": "ResponseBudgetBinding",
+        "type": "object"
+      },
+      "ResponseBudgetPolicy": {
+        "properties": {
+          "mode": {
+            "default": "workbench_auto",
+            "enum": [
+              "explicit",
+              "publisher",
+              "workbench_auto"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "source": {
+            "default": "Workbench Auto",
+            "title": "Source",
+            "type": "string"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thinking"
+          },
+          "total_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Tokens"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "title": "ResponseBudgetPolicy",
+        "type": "object"
+      },
       "ResponsePreset": {
         "properties": {
           "description": {
@@ -13262,6 +13571,11 @@
             "title": "Revision",
             "type": "integer"
           },
+          "settings_schema_version": {
+            "default": 1,
+            "title": "Settings Schema Version",
+            "type": "integer"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "string"
@@ -13296,6 +13610,28 @@
           "applied": {
             "title": "Applied"
           },
+          "apply_timing": {
+            "default": "reload",
+            "enum": [
+              "next_request",
+              "reload"
+            ],
+            "title": "Apply Timing",
+            "type": "string"
+          },
+          "control": {
+            "default": "choice",
+            "enum": [
+              "switch",
+              "choice",
+              "tokens",
+              "number",
+              "text",
+              "json"
+            ],
+            "title": "Control",
+            "type": "string"
+          },
           "default_source": {
             "anyOf": [
               {
@@ -13310,8 +13646,28 @@
           "default_value": {
             "title": "Default Value"
           },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
           "description": {
             "title": "Description",
+            "type": "string"
+          },
+          "domain": {
+            "default": "string",
+            "enum": [
+              "boolean",
+              "integer",
+              "number",
+              "string",
+              "object",
+              "json"
+            ],
+            "title": "Domain",
             "type": "string"
           },
           "flag": {
@@ -13344,6 +13700,20 @@
             ],
             "title": "Maximum"
           },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
           "observed": {
             "title": "Observed"
           },
@@ -13357,9 +13727,64 @@
           "recommended": {
             "title": "Recommended"
           },
+          "reset_value": {
+            "title": "Reset Value"
+          },
+          "section": {
+            "default": "advanced",
+            "enum": [
+              "response",
+              "memory",
+              "advanced"
+            ],
+            "title": "Section",
+            "type": "string"
+          },
           "source": {
             "title": "Source",
             "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "suggested_maximum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Maximum"
+          },
+          "suggested_minimum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Minimum"
           },
           "supported": {
             "anyOf": [
@@ -13371,6 +13796,17 @@
               }
             ],
             "title": "Supported"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
           }
         },
         "required": [
@@ -13477,6 +13913,50 @@
           "install_dir": {
             "title": "Install Dir",
             "type": "string"
+          },
+          "memory_planner_native_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Planner Native Fingerprint"
+          },
+          "memory_planner_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Planner Path"
+          },
+          "memory_planner_protocol": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Planner Protocol"
+          },
+          "memory_planner_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Planner Sha256"
           },
           "path_fallback": {
             "const": "unsupported",
@@ -13738,12 +14218,42 @@
             "title": "Applied",
             "type": "object"
           },
+          "output_budget_binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseBudgetBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output_budget_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseBudgetPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "overridden": {
             "items": {
               "$ref": "#/components/schemas/SettingNote"
             },
             "title": "Overridden",
             "type": "array"
+          },
+          "recipe_origin": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResponseRecipeOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "requested": {
             "additionalProperties": true,
@@ -13784,6 +14294,17 @@
       },
       "SettingsBags": {
         "properties": {
+          "accepted_loading_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Loading Identity"
+          },
           "agent": {
             "$ref": "#/components/schemas/SettingsBag"
           },
@@ -17283,6 +17804,22 @@
           },
           {
             "in": "query",
+            "name": "configuration_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Configuration Id"
+            }
+          },
+          {
+            "in": "query",
             "name": "refresh",
             "required": false,
             "schema": {
@@ -17315,6 +17852,53 @@
           }
         },
         "summary": "Bundle Configuration Options"
+      },
+      "post": {
+        "operationId": "preview_bundle_configuration_options_v1_bundles__bundle_id__configuration_options_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleConfigurationOptionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleConfigurationOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Bundle Configuration Options"
       }
     },
     "/v1/bundles/{bundle_id}/configurations": {

@@ -15,6 +15,7 @@
 .models-surface .models-workspace {display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-stack); align-items: start;}
 .models-surface :is(.model-detail, .model-configuration) {display: grid; gap: var(--space-stack); width: 100%; min-width: 0;}
 .models-surface .model-picker {max-width: var(--layout-form);}
+.models-surface .catalogue-row-text strong {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;}
 .models-surface .selected-model-name {font-size: var(--text-heading); margin: 0; overflow-wrap: anywhere;}
 .models-surface .model-detail [hidden] {display: none !important;}
 .models-surface .model-setup-head h3 {font-size: var(--text-body);}
@@ -61,6 +62,36 @@
 .models-surface .model-setup-head {display: flex; align-items: center; gap: var(--space-compact); flex-wrap: wrap;}
 .models-surface .model-setup-head h3 {margin: 0; font-size: var(--text-heading); overflow-wrap: anywhere;}
 .models-surface .model-setup-head .model-capacity {margin: 0 auto 0 0;}
+.selected-model-heading {display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact); padding-bottom: var(--pad-compact); min-width: 0;}
+.selected-model-heading > div {flex: 1 1 var(--layout-column); min-width: 0;}
+.model-detail-eyebrow {display: block; color: var(--muted); font-size: var(--text-small); margin-bottom: var(--space-tight);}
+.models-surface .selected-model-heading .selected-model-name {margin: 0; font-size: var(--text-heading); line-height: var(--leading-tight);}
+.model-weight-variant {max-width: 100%; padding: var(--pad-tight) var(--pad-compact); background: var(--bg-raised); border-radius: var(--radius-control); color: var(--muted); font-size: var(--text-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.model-file-attention {color: var(--warn); font-size: var(--text-small);}
+.models-surface .model-setup-head {padding-block: var(--pad-compact); margin-top: calc(var(--space-compact) * -1); border-bottom: var(--line-hairline) solid var(--border); gap: var(--space-compact);}
+.model-setup-selector {display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--space-tight) var(--space-compact); min-width: 0; flex: 1 1 var(--layout-column);}
+.model-setup-selector > label {margin: 0; color: var(--muted); font-size: var(--text-small);}
+.model-setup-selector > select {min-width: 0; max-width: 100%;}
+.model-setup-selector > .model-capacity {grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-compact);}
+.model-setup-readiness {display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-tight);}
+.model-lifecycle-actions {display: flex; gap: var(--space-tight); margin-left: auto;}
+.model-lifecycle-actions > button {white-space: nowrap;}
+.model-setup-menu > .menu-popover-trigger {padding-inline: var(--pad-tight);}
+.model-setup-actions {display: grid; gap: var(--space-compact); min-width: 0;}
+.model-setup-actions label {margin: 0;}
+.model-setup-actions input {display: block; width: 100%; margin-top: var(--space-tight);}
+.model-setup-actions > button {display: flex; align-items: center; gap: var(--space-compact); text-align: left;}
+.model-context-control {display: grid; gap: var(--space-compact); width: 100%; min-width: 0;}
+.model-recipe-reference {display: grid; gap: var(--space-compact); margin: 0;}
+.model-recipe-reference > div {border-top: var(--line-hairline) solid var(--border); padding-block: var(--pad-compact);}
+.model-recipe-reference dt {font-size: var(--text-body); color: var(--text); font-weight: var(--weight-medium);}
+.model-recipe-reference dd {margin: var(--space-tight) 0 0; font-size: var(--text-small); color: var(--muted); line-height: var(--leading-body);}
+.model-recipe-reference small {display: block; margin-top: var(--space-tight);}
+.response-settings-editor > .setting-rows {border-top: 0;}
+.response-advanced > summary, .advanced-sampling > summary, .memory-advanced > summary {display: flex; justify-content: flex-start; align-items: center; color: var(--muted); padding-block: var(--pad-tight); font-size: var(--text-small);}
+.response-advanced > summary::before, .advanced-sampling > summary::before, .memory-advanced > summary::before {content: "›"; margin-right: var(--space-tight); color: var(--muted);}
+.response-advanced[open] > summary::before, .advanced-sampling[open] > summary::before, .memory-advanced[open] > summary::before {transform: rotate(90deg);}
+.response-advanced > summary > span, .advanced-sampling > summary > span, .memory-advanced > summary > span {margin-left: auto;}
 .models-surface .model-edit-state[data-dirty="true"] {border-color: var(--accent); color: var(--text);}
 .models-surface .model-settings {display: grid; gap: var(--space-stack); min-width: 0;}
 .models-surface .model-variant-form {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact);}
@@ -68,6 +99,9 @@
 .model-effective-readout strong {color: var(--text); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums;}
 .model-effective-readout[data-state="set"] {color: var(--accent);}
 .model-effective-readout[data-state="set"] strong {color: var(--accent);}
+.model-unlimited-budget {display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-compact); font-size: var(--text-small);}
+.model-unlimited-budget > strong {color: var(--text); font-weight: var(--weight-medium);}
+.model-unlimited-budget > button {margin-left: auto;}
 .models-surface .model-loaded-difference {display: block; color: var(--warn); font-size: var(--text-small);}
 .settings-group {border-top: var(--line-hairline) solid var(--border); padding: var(--pad-compact) 0;}
 .settings-group > summary {font-weight: var(--weight-medium);}

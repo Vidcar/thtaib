@@ -60,8 +60,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(profile.bags.per_request.applied["reasoning_effort"], "xhigh")
         self.assertEqual(profile.bags.per_request.applied["temperature"], 0.6)
         options = self.manager.get_bundle_configuration_options(bundle_id)
-        self.assertEqual(options.response_presets[0].id, "balanced")
-        self.assertEqual(options.response_presets[0].per_request["reasoning_effort"], "medium")
+        self.assertEqual(options.response_presets, [])
         self.assertEqual(options.per_request_defaults["reasoning_effort"].default_value, "xhigh")
         self.assertIn("medium", [item.value for item in options.per_request_defaults["reasoning_effort"].options])
         # A previously authored configuration remains the user's choice.
@@ -72,6 +71,99 @@ class ModelConfigurationTests(unittest.TestCase):
     def test_fresh_default_does_not_invent_thinking_or_response_limits(self):
         profile = self.manager.list_model_configurations(self.bundle_id)[0]
         self.assertEqual(profile.bags.per_request.requested, {})
+
+    def test_prepare_and_save_during_active_work_do_not_change_the_resident_record(self):
+        current = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+            display_name="Current", startup={"ctx_size": 8192}, per_request={"temperature": 0.2}))
+        resident = self.manager.create_managed(ManagedDeploymentRequest(
+            bundle_id=self.bundle_id, profile_id=current.id, auto_start=False))
+        frozen = self.manager.get_deployment(resident.id)
+        with self.manager.reserve_deployment(resident.id, profile_id=current.id), patch.object(self.manager.deployments, "start") as start:
+            response_only = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                display_name="Response", startup={"ctx_size": 8192}, per_request={"temperature": 0.9}))
+            same = self.manager.create_managed(ManagedDeploymentRequest(
+                bundle_id=self.bundle_id, profile_id=response_only.id, auto_start=False))
+            future = self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                display_name="Future", startup={"ctx_size": 16384}))
+            prepared = self.manager.create_managed(ManagedDeploymentRequest(
+                bundle_id=self.bundle_id, profile_id=future.id, auto_start=False))
+        self.assertEqual(same.id, resident.id)
+        self.assertNotEqual(prepared.id, resident.id)
+        self.assertEqual(prepared.status.value, "stopped")
+        self.assertEqual(self.manager.get_deployment(resident.id), frozen)
+        start.assert_not_called()
+
+    def test_cutover_preserves_effective_saved_defaults_and_frozen_history(self):
+        from workbench_backend.inference.schemas import RunProfile, SettingsBag, SettingsBags
+        legacy_bags = SettingsBags(startup=SettingsBag(
+            requested={"ctx_size": 8192, "reasoning": "off", "reasoning_budget": 128, "reasoning_preserve": False},
+            applied={"host": "127.0.0.1", "port": 8080, "ctx_size": 8192, "n_gpu_layers": -1, "flash_attn": "on",
+                     "reasoning": "off", "reasoning_budget": 128, "reasoning_preserve": False}))
+        legacy = RunProfile(id="legacy", display_name="Existing", bundle_id=self.bundle_id,
+            bags=legacy_bags, created_at="before", updated_at="before")
+        self.manager.store.put_profile(legacy)
+        historical = self.deployment(ctx_size=8192).model_copy(update={
+            "profile_id": legacy.id, "profile_snapshot": legacy_bags, "settings": legacy_bags,
+            "requested_startup": legacy_bags.startup.requested, "applied_startup": legacy_bags.startup.applied})
+        self.manager.store.put_deployment(historical)
+        frozen = self.manager.get_deployment(historical.id)
+        migrated = self.manager.get_profile(legacy.id)
+        self.assertEqual(migrated.settings_schema_version, 2)
+        self.assertEqual(migrated.revision, legacy.revision)
+        self.assertEqual(migrated.bags.startup.applied["flash_attn"], "on")
+        self.assertEqual(migrated.bags.startup.applied["parallel"], 4)
+        self.assertIs(migrated.bags.startup.applied["kv_unified"], True)
+        self.assertEqual(migrated.bags.per_request.applied["reasoning"], "off")
+        self.assertEqual(migrated.bags.per_request.applied["reasoning_budget_tokens"], 128)
+        self.assertIs(migrated.bags.per_request.applied["reasoning_preserve"], False)
+        self.assertNotIn("reasoning", migrated.bags.startup.applied)
+        self.assertEqual(self.manager.get_deployment(historical.id), frozen)
+        self.assertIsNone(self.manager.configuration_deployment(legacy.id))
+        self.assertEqual(self.manager.get_profile(legacy.id), migrated)
+
+    def test_loaded_identity_includes_primary_content_and_non_response_template_kwargs(self):
+        from workbench_backend.inference.configurations import loaded_model_identity
+        from workbench_backend.inference.settings import resolve_bags
+        bundle = self.manager.get_bundle(self.bundle_id)
+        first = resolve_bags(startup={"chat_template_kwargs": '{"tool_style":"compact","enable_thinking":true}'})
+        response_change = resolve_bags(startup={"chat_template_kwargs": '{"tool_style":"compact","enable_thinking":false}'},
+                                      per_request={"temperature": 0.9})
+        loading_change = resolve_bags(startup={"chat_template_kwargs": '{"tool_style":"expanded"}'})
+        identity = loaded_model_identity(None, bundle, first)
+        self.assertEqual(identity, loaded_model_identity(None, bundle, response_change))
+        self.assertNotEqual(identity, loaded_model_identity(None, bundle, loading_change))
+        changed = bundle.model_copy(update={"files": [bundle.files[0].model_copy(update={"sha256": "changed"}), *bundle.files[1:]]})
+        self.assertNotEqual(identity, loaded_model_identity(None, changed, first))
+
+    def test_prepared_identity_cannot_silently_load_changed_artifacts(self):
+        deployment = self.deployment(ctx_size=8192)
+        bundle = self.manager.store.get_bundle(self.bundle_id)
+        changed = bundle.model_copy(update={"files": [bundle.files[0].model_copy(update={"sha256": "replaced"}), *bundle.files[1:]]})
+        self.manager.store.put_bundle(changed)
+        with patch.object(self.manager.deployments, "start") as start, self.assertRaises(ManagerError) as caught:
+            self.manager.ensure_deployment_ready(deployment.id)
+        self.assertEqual(caught.exception.code, "loaded_model_identity_changed")
+        start.assert_not_called()
+
+    def test_compatible_child_does_not_bypass_invalid_requested_startup(self):
+        deployment = self.deployment()
+        with patch.object(self.manager.deployments, "start") as start, self.assertRaises(ManagerError) as caught:
+            self.manager.create_managed(ManagedDeploymentRequest(bundle_id=self.bundle_id,
+                startup={"ctx_size": -1}, auto_start=False))
+        self.assertEqual(caught.exception.code, "managed_startup_invalid")
+        self.assertEqual(len(self.manager.store.list_deployments()), 1)
+        self.assertEqual(self.manager.get_deployment(deployment.id), deployment)
+        start.assert_not_called()
+
+    def test_invalid_known_values_fail_save_without_replacing_the_saved_revision(self):
+        original = self.manager.list_model_configurations(self.bundle_id)[0]
+        for response in ({"temperature": float("nan")}, {"top_p": 1.1}, {"max_tokens": 1.5}, {"reasoning_budget_tokens": -2}):
+            with self.subTest(response=response), self.assertRaises(ManagerError) as caught:
+                self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
+                    configuration_id=original.id, display_name=original.display_name,
+                    expected_revision=original.revision, per_request=response))
+            self.assertEqual(caught.exception.code, "configuration_values_invalid")
+        self.assertEqual(self.manager.get_profile(original.id).revision, original.revision)
 
     def test_configuration_save_revision_and_default_are_explicit(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
@@ -125,24 +217,25 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertEqual(changed.id, variant.id)
         self.assertEqual(reopened.get_profile(original.id).bags, original.bags)
 
-    def test_configuration_deployment_requires_exact_variant_and_response_settings(self):
+    def test_configuration_deployment_uses_loading_identity_and_preserves_setup_identity(self):
         original = self.manager.list_model_configurations(self.bundle_id)[0]
         variant = self.manager.save_model_configuration(self.bundle_id,
             ModelConfigurationWriteRequest(display_name="Same launch settings"))
         first = self.manager.create_managed(ManagedDeploymentRequest(
             bundle_id=self.bundle_id, profile_id=original.id, auto_start=False))
         self.assertEqual(self.manager.configuration_deployment(original.id).id, first.id)
-        self.assertIsNone(self.manager.configuration_deployment(variant.id))
+        self.assertEqual(self.manager.configuration_deployment(variant.id).id, first.id)
 
         second = self.manager.create_managed(ManagedDeploymentRequest(
             bundle_id=self.bundle_id, profile_id=variant.id, auto_start=False))
-        self.assertNotEqual(second.id, first.id)
+        self.assertEqual(second.id, first.id)
         self.assertEqual(self.manager.configuration_deployment(variant.id).id, second.id)
 
         self.manager.save_model_configuration(self.bundle_id, ModelConfigurationWriteRequest(
             configuration_id=variant.id, expected_revision=variant.revision,
             display_name=variant.display_name, per_request={"temperature": 0.55}))
-        self.assertIsNone(self.manager.configuration_deployment(variant.id))
+        self.assertEqual(self.manager.configuration_deployment(variant.id).id, first.id)
+        self.assertEqual(self.manager.get_deployment(first.id).profile_id, original.id)
 
     def test_configuration_names_are_unique_and_agent_instructions_stay_in_agents(self):
         from workbench_backend.inference.schemas import ProfileWriteRequest
@@ -259,7 +352,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.manager.store.put_deployment(deployment.model_copy(update={"id":"duplicate","status":DeploymentStatus.failed,"updated_at":"2030"}))
         self.assertEqual(self.manager.configuration_deployment(config.id).id, healthy.id)
 
-    def test_named_variants_keep_separate_deployments_and_response_settings(self):
+    def test_named_variants_share_one_deployment_and_keep_separate_response_settings(self):
         from workbench_backend.agents.effective_setup import resolve_effective_setup
         from workbench_backend.inference.schemas import DeploymentStatus, HealthReport, ProcessIdentity
         from workbench_backend.knowledge.schemas import KnowledgeRefs
@@ -282,10 +375,10 @@ class ModelConfigurationTests(unittest.TestCase):
         with open_application_store(self.paths) as store:
             resolved = SetupService(store, self.manager).resolve(
                 overrides=SetupConfiguration(model_configuration_id=selected.id), prepare_model=True)
-        self.assertNotEqual(resolved.configuration.deployment_id, deployment.id)
+        self.assertEqual(resolved.configuration.deployment_id, deployment.id)
         self.assertEqual(resolved.configuration.profile_id, selected.id)
         self.assertFalse(any(fact.requires_reload for fact in resolved.effective_values.values()))
-        self.assertEqual(len(self.manager.list_deployments()), 2)
+        self.assertEqual(len(self.manager.list_deployments()), 1)
 
         execution = resolve_effective_setup(
             deployment=self.manager.get_deployment(resolved.configuration.deployment_id),
@@ -306,13 +399,13 @@ class ModelConfigurationTests(unittest.TestCase):
             model = service.resolve(overrides=SetupConfiguration(bundle_id=self.bundle_id))
             self.assertEqual(model.configuration.model_configuration_id, default)
             preview = service.resolve(overrides=SetupConfiguration(deployment_id=first.id, model_configuration_id=selected.id))
-            self.assertIsNone(preview.configuration.deployment_id)
+            self.assertEqual(preview.configuration.deployment_id, second.id)
             applied = service.resolve(overrides=SetupConfiguration(
                 deployment_id=first.id, model_configuration_id=selected.id), prepare_model=True)
             exact = self.manager.get_deployment(applied.configuration.deployment_id)
-            self.assertEqual(exact.profile_id, selected.id)
+            self.assertEqual(applied.configuration.profile_id, selected.id)
             self.assertEqual(exact.requested_startup["ctx_size"], 16384)
-            self.assertNotIn(exact.id, {first.id, second.id})
+            self.assertEqual(exact.id, second.id)
             self.assertEqual(self.manager.get_deployment(first.id).requested_startup["ctx_size"], 8192)
             self.assertEqual(self.manager.get_deployment(second.id).requested_startup["ctx_size"], 16384)
 
@@ -383,7 +476,7 @@ class ModelConfigurationTests(unittest.TestCase):
             service = SetupService(store, self.manager)
             resolved = service.resolve(overrides=SetupConfiguration(approval_mode="ask", per_request_overrides={"temperature":0.7}))
             self.assertEqual(resolved.effective_values["approval_mode"].inherited_value, "full_access")
-            self.assertIsNone(resolved.effective_values["per_request.temperature"].inherited_value)
+            self.assertEqual(resolved.effective_values["per_request.temperature"].inherited_value, 0.8)
             self.assertEqual(resolved.effective_values["per_request.temperature"].requested_override, 0.7)
 
     def test_loaded_model_is_not_an_implicit_chat_selection(self):

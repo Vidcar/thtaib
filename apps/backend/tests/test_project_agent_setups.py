@@ -265,7 +265,10 @@ class ProjectSetupTests(unittest.TestCase):
 
         for result in (saved, draft, reset, omitted):
             default = result['effective_values']['startup.flash_attn']
-            self.assertEqual(default['value'], 'on')
+            # Auto is evaluated by the native loading plan; a cold preview does
+            # not invent the runtime's eventual On/Off choice.
+            self.assertIsNone(default['value'])
+            self.assertFalse(default['known'])
             self.assertIsNone(default['requested_override'])
             self.assertNotIn('flash_attn', result['configuration']['startup_overrides'] or {})
         application = self.post('/v1/setup-resolution', {'editing_layer': 'application', 'overrides': {

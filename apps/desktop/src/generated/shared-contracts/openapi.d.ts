@@ -632,7 +632,8 @@ export interface paths {
         /** Bundle Configuration Options */
         get: operations["bundle_configuration_options_v1_bundles__bundle_id__configuration_options_get"];
         put?: never;
-        post?: never;
+        /** Preview Bundle Configuration Options */
+        post: operations["preview_bundle_configuration_options_v1_bundles__bundle_id__configuration_options_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3349,6 +3350,22 @@ export interface components {
                 [key: string]: components["schemas"]["RuntimeControlDescriptor"];
             };
         };
+        /** BundleConfigurationOptionsRequest */
+        BundleConfigurationOptionsRequest: {
+            /** Configuration Id */
+            configuration_id?: string | null;
+            /** Deployment Id */
+            deployment_id?: string | null;
+            /**
+             * Refresh
+             * @default false
+             */
+            refresh: boolean;
+            /** Startup */
+            startup?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** BundleFile */
         BundleFile: {
             /** Name */
@@ -4508,7 +4525,7 @@ export interface components {
             notes?: string[];
             /**
              * Output Reservation Tokens
-             * @default 512
+             * @default 0
              */
             output_reservation_tokens: number;
             /**
@@ -4613,6 +4630,8 @@ export interface components {
             };
             /** Loaded Chat Template Origin */
             loaded_chat_template_origin?: ("repository" | "publisher") | null;
+            /** Loaded Model Identity */
+            loaded_model_identity?: string | null;
             /** Pid */
             pid?: number | null;
             process_identity?: components["schemas"]["ProcessIdentity"] | null;
@@ -5160,6 +5179,12 @@ export interface components {
             default_recipe_id?: string | null;
             /** Display Name */
             display_name?: string | null;
+            /** Initial Per Request */
+            initial_per_request?: {
+                [key: string]: unknown;
+            };
+            /** Initial Recipe Id */
+            initial_recipe_id?: string | null;
             /** Initial Startup */
             initial_startup?: {
                 [key: string]: unknown;
@@ -5238,6 +5263,12 @@ export interface components {
             finished_at?: string | null;
             /** Id */
             id: string;
+            /** Initial Per Request */
+            initial_per_request?: {
+                [key: string]: unknown;
+            };
+            /** Initial Recipe Id */
+            initial_recipe_id?: string | null;
             /** Initial Startup */
             initial_startup?: {
                 [key: string]: unknown;
@@ -5789,6 +5820,16 @@ export interface components {
             copy_files: boolean;
             /** Display Name */
             display_name?: string | null;
+            /** Initial Per Request */
+            initial_per_request?: {
+                [key: string]: unknown;
+            };
+            /** Initial Recipe Id */
+            initial_recipe_id?: string | null;
+            /** Initial Startup */
+            initial_startup?: {
+                [key: string]: unknown;
+            };
             /** Source Path */
             source_path: string;
         };
@@ -6006,6 +6047,7 @@ export interface components {
             per_request?: {
                 [key: string]: unknown;
             };
+            recipe_origin?: components["schemas"]["ResponseRecipeOrigin"] | null;
             /** Startup */
             startup?: {
                 [key: string]: unknown;
@@ -6058,6 +6100,12 @@ export interface components {
             architecture?: string | null;
             /** Assumptions */
             assumptions?: string[];
+            /**
+             * Completeness
+             * @default partial
+             * @enum {string}
+             */
+            completeness: "complete" | "partial" | "unavailable";
             /** Context Marker */
             context_marker?: number | null;
             /** Context Marker Kind */
@@ -6068,6 +6116,14 @@ export interface components {
             devices?: {
                 [key: string]: unknown;
             }[];
+            /** Dynamic Overhead Bytes */
+            dynamic_overhead_bytes?: number | null;
+            /** Effective Context */
+            effective_context?: number | null;
+            /** Effective Context Per Slot */
+            effective_context_per_slot?: number | null;
+            /** Effective Parallel */
+            effective_parallel?: number | null;
             /** Estimated At */
             estimated_at: string;
             /** Evaluated Startup */
@@ -6079,12 +6135,18 @@ export interface components {
             hardware: components["schemas"]["HardwareMemoryObservation"];
             /** Kv Bytes */
             kv_bytes?: number | null;
+            /** Kv Unified */
+            kv_unified?: boolean | null;
             /** Model Disk Bytes */
             model_disk_bytes?: number | null;
             /** Observed Runtime */
             observed_runtime?: {
                 [key: string]: unknown;
             } | null;
+            /** Plan Identity */
+            plan_identity?: string | null;
+            /** Projector Bytes */
+            projector_bytes?: number | null;
             /** Projector Disk Bytes */
             projector_disk_bytes?: number | null;
             /** Ram Bytes */
@@ -6103,6 +6165,8 @@ export interface components {
             source: "metadata" | "native_prediction";
             /** Source Identity */
             source_identity: string;
+            /** Speculation Bytes */
+            speculation_bytes?: number | null;
             /** Unknown Reasons */
             unknown_reasons?: string[];
             /** Weights Bytes */
@@ -6643,6 +6707,49 @@ export interface components {
             /** Rss Bytes */
             rss_bytes?: number | null;
         };
+        /** ResponseBudgetBinding */
+        ResponseBudgetBinding: {
+            /** Bound At */
+            bound_at: string;
+            /** Capacity Tokens */
+            capacity_tokens: number;
+            /** Margin Tokens */
+            margin_tokens: number;
+            /** Model Identity */
+            model_identity: string;
+            /** Source */
+            source: string;
+            /** Total Tokens */
+            total_tokens: number;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+        };
+        /** ResponseBudgetPolicy */
+        ResponseBudgetPolicy: {
+            /**
+             * Mode
+             * @default workbench_auto
+             * @enum {string}
+             */
+            mode: "explicit" | "publisher" | "workbench_auto";
+            /**
+             * Source
+             * @default Workbench Auto
+             */
+            source: string;
+            /** Thinking */
+            thinking?: boolean | null;
+            /** Total Tokens */
+            total_tokens?: number | null;
+            /**
+             * Version
+             * @default 1
+             */
+            version: number;
+        };
         /** ResponsePreset */
         ResponsePreset: {
             /** Description */
@@ -7050,6 +7157,11 @@ export interface components {
              * @default 1
              */
             revision: number;
+            /**
+             * Settings Schema Version
+             * @default 1
+             */
+            settings_schema_version: number;
             /** Updated At */
             updated_at: string;
         };
@@ -7059,12 +7171,32 @@ export interface components {
             accepted_values?: string[] | null;
             /** Applied */
             applied?: unknown;
+            /**
+             * Apply Timing
+             * @default reload
+             * @enum {string}
+             */
+            apply_timing: "next_request" | "reload";
+            /**
+             * Control
+             * @default choice
+             * @enum {string}
+             */
+            control: "switch" | "choice" | "tokens" | "number" | "text" | "json";
             /** Default Source */
             default_source?: string | null;
             /** Default Value */
             default_value?: unknown;
+            /** Dependencies */
+            dependencies?: string[];
             /** Description */
             description: string;
+            /**
+             * Domain
+             * @default string
+             * @enum {string}
+             */
+            domain: "boolean" | "integer" | "number" | "string" | "object" | "json";
             /** Flag */
             flag?: string | null;
             /** Key */
@@ -7073,16 +7205,34 @@ export interface components {
             label: string;
             /** Maximum */
             maximum?: number | null;
+            /** Minimum */
+            minimum?: number | null;
             /** Observed */
             observed?: unknown;
             /** Options */
             options?: components["schemas"]["RuntimeControlOption"][];
             /** Recommended */
             recommended?: unknown;
+            /** Reset Value */
+            reset_value?: unknown;
+            /**
+             * Section
+             * @default advanced
+             * @enum {string}
+             */
+            section: "response" | "memory" | "advanced";
             /** Source */
             source: string;
+            /** Step */
+            step?: number | null;
+            /** Suggested Maximum */
+            suggested_maximum?: number | null;
+            /** Suggested Minimum */
+            suggested_minimum?: number | null;
             /** Supported */
             supported?: boolean | null;
+            /** Unit */
+            unit?: string | null;
         };
         /** RuntimeControlOption */
         RuntimeControlOption: {
@@ -7119,6 +7269,14 @@ export interface components {
             flavor: string;
             /** Install Dir */
             install_dir: string;
+            /** Memory Planner Native Fingerprint */
+            memory_planner_native_fingerprint?: string | null;
+            /** Memory Planner Path */
+            memory_planner_path?: string | null;
+            /** Memory Planner Protocol */
+            memory_planner_protocol?: number | null;
+            /** Memory Planner Sha256 */
+            memory_planner_sha256?: string | null;
             /**
              * Path Fallback
              * @default unsupported
@@ -7226,8 +7384,11 @@ export interface components {
             applied?: {
                 [key: string]: unknown;
             };
+            output_budget_binding?: components["schemas"]["ResponseBudgetBinding"] | null;
+            output_budget_policy?: components["schemas"]["ResponseBudgetPolicy"] | null;
             /** Overridden */
             overridden?: components["schemas"]["SettingNote"][];
+            recipe_origin?: components["schemas"]["ResponseRecipeOrigin"] | null;
             /** Requested */
             requested?: {
                 [key: string]: unknown;
@@ -7243,6 +7404,8 @@ export interface components {
         };
         /** SettingsBags */
         SettingsBags: {
+            /** Accepted Loading Identity */
+            accepted_loading_identity?: string | null;
             agent?: components["schemas"]["SettingsBag"];
             per_request?: components["schemas"]["SettingsBag"];
             startup?: components["schemas"]["SettingsBag"];
@@ -7809,6 +7972,7 @@ export type SchemaBrowserSessionStatus = components['schemas']['BrowserSessionSt
 export type SchemaBrowserTab = components['schemas']['BrowserTab'];
 export type SchemaBrowserViewport = components['schemas']['BrowserViewport'];
 export type SchemaBundleConfigurationOptions = components['schemas']['BundleConfigurationOptions'];
+export type SchemaBundleConfigurationOptionsRequest = components['schemas']['BundleConfigurationOptionsRequest'];
 export type SchemaBundleFile = components['schemas']['BundleFile'];
 export type SchemaBundleProjectors = components['schemas']['BundleProjectors'];
 export type SchemaBundleSource = components['schemas']['BundleSource'];
@@ -7951,6 +8115,8 @@ export type SchemaResizeAction = components['schemas']['ResizeAction'];
 export type SchemaResolvedSetting = components['schemas']['ResolvedSetting'];
 export type SchemaResolvedSetupSelection = components['schemas']['ResolvedSetupSelection'];
 export type SchemaResourceUsage = components['schemas']['ResourceUsage'];
+export type SchemaResponseBudgetBinding = components['schemas']['ResponseBudgetBinding'];
+export type SchemaResponseBudgetPolicy = components['schemas']['ResponseBudgetPolicy'];
 export type SchemaResponsePreset = components['schemas']['ResponsePreset'];
 export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
 export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];
@@ -9363,6 +9529,7 @@ export interface operations {
         parameters: {
             query?: {
                 deployment_id?: string | null;
+                configuration_id?: string | null;
                 refresh?: boolean;
             };
             header?: never;
@@ -9372,6 +9539,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleConfigurationOptions"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_bundle_configuration_options_v1_bundles__bundle_id__configuration_options_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BundleConfigurationOptionsRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

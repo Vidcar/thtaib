@@ -82,11 +82,12 @@ async function checkSelectedModelOwnsDetails(ModelsPanel) {
   let renderer;
   const deployment = { id: "gemma-live", bundle_id: "gemma", profile_id: "gemma-default", display_name: "managed:Gemma", scope: "managed", status: "running", health: { healthy: true }, applied_startup: {}, endpoint: "http://localhost:8080/v1" };
   const gemmaProfile = { id: "gemma-default", bundle_id: "gemma", display_name: "Default", revision: 1, bags: { startup: { requested: {} }, per_request: { requested: {} }, agent: { requested: {} } } };
-  globalThis.fetch = async url => {
-    const address = String(url);
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
     if (address.endsWith("/v1/bundles")) return jsonResponse([bundle("qwen", "Selected Qwen"), { ...bundle("gemma", "Loaded Gemma"), default_configuration_id: "gemma-default" }]);
     if (address.endsWith("/v1/deployments")) return jsonResponse([deployment]);
     if (address.endsWith("/v1/profiles")) return jsonResponse([gemmaProfile]);
+    if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: { ...body.overrides, deployment_id: body.overrides.model_configuration_id === "gemma-default" ? "gemma-live" : null }, effective_values: {}, instruction_layers: [] });
     if (address.endsWith("/v1/imports")) return jsonResponse([]);
     if (address.endsWith("/v1/paths")) return jsonResponse({ models: "D:\\Models" });
     if (address.endsWith("/v1/runtime/models")) return jsonResponse({ max_loaded_models: 1, loaded_deployment_ids: [], loading_deployment_ids: [], router_status: "stopped" });
@@ -256,14 +257,14 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.equal(context().props.value, "16384");
     failure = "";
     catalogue = [model];
-    await act(async () => { button("Save changes").props.onClick(); await tick(); });
+    await act(async () => { button("Save").props.onClick(); await tick(); });
     assert.equal(savedRequests.length, 1, "a retained editor can save as soon as the connection recovers");
     assert.equal(savedRequests[0].startup.ctx_size, 16384);
     assert.equal(savedRequests[0].per_request.temperature, 0.7);
     assert.equal(savedRequests[0].display_name, "My draft");
     assert.equal(button("Retry"), undefined, "save refresh clears the earlier catalogue error");
     assert.equal(renderer.root.findByProps({ className: "badge model-edit-state" }).props["data-dirty"], false);
-    assert.ok(textOf(renderer.root).includes("Configuration saved."));
+    assert.ok(textOf(renderer.root).includes("Setup saved."));
 
     await act(async () => renderer.unmount());
     failure = "bundles";
@@ -307,7 +308,7 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
     await act(async () => review.props.onClick());
     let download = renderer.root.findAllByType("button").find(node => textOf(node) === "Download model");
     await act(async () => { download.props.onClick(); download.props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: { cache_type_k:"f16", cache_type_v:"f16", kv_offload:true } }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
+    assert.deepEqual(downloads, [{ repo_id: "org/second", revision: "pinned-revision", allow_patterns: ["weights[[]4].gguf", "mmproj.gguf", "README.md"], recipe_ids: [], default_recipe_id: null, initial_startup: {} }], "download pins the inspected revision, exact files and initial settings, escaping glob syntax and deduplicating clicks");
     assert.equal(completions, 1);
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -399,42 +400,48 @@ async function checkExistingBundleRecipes(ModelResponseRecipes) {
       { id: "coding", name: "Precise coding", section: "Coding guidance", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
       { id: "recommended", name: "Recommended response", section: "Recommended settings", per_request: { temperature: 0.7, top_p: 0.9 }, reasoning: "preserve", notes: ["Not copied: Prompt format is guidance only"], source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) },
     ] } };
-  const saved = [{ id: "profile-general", bundle_id: model.id, display_name: "General thinking edited", recipe_origin: { recipe_id: "general", source_repo_id: "org/model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64) } }];
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ address: String(url), body: init.body ? JSON.parse(init.body) : null });
     if (String(url).endsWith("/response-recipes/refresh")) {
       if (refreshFailures-- > 0) throw new Error("pinned card temporarily unavailable");
       return jsonResponse(model);
     }
-    if (String(url).endsWith("/response-recipes/configurations")) return jsonResponse({ bundle: model, configurations: saved });
     throw new Error(`unexpected fetch ${String(url)}`);
   };
   let renderer, refreshed = 0;
   try {
-    await act(async () => { renderer = create(React.createElement(ModelResponseRecipes, { bundle: model, profiles: saved, onChanged: async () => { refreshed++; } })); });
-    assert.ok(textOf(renderer.root).includes("Created from model card as “General thinking edited”"), "edited configurations keep origin without claiming their current values match the card");
-    assert.ok(textOf(renderer.root).includes("Coding guidance"), "each recipe displays its own source section");
-    assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "mode-neutral recipes do not claim a thinking override");
-    assert.ok(textOf(renderer.root).includes("Not copied: Prompt format is guidance only"), "omitted guidance is labelled in My models");
-    const checks = renderer.root.findAllByType("input").filter(node => node.props.type === "checkbox");
-    for (const checkbox of checks) await act(async () => checkbox.props.onChange({ target: { checked: true } }));
-    const defaultChoice = renderer.root.findByProps({ id: "model-recipe-default-bundle-card" });
-    assert.equal(defaultChoice.props.value, "", "creating configurations must not silently choose a model default");
-    await act(async () => defaultChoice.props.onChange({ target: { value: "general" } }));
-    const createButton = renderer.root.findAllByType("button").find(node => textOf(node) === "Create selected configurations");
-    assert.equal(createButton.props.disabled, false, "a missing guidance file does not block metadata-only configuration creation");
-    await act(async () => { createButton.props.onClick(); await tick(); });
-    assert.deepEqual(calls[0].body, { recipe_ids: ["general", "coding", "recommended"], default_recipe_id: "general" });
-    assert.equal(refreshed, 1, "recipe creation refreshes the saved model and configurations");
+    await act(async () => { renderer = create(React.createElement(ModelResponseRecipes, { bundle: model, onChanged: async () => { refreshed++; } })); });
+    assert.ok(textOf(renderer.root).includes("Coding guidance"), "each recommendation retains its source section");
+    assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "mode-neutral recommendations retain their meaning");
+    assert.equal(renderer.root.findAllByType("input").length, 0, "Model card has no duplicate configuration editor");
+    assert.equal(renderer.root.findAllByType("button").some(node => textOf(node).includes("Create")), false);
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
-    assert.ok(textOf(renderer.root).includes("Card refresh failed: pinned card temporarily unavailable"), "refresh errors are visible without losing saved recipe choices");
-    assert.equal(refreshed, 1, "a failed refresh leaves existing library metadata untouched");
+    assert.ok(textOf(renderer.root).includes("Card refresh failed: pinned card temporarily unavailable"));
+    assert.equal(refreshed, 0, "failed refresh leaves saved metadata untouched");
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
-    assert.ok(calls[2].address.endsWith("/response-recipes/refresh"), "retry reads only the pinned metadata endpoint rather than importing weights");
-    assert.equal(refreshed, 2);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(call => call.address.endsWith("/response-recipes/refresh")), "refresh never downloads weights or creates a configuration");
+    assert.equal(refreshed, 1);
+    await act(async () => renderer.unmount()); renderer = null;
+    const { ModelResponseRecipePicker } = await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx");
+    const edits = [];
+    let current = { temperature: 0.2, top_p: 0.95, max_tokens: 6000, reasoning: "off" }, origin = null;
+    const props = () => ({ bundle: model, value: current, origin, options: { per_request_defaults: { reasoning: { supported: true } } }, onChange: (value, nextOrigin) => { current = value; origin = nextOrigin; edits.push({ value, origin }); renderer.update(React.createElement(ModelResponseRecipePicker, props())); } });
+    await act(async () => { renderer = create(React.createElement(ModelResponseRecipePicker, props())); });
+    await act(async () => renderer.root.findByProps({ id: "model-response-recipe" }).props.onChange({ target: { value: "coding" } }));
+    assert.equal(current.temperature, 0.6);
+    assert.equal(current.max_tokens, 6000, "recipe preserves explicit settings outside its recommendation");
+    assert.equal(current.reasoning, "on");
+    assert.equal(origin.recipe_id, "coding");
+    assert.equal(calls.length, 2, "selecting a recipe edits only the draft");
+    await act(async () => { current = { ...current, temperature: 0.8 }; renderer.update(React.createElement(ModelResponseRecipePicker, props())); });
+    assert.match(textOf(renderer.root), /Customized.*Temperature/, "customized values remain visible with pinned origin");
+    await act(async () => renderer.root.findByProps({ id: "model-response-recipe" }).props.onChange({ target: { value: "recommended" } }));
+    assert.equal(current.reasoning, "on", "mode-neutral recipe preserves current Thinking choice");
+    assert.equal(current.max_tokens, 6000);
+    assert.ok(edits.length > 0);
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
-
 async function checkFileLinkAndRecipes(HuggingFaceImport) {
   const originalFetch = globalThis.fetch;
   const files = ["model-IQ4_XS.gguf", "model-LOW-MTP-IQ4_XS.gguf", "model-MTP-IQ4_XS.gguf"];
@@ -471,7 +478,7 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.ok(textOf(renderer.root).includes("Thinking unchanged"), "Add models shows that the recipe preserves thinking mode");
     assert.ok(textOf(renderer.root).includes("Not copied: Launch flags are guidance only"), "Add models labels omitted card guidance");
     await act(async () => { for (const recipe of recipes) recipe.props.onChange({ target: { checked: true } }); });
-    await act(async () => renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.onChange());
+    await act(async () => renderer.root.findByProps({ id: "import-initial-recipe" }).props.onChange({ target: { value: "general" } }));
     await act(async () => {
       renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.onChange({ target:{value:"16384"} });
       renderer.root.findByProps({ "aria-label":"Import cache location" }).props.onChange({ target:{value:"cpu"} });
@@ -483,7 +490,7 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "model-variant" && node.props.value === files[1]).props.checked, true);
     assert.equal(renderer.root.findByProps({ "aria-label":"Import context tokens" }).props.value, "16384");
     assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu");
-    assert.equal(renderer.root.findAllByType("input").find(node => node.props.name === "recipe-default" && node.props.value === "general").props.checked, true);
+    assert.equal(renderer.root.findByProps({ id: "import-initial-recipe" }).props.value, "general");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     assert.ok(textOf(renderer.root.findByProps({ className: "selected-download-files" })).includes("LOW-MTP"), "review shows the selected kind and exact file before download");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
@@ -491,7 +498,7 @@ async function checkFileLinkAndRecipes(HuggingFaceImport) {
     assert.equal(renderer.root.findByProps({ "aria-label":"Import cache location" }).props.value, "cpu", "Back preserves KV placement");
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Review download").props.onClick());
     await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Download model").props.onClick(); await tick(); });
-    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: "general", initial_startup:{cache_type_k:"f16", cache_type_v:"f16", kv_offload:false, ctx_size:16384} }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
+    assert.deepEqual(downloads, [{ repo_id, revision: "a".repeat(40), allow_patterns: [files[1], "README.md"], recipe_ids: ["general", "coding", "instruct", "recommended"], default_recipe_id: null, initial_startup:{kv_offload:false, ctx_size:16384}, initial_recipe_id: "general", initial_per_request: { temperature: 1, min_p: 0, reasoning: "on" } }], "download retains exact LOW-MTP file, explicit recipe/default and initial settings choices");
     inspected = { ...inspected, file_hint: "missing-IQ4_XS.gguf", variants: [inspected.variants[0]] };
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());
     await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Back").props.onClick());

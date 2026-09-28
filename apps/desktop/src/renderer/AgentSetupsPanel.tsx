@@ -47,7 +47,7 @@ function AgentReview({ draft, catalogue, agents }: { draft: SetupDraft; catalogu
   </dl>;
 }
 
-export function AgentSetupsPanel({ onUse, openAgentId, openRequest, active = true }: { onUse?: (setup: AgentSetup) => void; openAgentId?: string; openRequest?: number; active?: boolean }) {
+export function AgentSetupsPanel({ openAgentId, openRequest, active = true }: { onUse?: (setup: AgentSetup) => void; openAgentId?: string; openRequest?: number; active?: boolean }) {
   const [records, setRecords] = useState<AgentSetup[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [creating, setCreating] = useState(false);
@@ -143,7 +143,7 @@ export function AgentSetupsPanel({ onUse, openAgentId, openRequest, active = tru
     <CatalogueWorkspace title="Agents" search={query} onSearch={setQuery} items={visibleRecords.map(record => ({ id: record.id, name: record.name, icon: "agents", detail: <>{record.role || "General assistant"}<br />{setupModelLabel(record.configuration, catalogue)}</>, status: [record.missing_dependencies?.length ? "Needs attention" : "", drafts[record.id] ? "Unsaved changes" : ""].filter(Boolean).join(" · "), selectorLabel: `${record.name} · ${setupModelLabel(record.configuration, catalogue)}` }))} selectedId={creating ? "" : selectedId} onSelect={id => { if (!busy) { setSelectedId(id); setCreating(false); } }} emptyLabel={query ? "No matching agents" : "No agents yet"} loading={loading}>
       {creating || selected ? <>
         <form className="agent-editor workspace-editor" onSubmit={event => { event.preventDefault(); if (creating && step < 2) { if (draft.name.trim()) setStep(current => current + 1); } else void save(); }}>
-          <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3>{!creating && onUse ? <button type="button" disabled={busy || Boolean(selected?.missing_dependencies?.length)} title={selected?.missing_dependencies?.length ? "Repair the unavailable selections below before using this agent." : drafts[selected!.id] ? "Uses the saved agent. Save edits to include them." : undefined} onClick={() => onUse(selected!)}><Icon name="chat" size={15} /> Use in Chat</button> : null}</div>
+          <div className="section-heading"><h3>{creating ? "New agent" : selected!.name}</h3></div>
           {selected?.missing_dependencies?.length && !creating ? <Notice tone="warn">This setup needs attention.<ul>{selected.missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.kind.includes("model") || issue.kind.includes("deployment") || issue.kind.includes("bundle") ? "Assigned model" : issue.kind === "connection" ? "Connection" : issue.kind === "tool" ? "Tool" : "Knowledge selection"}: {issue.reason}</li>)}</ul><div className="actions"><button type="button" onClick={() => setTab(selected.missing_dependencies?.some(issue => /memory|skill|instruction/.test(issue.kind)) ? "knowledge" : "model")}>Review selections</button></div></Notice> : null}
           {selected?.helper_missing_dependencies?.length && !creating ? <Notice tone="warn">Needs attention when used as a helper.<ul>{selected.helper_missing_dependencies.map((issue, index) => <li key={`${issue.kind}-${issue.id}-${index}`}>{issue.reason}</li>)}</ul></Notice> : null}
           {creating ? <nav className="model-tabs agent-steps" aria-label="Agent creation steps">{["Role", "Setup", "Review"].map((label, index) => <span key={label} aria-current={step === index ? "step" : undefined}>{index + 1}. {label}</span>)}</nav>

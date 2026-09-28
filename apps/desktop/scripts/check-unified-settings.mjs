@@ -32,7 +32,7 @@ async function configurations(Panel) {
   const bundle = { id: "model", display_name: "Example model", default_configuration_id: "default", disk_matches: true, files: [], companions: [] };
   let profiles = [{ id: "default", bundle_id: "model", display_name: "Example model", revision: 4, bags: { startup: bag({ ctx_size: 8192, parallel: 1 }), per_request: bag({ temperature: 0.5, max_tokens: 512 }), agent: bag({}) } }];
   let renderer;
-  const options = { bundle_id: "model", context_size: { maximum: 32768, options: [4096, 8192, 16384, 32768].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: {}, metadata: {} };
+  const options = { bundle_id: "model", context_size: { maximum: 32768, options: [4096, 8192, 16384, 32768].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32, options: [] }, startup_defaults: {}, per_request_defaults: { reasoning: { supported: true }, reasoning_preserve: { supported: true } }, metadata: {} };
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url), body = init.body ? JSON.parse(init.body) : null;
     calls.push({ path, method: init.method ?? "GET", body });
@@ -43,7 +43,7 @@ async function configurations(Panel) {
     if (path.endsWith("/projectors")) return response({ candidates: [] });
     if (path.endsWith("/v1/setup-resolution")) {
       const changes = body.overrides.per_request_overrides ?? {};
-      const facts = Object.fromEntries(['temperature', 'max_tokens'].map(key => {
+      const facts = Object.fromEntries(['temperature', 'max_tokens', 'reasoning', 'reasoning_preserve'].map(key => {
         const specified = Object.hasOwn(changes, key);
         const requested = specified ? changes[key] : profiles.find(item => item.id === body.overrides.model_configuration_id)?.bags.per_request.requested[key];
         const value = requested ?? (key === 'temperature' ? 0.8 : null);
@@ -75,9 +75,25 @@ async function configurations(Panel) {
     assert.equal(lastPreview().project_id, null, 'Models preview excludes project selection');
     assert.equal(lastPreview().agent_setup_version_id, null, 'Models preview excludes agent selection');
     assert.ok(text(renderer.root).includes('512'), 'the saved reply limit is displayed as its resolved value');
+    await act(async () => { renderer.root.findByProps({ id: 'model-response-max_tokens' }).props.onChange(-1); await tick(); });
+    assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, -1, 'native Unlimited remains an explicit saved response value');
+    assert.match(text(renderer.root), /Unlimited.*Native output limit/, 'legacy unlimited value is labelled without showing negative tokens');
+    await act(async () => { button('Set budget').props.onClick(); await tick(); });
+    await act(async () => { renderer.root.findByProps({ id: 'model-response-max_tokens' }).props.onChange(512); await tick(); });
+
     assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /8,192 tokens.*Configuration default/, 'startup control displays its resolved value and saved source');
+    await act(async () => { renderer.root.findByProps({ 'aria-label': 'Conversation capacity mode' }).props.onChange({ target: { value: 'full' } }); await tick(); });
+    assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 0, 'Full uses the native maximum directive rather than an exact numeric custom capacity');
+    assert.equal(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value, 32768, 'Full displays the supported maximum rather than zero tokens');
+    await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '32768' } }); await tick(); });
+    assert.equal(renderer.root.findByProps({ 'aria-label': 'Conversation capacity mode' }).props.value, 'custom', 'an exact maximum remains a custom request');
     await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }); await tick(); });
     assert.equal(lastPreview().overrides.startup_overrides.ctx_size, 16384, 'staged launch changes reach the shared setup preview');
+    const selectedOptions = calls.findLast(call => call.path.endsWith('/configuration-options'));
+    assert.equal(selectedOptions.method, 'POST', 'draft-sensitive options use the read-only catalogue request');
+    assert.equal(selectedOptions.body.configuration_id, 'default');
+    assert.equal(selectedOptions.body.startup.ctx_size, 16384, 'configuration options follow the staged loading settings');
+
     assert.match(text(settingRow(renderer.root.findByProps({ id: 'model-ctx-size' }))), /16,384 tokens.*This editor.*Unsaved change/, 'edited launch value and status replace stale saved readout');
     await act(async () => { renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '8192' } }); await tick(); });
     assert.deepEqual(lastPreview().overrides.startup_overrides, {}, 'returning to the saved startup value removes the preview override');
@@ -100,18 +116,31 @@ async function configurations(Panel) {
     await act(async () => { numeric('Reply limit').props.onChange({ target: { value: '' } }); await tick(); });
     assert.equal(lastPreview().overrides.per_request_overrides.max_tokens, null);
     assert.match(text(settingRow(numeric('Reply limit'))), /Not reported/, 'unknown default is not invented from the saved value');
-    assert.ok(button("Save changes"), "save is available without a running deployment");
-    await act(async () => { button("Save changes").props.onClick(); await tick(); });
+    const choice = value => renderer.root.findAll(node => node.type === 'input' && node.props.type === 'radio' && node.props.value === value)[0];
+    assert.notEqual(choice('off').props.disabled, true, 'cold Auto Thinking remains editable when its template default is unknown');
+    await act(async () => { choice('off').props.onChange(); await tick(); });
+    assert.equal(lastPreview().overrides.per_request_overrides.reasoning, 'off', 'explicit Off reaches the authoritative preview');
+    const thinkingSwitch = renderer.root.findByProps({ role: 'switch', 'aria-label': 'Thinking' });
+    const thinkingReset = settingRow(thinkingSwitch).findAllByType('button').find(node => text(node) === 'Reset');
+    await act(async () => { thinkingReset.props.onClick(); await tick(); });
+    assert.equal(Object.hasOwn(lastPreview().overrides.per_request_overrides, 'reasoning'), false, 'Default restores native omission');
+    await act(async () => { choice('off').props.onChange(); await tick(); });
+    assert.notEqual(choice('drop').props.disabled, true, 'unknown thinking-history default does not block an explicit supported choice');
+    await act(async () => { choice('drop').props.onChange(); await tick(); });
+    assert.ok(button("Save"), "save is available without a running deployment");
+    await act(async () => { button("Save").props.onClick(); await tick(); });
     assert.equal(profiles[0].bags.per_request.requested.temperature, undefined, 'saving commits the same numeric removal shown in preview');
     assert.equal(profiles[0].bags.per_request.requested.max_tokens, undefined);
-    await act(async () => { button("Save changes").props.onClick(); await tick(); });
+    assert.equal(profiles[0].bags.per_request.requested.reasoning, 'off', 'Models saves the explicit cold Thinking choice');
+    assert.equal(profiles[0].bags.per_request.requested.reasoning_preserve, false, 'Models saves a false history choice without treating it as omission');
+    await act(async () => { button("Save").props.onClick(); await tick(); });
     assert.equal(profiles.length, 1, "ordinary repeated saving does not create another configuration");
     assert.equal(profiles[0].revision, 6);
     assert.equal(profiles[0].bags.startup.requested.port, undefined, "automatic port is not frozen into a saved configuration");
     assert.equal(calls.some(call => call.path.includes("/deployments/managed")), false, "saving never creates a deployment");
-    await act(async () => { button("Save as configuration").props.onClick(); });
-    await act(async () => { button("Create configuration").props.onClick(); await tick(); });
-    assert.equal(profiles.length, 2, "only explicit Save as configuration creates another configuration");
+    await act(async () => { button("Save a copy").props.onClick(); });
+    await act(async () => { button("Save").props.onClick(); await tick(); });
+    assert.equal(profiles.length, 2, "only explicit Save a copy creates another configuration");
     assert.equal(profiles[1].display_name, "Example model copy");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -199,7 +228,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     await act(async () => { renderer = create(React.createElement(Panel, props()), { createNodeMock: element => element.type === 'form' ? { reportValidity: () => true } : null }); await tick(); });
     const button = label => renderer.root.findAllByType('button').find(node => text(node) === label);
     await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
-    await act(async () => { button('Save changes').props.onClick(); await tick(); });
+    await act(async () => { button('Save').props.onClick(); await tick(); });
     assert.ok(releasePreview, 'save waits at the actual preview receiver');
     await act(async () => { selected = 'second'; renderer.update(React.createElement(Panel, props())); await tick(); });
     if (navigateBack) await act(async () => { selected = 'first'; renderer.update(React.createElement(Panel, props())); await tick(); });
@@ -210,7 +239,7 @@ async function configurationNavigationOwnership(Panel, navigateBack = false) {
     const chooser = renderer.root.findAllByType('select').find(node => node.findAllByType('option').some(option => option.props.value === `${selected}-default`));
     assert.equal(chooser.props.value, `${selected}-default`, 'old completion cannot replace the newly selected configuration');
     if (navigateBack) assert.equal(Number(renderer.root.findByProps({ id: 'model-ctx-size' }).props.value), 16384, 'the saved revision is visible after returning');
-    assert.equal(text(renderer.root).includes('Configuration saved.'), false, 'old status is not shown as completion for the new model');
+    assert.equal(text(renderer.root).includes('Setup saved.'), false, 'old status is not shown as completion for the new model');
     assert.equal(text(renderer.root).includes('Checked launch settings'), false, 'old checked settings are not presented for the new model');
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
@@ -230,7 +259,7 @@ async function failedReloadFacts(Panel) {
     if (path.includes('/configuration-options')) return response({ bundle_id: 'model', context_size: { maximum: 32768, options: [4096, 8192, 16384].map(value => ({ value, label: String(value) })) }, gpu_layers: { maximum: 32 }, startup_defaults: {}, per_request_defaults: {}, metadata: {} });
     if (path.endsWith('/v1/settings/preview')) return response({ startup: bag(body.startup), per_request: bag(body.per_request), agent: bag({}) });
     if (path.endsWith('/v1/setup-resolution')) return response({ configuration: { ...body.overrides, deployment_id: 'deploy' }, effective_values: { 'startup.ctx_size': { value: body.overrides.startup_overrides?.ctx_size ?? 8192, requires_reload: true } }, instruction_layers: [] });
-    if (path.endsWith('/reconfigure')) {
+    if (path.endsWith('/v1/deployments/managed')) {
       deployment = { ...deployment, status: 'failed', health: { healthy: false }, server_props: null, error: 'Recovery needed' };
       return { ok: false, status: 409, json: async () => ({ error: originalError, code: 'reconfigure_failed', details: { recovered: false } }) };
     }
@@ -239,7 +268,7 @@ async function failedReloadFacts(Panel) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: 'model', initialBundles: [bundle], initialProfiles: [profile] })); await tick(); });
     await act(async () => renderer.root.findByProps({ id: 'model-ctx-size' }).props.onChange({ target: { value: '16384' } }));
-    await act(async () => { renderer.root.findByProps({ className: 'model-settings' }).props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => { renderer.root.findAllByType('button').find(node => text(node) === 'Reload saved').props.onClick(); await tick(); });
     assert.ok(reads > 1, 'failed Apply refreshes the receiver state instead of retaining a stale healthy deployment');
     const badges = renderer.root.findAll(node => node.type === 'span' && String(node.props.className).startsWith('badge '));
     assert.equal(badges.some(node => text(node) === 'Ready'), false, 'a failed receiver is no longer labeled Ready');
@@ -273,11 +302,11 @@ async function sameBundleVariantsLoadSeparately(Panel) {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { selectedBundleId: "model", initialBundles: [bundle], initialProfiles: profiles })); await tick(); });
     await act(async () => renderer.root.findByProps({ id: "model-configuration" }).props.onChange({ target: { value: "variant-b" } }));
-    const submit = () => renderer.root.findByProps({ className: "model-settings" });
     assert.ok(renderer.root.findAllByType("button").some(item => text(item) === "Load"), "variant B is offered a separate load while A is running");
-    await act(async () => { submit().props.onSubmit({ preventDefault() {} }); await tick(); });
+    await act(async () => { renderer.root.findAllByType("button").find(item => text(item) === "Load").props.onClick(); await tick(); });
     assert.ok(calls.some(call => call.path.endsWith("/v1/deployments/managed") && call.body.profile_id === "variant-b"), "Models loads exact variant B");
     assert.equal(calls.some(call => call.path.endsWith("/reconfigure")), false, "Models does not reconfigure variant A when selecting B");
+    assert.deepEqual(calls.find(call => call.path.endsWith("/v1/deployments/managed")).body.startup, {}, "explicit Load uses the saved setup without editor or chat overrides");
     assert.equal(deployments[0].profile_id, "variant-a", "variant A remains bound to its original setup");
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }

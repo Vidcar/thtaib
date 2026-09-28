@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import shutil
+import subprocess
 import time
 import zipfile
 from pathlib import Path
@@ -19,6 +20,7 @@ import httpx
 from workbench_backend.errors import ManagerError
 from workbench_backend.inference.hardware import NvidiaPresent, nvidia_gpu_present
 from workbench_backend.inference.hashes import sha256_file
+from workbench_backend.inference.native_memory import EXECUTABLE as MEMORY_PLANNER_EXECUTABLE, planner_manifest_fields
 from workbench_backend.inference.process import classify_identity
 from workbench_backend.inference.schemas import (
     Deployment,
@@ -103,6 +105,41 @@ class RuntimeService:
 
     def current(self) -> RuntimeManifest | None:
         return self.store.read_runtime_manifest()
+
+    def install_memory_planner(self, source: Path) -> RuntimeManifest:
+        """Attach a verified delivery build without restarting resident models."""
+        manifest = self.current()
+        if manifest is None or manifest.status != "ready" or manifest.release_tag != LLAMA_CPP_RELEASE_TAG:
+            raise ManagerError("Pin the supported runtime before installing its allocation helper.",
+                               code="memory_planner_runtime", status_code=409)
+        directory = Path(manifest.executable).resolve().parent
+        destination = directory / MEMORY_PLANNER_EXECUTABLE
+        candidate = destination if source.resolve() == destination else destination.with_suffix(".candidate.exe")
+        try:
+            if candidate != destination:
+                shutil.copy2(source, candidate)
+            fields = planner_manifest_fields(candidate, directory)
+            if candidate != destination:
+                candidate.replace(destination)
+            fields["memory_planner_path"] = str(destination)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            if candidate != destination:
+                candidate.unlink(missing_ok=True)
+            raise ManagerError("The allocation helper could not be matched to the pinned runtime.",
+                               code="memory_planner_identity", status_code=409) from exc
+        return self.store.write_runtime_manifest(manifest.model_copy(update=fields))
+
+    @staticmethod
+    def _with_memory_planner(manifest: RuntimeManifest) -> RuntimeManifest:
+        """A local/reused pin can retain an already delivered compatible helper."""
+        directory = Path(manifest.executable).parent
+        candidate = directory / MEMORY_PLANNER_EXECUTABLE
+        if manifest.release_tag != LLAMA_CPP_RELEASE_TAG or not candidate.is_file():
+            return manifest
+        try:
+            return manifest.model_copy(update=planner_manifest_fields(candidate, directory))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return manifest
 
     def require_executable(self) -> Path:
         manifest = self.current()
@@ -257,7 +294,7 @@ class RuntimeService:
                 companion_asset_name=spec["companion_asset_name"],
                 companion_sha256=companion_digest,
             )
-            return self.store.write_runtime_manifest(manifest)
+            return self.store.write_runtime_manifest(self._with_memory_planner(manifest))
         except ManagerError as exc:
             return self._fail_pin(install_dir, spec, exc.message, "failed")
         except (OSError, InterruptedError) as exc:

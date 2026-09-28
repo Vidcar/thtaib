@@ -14,7 +14,7 @@ from workbench_backend.agents.schemas import AgentRun, AgentStartRequest, Interr
 from workbench_backend.agents.tools import enabled_for_project, resolve_presented_tools
 from workbench_backend.agents.setup_service import SetupService, configuration_from_request, cleared_configuration_fields
 from workbench_backend.agents.setup_schemas import ProjectCreateRequest, SetupConfiguration, ReviewConfiguration, FrozenExecutionSelection, ResolvedSetupSelection
-from workbench_backend.agents.helpers import freeze_helpers, freeze_settings
+from workbench_backend.agents.helpers import freeze_helpers, freeze_settings, prepare_frozen_model
 from contextlib import ExitStack, nullcontext
 from workbench_backend.assets.schemas import RetainedAssetListFilters, RetainedAssetOrigin, RetainedAssetReuseRequest
 from workbench_backend.assets.service import RetainedAssetService
@@ -1860,32 +1860,9 @@ class ChatService:
 
     def _prepare_frozen_model(self, frozen: FrozenExecutionSelection) -> FrozenExecutionSelection:
         """Bind the frozen startup to an exact launch without changing another launch."""
-        from workbench_backend.inference.configurations import requested_identity
-        from workbench_backend.inference.schemas import ManagedDeploymentRequest, SettingsBags
-        def prepare(configuration, settings):
-            bags = SettingsBags.model_validate(settings)
-            selected = self.manager.store.get_deployment(configuration.deployment_id or "")
-            if selected is not None and configuration.bundle_id is None and selected.bundle_id:
-                configuration = configuration.model_copy(update={"bundle_id": selected.bundle_id})
-            if selected is not None and selected.scope.value == "connected":
-                return configuration
-            wanted = requested_identity(bags)[0]
-            if selected is None or requested_identity(selected.settings)[0] != wanted:
-                candidates = [item for item in self.manager.store.list_deployments()
-                    if item.scope.value == "managed" and item.bundle_id == configuration.bundle_id
-                    and item.profile_id == configuration.profile_id and requested_identity(item.settings)[0] == wanted]
-                selected = next((item for item in candidates if item.status.value == "running" and item.health and item.health.healthy), candidates[0] if candidates else None)
-                if selected is None:
-                    if configuration.bundle_id is None:
-                        raise ChatError("The saved model is unavailable. Choose another model.", code="deploy_missing", status_code=409)
-                    profile = self.manager.get_profile(configuration.profile_id) if configuration.profile_id else None
-                    startup = {key: None for key in profile.bags.startup.requested} if profile else {}
-                    startup.update(bags.startup.requested)
-                    selected = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=configuration.bundle_id,
-                        profile_id=configuration.profile_id, startup=startup, auto_start=False))
-            return configuration.model_copy(update={"deployment_id": selected.id})
-        configuration = prepare(frozen.selection.configuration, frozen.settings)
-        helpers = [helper.model_copy(update={"configuration": prepare(helper.configuration, helper.settings_snapshot)})
+        configuration = prepare_frozen_model(self.manager, frozen.selection.configuration, frozen.settings, error_type=ChatError)
+        helpers = [helper.model_copy(update={"configuration": prepare_frozen_model(self.manager,
+            helper.configuration, helper.settings_snapshot, error_type=ChatError)})
             if helper.settings_snapshot else helper for helper in frozen.helper_snapshots]
         return frozen.model_copy(update={"selection": frozen.selection.model_copy(update={"configuration": configuration}), "helper_snapshots": helpers})
 

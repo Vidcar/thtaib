@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+import hashlib
 import time
 import httpx
 
@@ -13,7 +14,10 @@ from workbench_backend.errors import ManagerError
 from workbench_backend.inference.bundles import BundleService
 from workbench_backend.inference.import_jobs import ImportJobRunner
 from workbench_backend.inference.configuration_options import bundle_configuration_options
-from workbench_backend.inference.configurations import ensure_model_configurations, requested_identity
+from workbench_backend.inference.configurations import (
+    ensure_model_configurations, requested_identity, loading_startup_settings,
+    loaded_model_identity, has_response_startup_defaults, upgrade_configuration,
+)
 from workbench_backend.inference.deployments import DeploymentService
 from workbench_backend.inference.hf_fetch import HuggingFaceFetcher, PUBLISHER_DIR, REPOSITORY_TEMPLATE_DIR
 from workbench_backend.inference.hashes import sha256_file
@@ -56,7 +60,7 @@ from workbench_backend.inference.schemas import (
     SettingsBags,
     SmokeResult,
 )
-from workbench_backend.inference.settings import resolve_bags
+from workbench_backend.inference.settings import resolve_bags, split_response_startup, STARTUP_KEYS, PER_REQUEST_KEYS
 from workbench_backend.inference.store import RecordStore
 from workbench_backend.lab.store import LabStore
 from workbench_backend.paths import WorkbenchPaths
@@ -249,6 +253,8 @@ class ModelManager:
         bundle_id: str,
         *,
         deployment_id: str | None = None,
+        configuration_id: str | None = None,
+        startup: dict | None = None,
         refresh: bool = False,
     ) -> BundleConfigurationOptions:
         deployment = self.get_deployment(deployment_id) if deployment_id else None
@@ -269,12 +275,61 @@ class ModelManager:
         verified = self.bundles.verify_bundle(bundle, use_cache=True)
         metadata, cached, inspected_at = cached_inspection(self.store, verified, "runtime", GgufRuntimeMetadata,
             lambda: self._read_bundle_runtime_metadata(verified), refresh=refresh)
+        profile = self.get_profile(configuration_id) if configuration_id else None
+        if profile is not None and profile.bundle_id != bundle_id:
+            raise ManagerError("Configuration belongs to another model.", code="profile_bundle_mismatch", status_code=400)
+        requested = dict(profile.bags.startup.requested if profile else deployment.settings.startup.requested if deployment else {})
+        for key, value in (startup or {}).items():
+            if value is None:
+                requested.pop(key, None)
+            else:
+                requested[key] = value
+        selected_bags = resolve_bags(startup=requested)
+        selected_startup = selected_bags.startup.applied
+        configuration = verified.huggingface_configuration
+        template_source = "gguf_template"
+        selected_file = selected_startup.get("chat_template_file")
+        if not selected_file and not selected_startup.get("chat_template") and configuration and configuration.template_file:
+            selected_file = configuration.template_file
+            template_source = f"{configuration.template_origin}_template"
+        elif selected_file:
+            template_source = "configuration_template"
+        if selected_file:
+            path = Path(str(selected_file))
+            record = next((item for item in verified.files if Path(item.path).resolve() == path.resolve()), None)
+            try:
+                with path.open("rb") as template_stream:
+                    payload = template_stream.read(2 * 1024 * 1024 + 1)
+                if (len(payload) > 2 * 1024 * 1024
+                        or record is not None and hashlib.sha256(payload).hexdigest() != record.sha256
+                        or template_source != "configuration_template" and record is None):
+                    raise ValueError("selected template differs from the verified record")
+                metadata = metadata.model_copy(update={"chat_template": payload.decode("utf-8")})
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise ManagerError("The selected chat template is missing or changed.", code="bundle_template_invalid", status_code=409) from exc
+        elif selected_startup.get("chat_template"):
+            inline = str(selected_startup["chat_template"])
+            # Named native templates require native evaluation. Do not describe
+            # the bundle's unrelated embedded template as the selected one.
+            metadata = metadata.model_copy(update={"chat_template": inline if "{{" in inline or "{%" in inline else None})
+            template_source = "configuration_template"
+        descriptor_deployment = deployment
+        if deployment is not None and (configuration_id is not None or startup is not None):
+            exact = (not has_response_startup_defaults(deployment.settings)
+                and deployment.loaded_model_identity is not None
+                and deployment.loaded_model_identity == loaded_model_identity(self.runtime.current(), verified, selected_bags))
+            if not exact:
+                descriptor_deployment = None
         result = bundle_configuration_options(
             verified.id,
             metadata,
-            deployment=deployment,
+            deployment=descriptor_deployment,
             huggingface_configuration=verified.huggingface_configuration,
+            selected_template_source=template_source,
         )
+        if deployment is not None and descriptor_deployment is None:
+            result.deployment_id = deployment.id
+            result.context_size.observed = deployment.server_props.n_ctx if deployment.server_props else None
         result.metadata.update(inspection_cached=cached, inspected_at=inspected_at)
         return result
 
@@ -379,12 +434,21 @@ class ModelManager:
                 raise ManagerError("This model already has a configuration with that name. Choose a different name.", code="configuration_name_conflict", status_code=409)
             if request.agent:
                 raise ManagerError("Put instructions in an Agent setup. Model configurations save loading and response settings.", code="configuration_agent_instructions", status_code=400)
-            body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default"}),
+            recipe_origin = existing.recipe_origin if existing else None
+            if "recipe_origin" in request.model_fields_set:
+                if request.recipe_origin is not None:
+                    from workbench_backend.inference.recipe_configurations import validate_recipe_origin
+                    recipe_origin = validate_recipe_origin(self.get_bundle(bundle_id), request.recipe_origin)
+                else:
+                    recipe_origin = None
+            body = ProfileWriteRequest(**{**request.model_dump(exclude={"configuration_id", "make_default", "recipe_origin"}),
                 "display_name": name, "bundle_id": bundle_id, "agent": {}})
             if request.configuration_id:
                 profile = self.update_profile(existing.id, body)
             else:
                 profile = self.create_profile(body)
+            if profile.recipe_origin != recipe_origin:
+                profile = self.store.put_profile(profile.model_copy(update={"recipe_origin": recipe_origin}))
             if request.make_default:
                 self.set_default_configuration(bundle_id, profile.id)
             return profile
@@ -401,10 +465,26 @@ class ModelManager:
 
     def configuration_deployment(self, configuration_id: str) -> Deployment | None:
         profile = self.get_profile(configuration_id)
-        selected_settings = requested_identity(profile.bags)
-        matches = [d for d in self.store.list_deployments() if d.scope == ManagementScope.managed
-            and d.bundle_id == profile.bundle_id and d.profile_id == profile.id
-            and requested_identity(d.settings) == selected_settings]
+        return self.compatible_deployment(profile.bundle_id or "", profile.bags)
+
+    def compatible_deployment(self, bundle_id: str, bags: SettingsBags) -> Deployment | None:
+        """Find an exact native plan without using setup or response identity."""
+        bundle = self.store.get_bundle(bundle_id)
+        if bundle is None:
+            return None
+        selected_identity = loaded_model_identity(self.runtime.current(), bundle, bags)
+        matches = []
+        for deployment in self.store.list_deployments():
+            if deployment.scope != ManagementScope.managed or deployment.bundle_id != bundle_id or has_response_startup_defaults(deployment.settings):
+                continue
+            if deployment.loaded_model_identity is not None:
+                compatible = deployment.loaded_model_identity == selected_identity
+            else:
+                # Only cold historical records may be bound to the current
+                # runtime. A live old record has no proven runtime identity.
+                compatible = deployment.status == DeploymentStatus.stopped and loaded_model_identity(self.runtime.current(), bundle, deployment.settings) == selected_identity
+            if compatible:
+                matches.append(deployment)
         return max(matches, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy and d.process_identity),
             d.status != DeploymentStatus.failed, d.updated_at), default=None)
 
@@ -412,6 +492,12 @@ class ModelManager:
         profile = self.store.get_profile(profile_id)
         if profile is None:
             raise ManagerError("Unknown profile", code="profile_missing", status_code=404)
+        migrated = upgrade_configuration(profile)
+        if migrated != profile:
+            with self.store.configuration_lock():
+                current = self.store.get_profile(profile_id)
+                if current is not None:
+                    profile = self.store.put_profile(upgrade_configuration(current))
         return self._resolved_profile(profile)
 
     def _resolved_profile(self, profile: RunProfile) -> RunProfile:
@@ -432,16 +518,16 @@ class ModelManager:
 
     def create_profile(self, request: ProfileWriteRequest) -> RunProfile:
         self._require_profile_bundle(request.bundle_id)
+        loading, response = split_response_startup(request.startup, request.per_request)
+        bags = resolve_bags(startup=loading, per_request=response, agent=request.agent)
+        self._validate_configuration_bags(request.bundle_id, bags)
         now = utc_now()
         profile = RunProfile(
             id=new_id("profile"),
             display_name=request.display_name,
             bundle_id=request.bundle_id,
-            bags=resolve_bags(
-                startup=request.startup,
-                per_request=request.per_request,
-                agent=request.agent,
-            ),
+            bags=bags,
+            settings_schema_version=2,
             created_at=now,
             updated_at=now,
         )
@@ -456,20 +542,50 @@ class ModelManager:
         existing = self.get_profile(profile_id)
         if request.expected_revision is not None and request.expected_revision != existing.revision:
             raise ManagerError("This configuration changed elsewhere. Refresh before saving.", code="configuration_revision_conflict", status_code=409)
+        loading, response = split_response_startup(request.startup, request.per_request)
+        bags = resolve_bags(startup=loading, per_request=response, agent=request.agent)
+        self._validate_configuration_bags(request.bundle_id, bags)
         updated = existing.model_copy(
             update={
                 "display_name": request.display_name,
                 "bundle_id": request.bundle_id,
-                "bags": resolve_bags(
-                    startup=request.startup,
-                    per_request=request.per_request,
-                    agent=request.agent,
-                ),
+                "bags": bags,
+                "settings_schema_version": 2,
                 "updated_at": utc_now(),
                 "revision": existing.revision + 1,
             }
         )
         return self.store.put_profile(updated)
+
+    def _validate_configuration_bags(self, bundle_id: str | None, bags: SettingsBags) -> None:
+        invalid = [key for key in bags.startup.unsupported if key in STARTUP_KEYS]
+        invalid.extend(key for key in bags.per_request.unsupported if key in PER_REQUEST_KEYS)
+        if invalid:
+            raise ManagerError("Correct invalid model control values before saving.", code="configuration_values_invalid", status_code=422,
+                               details={"keys": sorted(set(invalid))})
+        if not bundle_id:
+            return
+        options = self.get_bundle_configuration_options(bundle_id, startup=bags.startup.requested)
+        context = bags.startup.applied.get("ctx_size")
+        layers = bags.startup.applied.get("n_gpu_layers")
+        if type(context) is int and options.context_size.maximum is not None and context > options.context_size.maximum:
+            raise ManagerError("Conversation capacity exceeds this model's supported context.", code="configuration_context_invalid", status_code=422,
+                               details={"key": "ctx_size", "maximum": options.context_size.maximum})
+        if type(layers) is int and layers >= 0 and options.gpu_layers.maximum is not None and layers > options.gpu_layers.maximum:
+            raise ManagerError("GPU layer count exceeds this model's available layers.", code="configuration_gpu_layers_invalid", status_code=422)
+        architecture = options.metadata.get("architecture") or ""
+        if architecture == "deepseek4" and bags.startup.applied.get("cache_type_k", "f16") != bags.startup.applied.get("cache_type_v", "f16"):
+            raise ManagerError("This model requires matching K and V cache precision.", code="configuration_cache_invalid", status_code=422)
+        for key in ("reasoning", "reasoning_effort", "reasoning_preserve"):
+            value = bags.per_request.applied.get(key)
+            # b11045 server-common.cpp consumes top-level effort=none, disables
+            # Thinking and erases the effort kwarg before the template runs.
+            if value is None or value in {"auto", "default"} or key == "reasoning_effort" and value == "none":
+                continue
+            descriptor = options.per_request_defaults[key]
+            if descriptor.supported is False or (descriptor.accepted_values is not None and value not in descriptor.accepted_values):
+                raise ManagerError("The selected template does not support this Thinking choice.", code="configuration_thinking_invalid", status_code=422,
+                                   details={"key": key, "supported": descriptor.accepted_values})
 
     def rename_profile(self, profile_id: str, request: RenameProfileRequest | str) -> RunProfile:
         display_name = request if isinstance(request, str) else request.display_name
@@ -562,15 +678,13 @@ class ModelManager:
         return self.deployments.reconcile()
 
     def create_managed(self, request: ManagedDeploymentRequest) -> Deployment:
-        self._require_deployable_bundle(request.bundle_id)
+        bundle = self._require_deployable_bundle(request.bundle_id, use_cache=True)
         if request.profile_id:
             profile = self.get_profile(request.profile_id)
             self._validate_profile_bundle(profile, request.bundle_id)
-        with self.lifecycle.mutate(
-            "create_managed",
-            profile_ids={request.profile_id} if request.profile_id else set(),
-            bundle_ids={request.bundle_id},
-        ):
+        # Preparing a future immutable record is a configuration operation, not
+        # a lifecycle mutation. It must remain possible during generation.
+        with self.store.configuration_lock():
             profile = self.get_profile(request.profile_id) if request.profile_id else None
             startup = dict(profile.bags.startup.requested) if profile else {}
             for key, value in request.startup.items():
@@ -580,13 +694,19 @@ class ModelManager:
                     startup[key] = value
             wanted = resolve_bags(startup=startup, per_request=profile.bags.per_request.requested if profile else {},
                 agent=profile.bags.agent.requested if profile else {})
-            candidates = [d for d in self.store.list_deployments() if d.bundle_id == request.bundle_id
-                and d.scope == ManagementScope.managed and d.profile_id == request.profile_id
-                and requested_identity(d.settings) == requested_identity(wanted)]
-            if candidates:
-                existing = max(candidates, key=lambda d: (d.status == DeploymentStatus.running and bool(d.health and d.health.healthy), d.updated_at))
-                return self.deployments.start(existing.id) if request.auto_start else existing
-            return self.deployments.create_managed(request)
+            from workbench_backend.inference.deployments import _require_valid_managed_startup
+            _require_valid_managed_startup(wanted.startup)
+            invalid_response = [key for key in wanted.per_request.unsupported if key in PER_REQUEST_KEYS]
+            if invalid_response:
+                raise ManagerError("Correct invalid response controls before preparing this setup.", code="configuration_values_invalid", status_code=422,
+                                   details={"keys": invalid_response})
+            existing = self.compatible_deployment(request.bundle_id, wanted)
+            if existing is None:
+                existing = self.deployments.create_managed(request.model_copy(update={"auto_start": False}))
+                existing = self.store.put_deployment(existing.model_copy(update={
+                    "loaded_model_identity": loaded_model_identity(self.runtime.current(), bundle, existing.settings),
+                }))
+        return self.start_deployment(existing.id) if request.auto_start else existing
 
     def attach_connected(self, request: ConnectedDeploymentRequest) -> Deployment:
         return self.deployments.attach_connected(request)
@@ -620,7 +740,17 @@ class ModelManager:
         deployment = self.get_deployment(deployment_id)
         if deployment.bundle_id:
             self._require_deployable_bundle(deployment.bundle_id)
+        self._require_current_loaded_identity(deployment)
         return self.deployments.start(deployment_id)
+
+    def _require_current_loaded_identity(self, deployment: Deployment) -> None:
+        if deployment.scope != ManagementScope.managed or deployment.loaded_model_identity is None or not deployment.bundle_id:
+            return
+        bundle = self.store.get_bundle(deployment.bundle_id)
+        if bundle is not None and loaded_model_identity(self.runtime.current(), bundle, deployment.settings) != deployment.loaded_model_identity:
+            raise ManagerError("This model's runtime or files changed after its setup was prepared. Select the saved setup again to prepare the current model.",
+                               code="loaded_model_identity_changed", status_code=409,
+                               details={"deployment_id": deployment.id, "bundle_id": deployment.bundle_id})
 
     def stop_deployment(self, deployment_id: str) -> Deployment:
         deployment = self.get_deployment(deployment_id)
@@ -661,6 +791,7 @@ class ModelManager:
             if not deployment.endpoint:
                 raise ManagerError("Deployment has no endpoint", code="no_endpoint", status_code=409)
             return deployment
+        self._require_current_loaded_identity(deployment)
         if self.deployments._router_enabled():
             if deployment.bundle_id:
                 # A resident preset already uses verified weight bytes. Recheck
@@ -787,19 +918,15 @@ class ModelManager:
                         code="context_compatibility_unavailable", status_code=409)
             # Response settings belong to requests, not the loaded process. An
             # explicit configuration switch with the identical frozen launch
-            # can update that binding without unloading the model. Keep every
+            # reuses that child without rewriting its snapshot. Keep every
             # busy/revision/identity check above and require observed ownership;
             # equal settings on an unhealthy or unowned process are not enough.
             def same_frozen_launch(current: Deployment) -> bool:
-                selected = requested_identity(bags)[0]
-                frozen = dict(current.applied_startup)
-                # Match the existing configuration identity rule for an
-                # automatically allocated port; never erase an explicit port.
-                if current.requested_startup.get("port") is None:
-                    frozen.pop("port", None)
+                selected = loading_startup_settings(bags)
                 return (current.applied_startup == current.settings.startup.applied
-                    and selected == requested_identity(current.settings)[0] == frozen
-                    and (profile is None or requested_identity(profile.bags)[0] == selected))
+                    and not has_response_startup_defaults(current.settings)
+                    and selected == loading_startup_settings(current.settings)
+                    and (profile is None or loading_startup_settings(profile.bags) == selected))
 
             if (same_frozen_launch(deployment) and deployment.status == DeploymentStatus.running
                 and deployment.health and deployment.health.healthy and deployment.process_identity
@@ -810,15 +937,9 @@ class ModelManager:
                     and deployment.process_identity == identity
                     and self.deployments.processes.classify(identity) == "match"
                     and same_frozen_launch(deployment)):
-                    settings = deployment.settings.model_copy(update={
-                        "per_request": bags.per_request, "agent": bags.agent}, deep=True)
-                    return self.store.put_deployment(deployment.model_copy(update={
-                        "settings": settings,
-                        "profile_id": profile.id if profile else deployment.profile_id,
-                        "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
-                        "configuration_revision": profile.revision if profile else deployment.configuration_revision,
-                        "reconfiguration": None, "updated_at": utc_now(),
-                    }))
+                    # The requester binds its own saved response setup. Sharing
+                    # a child never rewrites that child's historical snapshot.
+                    return deployment
             # Preflight changed fixed ports while the old process remains usable.
             if requested.get("port") is not None and (requested.get("port") != deployment.applied_startup.get("port") or requested.get("host", "127.0.0.1") != deployment.applied_startup.get("host", "127.0.0.1")):
                 self.deployments._allocate_listen(bags.startup.applied, fixed=True)
@@ -831,6 +952,7 @@ class ModelManager:
                 "profile_id": profile.id if profile else deployment.profile_id,
                 "profile_snapshot": profile.bags.model_copy(deep=True) if profile else deployment.profile_snapshot,
                 "configuration_revision": profile.revision if profile else deployment.configuration_revision,
+                "loaded_model_identity": loaded_model_identity(self.runtime.current(), bundle, bags),
                 "server_props": None, "reconfiguration": journal, "updated_at": utc_now()})
             self.store.put_deployment(pending)
             failure = None

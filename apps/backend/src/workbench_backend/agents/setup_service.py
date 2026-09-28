@@ -366,7 +366,6 @@ class SetupService:
         if configuration_id and hasattr(self, "manager"):
             profile = self.manager.store.get_profile(configuration_id)
             if profile is not None:
-                from workbench_backend.inference.configurations import requested_identity
                 from workbench_backend.inference.settings import resolve_bags
 
                 profile = self.manager.canonical_configuration(profile.id)
@@ -383,15 +382,9 @@ class SetupService:
                         requested_startup.pop(key, None)
                     else:
                         requested_startup[key] = value
-                wanted_startup = requested_identity(resolve_bags(startup=requested_startup))[0]
-                def exact_selection(deployment) -> bool:
-                    return bool(deployment and deployment.bundle_id == profile.bundle_id
-                        and deployment.profile_id == profile.id
-                        and requested_identity(deployment.settings)[0] == wanted_startup)
-                selected = self.manager.store.get_deployment(values.get("deployment_id") or "")
-                matching = self.manager.configuration_deployment(profile.id)
-                if not exact_selection(selected):
-                    selected = matching if exact_selection(matching) else None
+                candidate_bags = profile.bags.model_copy(deep=True)
+                candidate_bags.startup = resolve_bags(startup=requested_startup).startup
+                selected = self.manager.compatible_deployment(profile.bundle_id, candidate_bags)
                 if selected is None and prepare_model:
                     from workbench_backend.inference.schemas import ManagedDeploymentRequest
                     selected = self.manager.create_managed(ManagedDeploymentRequest(bundle_id=profile.bundle_id,

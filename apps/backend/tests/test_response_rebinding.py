@@ -77,9 +77,10 @@ class ResponseRebindingTests(unittest.TestCase):
                       "applied_startup", "startup_overrides", "server_props", "loaded_chat_template_origin"):
             self.assertEqual(getattr(result, field), getattr(self.loaded, field), field)
         self.assertEqual(result.settings.startup, self.loaded.settings.startup)
-        self.assertEqual(result.profile_id, self.balanced.id)
-        self.assertEqual(result.configuration_revision, self.balanced.revision)
-        self.assertEqual(result.profile_snapshot, self.balanced.bags)
+        self.assertEqual(result.profile_id, self.source.id)
+        self.assertEqual(result.configuration_revision, self.source.revision)
+        self.assertEqual(result.profile_snapshot, self.source.bags)
+        self.assertEqual(result.settings.per_request, self.loaded.settings.per_request)
         self.assertEqual(self.manager.store.get_profile(self.source.id).model_dump(exclude={"bundle_name"}),
                          self.source.model_dump(exclude={"bundle_name"}))
         self.assertIsNone(self.manager.get_profile(self.balanced.id).recipe_origin)

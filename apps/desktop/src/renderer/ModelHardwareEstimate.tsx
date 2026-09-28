@@ -33,28 +33,33 @@ export function ModelHardwareEstimate({ selection, onEstimate, active = true }: 
   const error = answer?.key === key ? answer.error : undefined;
   const devices = result?.hardware.gpu_devices ?? [];
   const gpuAvailable = devices.length === 1 && !result?.hardware.stale ? devices[0].available_bytes : null;
-  const shortage = gpuAvailable != null && result?.gpu_bytes != null ? Math.max(0, result.gpu_bytes - gpuAvailable) : 0;
+  const shortage = gpuAvailable != null && result?.gpu_bytes != null && result.completeness === "complete" ? Math.max(0, result.gpu_bytes - gpuAvailable) : 0;
   const observed = result?.observed_runtime;
   const observedStartup = observed?.startup as Record<string, unknown> | undefined;
   const observedUsage = observed?.resource_usage as { rss_bytes?: number | null } | undefined;
   const evaluated = result?.evaluated_startup;
+  const completeness = result?.completeness ?? "partial";
   return <section className="model-memory-estimate" aria-label="Advisory hardware estimate" aria-busy={loading}>
-    <div className="estimate-heading"><strong>Memory estimate <small className="hint">Approximate</small></strong><button type="button" className="text-button" onClick={() => { refreshRequest.current = { key, epoch: epoch + 1 }; setEpoch(epoch + 1); }} disabled={loading} aria-label="Refresh hardware estimate">Refresh</button></div>
+    <div className="estimate-heading"><strong>Memory preview <small className="hint">Estimated</small></strong><button type="button" className="text-button" onClick={() => { refreshRequest.current = { key, epoch: epoch + 1 }; setEpoch(epoch + 1); }} disabled={loading} aria-label="Refresh hardware estimate">Refresh</button></div>
     {loading && !result ? <span className="hint" role="status">Estimating…</span> : null}
     {error ? <span className="hint" role="status">Estimate unavailable · {error}</span> : null}
     {result ? <>
       <div className="estimate-availability" aria-label="Available memory">{devices.length ? devices.map(device => <span key={device.id}>{devices.length === 1 ? "GPU" : device.name} <strong>{bytes(device.available_bytes)} / {bytes(device.total_bytes)}</strong>{result.hardware.stale ? " · stale" : ""}</span>) : <span>GPU <strong>Not reported</strong></span>}<span>RAM <strong>{bytes(result.hardware.ram_available_bytes)} / {bytes(result.hardware.ram_total_bytes)}</strong></span><small className="hint">Available / total</small></div>
-      <div className="estimate-summary"><span>Weights <strong>{bytes(result.weights_bytes)}</strong></span><span>{result.source === "native_prediction" ? "Context memory" : "KV cache"} <strong>{bytes(result.kv_bytes)}</strong></span><span>Overhead <strong>{bytes(result.runtime_overhead_bytes)}</strong></span></div>
-      <div className="estimate-summary"><span>GPU <strong>{bytes(result.gpu_bytes)}</strong></span><span>RAM <strong>{bytes(result.ram_bytes)}</strong></span><span>Model files <strong>{bytes(result.model_disk_bytes)}</strong></span>{result.projector_disk_bytes ? <span>Vision file <strong>{bytes(result.projector_disk_bytes)}</strong></span> : null}</div>
-      {shortage ? <p className="estimate-shortage">{result.runtime_overhead_bytes == null ? "At least " : "Approximately "}{bytes(shortage)} above available GPU memory. You can keep these settings.</p> : null}
-      {result.context_marker != null ? <p className="hint">{result.context_marker_kind === "upper_bound" ? "GPU context upper bound" : "Native automatic context estimate"}: {result.context_marker.toLocaleString()} tokens{result.context_marker_kind === "upper_bound" ? " · excludes unknown overhead" : ""}</p> : null}
-      <details><summary>Hardware &amp; assumptions{result.unknown_reasons?.length ? " · incomplete estimate" : ""}</summary>
-        <p className="hint">Observed {new Date(result.hardware.observed_at).toLocaleTimeString()} · {result.hardware.source}</p>
+      <dl className="estimate-totals" data-completeness={completeness}><div><dt>Estimated GPU</dt><dd>{bytes(result.gpu_bytes)}</dd></div><div><dt>Estimated RAM</dt><dd>{bytes(result.ram_bytes)}</dd></div></dl>
+      <div className="estimate-summary"><span>Weights <strong>{bytes(result.weights_bytes)}</strong></span><span>Cache and model state <strong>{bytes(result.kv_bytes)}</strong></span><span>Compute <strong>{bytes(result.runtime_overhead_bytes)}</strong></span>{result.projector_disk_bytes ? <span>Vision <strong>{bytes(result.projector_bytes)}</strong></span> : null}</div>
+      {result.speculation_bytes != null && result.speculation_bytes > 0 ? <p className="hint">Speculation: {bytes(result.speculation_bytes)} included in the measured components.</p> : null}
+      <p className="estimate-completeness hint">{completeness === "complete" ? "Selected model components measured." : completeness === "unavailable" ? "Native measurement unavailable." : "Some selected components could not be measured."} Driver, operating system and host-cache costs remain unknown.</p>
+      {shortage ? <p className="estimate-shortage">At least {bytes(shortage)} above available GPU memory, before unknown dynamic costs.</p> : null}
+      {result.effective_context != null ? <p className="estimate-context">Shared context pool: <strong>{result.effective_context.toLocaleString()} tokens</strong>{result.effective_parallel != null ? ` · ${result.effective_parallel} request slots` : ""}{result.effective_context_per_slot != null && result.effective_parallel !== 1 ? <small>Up to {result.effective_context_per_slot.toLocaleString()} tokens per request. Slots share the pool.</small> : null}</p> : result.context_marker != null ? <p className="hint">{result.context_marker_kind === "upper_bound" ? "Context upper bound" : "Automatic context estimate"}: {result.context_marker.toLocaleString()} tokens · dynamic costs excluded.</p> : null}
+      {observed ? <p className="estimate-observed"><span>Observed</span><strong>{bytes(observedUsage?.rss_bytes)} process RAM</strong>{typeof observed.observed_at === "string" ? <small>{new Date(observed.observed_at).toLocaleTimeString()}</small> : null}</p> : <p className="hint">Observed: no matching loaded model.</p>}
+      <details><summary>Allocation details &amp; assumptions{completeness !== "complete" ? " · incomplete" : ""}</summary>
+        <p className="hint">Available memory observed {new Date(result.hardware.observed_at).toLocaleTimeString()} · {result.hardware.source}</p>
         <p className="hint">{result.source === "native_prediction" ? "Pinned native prediction" : "GGUF metadata estimate"} · {result.architecture ?? "Architecture unknown"} · calculated {new Date(result.estimated_at).toLocaleTimeString()}</p>
         {result.source === "native_prediction" && evaluated ? <p className="hint">Prediction settings: context {settingValue(evaluated.ctx_size, "ctx_size")} · GPU layers {settingValue(evaluated.n_gpu_layers, "n_gpu_layers")} · slots {settingValue(evaluated.parallel)}.</p> : null}
-        {(result.devices ?? []).map((device, index) => <p key={index}>{String(device.id)}: weights {bytes(device.weights_bytes as number)} · context {bytes(device.kv_bytes as number)} · compute {bytes(device.runtime_overhead_bytes as number)}</p>)}
+        {(result.devices ?? []).map((device, index) => <p key={index}>{String(device.id)}: weights {bytes(device.weights_bytes as number)} · cache and model state {bytes(device.kv_bytes as number)} · compute {bytes(device.runtime_overhead_bytes as number)}{device.projector_bytes != null ? ` · vision ${bytes(device.projector_bytes as number)}` : ""} · total {bytes(device.total_bytes as number)}</p>)}
         {[...(result.assumptions ?? []), ...(result.unknown_reasons ?? [])].map((message, index) => <p className="hint" key={index}>{message}</p>)}
-        {observed ? <><p className="hint">Loaded process RAM: {bytes(observedUsage?.rss_bytes)} · context request: {settingValue(observedStartup?.ctx_size, "ctx_size")} · KV: {settingValue(observedStartup?.kv_offload, "kv_offload")}</p><p className="hint">Loaded observations belong to that launch; GPU allocation has not been observed here.</p></> : null}
+        {result.plan_identity ? <p className="hint">Plan <code>{result.plan_identity.slice(0, 16)}</code> · model files {bytes(result.model_disk_bytes)}{result.projector_disk_bytes ? ` · vision file ${bytes(result.projector_disk_bytes)}` : ""}</p> : null}
+        {observed ? <p className="hint">Observed loading request: context {settingValue(observedStartup?.ctx_size, "ctx_size")} · cache {settingValue(observedStartup?.kv_offload, "kv_offload")}. GPU process allocation is not reported.</p> : null}
       </details>
     </> : null}
   </section>;
