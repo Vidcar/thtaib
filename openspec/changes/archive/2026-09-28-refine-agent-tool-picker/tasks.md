@@ -8,4 +8,4 @@
 ## 2. Delivery
 
 - [x] 2.1 Run the complete desktop build/regressions, OpenSpec validation and whitespace checks; fix relevant failures before delivery.
-- [ ] 2.2 Sync/archive the specification, merge the validated PR, refresh and verify the established local desktop while preserving unrelated drafts, and leave a current handover.
+- [x] 2.2 Sync/archive the specification, merge the validated PR, refresh and verify the established local desktop while preserving unrelated drafts, and leave a current handover.
