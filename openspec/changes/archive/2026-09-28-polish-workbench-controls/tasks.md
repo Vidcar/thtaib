@@ -23,4 +23,4 @@
 
 - [x] 4.1 Run focused and complete backend default/integration, desktop build/regression, contract freshness, OpenSpec and whitespace checks; resolve concrete failures and record results.
 - [x] 4.2 Inspect running Windows product at full/half width, 100%/125% scale, both themes and populated/empty/error states using isolated data; correct findings and record honest limitations.
-- [ ] 4.3 Sync/archive the completed OpenSpec change, refresh handover, complete Git/PR/merge and established local delivery; verify clean intended state and usable local product.
+- [x] 4.3 Sync/archive the completed OpenSpec change, refresh handover, complete Git/PR/merge and established local delivery; verify clean intended state and usable local product.
