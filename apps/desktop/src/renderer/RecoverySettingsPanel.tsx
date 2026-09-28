@@ -260,9 +260,9 @@ export function RecoverySettingsPanel({ onPreferencesChanged, onRestoreCompleted
       <div hidden={category !== "Connections"} className="settings-category-content">{connectionsPanel}</div>
 
       <div className="settings-category-content settings-permissions" hidden={category !== "Permissions"}>
-        <SettingSection title="Saved permissions" description="Each approval is limited to its recorded action, arguments and project. Revoke one to be asked again." actions={<span className="badge">{grants.length || "None"}</span>}>
+        <SettingSection title="Saved permissions" description="Remembered approvals cover the exact action and inputs in their original project. Revoke one to be asked again in Ask mode." actions={<span className="badge">{grants.length || "None"}</span>}>
           {grants.length === 0 ? (
-            <p className="hint">No saved approvals. Tools will ask when permission is needed.</p>
+            <p className="hint">In Ask mode, choose <strong>Allow for this session</strong> or <strong>Always allow</strong> on an action's approval card to save it here. Approve once and Full access do not save permissions.</p>
           ) : grants.map((grant) => (
             <SettingRow key={grant.id} inline label={grantLabel(grant)} provenance={<>{argumentSummary(grant.arguments)}{grant.project_path ? <> · Project: {grant.project_path}</> : null}</>}>
               <button type="button" disabled={busy} onClick={() => void revoke(grant.id)}>

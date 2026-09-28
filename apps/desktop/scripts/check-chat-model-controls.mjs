@@ -17,7 +17,7 @@ const original = { deploymentConfiguration: api.deploymentConfiguration, modelCo
 const bag = (requested = {}) => ({ requested, applied: requested, overridden: [], unsupported: [], retired: [] });
 const profile = (id, bundle, name) => ({ id, bundle_id: bundle, display_name: name, bags: { startup: bag({ ctx_size: 32768 }), per_request: bag({ reasoning: "on", reasoning_effort: "high", max_tokens: 5000 }), agent: bag() } });
 const bundles = [
-  { id: "bundle_a", display_name: "Qwen", status: "ready", disk_matches: true, default_configuration_id: "config_a" },
+  { id: "bundle_a", display_name: "Qwen", quantization: "IQ4_XS", primary_path: "C:/models/Qwen-8B-IQ4_XS.gguf", status: "ready", disk_matches: true, default_configuration_id: "config_a" },
   { id: "bundle_b", display_name: "Gemma", status: "ready", disk_matches: true, default_configuration_id: "config_b" },
 ];
 const profiles = [profile("config_a", "bundle_a", "Default"), profile("config_a_fast", "bundle_a", "Fast"), profile("config_b", "bundle_b", "Default")];
@@ -66,9 +66,18 @@ try {
   await open(renderer, "Chat model: Qwen");
   assert.equal(choices(renderer).length, 2, "one bounded model row per bundle");
   assert.equal(optionCalls, 0, "model picker does not load tuning or every compatibility preview");
-  await act(async () => aria(renderer, "Configurations for Qwen").props.onClick());
-  assert.equal(loaded.length, 0, "expansion never loads");
-  assert.equal(renderer.root.findAll(node => node.props.className === "chat-model-choice chat-model-variant").length, 2);
+  const variants = () => renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-model-choice chat-model-variant");
+  assert.equal(loaded.length, 0, "showing configuration choices never loads a model");
+  assert.equal(variants().length, 3, "named settings are immediately visible beneath their models");
+  assert.equal(renderer.root.findAll(node => node.type === "button" && String(node.props["aria-label"]).startsWith("Configurations for ")).length, 0, "no small expand controls remain");
+  assert.ok(text(choices(renderer)[0]).includes("IQ4_XS"), "quantization remains visible on the model row");
+  assert.ok(variants().every(node => !text(node).includes(".gguf")), "settings do not repeat weight filenames");
+  assert.match(variants()[0].props.title, /Qwen-8B-IQ4_XS\.gguf/, "full file identity remains available on hover");
+  await act(async () => aria(renderer, "Search models", "input").props.onChange({ target: { value: "Qwen-8B-IQ4_XS.gguf" } }));
+  assert.equal(choices(renderer).length, 1, "original filenames remain searchable");
+  await act(async () => aria(renderer, "Search models", "input").props.onChange({ target: { value: "" } }));
+  await act(async () => aria(renderer, "Search models", "input").props.onKeyDown({ key: "ArrowDown", preventDefault() {} }));
+  assert.equal(variants()[0].props["data-highlighted"], true, "keyboard navigation reaches secondary choices directly");
   await act(async () => choices(renderer)[0].props.onClick()); await flush();
   assert.equal(readinessCalls.length, 0, "exact healthy selection does not preflight");
   assert.equal(loaded.length, 0); assert.equal(applied.length, 0);
@@ -166,6 +175,10 @@ try {
   assert.match(text(renderer.root), /Context is managed by this connection/);
   previewFailure = true;
   await update({ conversationId: "chat_4" }); await flush();
+  const duplicates = ["publisher_a", "publisher_b"].map((publisher, index) => ({ ...bundles[0], id: "duplicate_" + index, display_name: publisher + "/qwen-8b", source: { repo_id: publisher + "/qwen-8b" }, default_configuration_id: "duplicate_config_" + index }));
+  await update({ bundles: duplicates, deployments: [], profiles: duplicates.map((bundle, index) => profile("duplicate_config_" + index, bundle.id, "Default")) });
+  assert.equal(new Set(choices(renderer).map(text)).size, 2, "short model names retain distinct publisher identities");
+  assert.ok(choices(renderer).every(node => !text(node).includes(".gguf")), "model groups keep full filenames in their tooltip");
   console.log("Chat model picker, exact residency, safe staging and per-model tuning checks passed.");
 } finally {
   if (renderer) await act(async () => renderer.unmount());

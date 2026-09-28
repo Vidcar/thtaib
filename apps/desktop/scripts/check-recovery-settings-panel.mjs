@@ -44,7 +44,7 @@ async function checkPreferencesWaitForHydrationAndSave(RecoverySettingsPanel) {
     if (parsed.pathname === "/v1/settings/presentation" && request.method === "PATCH") {
       return saveDeferred.promise;
     }
-    if (parsed.pathname === "/v1/permissions/grants") {
+    if (parsed.pathname === "/v1/settings/grants") {
       return jsonResponse([]);
     }
     if (parsed.pathname === "/v1/work/active") {
@@ -160,7 +160,7 @@ async function checkLateInitialRefreshCannotReplaceSavedPreferences(RecoverySett
         success_notifications: true,
       });
     }
-    if (parsed.pathname === "/v1/permissions/grants") {
+    if (parsed.pathname === "/v1/settings/grants") {
       return jsonResponse([]);
     }
     if (parsed.pathname === "/v1/work/active") {
@@ -218,7 +218,7 @@ async function checkBackupDestinationIsArchiveInsideTypedFolder(RecoverySettings
         success_notifications: false,
       });
     }
-    if (parsed.pathname === "/v1/permissions/grants") {
+    if (parsed.pathname === "/v1/settings/grants") {
       return jsonResponse([]);
     }
     if (parsed.pathname === "/v1/work/active") {

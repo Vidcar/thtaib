@@ -25,8 +25,10 @@ try {
   for (const queued of [false, true]) {
     const live = queued ? run("existing_run", "running") : null;
     const routes = [];
+    let savedGrants = [], grantRequests = 0;
     const harness = makeHarness({ aRun: live, threadARun: live, knowledgeEntries: entries, commandProjectsRun: true, commandProjectedStatus: "running", requestOverride: ({ req, res, url }) => {
       if (req.method === "GET" && url.pathname === "/v1/chat/shortcuts") { json(res, 200, shortcuts); return true; }
+      if (req.method === "GET" && url.pathname === "/v1/settings/grants") { grantRequests++; json(res, 200, savedGrants); return true; }
     } });
     harness.state.conversations.conv_a.draft = { revision: 1, content: "", attachment_ids: [], intended_config: { protected_instruction_entry_ids: ["missing_instruction"], model_overrides: { remote: { startup_overrides: { ctx_size: 8192 } } }, inherited_model_configuration: { deployment_id: "dep_1" } } };
     renderer = await renderChat(vite, harness, { onNavigate: target => routes.push(target) });
@@ -38,6 +40,22 @@ try {
       await waitFor(() => button(renderer, "Conversation A"), "history ready");
       await act(async () => button(renderer, "Conversation A").props.onClick());
       await waitFor(() => assert.equal(textarea(renderer).props.disabled, false), "Chat bound");
+      const permissionLinks = () => renderer.root.findAll(node => node.type === "button" && node.props.className === "chat-tools-permissions");
+      await act(async () => control(renderer, "Approval mode").props.onClick());
+      await waitFor(() => assert.equal(grantRequests, 1), "empty permissions refreshed on opening");
+      assert.equal(permissionLinks().length, 0, "empty permissions shortcut is hidden");
+      const accessHeading = renderer.root.findByProps({ className: "chat-access-heading" });
+      assert.ok(accessHeading.findAll(node => node.type === "button" && node.props["aria-label"] === "When access changes").length, "help shares the Access heading row");
+      await act(async () => control(renderer, "Approval mode").props.onClick());
+      savedGrants = [{ id: "remembered_approval" }];
+      await act(async () => control(renderer, "Approval mode").props.onClick());
+      await waitFor(() => assert.equal(permissionLinks().length, 1), "new remembered approval reveals the shortcut");
+      await act(async () => control(renderer, "Approval mode").props.onClick());
+      savedGrants = [];
+      await act(async () => control(renderer, "Approval mode").props.onClick());
+      await waitFor(() => assert.equal(grantRequests, 3), "revoked permissions refreshed on reopening");
+      assert.equal(permissionLinks().length, 0, "revoking the last approval hides its shortcut");
+      await act(async () => control(renderer, "Approval mode").props.onClick());
       let submissions = 0;
       const key = (key, patch = {}) => ({ key, shiftKey: false, nativeEvent: { isComposing: false }, preventDefault() {}, currentTarget: { form: { requestSubmit: () => submissions++ } }, ...patch });
       await act(async () => textarea(renderer).props.onChange({ target: { value: "@mem" } }));
