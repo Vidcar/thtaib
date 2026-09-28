@@ -24,4 +24,4 @@
 
 - [x] 4.1 Pass backend default/integration, desktop build, generated contracts, OpenSpec and whitespace checks.
 - [x] 4.2 Verify real native model/request/reload and mounted Windows themes/scaling/keyboard/history/draft behaviour using isolated data.
-- [ ] 4.3 Synchronize/archive the change, update handover, complete commit/PR/merge and refresh the established local application.
+- [x] 4.3 Synchronize/archive the change, update handover, complete commit/PR/merge and refresh the established local application.
