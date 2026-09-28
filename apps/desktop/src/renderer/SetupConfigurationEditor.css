@@ -3,9 +3,15 @@
 .setup-configuration-editor details[open] > summary::before {transform: rotate(90deg);}
 .setup-configuration-editor summary small {color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular); margin-left: auto;}
 .setup-configuration-editor .setup-options > summary {list-style: none;}
-.setup-tool-group {border-bottom: var(--line-hairline) solid var(--border); padding-bottom: var(--pad-tight);}
-.setup-tool-group > details {padding: 0 var(--pad-compact) var(--pad-tight);}
-.setup-tool-group > details > summary {font-size: var(--text-small); color: var(--muted); cursor: pointer;}
+.setup-tool-group {min-width: 0; margin-block: var(--space-compact); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); background: var(--bg-panel);}
+.setup-tool-group-head {display: flex; align-items: center; gap: var(--space-compact); min-width: 0; padding-right: var(--pad-compact);}
+.setup-tool-group-expand {display: flex; flex: 1; align-self: stretch; align-items: center; justify-content: space-between; gap: var(--space-compact); min-width: 0; min-height: calc(var(--control-height) + var(--pad-compact) * 2); padding: var(--pad-compact); border: 0; border-radius: var(--radius-control); background: transparent; font-weight: var(--weight-regular); text-align: left;}
+.setup-tool-group-expand:hover:not(:disabled) {background: color-mix(in srgb, var(--accent) var(--tint-quiet), transparent);}
+.setup-tool-group-name {min-width: 0; overflow-wrap: anywhere;}
+.setup-tool-group-count {flex: 0 0 auto; color: var(--muted); font-size: var(--text-small); font-weight: var(--weight-regular); font-variant-numeric: tabular-nums; white-space: nowrap;}
+.setup-tool-choices {min-width: 0; padding: 0 var(--pad-compact) var(--pad-tight) calc(var(--pad-compact) + var(--pad-card)); border-top: var(--line-hairline) solid var(--border);}
+.setup-tool-choices[hidden] {display: none;}
+.setup-tool-choices .setting-row {min-height: calc(var(--control-height) + var(--pad-tight) * 2); padding-block: var(--pad-tight);}
 .setup-helper-list {list-style: none; padding: 0; margin: var(--space-compact) 0; display: grid; gap: var(--space-tight);}
 .setup-helper-list li {display: flex; align-items: start; gap: var(--space-compact); padding: var(--pad-compact) 0; border-bottom: var(--line-hairline) solid var(--border);}
 .setup-helper-list li > svg {flex-shrink: 0; margin-top: var(--pad-tight);}
