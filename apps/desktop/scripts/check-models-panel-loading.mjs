@@ -20,6 +20,8 @@ globalThis.window = {
 const vite = await createViteServer({ root: desktopRoot, appType: "custom", server: { middlewareMode: true, hmr: false }, logLevel: "error" });
 try {
   const { ModelsPanel } = await vite.ssrLoadModule("/src/renderer/ModelsPanel.tsx");
+  const { DeploymentsPanel } = await vite.ssrLoadModule("/src/renderer/DeploymentsPanel.tsx");
+  const { ModelPresetPanel } = await vite.ssrLoadModule("/src/renderer/ModelPresetPanel.tsx");
   await checkModelPicker((await vite.ssrLoadModule("/src/renderer/ModelPicker.tsx")).ModelPicker);
   await checkVariantPresentation(await vite.ssrLoadModule("/src/renderer/modelVariantPresentation.ts"));
   await checkFileLinkAndRecipes((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
@@ -30,8 +32,10 @@ try {
   await checkRefreshFailureKeepsModelDraft(ModelsPanel);
   await checkExistingBundleRecipes((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
   await checkPinnedCardViewer((await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx")).ModelResponseRecipes);
-  await checkSelectedModelOwnsDetails(ModelsPanel);
-  await checkCardRefreshRetainsNewSelection(ModelsPanel);
+  await checkModelPresetDraftAndVisibility(ModelPresetPanel);
+  await checkPresetLateModelOwnership(ModelPresetPanel);
+  await checkSelectedModelOwnsDetails(ModelsPanel, DeploymentsPanel);
+  await checkCardViewerAndLateRefreshRetainNewSelection(ModelsPanel);
   await checkRepositorySelectionLoadsFiles(ModelsPanel);
   await checkRepositoryChoicesAndLateResults((await vite.ssrLoadModule("/src/renderer/HuggingFaceImport.tsx")).HuggingFaceImport);
   await checkPermanentDeletionPreview((await vite.ssrLoadModule("/src/renderer/ModelDeletion.tsx")).ModelDeletion);
@@ -41,7 +45,7 @@ try {
   await vite.close();
 }
 
-console.log("Models panel deferred loading checks passed.");
+console.log("Models loading, contextual details, preset drafts/visibility and late-result ownership checks passed.");
 
 async function checkModelPicker(ModelPicker) {
   const previousDocument = globalThis.document;
@@ -77,14 +81,15 @@ async function checkModelPicker(ModelPicker) {
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.document = previousDocument; }
 }
 
-async function checkSelectedModelOwnsDetails(ModelsPanel) {
+async function checkSelectedModelOwnsDetails(ModelsPanel, DeploymentsPanel) {
   const originalFetch = globalThis.fetch;
   let renderer;
   const deployment = { id: "gemma-live", bundle_id: "gemma", profile_id: "gemma-default", display_name: "managed:Gemma", scope: "managed", status: "running", health: { healthy: true }, applied_startup: {}, endpoint: "http://localhost:8080/v1" };
   const gemmaProfile = { id: "gemma-default", bundle_id: "gemma", display_name: "Default", revision: 1, bags: { startup: { requested: {} }, per_request: { requested: {} }, agent: { requested: {} } } };
+  const models = [bundle("qwen", "Selected Qwen"), { ...bundle("gemma", "Loaded Gemma"), default_configuration_id: "gemma-default" }];
   globalThis.fetch = async (url, init = {}) => {
     const address = String(url), body = init.body ? JSON.parse(init.body) : null;
-    if (address.endsWith("/v1/bundles")) return jsonResponse([bundle("qwen", "Selected Qwen"), { ...bundle("gemma", "Loaded Gemma"), default_configuration_id: "gemma-default" }]);
+    if (address.endsWith("/v1/bundles")) return jsonResponse(models);
     if (address.endsWith("/v1/deployments")) return jsonResponse([deployment]);
     if (address.endsWith("/v1/profiles")) return jsonResponse([gemmaProfile]);
     if (address.endsWith("/v1/setup-resolution")) return jsonResponse({ configuration: { ...body.overrides, deployment_id: body.overrides.model_configuration_id === "gemma-default" ? "gemma-live" : null }, effective_values: {}, instruction_layers: [] });
@@ -102,10 +107,23 @@ async function checkSelectedModelOwnsDetails(ModelsPanel) {
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
     assert.equal(renderer.root.findAll(node => node.type?.name === "ModelCapabilities").length, 0, "another loaded model must not occupy the selected model's detailed controls");
     assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Selected Qwen"), true);
-    const loaded = renderer.root.findByProps({ "aria-label": "Other active models" });
-    await act(async () => { loaded.findByType("button").props.onClick(); await tick(); });
-    assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Loaded Gemma"), true, "the compact active-model strip selects that model");
-    assert.deepEqual(renderer.root.findAll(node => node.type?.name === "ModelCapabilities").map(node => node.props.deployment.id), ["gemma-live"], "selecting the loaded model restores its own controls and persisted probes");
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Other active models" }).length, 0, "runtime details have one contextual owner instead of another main-page strip");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Model card").props.onClick());
+    assert.ok(textOf(renderer.root).includes("No publisher card"), "the header opens information for the selected local model");
+    await act(async () => renderer.root.findAllByType("button").find(node => textOf(node) === "Files").props.onClick());
+    assert.ok(renderer.root.findByProps({ "aria-label": "Model files, source and metadata" }), "Files opens the information panel");
+    await act(async () => renderer.root.findByProps({ "aria-label": "Loaded model details" }).props.onClick());
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, "runtime", "the loaded-state action opens runtime diagnostics in the shared inspector");
+    await act(async () => renderer.root.findAllByProps({ className: "catalogue-row" }).find(node => textOf(node).includes("Loaded Gemma")).props.onClick());
+    assert.equal(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Loaded Gemma"), true, "the catalogue chooses the detailed model");
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, null, "a model switch dismisses the previous model's inspector");
+    assert.equal(renderer.root.findAll(node => node.type?.name === "ModelCapabilities").length, 0, "runtime capabilities stay out of the central editor");
+
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(React.createElement(DeploymentsPanel, { selectedBundleId: "gemma", initialBundles: models, initialProfiles: [gemmaProfile] })); await tick(); });
+    await act(async () => renderer.root.findByProps({ "aria-label": "Loaded model details" }).props.onClick());
+    assert.deepEqual(renderer.root.findAll(node => node.type?.name === "ModelCapabilities").map(node => node.props.deployment.id), ["gemma-live"], "opening the selected model's runtime details restores its own persisted probes");
+    assert.ok(textOf(renderer.root).includes("Selected model loads"));
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
 
@@ -158,7 +176,7 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
 
     assert.ok(textOf(renderer.root).includes("Qwen existing"), "model library should render as soon as bundles load");
     assert.ok(!textOf(renderer.root).includes("Loading your models"), "library loading copy should not wait for runtime or configuration metadata");
-    assert.ok(textOf(renderer.root).includes("Checking local engine"), "runtime state should be pending while /v1/runtime is delayed");
+    assert.ok(textOf(renderer.root).includes("Checking local engine"), `runtime state should be pending while /v1/runtime is delayed: ${textOf(renderer.root)}`);
     assert.ok(!textOf(renderer.root).includes("Engine setup required"), "pending runtime must not be shown as missing engine setup");
     assert.ok(!calls.some((call) => call.includes("/configuration-options")), "configuration metadata should wait until deployment runtime data has loaded");
 
@@ -174,10 +192,11 @@ async function checkModelsRenderBeforeDeferredRuntimeAndConfiguration(ModelsPane
       await tick();
     });
     assert.ok(textOf(renderer.root).includes("256k maximum context"), "deferred configuration result should hydrate model capacity");
-    const speculation = renderer.root.find(node => node.type === "select" && node.props.id === "model-spec_type");
-    assert.deepEqual(speculation.findAllByType("option").map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct default-following choice");
-    assert.equal(speculation.props.value, "", "an unset startup control follows the default");
-    await act(async () => { speculation.props.onChange({ target: { value: "draft-mtp" } }); });
+    const speculation = renderer.root.findByProps({ id: "model-spec_type", role: "radiogroup" });
+    const speculationModes = speculation.findAllByType("input").filter(node => node.props.type === "radio");
+    assert.deepEqual(speculationModes.map(option => option.props.value), ["", "none", "draft-mtp"], "startup controls offer a distinct default-following choice");
+    assert.deepEqual(speculationModes.filter(option => option.props.checked).map(option => option.props.value), [""], "an unset startup control follows the default");
+    await act(async () => { speculationModes.find(option => option.props.value === "draft-mtp").props.onChange(); });
     assert.equal(renderer.root.findByProps({ id: "model-spec_draft_n_max" }).props.value, "", "MTP draft count stays inherited until explicitly selected");
     const thinkingEditor = renderer.root.findAll(node => node.type?.name === "ResponseSettingsEditor")[0];
     assert.deepEqual(thinkingEditor.props.options.per_request_defaults.reasoning_effort.options.map(option => option.value), ["default", "low", "medium", "xhigh"], "The response editor receives only model-specific thinking levels");
@@ -257,7 +276,8 @@ async function checkRefreshFailureKeepsModelDraft(ModelsPanel) {
     assert.equal(context().props.value, "16384");
     failure = "";
     catalogue = [model];
-    await act(async () => { button("Save").props.onClick(); await tick(); });
+    assert.equal(button("Save").props.type, "submit", "sticky Save submits the single settings form");
+    await act(async () => { renderer.root.findByProps({ id: "model-settings-form" }).props.onSubmit({ preventDefault() {} }); await tick(); });
     assert.equal(savedRequests.length, 1, "a retained editor can save as soon as the connection recovers");
     assert.equal(savedRequests[0].startup.ctx_size, 16384);
     assert.equal(savedRequests[0].per_request.temperature, 0.7);
@@ -313,9 +333,8 @@ async function checkRepositoryChoicesAndLateResults(HuggingFaceImport) {
   } finally { if (renderer) await act(async () => renderer.unmount()); }
 }
 
-async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
+async function checkCardViewerAndLateRefreshRetainNewSelection(ModelsPanel) {
   const originalFetch = globalThis.fetch;
-  const pendingCard = createDeferred();
   const pendingView = createDeferred();
   const card = (model, markdown) => ({ bundle_id: model.id, repo_id: model.source.repo_id, revision: model.source.resolved_revision, sha256: "b".repeat(64), markdown, origin: "saved" });
   const hfBundle = (id, name) => ({ ...bundle(id, name), source: { kind: "huggingface", repo_id: `org/${id}`, resolved_revision: "a".repeat(40) },
@@ -334,7 +353,6 @@ async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
     if (address.endsWith("/projectors")) return jsonResponse({ selected_path: null, candidates: [] });
     if (address.endsWith("/probes")) return jsonResponse({ evidence: [], current_support: {}, current_fingerprint: "now", image_setup: {} });
     if (address.endsWith("/v1/models/storage")) return jsonResponse({ future_install_root: "D:\\Models", locations: [] });
-    if (address.endsWith("/v1/bundles/first/response-recipes/refresh")) return pendingCard.promise;
     if (address.endsWith("/v1/bundles/first/model-card")) return pendingView.promise;
     if (address.endsWith("/v1/bundles/second/model-card")) return jsonResponse(card(second, "Second card content"));
     throw new Error(`unexpected fetch ${address}`);
@@ -342,15 +360,20 @@ async function checkCardRefreshRetainsNewSelection(ModelsPanel) {
   let renderer;
   try {
     await act(async () => { renderer = create(React.createElement(ModelsPanel)); await tick(); });
+    assert.equal(renderer.root.findAll(node => node.type?.name === "ModelResponseRecipes").length, 0, "card content is not mounted until requested from the header");
+    const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+    await act(async () => { button("Model card").props.onClick(); await tick(); });
     assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "first");
-    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Show model card").props.onClick(); await tick(); });
-    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Refresh model card").props.onClick(); await tick(); });
-    await act(async () => { renderer.root.findByProps({ "aria-label": "Other active models" }).findByType("button").props.onClick(); await tick(); });
-    await act(async () => { renderer.root.findAllByType("button").find(node => textOf(node) === "Show model card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Loading this model's pinned card"));
+    assert.equal(button("Show model card"), undefined, "the opened card panel has no second show-card control");
+    const lateRefresh = renderer.root.find(node => node.type?.name === "DeploymentsPanel").props.onBundlesChanged;
+    await act(async () => { renderer.root.findAllByProps({ className: "catalogue-row" }).find(node => textOf(node).includes("Second model")).props.onClick(); await tick(); });
+    assert.equal(renderer.root.find(node => node.type?.name === "ModelInspector").props.view, null);
+    await act(async () => { button("Model card").props.onClick(); await tick(); });
     assert.ok(textOf(renderer.root).includes("Second card content"), "the newly selected model loads its own pinned card");
     await act(async () => { pendingView.resolve(jsonResponse(card(first, "First card content"))); await tick(); });
     assert.ok(!textOf(renderer.root).includes("First card content"), "a late card response cannot appear after switching models");
-    await act(async () => { pendingCard.resolve(jsonResponse(first)); await tick(); });
+    await act(async () => { await lateRefresh(); await tick(); });
     assert.ok(textOf(renderer.root.findByProps({ "aria-label": "Selected model" })).includes("Second model"), "late card refresh retains the newly selected model");
     assert.equal(renderer.root.find(node => node.type?.name === "ModelResponseRecipes").props.bundle.id, "second");
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
@@ -422,26 +445,146 @@ async function checkExistingBundleRecipes(ModelResponseRecipes) {
     assert.equal(calls.length, 2);
     assert.ok(calls.every(call => call.address.endsWith("/response-recipes/refresh")), "refresh never downloads weights or creates a configuration");
     assert.equal(refreshed, 1);
-    await act(async () => renderer.unmount()); renderer = null;
-    const { ModelResponseRecipePicker } = await vite.ssrLoadModule("/src/renderer/ModelResponseRecipes.tsx");
-    const edits = [];
-    let current = { temperature: 0.2, top_p: 0.95, max_tokens: 6000, reasoning: "off" }, origin = null;
-    const props = () => ({ bundle: model, value: current, origin, options: { per_request_defaults: { reasoning: { supported: true } } }, onChange: (value, nextOrigin) => { current = value; origin = nextOrigin; edits.push({ value, origin }); renderer.update(React.createElement(ModelResponseRecipePicker, props())); } });
-    await act(async () => { renderer = create(React.createElement(ModelResponseRecipePicker, props())); });
-    await act(async () => renderer.root.findByProps({ id: "model-response-recipe" }).props.onChange({ target: { value: "coding" } }));
-    assert.equal(current.temperature, 0.6);
-    assert.equal(current.max_tokens, 6000, "recipe preserves explicit settings outside its recommendation");
-    assert.equal(current.reasoning, "on");
-    assert.equal(origin.recipe_id, "coding");
-    assert.equal(calls.length, 2, "selecting a recipe edits only the draft");
-    await act(async () => { current = { ...current, temperature: 0.8 }; renderer.update(React.createElement(ModelResponseRecipePicker, props())); });
-    assert.match(textOf(renderer.root), /Customized.*Temperature/, "customized values remain visible with pinned origin");
-    await act(async () => renderer.root.findByProps({ id: "model-response-recipe" }).props.onChange({ target: { value: "recommended" } }));
-    assert.equal(current.reasoning, "on", "mode-neutral recipe preserves current Thinking choice");
-    assert.equal(current.max_tokens, 6000);
-    assert.ok(edits.length > 0);
   } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
 }
+
+function presetBundle(id = "preset-model") {
+  const source = { source_repo_id: `org/${id}`, source_revision: "a".repeat(40), card_sha256: "b".repeat(64) };
+  return { ...bundle(id, "Preset model"), source: { kind: "huggingface", repo_id: source.source_repo_id, resolved_revision: source.source_revision }, huggingface_configuration: { hidden_response_recipe_ids: [], response_recipes: [
+    { ...source, id: "coding", name: "Thinking", section: "Coding guidance", per_request: { temperature: 0.6, min_p: 0 }, reasoning: "on" },
+    { ...source, id: "instruct", name: "Non-thinking", section: "Non-thinking guidance", per_request: { temperature: 0.7, presence_penalty: 1.5 }, reasoning: "off" },
+    { ...source, id: "neutral", name: "Recommended response", section: "Recommended settings", per_request: { temperature: 0.7, top_p: 0.9 }, reasoning: "preserve" },
+  ] } };
+}
+
+async function checkModelPresetDraftAndVisibility(ModelPresetPanel) {
+  const originalFetch = globalThis.fetch;
+  let model = presetBundle(), current = { temperature: 0.2, top_p: 0.95, top_k: 30, max_tokens: 6000, reasoning: "off" }, origin = null;
+  let renderer, changed = 0, restoreFailures = 1, externalDisabled = false;
+  let options = { per_request_defaults: { reasoning: { supported: true } } };
+  const edits = [], calls = [];
+  const props = () => ({ bundle: model, value: current, origin, options, disabled: externalDisabled, onApply: (value, nextOrigin) => { current = value; origin = nextOrigin; edits.push({ value, origin }); renderer.update(React.createElement(ModelPresetPanel, props())); }, onChanged: async () => { changed++; renderer.update(React.createElement(ModelPresetPanel, props())); } });
+  const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+  const choose = async id => act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "radio" && node.props.value === id).props.onChange());
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ address, method: init.method ?? "GET", body });
+    if (address.endsWith("/neutral/visibility")) {
+      assert.equal(init.method, "PUT"); assert.deepEqual(body, { visible: false });
+      model = { ...model, huggingface_configuration: { ...model.huggingface_configuration, hidden_response_recipe_ids: ["neutral"] } };
+      return jsonResponse(model);
+    }
+    if (address.endsWith("/response-recipes/refresh")) {
+      assert.equal(init.method, "POST");
+      if (body.restore_hidden && restoreFailures-- > 0) throw new Error("Pinned card temporarily unavailable");
+      if (body.restore_hidden) model = { ...model, huggingface_configuration: { ...model.huggingface_configuration, hidden_response_recipe_ids: [] } };
+      return jsonResponse(model);
+    }
+    throw new Error(`Unexpected preset request ${address}`);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelPresetPanel, props())); });
+    assert.equal(renderer.root.findAllByType("select").length, 0, "presets are applied from a panel rather than a competing setup selector");
+    await choose("coding");
+    assert.equal(edits.length, 0, "previewing a preset leaves the draft untouched");
+    assert.ok(textOf(renderer.root).includes("Coding guidance"));
+    assert.ok(textOf(renderer.root).includes("org/preset-model"), "the apply preview identifies recorded publisher provenance");
+    assert.ok(textOf(renderer.root.findByType("table")).includes("Thinking"), "the preview includes the preset's explicit Thinking mode");
+    await act(async () => button("Apply to draft").props.onClick());
+    assert.deepEqual(current, { temperature: 0.6, top_p: 0.95, top_k: 30, max_tokens: 6000, reasoning: "on", min_p: 0 }, "apply merges only supplied response values and Thinking");
+    assert.deepEqual(origin, { recipe_id: "coding", name: "Thinking", source_repo_id: "org/preset-model", source_revision: "a".repeat(40), card_sha256: "b".repeat(64), section: "Coding guidance" });
+    assert.equal(calls.length, 0, "applying does not save, load, refresh or create a setup");
+    await act(async () => { current = { ...current, temperature: 0.8 }; renderer.update(React.createElement(ModelPresetPanel, props())); });
+    const temperature = renderer.root.findAllByType("tr").find(node => textOf(node.findAllByType("th")[0]) === "Temperature");
+    assert.deepEqual(temperature.findAllByType("td").map(textOf), ["0.8", "0.6"], "preview compares the edited draft with the supplied value");
+    await act(async () => button("Apply to draft").props.onClick());
+    assert.equal(current.temperature, 0.6, "reapplying restores the supplied value in the draft");
+    await choose("instruct");
+    await act(async () => button("Apply to draft").props.onClick());
+    assert.equal(current.reasoning, "off"); assert.equal(current.presence_penalty, 1.5); assert.equal(current.max_tokens, 6000);
+    await choose("neutral");
+    assert.ok(!renderer.root.findAllByType("tr").some(node => textOf(node.findAllByType("th")[0]) === "Thinking"), "mode-neutral presets do not advertise a Thinking change");
+    await act(async () => button("Apply to draft").props.onClick());
+    assert.equal(current.reasoning, "off", "mode-neutral apply preserves the draft's Thinking choice");
+    assert.equal(current.top_p, 0.9); assert.equal(current.top_k, 30);
+    const responseBeforeHide = { ...current }, originBeforeHide = { ...origin };
+    await act(async () => { button("Remove from list").props.onClick(); await tick(); });
+    assert.deepEqual(model.huggingface_configuration.hidden_response_recipe_ids, ["neutral"]);
+    assert.equal(model.huggingface_configuration.response_recipes.length, 3, "removal keeps underlying records for saved ancestry");
+    assert.equal(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"), false);
+    assert.deepEqual(current, responseBeforeHide); assert.deepEqual(origin, originBeforeHide, "hiding does not detach the saved source");
+    await act(async () => renderer.unmount());
+    await act(async () => { renderer = create(React.createElement(ModelPresetPanel, props())); });
+    assert.equal(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"), false, "reopening respects persisted visibility");
+    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    assert.ok(textOf(renderer.root).includes("Pinned card temporarily unavailable"));
+    assert.deepEqual(model.huggingface_configuration.hidden_response_recipe_ids, ["neutral"], "failed restore leaves the previous exclusions intact");
+    assert.equal(changed, 1, "failed restore does not publish a new catalogue");
+    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    assert.ok(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"));
+    assert.ok(calls.slice(1, 3).every(call => call.body.restore_hidden === true), "restore explicitly requests pinned restoration");
+    assert.deepEqual(current, responseBeforeHide); assert.deepEqual(origin, originBeforeHide);
+    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    assert.equal(calls.at(-1).body.restore_hidden, false, "ordinary refresh does not silently restore removed choices");
+    assert.ok(calls.every(call => call.address.includes("/response-recipes/")), "preset management cannot change saved setups or model weights");
+    await choose("coding");
+    await act(async () => { externalDisabled = true; renderer.update(React.createElement(ModelPresetPanel, props())); });
+    assert.equal(button("Apply to draft").props.disabled, true, "parent Save/Load activity blocks preset draft edits");
+    assert.equal(button("Remove from list").props.disabled, true);
+    assert.equal(button("Refresh from model card").props.disabled, true);
+    assert.ok(renderer.root.findAllByType("input").every(node => node.props.disabled));
+    const requestsBeforeBlockedRefresh = calls.length;
+    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    assert.equal(calls.length, requestsBeforeBlockedRefresh, "a parent mutation cannot race a preset refresh");
+    await act(async () => { externalDisabled = false; renderer.update(React.createElement(ModelPresetPanel, props())); });
+    await act(async () => { options = { per_request_defaults: { reasoning: { supported: false } } }; renderer.update(React.createElement(ModelPresetPanel, props())); });
+    assert.equal(button("Apply to draft").props.disabled, true, "unsupported explicit Thinking cannot be applied");
+    assert.ok(textOf(renderer.root).includes("unavailable for the selected template"));
+    await act(async () => { model = { ...model, huggingface_configuration: { ...model.huggingface_configuration, hidden_response_recipe_ids: ["coding", "instruct", "neutral"] } }; renderer.update(React.createElement(ModelPresetPanel, props())); });
+    assert.equal(renderer.root.findAllByType("input").length, 0);
+    assert.ok(textOf(renderer.root).includes("All presets were removed from this list"), "an empty hidden list points to restoration");
+    assert.equal(button("Restore presets from model card").props.disabled, false);
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
+async function checkPresetLateModelOwnership(ModelPresetPanel) {
+  const originalFetch = globalThis.fetch;
+  const pendingRefresh = createDeferred(), pendingRestore = createDeferred();
+  const first = presetBundle("first-preset"), second = presetBundle("second-preset");
+  first.huggingface_configuration.hidden_response_recipe_ids = ["neutral"];
+  second.huggingface_configuration.response_recipes = [{ ...second.huggingface_configuration.response_recipes[0], id: "second-only", name: "Second model preset" }];
+  let currentModel = first, renderer, refreshed = 0;
+  const draft = { temperature: 0.4, reasoning: "off", max_tokens: 4096 }, edits = [];
+  const props = () => ({ bundle: currentModel, value: draft, origin: null, options: { per_request_defaults: { reasoning: { supported: true } } }, onApply: value => edits.push(value), onChanged: async () => { refreshed++; renderer.update(React.createElement(ModelPresetPanel, props())); } });
+  const button = label => renderer.root.findAllByType("button").find(node => textOf(node) === label);
+  globalThis.fetch = async (url, init = {}) => {
+    const address = String(url), body = JSON.parse(init.body);
+    if (address.includes("/first-preset/response-recipes/refresh")) return body.restore_hidden ? pendingRestore.promise : pendingRefresh.promise;
+    if (address.includes("/second-preset/response-recipes/refresh")) return jsonResponse(second);
+    throw new Error(`Unexpected late preset request ${address}`);
+  };
+  try {
+    await act(async () => { renderer = create(React.createElement(ModelPresetPanel, props())); });
+    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    await act(async () => { currentModel = second; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
+    assert.equal(button("Refresh from model card").props.disabled, false, "a new model does not inherit another model's pending presentation");
+    await act(async () => { pendingRefresh.reject(new Error("First model refresh failed late")); await tick(); });
+    assert.ok(!textOf(renderer.root).includes("First model refresh failed late"), "late failure cannot become the selected model's error");
+    assert.ok(textOf(renderer.root).includes("Second model preset"));
+    await act(async () => { button("Refresh from model card").props.onClick(); await tick(); });
+    assert.equal(refreshed, 1);
+    await act(async () => { currentModel = first; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
+    await act(async () => { button("Restore presets from model card").props.onClick(); await tick(); });
+    await act(async () => { currentModel = second; renderer.update(React.createElement(ModelPresetPanel, props())); await tick(); });
+    await act(async () => { pendingRestore.resolve(jsonResponse({ ...first, huggingface_configuration: { ...first.huggingface_configuration, hidden_response_recipe_ids: [] } })); await tick(); });
+    assert.equal(refreshed, 2, "successful background changes refresh the global catalogue even after selection changes");
+    assert.ok(textOf(renderer.root).includes("Second model preset"));
+    assert.equal(renderer.root.findAllByType("input").some(node => node.props.value === "neutral"), false, "late restored recipes cannot appear for another selected model");
+    assert.equal(button("Refresh from model card").props.disabled, false);
+    assert.equal(edits.length, 0); assert.deepEqual(draft, { temperature: 0.4, reasoning: "off", max_tokens: 4096 }, "background management leaves the selected response draft intact");
+  } finally { if (renderer) await act(async () => renderer.unmount()); globalThis.fetch = originalFetch; }
+}
+
 async function checkFileLinkAndRecipes(HuggingFaceImport) {
   const originalFetch = globalThis.fetch;
   const files = ["model-IQ4_XS.gguf", "model-LOW-MTP-IQ4_XS.gguf", "model-MTP-IQ4_XS.gguf"];

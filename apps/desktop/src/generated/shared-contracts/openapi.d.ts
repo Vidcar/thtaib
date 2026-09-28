@@ -811,6 +811,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bundles/{bundle_id}/response-recipes/{recipe_id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Response Recipe Visibility */
+        put: operations["set_response_recipe_visibility_v1_bundles__bundle_id__response_recipes__recipe_id__visibility_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/conversations": {
         parameters: {
             query?: never;
@@ -5136,6 +5153,8 @@ export interface components {
             generation_defaults?: {
                 [key: string]: unknown;
             };
+            /** Hidden Response Recipe Ids */
+            hidden_response_recipe_ids?: string[];
             /** Metadata Refreshed At */
             metadata_refreshed_at?: string | null;
             /** Response Recipes */
@@ -6830,6 +6849,19 @@ export interface components {
             /** Source Revision */
             source_revision: string;
         };
+        /** ResponseRecipeRefreshRequest */
+        ResponseRecipeRefreshRequest: {
+            /**
+             * Restore Hidden
+             * @default false
+             */
+            restore_hidden: boolean;
+        };
+        /** ResponseRecipeVisibilityRequest */
+        ResponseRecipeVisibilityRequest: {
+            /** Visible */
+            visible: boolean;
+        };
         /** RetainedAsset */
         RetainedAsset: {
             /** Access Scope */
@@ -8122,6 +8154,8 @@ export type SchemaResponseRecipe = components['schemas']['ResponseRecipe'];
 export type SchemaResponseRecipeConfigurationRequest = components['schemas']['ResponseRecipeConfigurationRequest'];
 export type SchemaResponseRecipeConfigurationResult = components['schemas']['ResponseRecipeConfigurationResult'];
 export type SchemaResponseRecipeOrigin = components['schemas']['ResponseRecipeOrigin'];
+export type SchemaResponseRecipeRefreshRequest = components['schemas']['ResponseRecipeRefreshRequest'];
+export type SchemaResponseRecipeVisibilityRequest = components['schemas']['ResponseRecipeVisibilityRequest'];
 export type SchemaRetainedAsset = components['schemas']['RetainedAsset'];
 export type SchemaRetainedAssetContent = components['schemas']['RetainedAssetContent'];
 export type SchemaRetainedAssetDeletionPreview = components['schemas']['RetainedAssetDeletionPreview'];
@@ -9934,7 +9968,47 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ResponseRecipeRefreshRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelBundle"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_response_recipe_visibility_v1_bundles__bundle_id__response_recipes__recipe_id__visibility_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bundle_id: string;
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResponseRecipeVisibilityRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

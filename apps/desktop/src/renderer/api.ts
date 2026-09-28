@@ -190,7 +190,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ repo_id, revision, allow_patterns, recipe_ids, default_recipe_id, ...(initial ? { initial_startup: initial.startup, ...(initial.recipe_id ? { initial_recipe_id: initial.recipe_id, initial_per_request: initial.per_request ?? {} } : initial.per_request ? { initial_per_request: initial.per_request } : {}) } : {}) }),
     }),
-  refreshResponseRecipes: (bundleId: string) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST" }),
+  refreshResponseRecipes: (bundleId: string, restore_hidden = false) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/refresh`, { method: "POST", body: JSON.stringify({ restore_hidden }) }),
+  setResponseRecipeVisibility: (bundleId: string, recipeId: string, visible: boolean) => request<ModelBundle>(`/v1/bundles/${bundleId}/response-recipes/${encodeURIComponent(recipeId)}/visibility`, { method: "PUT", body: JSON.stringify({ visible }) }),
   modelCard: (bundleId: string) => request<ModelCard>(`/v1/bundles/${encodeURIComponent(bundleId)}/model-card`),
   createRecipeConfigurations: (bundleId: string, recipe_ids: string[], default_recipe_id: string | null = null) =>
     request<{ bundle: ModelBundle; configurations: RunProfile[] }>(`/v1/bundles/${bundleId}/response-recipes/configurations`, {

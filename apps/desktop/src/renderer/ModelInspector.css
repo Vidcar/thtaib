@@ -1,0 +1,55 @@
+/* The editor owns drafts and scroll; the inspector owns supporting information. */
+.models-surface .catalogue-editor {max-width: none;}
+.model-editor-layout {position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; min-width: 0;}
+.model-editor-main {display: grid; gap: var(--space-stack); min-width: 0; overflow-anchor: none;}
+.model-editor-layout[data-panel-open="true"][data-panel-docked="true"] {grid-template-columns: minmax(720px, 1fr) 420px;}
+.model-inspector {display: flex; flex-direction: column; min-width: 0; background: var(--bg-panel); border: var(--line-hairline) solid var(--border); border-radius: var(--radius-card); z-index: 10; overflow: hidden;}
+.model-editor-layout[data-panel-docked="true"] .model-inspector {position: sticky; top: 0; max-height: calc(100dvh - 100px);}
+.model-inspector > header {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); padding: var(--pad-card); border-bottom: var(--line-hairline) solid var(--border); flex: none;}
+.model-inspector > header h3 {font-size: var(--text-heading); margin: 0;}
+.model-inspector-body {overflow: auto; overscroll-behavior: contain; padding: var(--pad-card); display: grid; align-content: start; gap: var(--space-stack); min-width: 0; scrollbar-gutter: stable;}
+.model-inspector-body > :is(section, div) {min-width: 0;}
+.model-inspector-body .card {padding: 0; border: 0; background: transparent;}
+.model-inspector-body .model-card-markdown {max-height: none; overflow: visible; padding: var(--pad-compact);}
+.model-inspector-body .model-card-heading h3 {display: none;}
+.model-inspector-backdrop {position: fixed; inset: 0; background: color-mix(in srgb, black 30%, transparent); z-index: 1090;}
+.model-editor-layout[data-panel-docked="false"] .model-inspector {position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100vw; border-radius: 0; z-index: 1100; box-shadow: var(--shadow);}
+.model-information-actions {display: flex; gap: var(--space-compact); margin-top: calc(var(--space-stack) * -1);}
+.models-surface .model-setup-head {position: sticky; top: 0; z-index: 8; margin: 0; padding: var(--pad-compact) 0; background: var(--bg); align-items: center;}
+.models-surface .model-setup-selector {flex: 1 1 100%;}
+.models-surface .model-setup-head > .primary-button {min-width: calc(var(--text-small) * 6.5);}
+.models-surface .model-lifecycle-actions > button {min-width: calc(var(--text-small) * 7.5);}
+.model-setup-selector > .model-capacity {height: calc(var(--control-height) + var(--space-tight)); min-width: 0; flex-wrap: nowrap;}
+.model-capacity > span {min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.model-setup-readiness {white-space: nowrap; flex: none; min-height: var(--control-height);}
+.model-toolbar-status {flex-basis: 100%; height: calc(var(--text-small) * var(--leading-tight) * 2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--muted); font-size: var(--text-small); line-height: var(--leading-tight);}
+.model-toolbar-status > span {display: block;}
+.model-edit-state {min-width: calc(var(--text-small) * 5); text-align: center;}
+.model-response-source {display: flex; align-items: center; justify-content: space-between; gap: var(--space-compact); padding-block: var(--pad-compact);}
+.model-response-source > span {line-height: var(--leading-tight); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+.model-response-source > button {flex: none;}
+.model-placement-control {display: grid; gap: var(--space-tight); width: 100%; min-width: 0;}
+.model-placement-control > select {width: 100%; min-width: 0;}
+.model-gpu-exact[data-active="false"] {opacity: var(--fade-disabled);}
+.model-inspector .running-model {min-width: 0; margin-bottom: var(--space-stack);}
+.model-inspector .running-model .section-heading {flex-wrap: wrap;}
+.model-inspector .settings-readout {grid-template-columns: minmax(0, 1fr);}
+.model-inspector .plain-list {padding: 0;}
+.model-inspector .engine-log {max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto;}
+.model-preset-panel {display: grid; gap: var(--space-compact); min-width: 0;}
+.model-preset-panel :is(p, h4) {margin: 0;}
+.model-preset-panel .actions {display: flex; flex-wrap: wrap; gap: var(--space-tight);}
+.model-preset-choices {display: grid; gap: var(--space-tight);}
+.model-preset-choices > label {display: flex; align-items: center; gap: var(--space-compact); padding: var(--pad-compact); margin: 0; border: var(--line-hairline) solid var(--border); border-radius: var(--radius-control); cursor: pointer;}
+.model-preset-choices > label:has(input:checked) {border-color: var(--accent); background: var(--bg-input);}
+.model-preset-choices > label > span {display: grid; gap: var(--space-tight);}
+.model-preset-choices small {color: var(--muted); font-size: var(--text-small);}
+.model-preset-diff {width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--text-small);}
+.model-preset-diff :is(td, th) {padding: var(--pad-tight); text-align: left; overflow-wrap: anywhere; border-bottom: var(--line-hairline) solid var(--border);}
+.model-preset-diff thead {color: var(--muted);}
+.model-preset-diff td:last-child {font-weight: var(--weight-medium); color: var(--accent);}
+@container (max-width: 620px) {
+  .model-response-source {align-items: flex-start; flex-direction: column;}
+  .model-response-source > span {height: calc(var(--text-small) * var(--leading-tight)); max-width: 100%;}
+  .model-capacity > span {display: none;}
+}

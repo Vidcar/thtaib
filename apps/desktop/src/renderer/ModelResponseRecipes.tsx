@@ -4,9 +4,8 @@ import remarkGfm from "remark-gfm";
 import { api } from "./api";
 import { errorMessage } from "./errors";
 import { settingValue } from "./effectiveSettings";
-import { SettingRow } from "./CompactControls";
 import { Notice } from "./Notice";
-import type { BundleConfigurationOptions, ModelBundle, ModelCard, ResponseRecipe, ResponseRecipeOrigin, RunProfile } from "./types";
+import type { ModelBundle, ModelCard, ResponseRecipe, RunProfile } from "./types";
 
 const fieldNames: Record<string, string> = {
   temperature: "Temperature", top_p: "Top P", top_k: "Top K", min_p: "Min P",
@@ -39,36 +38,13 @@ function safeCardHref(raw: string, repoId: string, revision: string): string {
   } catch { return ""; }
 }
 
-/** Selecting publisher guidance edits the current setup draft; saving is owned by Models. */
-export function ModelResponseRecipePicker({ bundle, value, origin, options, disabled, onChange }: {
-  bundle: ModelBundle; value: Record<string, unknown>; origin: ResponseRecipeOrigin | null; options: BundleConfigurationOptions | null; disabled?: boolean;
-  onChange: (value: Record<string, unknown>, origin: ResponseRecipeOrigin | null) => void;
-}) {
-  const recipes = bundle.huggingface_configuration?.response_recipes ?? [];
-  const matchesOrigin = (recipe: ResponseRecipe) => origin?.recipe_id === recipe.id && origin.source_repo_id === recipe.source_repo_id && origin.source_revision === recipe.source_revision && origin.card_sha256 === recipe.card_sha256;
-  const selected = recipes.find(matchesOrigin);
-  const incompatible = (recipe: ResponseRecipe) => recipe.reasoning !== "preserve" && options?.per_request_defaults.reasoning?.supported === false;
-  const expected = selected ? { ...selected.per_request, ...(selected.reasoning === "preserve" ? {} : { reasoning: selected.reasoning }) } : {};
-  const customized = selected ? Object.entries(expected).filter(([key, entry]) => JSON.stringify(value[key]) !== JSON.stringify(entry)).map(([key]) => fieldNames[key] ?? key.replaceAll("_", " ")) : [];
-  const choose = (id: string) => {
-    const recipe = recipes.find(item => item.id === id);
-    if (!recipe || incompatible(recipe)) { if (!id) onChange(value, null); return; }
-    const next = { ...value, ...recipe.per_request };
-    if (recipe.reasoning !== "preserve") next.reasoning = recipe.reasoning;
-    onChange(next, { recipe_id: recipe.id, name: recipe.name, source_repo_id: recipe.source_repo_id, source_revision: recipe.source_revision, card_sha256: recipe.card_sha256, section: recipe.section });
-  };
-  return <SettingRow label="Recipe" htmlFor="model-response-recipe" help="Apply a recommendation from the installed model's pinned publisher card. It changes this draft's response settings. Loading settings remain independent." provenance={origin ? <span className="model-effective-readout"><strong>{origin.name}</strong> · {customized.length ? "Customized" : selected ? "Pinned card" : "Saved recommendation"}</span> : <span className="model-effective-readout">Model defaults · Custom values stay visible</span>} hint={origin ? <><span>{origin.source_repo_id} · {origin.source_revision.slice(0, 8)}{customized.length ? ` · Custom: ${customized.join(", ")}` : ""}</span> <a href={pinnedCardUrl(origin.source_repo_id, origin.source_revision)} target="_blank" rel="noreferrer noopener">Source ↗</a></> : recipes.length ? "Choose a recipe, then adjust individual controls if needed." : "No compatible publisher recipes are recorded for this model."} onReset={origin && !disabled ? () => onChange(value, null) : undefined} resetLabel="Clear recipe" resetTitle="Keep current response values and remove the recipe association">
-    <select id="model-response-recipe" disabled={disabled || !recipes.length} value={selected?.id ?? (origin ? "saved" : "")} onChange={event => choose(event.target.value)}><option value="">Model defaults / Custom</option>{origin && !selected ? <option value="saved">{origin.name} · saved source</option> : null}{recipes.map(recipe => <option key={recipe.id} value={recipe.id} disabled={incompatible(recipe)}>{recipe.name}{incompatible(recipe) ? " · unavailable for this template" : ""}</option>)}</select>
-  </SettingRow>;
-}
-
-export function ModelResponseRecipes({ bundle, onChanged }: {
-  bundle: ModelBundle; profiles?: RunProfile[]; onChanged: () => Promise<void>;
+export function ModelResponseRecipes({ bundle, onChanged, panel = false }: {
+  bundle: ModelBundle; profiles?: RunProfile[]; onChanged: () => Promise<void>; panel?: boolean;
 }) {
   const recipes = bundle.huggingface_configuration?.response_recipes ?? [];
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [cardOpen, setCardOpen] = useState(false);
+  const [cardOpen, setCardOpen] = useState(panel);
   const [cardBusy, setCardBusy] = useState(false);
   const [card, setCard] = useState<ModelCard | null>(null);
   const [cardError, setCardError] = useState("");
@@ -80,8 +56,9 @@ export function ModelResponseRecipes({ bundle, onChanged }: {
 
   useEffect(() => {
     mounted.current = true;
+    if (panel) void loadCard();
     return () => { mounted.current = false; cardGeneration.current += 1; };
-  }, []);
+  }, [panel]);
 
   async function loadCard() {
     const generation = ++cardGeneration.current;
@@ -130,8 +107,8 @@ export function ModelResponseRecipes({ bundle, onChanged }: {
     finally { setBusy(false); }
   }
 
-  return <section className="card model-recipe-library" aria-labelledby="model-recipes-heading">
-    <div className="model-card-heading"><div><h3>Model card</h3><p className="hint">{repoId ?? "Hugging Face repository unavailable"}{revision ? ` · installed revision ${revision.slice(0, 12)}` : " · installed revision unavailable"}</p></div><div className="model-card-actions">{pinnedUrl ? <a href={pinnedUrl} target="_blank" rel="noreferrer noopener">View pinned card ↗</a> : null}<button type="button" aria-expanded={cardOpen} aria-controls={`model-card-content-${bundle.id}`} onClick={toggleCard}>{cardOpen ? "Hide model card" : "Show model card"}</button></div></div>
+  return <section className="card model-recipe-library" aria-label="Model card and publisher recommendations">
+    <div className="model-card-heading"><div><h3>Model card</h3><p className="hint">{repoId ?? "Hugging Face repository unavailable"}{revision ? ` · installed revision ${revision.slice(0, 12)}` : " · installed revision unavailable"}</p></div><div className="model-card-actions">{pinnedUrl ? <a href={pinnedUrl} target="_blank" rel="noreferrer noopener">View pinned card ↗</a> : null}{!panel ? <button type="button" aria-expanded={cardOpen} aria-controls={`model-card-content-${bundle.id}`} onClick={toggleCard}>{cardOpen ? "Hide model card" : "Show model card"}</button> : null}</div></div>
     {cardOpen ? <div id={`model-card-content-${bundle.id}`} className="model-card-content" aria-label="Selected model card">
       {cardBusy ? <p role="status">Loading this model's pinned card…</p> : null}
       {cardError ? <Notice tone="error" action={<button type="button" onClick={() => void loadCard()}>Retry card</button>}>Model card unavailable: {cardError}</Notice> : null}
@@ -140,9 +117,9 @@ export function ModelResponseRecipes({ bundle, onChanged }: {
         img({ alt }) { return <span className="hint">{alt ? `[Image omitted: ${alt}]` : "[Image omitted]"}</span>; },
       }}>{card.markdown}</ReactMarkdown></div></> : null}
     </div> : null}
-    <div className="section-heading"><div><h3 id="model-recipes-heading">Publisher recommendations</h3><p className="hint">Choose and customize these recipes in the setup's Response section.</p></div><button type="button" disabled={busy} onClick={() => void refreshCard()}>{busy ? "Refreshing…" : "Refresh model card"}</button></div>
+    {!panel ? <><div className="section-heading"><div><h3 id="model-recipes-heading">Publisher recommendations</h3><p className="hint">Use model-card presets from the setup's Response section.</p></div><button type="button" disabled={busy} onClick={() => void refreshCard()}>{busy ? "Refreshing…" : "Refresh model card"}</button></div>
     <p className="hint">Refresh reads the recorded revision without downloading weights or changing saved setups.</p>
     {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
-    {recipes.length ? <dl className="model-recipe-reference">{recipes.map(recipe => <div key={recipe.id}><dt>{recipe.name}</dt><dd>{recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`} · {Object.entries(recipe.per_request).map(([key, value]) => `${fieldNames[key] ?? key.replaceAll("_", " ")} ${settingValue(value)}`).join(" · ")}<small>{recipe.section} · <a href={cardUrl(recipe)} target="_blank" rel="noreferrer noopener">Pinned source ↗</a></small></dd></div>)}</dl> : <p className="hint">No clear response recipes are saved for this model.</p>}
+    {recipes.length ? <dl className="model-recipe-reference">{recipes.map(recipe => <div key={recipe.id}><dt>{recipe.name}</dt><dd>{recipe.reasoning === "preserve" ? "Thinking unchanged" : `Thinking ${recipe.reasoning}`} · {Object.entries(recipe.per_request).map(([key, value]) => `${fieldNames[key] ?? key.replaceAll("_", " ")} ${settingValue(value)}`).join(" · ")}<small>{recipe.section} · <a href={cardUrl(recipe)} target="_blank" rel="noreferrer noopener">Pinned source ↗</a></small></dd></div>)}</dl> : <p className="hint">No clear response recipes are saved for this model.</p>}</> : null}
   </section>;
 }

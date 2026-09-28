@@ -14,9 +14,11 @@ export type StartupMismatch = {
 export function SettingsNotes({
   unsupported,
   retired,
+  category = "startup",
 }: {
   unsupported?: string[];
   retired?: RetiredNote[];
+  category?: "startup" | "response";
 }) {
   const hasUnsupported = Boolean(unsupported?.length);
   const hasRetired = Boolean(retired?.length);
@@ -27,7 +29,7 @@ export function SettingsNotes({
     <div className="settings-notes">
       {hasUnsupported ? (
         <p className="notice notice-warn">
-          Unsupported startup: {unsupported?.join(", ")}
+          Unsupported {category}: {unsupported?.join(", ")}
         </p>
       ) : null}
       {hasRetired
